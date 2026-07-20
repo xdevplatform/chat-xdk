@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      # Needed for the workspace path dependency `../juicebox-sdk` (see Cargo.toml).
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            chat-xdk -> target
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Rust target (wasm32)
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      # `make wasm` also stages the wasm-pack output into crates/wasm/js/pkg/,
+      # the layout the npm package ships.
+      - name: Build wasm pkg (wasm-pack)
+        run: make wasm
+
+      - name: Format (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Lint (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # License policy for third-party crates (see deny.toml + THIRD_PARTY_NOTICES.md).
+      # Only on ubuntu to avoid doubling the install; graph is platform-agnostic enough.
+      - name: Install cargo-deny
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: License check (cargo deny)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo deny check licenses
+
+      - name: Test (Rust workspace)
+        run: cargo test --workspace
+
+      - name: Build Python extension (pyo3)
+        env:
+          PYO3_PYTHON: python
+        run: cargo build -p chat-xdk-python
+
+      - name: Install built extension into in-repo Python package
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT_SUFFIX="$(python -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')"
+          # cargo outputs libchat_xdk.{so|dylib} for the cdylib; name it how Python expects.
+          if [[ -f target/debug/libchat_xdk.dylib ]]; then
+            cp -f target/debug/libchat_xdk.dylib "crates/pyo3/python/chat_xdk/_native${EXT_SUFFIX}"
+          elif [[ -f target/debug/libchat_xdk.so ]]; then
+            cp -f target/debug/libchat_xdk.so "crates/pyo3/python/chat_xdk/_native${EXT_SUFFIX}"
+          else
+            echo "Expected target/debug/libchat_xdk.{dylib|so} not found"
+            ls -la target/debug || true
+            exit 1
+          fi
+
+      - name: Test (Python SDK)
+        env:
+          PYTHONPATH: crates/pyo3/python
+        run: |
+          # The suites skip when the extension can't be imported (fine for
+          # local runs without a build); in CI an import failure must fail
+          # the job, not silently skip every Python test.
+          python -c "import chat_xdk"
+          python -m unittest discover -s crates/pyo3/python/tests -v
+
+      - name: Test (Node/wasm SDK)
+        run: |
+          node crates/wasm/js/tests/sdk_vectors.test.mjs
+          node crates/wasm/js/tests/api.test.mjs
+          node crates/wasm/js/tests/wrapper.test.mjs
+
+      # The package declares engines.node >=18; rerun the suites on the floor
+      # version, where `require()` of an ES module is unavailable and only the
+      # wrapper's dynamic-import loading works.
+      - name: Node 18 (engines floor)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Test (Node 18/wasm SDK)
+        run: |
+          node crates/wasm/js/tests/sdk_vectors.test.mjs
+          node crates/wasm/js/tests/api.test.mjs
+          node crates/wasm/js/tests/wrapper.test.mjs
+
+      # go binding suite: the `go` job below. Prebuilt archive byte-verify:
+      # .github/workflows/go-prebuilt-linux.yml (PR verify + push sync).
+
+      - name: Build chat_xdk_dotnet (JNA / JVM)
+        if: runner.os == 'Linux'
+        run: cargo build -p chat-xdk-dotnet --release
+
+      - name: Setup Java (JVM bindings)
+        if: runner.os == 'Linux'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: chat-xdk/crates/jvm/java/chatxdk/pom.xml
+
+      - name: Test (JVM / JNA bindings)
+        if: runner.os == 'Linux'
+        working-directory: chat-xdk/crates/jvm/java/chatxdk
+        run: mvn test -Djna.library.path="${GITHUB_WORKSPACE}/chat-xdk/target/release"
+
+      - name: Setup .NET (.NET bindings)
+        if: runner.os == 'Linux'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test (.NET / P/Invoke bindings)
+        if: runner.os == 'Linux'
+        working-directory: chat-xdk/crates/dotnet/dotnet/ChatXdk.Tests
+        run: dotnet test
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/chat-xdk/target/release
+
+  go:
+    name: test go binding (ubuntu)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      # Needed for the workspace path dependency `../juicebox-sdk` (see Cargo.toml).
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            chat-xdk -> target
+
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: chat-xdk/go/chatxdk/go.mod
+          cache: false
+
+      # Builds the static archive (`prebuilt`) into go/chatxdk/libs/linux_amd64,
+      # then runs the go/chatxdk suite against it.
+      - name: Test (Go SDK)
+        run: make test-go

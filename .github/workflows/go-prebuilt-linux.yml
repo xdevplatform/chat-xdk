@@ -1,0 +1,194 @@
+# Committed prebuilts (reproducible by default with GNU ar):
+#   go/chatxdk/libs/linux_amd64/libchat_xdk_go.a       (glibc)
+#   go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a  (musl / Alpine)
+#
+# verify (pull_request): build both targets on Ubuntu and fail if archives
+#   don't match (required for fork PRs -- bots cannot push there).
+# sync (push): build, then commit + push if either archive changed. `paths`
+#   must include this workflow file so a push that only edits YAML still triggers
+#   sync (otherwise the prebuilt can stay stale while PR verify fails).
+# sync (workflow_dispatch): same as push, for any branch (input).
+#
+# Pushes use the chat-xdk-release GitHub App token (ruleset bypass), falling back to PREBUILT_SYNC_PAT
+# (classic PAT: repo scope, or fine-grained: Contents write on this repository).
+
+name: go prebuilt (linux)
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "crates/core/**"
+      - "crates/go/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "go/chatxdk/libs/**"
+      - ".github/workflows/go-prebuilt-linux.yml"
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/core/**"
+      - "crates/go/**"
+      - "go/chatxdk/libs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/go-prebuilt-linux.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to checkout, update lib, and push to"
+        required: true
+        default: "main"
+
+concurrency:
+  group: go-prebuilt-linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  RUST_TARGET_GNU: x86_64-unknown-linux-gnu
+  RUST_TARGET_MUSL: x86_64-unknown-linux-musl
+  COMMITTED_GNU: go/chatxdk/libs/linux_amd64/libchat_xdk_go.a
+  COMMITTED_MUSL: go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    name: verify go prebuilt linux (PR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+      - name: Checkout juicebox-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl
+      - name: Install Linux build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential musl-tools
+      - name: Build static libraries (glibc + musl)
+        run: |
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
+      - name: Strip (deterministic archives)
+        run: |
+          # -D pins GNU deterministic-archive mode (zeroed member dates) even if
+          # a runner's binutils is not configured with it as the default.
+          strip -D --strip-debug "target/$RUST_TARGET_GNU/release/libchat_xdk_go.a"
+          strip -D --strip-debug "target/$RUST_TARGET_MUSL/release/libchat_xdk_go.a"
+      - name: Must match committed archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILT_GNU="target/${RUST_TARGET_GNU}/release/libchat_xdk_go.a"
+          BUILT_MUSL="target/${RUST_TARGET_MUSL}/release/libchat_xdk_go.a"
+          for pair in "$BUILT_GNU:$COMMITTED_GNU" "$BUILT_MUSL:$COMMITTED_MUSL"; do
+            BUILT="${pair%%:*}"
+            COMMITTED="${pair#*:}"
+            if [[ ! -f "$COMMITTED" ]]; then
+              echo "::error::Missing committed prebuilt at $COMMITTED"
+              exit 1
+            fi
+            if ! cmp -s "$BUILT" "$COMMITTED"; then
+              echo "::error::Built $BUILT differs from committed $COMMITTED"
+              echo "On a same-repo branch, push a Rust/Go change to trigger the sync job, or run 'go prebuilt (linux)' (workflow_dispatch) for your branch. Fork PRs must include the correct lib from a local Linux build that matches CI."
+              sha256sum "$BUILT" "$COMMITTED" || true
+              exit 1
+            fi
+          done
+          echo "OK: linux prebuilts match (glibc + musl)."
+
+  sync:
+    if: |
+      (github.event_name == 'push' && !contains(github.ref, 'dependabot')) ||
+      github.event_name == 'workflow_dispatch'
+    name: sync go prebuilt linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      # The chat-xdk-release GitHub App is a ruleset bypass actor, so its
+      # short-lived installation token can push to protected main.
+      - name: Mint push token
+        id: push-token
+        env:
+          HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID }}
+        if: ${{ env.HAS_RELEASE_APP != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          token: ${{ steps.push-token.outputs.token || secrets.PREBUILT_SYNC_PAT || secrets.GITHUB_TOKEN }}
+      - name: Checkout juicebox-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl
+      - name: Install Linux build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential musl-tools
+      - name: Build static libraries (glibc + musl)
+        run: |
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
+      - name: Strip (deterministic archives)
+        run: |
+          # -D pins GNU deterministic-archive mode (zeroed member dates) even if
+          # a runner's binutils is not configured with it as the default.
+          strip -D --strip-debug "target/$RUST_TARGET_GNU/release/libchat_xdk_go.a"
+          strip -D --strip-debug "target/$RUST_TARGET_MUSL/release/libchat_xdk_go.a"
+      - name: Commit prebuilts if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$COMMITTED_GNU")" "$(dirname "$COMMITTED_MUSL")"
+          cp -f "target/${RUST_TARGET_GNU}/release/libchat_xdk_go.a" "$COMMITTED_GNU"
+          cp -f "target/${RUST_TARGET_MUSL}/release/libchat_xdk_go.a" "$COMMITTED_MUSL"
+          if git diff --quiet -- "$COMMITTED_GNU" "$COMMITTED_MUSL"; then
+            echo "No change to linux prebuilts; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$COMMITTED_GNU" "$COMMITTED_MUSL"
+          git commit -m "chore(go): sync libchat_xdk_go.a (linux_amd64 glibc + musl)"
+          if ! git push origin "HEAD:refs/heads/$(git rev-parse --abbrev-ref HEAD)"; then
+            echo "::warning::git push failed. Use a write-capable token (set PREBUILT_SYNC_PAT) or relax branch protection for the Actions app."
+            exit 1
+          fi
+          echo "Pushed updated linux prebuilts to $(git rev-parse --abbrev-ref HEAD)"

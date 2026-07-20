@@ -1,0 +1,11 @@
+# Consolidate multiple author identities to a single canonical name/email.
+# Format: Canonical Name <canonical@email> <commit@email>
+
+Santiago Medina Rolong <smedinarolong@x.ai> <smedinarolong@x.ai>
+Santiago Medina Rolong <smedinarolong@x.ai> <smedinarolong@twitter.com>
+
+Vardhan Agnihotri <vagnihotri@twitter.com> <vagnihotri@twitter.com>
+Vardhan Agnihotri <vagnihotri@twitter.com> <60634457+VA-24@users.noreply.github.com>
+
+Mike Rosinsky <mrosinsky@x.com> <mrosinsky@x.com>
+Mike Rosinsky <mrosinsky@x.com> <56515138+m-rosinsky@users.noreply.github.com>

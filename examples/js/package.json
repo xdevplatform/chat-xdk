@@ -1,0 +1,20 @@
+{
+  "name": "chat-xdk-example-js",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Open-source chat-xdk browser + bot example (WASM)",
+  "scripts": {
+    "test": "node --test",
+    "start": "node server.mjs",
+    "bot": "node src/bot.mjs",
+    "register": "node src/register.mjs",
+    "build:wasm": "cd ../../crates/wasm && wasm-pack build --target web --out-dir pkg"
+  },
+  "dependencies": {
+    "@xdevplatform/chat-xdk": "file:../../crates/wasm/js"
+  },
+  "optionalDependencies": {
+    "@xdevplatform/xdk": "^1.0.0"
+  }
+}

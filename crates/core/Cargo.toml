@@ -1,0 +1,66 @@
+[package]
+name = "chat-xdk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+description = "X Chat SDK - encryption for X Direct Messages"
+
+[dependencies]
+# Proc macros for JS type generation
+chat-xdk-macros = { workspace = true, optional = true }
+
+# Cryptography - Pure Rust, WASM-compatible
+p256.workspace = true
+ecdsa.workspace = true
+elliptic-curve.workspace = true
+aes-gcm.workspace = true
+xsalsa20poly1305.workspace = true
+crypto_secretstream.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+
+# Secure memory handling
+zeroize.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+# Thrift runtime for generated types
+thrift = "0.24"
+uuid = "1"
+
+# Error handling
+thiserror.workspace = true
+
+# Random number generation
+rand.workspace = true
+getrandom.workspace = true
+
+# Hex encoding
+hex.workspace = true
+
+# Optional: Async runtime and Juicebox (for native builds with key storage)
+tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+juicebox_sdk = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+
+[[example]]
+name = "gen_sdk_vectors"
+required-features = ["internals"]
+
+[features]
+default = ["juicebox"]
+# Enable Juicebox key storage (requires networking, not WASM-compatible)
+juicebox = ["dep:tokio", "dep:async-trait", "dep:juicebox_sdk"]
+# Generate camelCase JS wrapper types (for WASM builds)
+js = ["dep:chat-xdk-macros"]
+# Expose the doc-hidden internals module (vector generator + fuzz targets only)
+internals = []

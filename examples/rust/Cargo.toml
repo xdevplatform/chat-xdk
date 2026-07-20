@@ -1,0 +1,38 @@
+[package]
+name = "chatbot-rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open-source chat-xdk example bot in Rust"
+
+# Detach from the parent workspace so the example is clonable on its own.
+[workspace]
+
+[features]
+# The real X Chat API client (ureq). On by default; disable for a pure
+# offline build of just the crypto core (e.g. `cargo build --no-default-features`).
+default = ["http"]
+http = ["dep:ureq"]
+
+[dependencies]
+chat-xdk-core = { path = "../../crates/core", default-features = false }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", features = ["json"], optional = true }
+
+[[bin]]
+name = "chatbot-rs"
+path = "src/main.rs"
+
+# One-time public-key registration helper (needs the HTTP client).
+[[bin]]
+name = "register"
+path = "src/bin/register.rs"
+required-features = ["http"]
+
+# Mirror the workspace's thrift pin so the example builds standalone (thrift
+# 0.24.0 is not yet on crates.io; this commit carries the Rust fixes the core
+# needs). Drop once thrift 0.24.0 is released on crates.io.
+[patch.crates-io]
+thrift = { git = "https://github.com/apache/thrift.git", rev = "deb36fa409849de45973b04ffc3ce49d277ca90a" }

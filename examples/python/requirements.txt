@@ -1,0 +1,7 @@
+# The chat-xdk Python binding (message encryption).
+# From a release: `pip install chatxdk`.
+# From this repo: `cd ../../crates/pyo3 && maturin develop`.
+chatxdk
+
+# The official X API SDK (REST client used for all API calls).
+xdk

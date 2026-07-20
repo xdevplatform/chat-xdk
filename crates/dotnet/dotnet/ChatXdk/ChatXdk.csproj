@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <AssemblyName>ChatXdk</AssemblyName>
+    <RootNamespace>ChatXdk</RootNamespace>
+    <PackageId>XDevPlatform.ChatXdk</PackageId>
+    <Version>0.4.0</Version>
+    <Authors>X Corp.</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/xdevplatform/chat-xdk</RepositoryUrl>
+    <Description>
+      X Chat SDK - encryption for X Direct Messages (.NET bindings).
+      Wraps the Rust chat-xdk-core library via P/Invoke (csbindgen-generated).
+    </Description>
+  </PropertyGroup>
+
+  <!--
+    Native libraries ship under runtimes/<rid>/native/ and are resolved by the
+    .NET runtime at load time from the P/Invoke name "chat_xdk_dotnet". CI
+    builds one cdylib per RID (osx-arm64, osx-x64, linux-x64, win-x64) and
+    stages it there before packing. For a local package, build the cdylib in
+    the release profile and copy it into the matching runtimes path.
+  -->
+  <ItemGroup>
+    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../../../THIRD_PARTY_NOTICES.md" Pack="true" PackagePath="THIRD_PARTY_NOTICES.md" />
+  </ItemGroup>
+
+</Project>

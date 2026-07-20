@@ -1,0 +1,56 @@
+# cargo-fuzz targets for chat-xdk-core's untrusted parsing entry points.
+# Standalone workspace (see [workspace] below) so libfuzzer never leaks into
+# the main build graph; run with `cargo +nightly fuzz run <target>` from
+# crates/core.
+
+[package]
+name = "chat-xdk-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+base64 = "0.22"
+
+[dependencies.chat-xdk-core]
+path = ".."
+# No juicebox: fuzzing only needs the pure crypto/parsing core, and this keeps
+# the sibling ../juicebox-sdk checkout out of the fuzz build. The internals
+# feature exposes the raw parsing entry points the targets feed.
+default-features = false
+features = ["internals"]
+
+[[bin]]
+name = "parse_message_event"
+path = "fuzz_targets/parse_message_event.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decrypt_event"
+path = "fuzz_targets/decrypt_event.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_message_content"
+path = "fuzz_targets/parse_message_content.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the root workspace so `cargo {test,clippy} --workspace` never
+# builds the libfuzzer harness.
+[workspace]
+
+# Mirrors the root workspace's pin: thrift 0.24 is not on crates.io yet, and
+# this standalone workspace does not inherit the root [patch] section.
+[patch.crates-io]
+thrift = { git = "https://github.com/apache/thrift.git", rev = "deb36fa409849de45973b04ffc3ce49d277ca90a" }

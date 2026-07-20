@@ -1,0 +1,6 @@
+[net]
+# Use the git CLI for git dependencies (and their submodules) so that git config
+# (e.g. URL rewrites) is honored. This avoids SSH-auth failures when an upstream
+# repo uses SSH submodule URLs.
+git-fetch-with-cli = true
+

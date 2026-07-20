@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/macros",
+    "crates/pyo3",
+    "crates/wasm",
+    "crates/go",
+    "crates/dotnet",
+]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/xdevplatform/chat-xdk"
+keywords = ["x", "chat", "encryption", "dm"]
+
+[workspace.dependencies]
+# Internal crates (default-features = false to allow overriding in member crates)
+chat-xdk-core = { path = "crates/core", default-features = false }
+# The `version` key is required by `cargo publish` for path dependencies; it is
+# stamped alongside [workspace.package] version by scripts/version.sh.
+chat-xdk-macros = { path = "crates/macros", version = "0.4.0" }
+
+# Cryptography - Pure Rust, WASM-compatible
+aes-gcm = "0.10"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+ecdsa = { version = "0.16", features = ["signing", "verifying", "der"] }
+elliptic-curve = { version = "0.13", features = ["sec1"] }
+xsalsa20poly1305 = "0.9.1"
+crypto_secretstream = "0.2"
+sha2 = "0.10"
+hmac = "0.12"
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"
+
+# Async
+tokio = { version = "1.0", features = ["rt", "sync"] }
+async-trait = "0.1"
+
+# Error handling
+thiserror = "1.0"
+
+# Random
+rand = "0.8"
+getrandom = "0.2"
+
+# Juicebox (path dependency).
+# We keep this as a path dependency because the upstream repo includes an SSH-only git submodule
+# which breaks Cargo git dependencies in CI environments without SSH keys.
+#
+# CI checks out `juicebox-systems/juicebox-sdk` as a sibling directory at `../juicebox-sdk`.
+juicebox_sdk = { path = "../juicebox-sdk/rust/sdk", features = ["tokio", "reqwest"] }
+
+# Misc
+hex = "0.4"
+serde_yaml = "0.9"
+
+# Python bindings
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
+
+# TypeScript type generation (for JS/WASM builds)
+ts-rs = { version = "10", features = ["serde-compat"] }
+
+# thrift 0.24.0 is not yet published to crates.io (latest release is 0.23.0), so
+# pin to the apache/thrift master commit that carries the Rust fixes this SDK
+# needs: the `crate_prefix` generator option (for `src/thrift/` submodule
+# output), `list<union>` codegen, and union/length-prefix parsing robustness.
+# Drop this [patch] once thrift 0.24.0 is released on crates.io.
+[patch.crates-io]
+thrift = { git = "https://github.com/apache/thrift.git", rev = "deb36fa409849de45973b04ffc3ce49d277ca90a" }
+

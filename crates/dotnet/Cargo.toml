@@ -1,0 +1,32 @@
+[package]
+name = "chat-xdk-dotnet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = ".NET (C#) bindings for the chat-xdk encryption SDK"
+
+[lib]
+name = "chat_xdk_dotnet"
+# cdylib  → shared library (.so/.dylib/.dll) loaded at runtime by the CLR
+# staticlib → static archive for embedding, e.g. in NativeAOT publish
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Core SDK with full Juicebox support
+chat-xdk-core = { workspace = true, features = ["juicebox"] }
+
+# Async runtime (Juicebox calls are async; we block_on them in the FFI layer)
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+# Serialization — all complex types cross the FFI boundary as JSON strings
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+# Exported private-key copies are wiped after base64 encoding
+zeroize.workspace = true
+
+[build-dependencies]
+# csbindgen reads src/lib.rs and emits the C# P/Invoke layer
+csbindgen = "1"

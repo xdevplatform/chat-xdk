@@ -1,0 +1,31 @@
+/target
+.idea/
+examples/config.yaml
+
+crates/wasm/js/node_modules/
+# Staged by `make wasm` from crates/wasm/pkg (build artifact, ships in the npm tarball)
+crates/wasm/js/pkg/
+crates/pyo3/python/chat_xdk/*.dSYM
+crates/pyo3/python/chat_xdk/*.so
+crates/pyo3/python/chat_xdk/*.dylib
+.venv/
+.thrift-compiler/
+
+# .NET / MSBuild (never commit local builds under crates/dotnet)
+crates/dotnet/**/bin/
+crates/dotnet/**/obj/
+# Native libs are staged per-RID at pack time, not committed
+crates/dotnet/**/runtimes/
+*.nupkg
+
+# Maven (JVM bindings)
+crates/jvm/java/**/target/
+
+# Go test coverage output
+go/chatxdk/coverage.out
+
+# Internal / confidential security docs (not for open-source publish)
+docs/internal/
+
+# Multi-arch natives staged at pack/release time (not committed)
+crates/jvm/java/chatxdk/src/main/resources/native/

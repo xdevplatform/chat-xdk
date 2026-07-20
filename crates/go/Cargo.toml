@@ -1,0 +1,26 @@
+[package]
+name = "chat-xdk-go"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Go bindings for chat-xdk encryption SDK (C FFI layer)"
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+default = ["juicebox"]
+juicebox = ["chat-xdk-core/juicebox", "dep:tokio"]
+
+[dependencies]
+chat-xdk-core = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+zeroize.workspace = true
+libc = "0.2"
+
+[build-dependencies]
+cbindgen = "0.27"

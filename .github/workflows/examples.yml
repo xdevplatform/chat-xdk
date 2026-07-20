@@ -1,0 +1,112 @@
+name: Examples
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["examples/**", "crates/**", "go/**", ".github/workflows/examples.yml"]
+  pull_request:
+    branches: ["**"]
+    paths: ["examples/**", "crates/**", "go/**", ".github/workflows/examples.yml"]
+
+# Runs the OFFLINE test for each example bot (real binding, no SDK mocking, no
+# network). The live e2e (CHATXDK_E2E=1) is intentionally not run in CI — it
+# needs real X API credentials.
+jobs:
+  examples:
+    name: example offline tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      # Workspace path dependency `../juicebox-sdk` (see Cargo.toml).
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chat-xdk -> target
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: chat-xdk/crates/jvm/java/chatxdk/pom.xml
+      - name: .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # --- Build the bindings the examples import -------------------------------
+      - name: wasm32 target + wasm-pack
+        run: rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Build wasm pkg
+        run: cd crates/wasm && wasm-pack build --target web --release
+
+      - name: Build Python extension into the in-repo package
+        env:
+          PYO3_PYTHON: python
+        run: |
+          set -euo pipefail
+          cargo build -p chat-xdk-python
+          EXT_SUFFIX="$(python -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')"
+          cp -f target/debug/libchat_xdk.so "crates/pyo3/python/chat_xdk/_native${EXT_SUFFIX}"
+
+      - name: Build chat_xdk_dotnet native lib (for .NET + JVM)
+        run: cargo build -p chat-xdk-dotnet --release
+
+      # --- Run each example's offline test -------------------------------------
+      - name: Rust example
+        run: cd examples/rust && cargo test
+
+      - name: Go example
+        run: cd examples/go && CGO_ENABLED=1 go test ./...
+
+      - name: JS example
+        run: cd examples/js && node --test
+
+      - name: Python example
+        run: cd examples/python && PYTHONPATH=../../crates/pyo3/python:. python -m unittest discover -s tests
+
+      - name: JVM example
+        run: |
+          (cd crates/jvm/java/chatxdk && mvn -q -DskipTests install)
+          (cd examples/jvm && mvn -q test)
+
+      - name: .NET example
+        run: |
+          cd examples/dotnet
+          dotnet build ChatBot.Tests/ChatBot.Tests.csproj
+          cp ../../target/release/libchat_xdk_dotnet.so ChatBot.Tests/bin/Debug/net8.0/
+          dotnet test ChatBot.Tests/ChatBot.Tests.csproj --no-build

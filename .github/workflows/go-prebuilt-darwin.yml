@@ -1,0 +1,211 @@
+# Committed prebuilts (reproducible: codegen-units=1 + ZERO_AR_DATE + zeroed ar member dates):
+#   go/chatxdk/libs/darwin_arm64/libchat_xdk_go.a
+#   go/chatxdk/libs/darwin_amd64/libchat_xdk_go.a
+#
+# Same pattern as go-prebuilt-linux.yml: verify on pull_request, sync on push /
+# workflow_dispatch. Builds both Apple targets on one macOS runner (matches local
+# dev where M-series laptops are primary; Intel Mac gets x86_64-apple-darwin via
+# cross-compile from macos-latest — same approach as building multiple targets in one CI job).
+#
+# verify (pull_request): build aarch64 + x86_64 apple-darwin and cmp both archives.
+# sync (push / workflow_dispatch): rebuild both, commit once if either changed.
+#
+# Pushes use the chat-xdk-release GitHub App token (ruleset bypass), falling back to PREBUILT_SYNC_PAT (same as Linux).
+
+name: go prebuilt (darwin)
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "crates/core/**"
+      - "crates/go/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "go/chatxdk/libs/**"
+      - ".github/workflows/go-prebuilt-darwin.yml"
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/core/**"
+      - "crates/go/**"
+      - "go/chatxdk/libs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/go-prebuilt-darwin.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to checkout, update libs, and push to"
+        required: true
+        default: "main"
+
+concurrency:
+  group: go-prebuilt-darwin-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  # Single codegen unit makes the build deterministic: with parallel codegen the
+  # macOS object code varies run-to-run, so a fresh build never byte-matches the
+  # committed archive. Combined with ZERO_AR_DATE and the ar-member date
+  # normalization below, this makes the darwin prebuilt fully reproducible.
+  RUSTFLAGS: "-C codegen-units=1"
+  # cctools ar/ranlib/libtool/strip honor this and write zeroed member dates
+  # instead of the build time.
+  ZERO_AR_DATE: "1"
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  RUST_TARGET_ARM64: aarch64-apple-darwin
+  RUST_TARGET_AMD64: x86_64-apple-darwin
+  COMMITTED_ARM64: go/chatxdk/libs/darwin_arm64/libchat_xdk_go.a
+  COMMITTED_AMD64: go/chatxdk/libs/darwin_amd64/libchat_xdk_go.a
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    name: verify go prebuilt darwin (PR)
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+      - name: Checkout juicebox-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+      - name: Rust targets (darwin)
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build static libraries (chat-xdk-go)
+        run: |
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
+      - name: Strip (macOS)
+        run: |
+          strip -S "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a"
+          strip -S "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+      - name: Normalize archives (zero every ar member date)
+        run: |
+          # ZERO_AR_DATE covers the cctools passes; this zeroes the date field
+          # of every member header so repeated builds of identical source are
+          # byte-identical no matter which tool wrote a header. Must stay
+          # identical to the Makefile `prebuilt` recipe.
+          python3 scripts/normalize_ar_dates.py \
+            "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a" \
+            "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+      - name: Must match committed archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILT_ARM="target/${RUST_TARGET_ARM64}/release/libchat_xdk_go.a"
+          BUILT_AMD="target/${RUST_TARGET_AMD64}/release/libchat_xdk_go.a"
+          COMMITTED_ARM="${COMMITTED_ARM64}"
+          COMMITTED_AMD="${COMMITTED_AMD64}"
+          for pair in "$BUILT_ARM:$COMMITTED_ARM" "$BUILT_AMD:$COMMITTED_AMD"; do
+            BUILT="${pair%%:*}"
+            COMMITTED="${pair#*:}"
+            if [[ ! -f "$COMMITTED" ]]; then
+              echo "::error::Missing committed prebuilt at $COMMITTED"
+              echo "Run Actions → go prebuilt (darwin) → workflow_dispatch on this branch to sync, or add the file from a matching local macOS build."
+              exit 1
+            fi
+            if ! cmp -s "$BUILT" "$COMMITTED"; then
+              echo "::error::Built $BUILT differs from committed $COMMITTED"
+              shasum -a 256 "$BUILT" "$COMMITTED" || true
+              exit 1
+            fi
+          done
+          echo "OK: darwin prebuilts match."
+
+  sync:
+    if: |
+      (github.event_name == 'push' && !contains(github.ref, 'dependabot')) ||
+      github.event_name == 'workflow_dispatch'
+    name: sync go prebuilt darwin
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      # The chat-xdk-release GitHub App is a ruleset bypass actor, so its
+      # short-lived installation token can push to protected main.
+      - name: Mint push token
+        id: push-token
+        env:
+          HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID }}
+        if: ${{ env.HAS_RELEASE_APP != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          token: ${{ steps.push-token.outputs.token || secrets.PREBUILT_SYNC_PAT || secrets.GITHUB_TOKEN }}
+      - name: Checkout juicebox-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+      - name: Rust targets (darwin)
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build static libraries (chat-xdk-go)
+        run: |
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
+          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
+          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
+      - name: Strip (macOS)
+        run: |
+          strip -S "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a"
+          strip -S "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+      - name: Normalize archives (zero every ar member date)
+        run: |
+          # ZERO_AR_DATE covers the cctools passes; this zeroes the date field
+          # of every member header so repeated builds of identical source are
+          # byte-identical no matter which tool wrote a header. Must stay
+          # identical to the Makefile `prebuilt` recipe.
+          python3 scripts/normalize_ar_dates.py \
+            "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a" \
+            "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+      - name: Commit prebuilts if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$COMMITTED_ARM64")" "$(dirname "$COMMITTED_AMD64")"
+          cp -f "target/${RUST_TARGET_ARM64}/release/libchat_xdk_go.a" "$COMMITTED_ARM64"
+          cp -f "target/${RUST_TARGET_AMD64}/release/libchat_xdk_go.a" "$COMMITTED_AMD64"
+          if git diff --quiet -- "$COMMITTED_ARM64" "$COMMITTED_AMD64"; then
+            echo "No change to darwin prebuilts; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$COMMITTED_ARM64" "$COMMITTED_AMD64"
+          git commit -m "chore(go): sync libchat_xdk_go.a (darwin arm64 + amd64)"
+          if ! git push origin "HEAD:refs/heads/$(git rev-parse --abbrev-ref HEAD)"; then
+            echo "::warning::git push failed. Use PREBUILT_SYNC_PAT or relax branch protection."
+            exit 1
+          fi
+          echo "Pushed updated darwin prebuilts to $(git rev-parse --abbrev-ref HEAD)"

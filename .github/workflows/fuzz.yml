@@ -1,0 +1,59 @@
+name: Fuzz
+
+# Short libFuzzer runs over the untrusted parsing entry points: weekly, and
+# on demand. Findings surface as job failures with the crashing input in the
+# uploaded artifacts.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1" # weekly, Monday 04:17 UTC
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_message_event, decrypt_event, parse_message_content]
+
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      - name: Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            chat-xdk/crates/core/fuzz -> target
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # Pin the GNU target: cargo-fuzz otherwise selects a musl target on some
+      # runners, and musl links libc statically, which the sanitizers the fuzz
+      # build enables cannot combine with.
+      - name: Fuzz ${{ matrix.target }} (5 minutes)
+        working-directory: chat-xdk/crates/core
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=300
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: chat-xdk/crates/core/fuzz/artifacts
+          if-no-files-found: ignore

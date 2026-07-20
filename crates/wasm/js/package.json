@@ -1,0 +1,46 @@
+{
+  "name": "@xdevplatform/chat-xdk",
+  "version": "0.4.0",
+  "description": "X Chat SDK - encryption for X Direct Messages",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": "./index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "pkg",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "juicebox-sdk": "^0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "juicebox-sdk": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "x",
+    "twitter",
+    "chat",
+    "encryption",
+    "dm",
+    "direct-messages"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xdevplatform/chat-xdk"
+  }
+}

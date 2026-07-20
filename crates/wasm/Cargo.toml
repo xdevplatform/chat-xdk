@@ -1,0 +1,44 @@
+[package]
+name = "chat-xdk-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "X Chat SDK - WebAssembly bindings for JavaScript/TypeScript"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Core SDK (pure-Rust crypto, works in WASM)
+# Disable juicebox feature for WASM - users manage keys via JS
+# Enable js feature for camelCase wrapper types
+chat-xdk-core = { workspace = true, default-features = false, features = ["js"] }
+
+# WASM bindings
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-wasm-bindgen = "0.6"
+base64 = { workspace = true }
+p256 = { workspace = true }
+
+# Secure memory handling
+zeroize = { workspace = true }
+
+# Async
+futures = "0.3"
+
+# Console logging for debugging
+console_error_panic_hook = { version = "0.1", optional = true }
+
+# Random for wasm (enables JS crypto.getRandomValues)
+getrandom = { version = "0.2", features = ["js"] }
+
+[features]
+default = ["panic_hook"]
+panic_hook = ["dep:console_error_panic_hook"]

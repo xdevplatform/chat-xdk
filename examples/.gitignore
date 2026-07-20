@@ -1,0 +1,19 @@
+# Build artifacts and local config — never commit these.
+target/
+node_modules/
+obj/
+.env
+
+# .NET/JVM build output. Scoped so it does not match Rust's src/bin/ sources.
+dotnet/**/bin/
+jvm/**/bin/
+
+# Registration state (private-key blobs + markers written by register scripts)
+state/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Go example compiled binary (named after the directory)
+go/go

@@ -1,0 +1,570 @@
+# Release chat-xdk bindings to their package registries.
+#
+# Manual trigger (Actions → Release → Run workflow). Pick a binding (or `all`)
+# and a version bump. `dry_run` (default true) builds + tests everything WITHOUT
+# publishing — flip it off to actually publish.
+#
+# All bindings share one version (workspace Cargo.toml), stamped by
+# scripts/version.sh. The git tag `vX.Y.Z` is created on a real release; the Go
+# module additionally needs the subdir tag `go/chatxdk/vX.Y.Z`.
+#
+# Auth is OIDC trusted publishing (no long-lived tokens) wherever the registry
+# supports it: PyPI, npm, and NuGet publishes authenticate with the job's OIDC
+# token after a one-time Trusted Publisher registration on the registry (org
+# xdevplatform, repo chat-xdk, workflow release.yml). Maven Central has no
+# OIDC; it requires a Central Portal user token.
+#
+# Required secrets:
+#   - NUGET_USER                  NuGet.org profile name the trusted publishing policy is registered under
+#   - SONATYPE_USERNAME           Maven Central (Sonatype Central Portal token username)
+#   - SONATYPE_TOKEN              Maven Central (Sonatype Central Portal token)
+#   - MAVEN_GPG_PRIVATE_KEY       Maven Central artifact signing
+#   - MAVEN_GPG_PASSPHRASE        Maven Central artifact signing
+#   - RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY   chat-xdk-release GitHub App (ruleset bypass; pushes to protected main)
+#   - PREBUILT_SYNC_PAT           fallback push credential if the App secrets are absent
+#   - CARGO_REGISTRY_TOKEN        crates.io (unused while publishing is gated on thrift 0.24 — see the rust job; crates.io also supports trusted publishing when ungated)
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      binding:
+        description: "Binding to release"
+        required: true
+        type: choice
+        options: [rust, python, js, go, dotnet, java, all]
+      bump:
+        description: "Version bump (none = republish the current version)"
+        required: true
+        type: choice
+        options: [patch, minor, major, beta, none]
+      dry_run:
+        description: "Build + test only; do not publish or push"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write # for OIDC trusted publishing (PyPI / npm / crates.io / NuGet)
+
+# One release at a time: the prepare → go-prebuilt → tag window is long, and a
+# concurrent run could tag a different commit than it built.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  prepare:
+    name: Prepare version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump version across all bindings
+        run: ./scripts/version.sh bump "${{ inputs.bump }}"
+      - id: v
+        run: echo "version=$(./scripts/version.sh get)" >> "$GITHUB_OUTPUT"
+      - name: Summary
+        run: ./scripts/version.sh list >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # The version stamp changes the Go static libraries (rustc's -C metadata
+  # includes the package version), so the committed archives must be rebuilt
+  # from the stamped source BEFORE the release commit is tagged — otherwise
+  # `go get` at the tag resolves prebuilts compiled from the previous version.
+  # Build steps and reproducibility flags mirror the go-prebuilt sync workflows.
+  go-prebuilt:
+    name: Build Go prebuilts (${{ matrix.os }})
+    needs: prepare
+    if: ${{ !inputs.dry_run || contains(fromJSON('["go","all"]'), inputs.binding) }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runs_on: ubuntu-latest
+          - os: darwin
+            runs_on: macos-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+      - name: Checkout juicebox-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - name: Stamp release version
+        run: ./scripts/version.sh set "${{ needs.prepare.outputs.version }}"
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+      - name: Build (linux glibc + musl)
+        if: matrix.os == 'linux'
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-unknown-linux-gnu x86_64-unknown-linux-musl
+          sudo apt-get update && sudo apt-get install -y build-essential musl-tools
+          cargo build -p chat-xdk-go --release --target x86_64-unknown-linux-gnu
+          cargo build -p chat-xdk-go --release --target x86_64-unknown-linux-musl
+          strip -D --strip-debug target/x86_64-unknown-linux-gnu/release/libchat_xdk_go.a
+          strip -D --strip-debug target/x86_64-unknown-linux-musl/release/libchat_xdk_go.a
+          mkdir -p go/chatxdk/libs/linux_amd64 go/chatxdk/libs/linux_amd64_musl
+          cp target/x86_64-unknown-linux-gnu/release/libchat_xdk_go.a go/chatxdk/libs/linux_amd64/
+          cp target/x86_64-unknown-linux-musl/release/libchat_xdk_go.a go/chatxdk/libs/linux_amd64_musl/
+      - name: Build (darwin arm64 + amd64)
+        if: matrix.os == 'darwin'
+        # Darwin-only reproducibility flags, matching go-prebuilt-darwin.yml;
+        # the linux sync workflow builds with default codegen units, so setting
+        # these job-wide would make the release archives diverge from what the
+        # linux verify/sync jobs rebuild.
+        env:
+          RUSTFLAGS: "-C codegen-units=1"
+          ZERO_AR_DATE: "1"
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build -p chat-xdk-go --release --target aarch64-apple-darwin
+          cargo build -p chat-xdk-go --release --target x86_64-apple-darwin
+          strip -S target/aarch64-apple-darwin/release/libchat_xdk_go.a
+          strip -S target/x86_64-apple-darwin/release/libchat_xdk_go.a
+          python3 scripts/normalize_ar_dates.py \
+            target/aarch64-apple-darwin/release/libchat_xdk_go.a \
+            target/x86_64-apple-darwin/release/libchat_xdk_go.a
+          mkdir -p go/chatxdk/libs/darwin_arm64 go/chatxdk/libs/darwin_amd64
+          cp target/aarch64-apple-darwin/release/libchat_xdk_go.a go/chatxdk/libs/darwin_arm64/
+          cp target/x86_64-apple-darwin/release/libchat_xdk_go.a go/chatxdk/libs/darwin_amd64/
+      # Upload only this platform's freshly built archives: the checkout also
+      # contains the other platform's committed (stale) copies, and overlapping
+      # artifact contents race when the tag job merge-downloads both.
+      - name: Upload prebuilts
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-prebuilt-${{ matrix.os }}
+          path: |
+            chat-xdk/go/chatxdk/libs/${{ matrix.os == 'linux' && 'linux_amd64' || 'darwin_arm64' }}/
+            chat-xdk/go/chatxdk/libs/${{ matrix.os == 'linux' && 'linux_amd64_musl' || 'darwin_amd64' }}/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  tag:
+    name: Commit + tag release
+    needs: [prepare, go-prebuilt]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      # The chat-xdk-release GitHub App is a ruleset bypass actor, so its
+      # short-lived installation token can push to protected main.
+      - name: Mint push token
+        id: push-token
+        env:
+          HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID }}
+        if: ${{ env.HAS_RELEASE_APP != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.push-token.outputs.token || secrets.PREBUILT_SYNC_PAT || github.token }}
+      - name: Stamp release version
+        run: ./scripts/version.sh set "${{ needs.prepare.outputs.version }}"
+      - name: Stage version-current Go prebuilts
+        uses: actions/download-artifact@v4
+        with:
+          path: go/chatxdk/libs
+          pattern: go-prebuilt-*
+          merge-multiple: true
+      - name: Commit + tag
+        run: |
+          set -euo pipefail
+          V="${{ needs.prepare.outputs.version }}"
+          # Republish mode: when the release tag already exists, publishers
+          # build at that tag; committing again would move it.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$V" >/dev/null; then
+            echo "tag v$V already exists; skipping commit+tag (republish)"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): v$V"
+          git tag "v$V"
+          git tag "go/chatxdk/v$V"   # subdir module tag for `go get`
+          # Atomic: either the branch and both tags land, or nothing does. A
+          # plain `push HEAD --tags` can publish the tags even when the branch
+          # push is rejected, burning the version in the Go module proxy cache.
+          git push --atomic origin HEAD "refs/tags/v$V" "refs/tags/go/chatxdk/v$V"
+
+  # ---------------------------------------------------------------------------
+  rust:
+    name: Publish Rust (crates.io)
+    needs: [prepare, tag]
+    # `tag` is skipped on dry runs, so success is only required on real ones.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["rust","all"]'), inputs.binding) }}
+    runs-on: ubuntu-latest
+    steps:
+      # Real run builds at the release tag; a dry-run builds at the triggering
+      # ref, since the tag only exists after a non-dry-run prepare.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
+      - name: crates.io publish is gated on thrift 0.24
+        run: |
+          echo "SKIPPED: crates.io publishing is gated."
+          echo
+          echo "chat-xdk-core depends on thrift = \"0.24\", which is not on crates.io"
+          echo "(the workspace [patch.crates-io] git pin is stripped on publish, so a"
+          echo "published crate would be unresolvable for consumers)."
+          echo
+          echo "Once thrift 0.24.0 is released and the patch is dropped, restore:"
+          echo "  cargo publish -p chat-xdk-macros"
+          echo "  cargo publish -p chat-xdk-core"
+
+  # ---------------------------------------------------------------------------
+  python:
+    name: Build Python wheel (${{ matrix.target }})
+    needs: [prepare, tag]
+    # `tag` is skipped on dry runs, so success is only required on real ones.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["python","all"]'), inputs.binding) }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: "auto"
+          - runs_on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "auto"
+          - runs_on: macos-latest
+            target: aarch64-apple-darwin
+            manylinux: "off"
+          - runs_on: macos-15-intel
+            target: x86_64-apple-darwin
+            manylinux: "off"
+          - runs_on: windows-latest
+            target: x86_64-pc-windows-msvc
+            manylinux: "off"
+    steps:
+      # Real run builds at the release tag; a dry-run builds at the triggering
+      # ref, since the tag only exists after a non-dry-run prepare.
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      # No working-directory: maturin-action mounts the whole workspace, so the
+      # chat-xdk and juicebox-sdk siblings are both visible and ../juicebox-sdk
+      # resolves inside the manylinux container.
+      - name: Build wheel (maturin, abi3)
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --manifest-path chat-xdk/crates/pyo3/Cargo.toml --out wheels
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.target }}
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  python-publish:
+    name: Publish Python (PyPI)
+    needs: [prepare, python]
+    if: ${{ !inputs.dry_run && contains(fromJSON('["python","all"]'), inputs.binding) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: wheels, pattern: python-wheel-*, merge-multiple: true }
+      - name: Publish to PyPI (OIDC trusted publisher)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: wheels }
+
+  # ---------------------------------------------------------------------------
+  js:
+    name: Publish JS/WASM (npm)
+    needs: [prepare, tag]
+    # `tag` is skipped on dry runs, so success is only required on real ones.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["js","all"]'), inputs.binding) }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      # Real run builds at the release tag; a dry-run builds at the triggering
+      # ref, since the tag only exists after a non-dry-run prepare.
+      - uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with: { tool: wasm-pack }
+      # Node here is publish tooling only (the shipped package supports Node
+      # 18+); Node 24 bundles npm >= 11.5.1, which supports OIDC trusted
+      # publishing natively.
+      - uses: actions/setup-node@v4
+        with: { node-version: "24", registry-url: "https://registry.npmjs.org" }
+      - run: make wasm
+      # The wasm artifacts must live inside the package root (npm cannot include
+      # files outside it); guard against shipping a tarball without them.
+      - name: Verify tarball contents
+        working-directory: chat-xdk/crates/wasm/js
+        run: |
+          set -euo pipefail
+          npm pack --json > /tmp/pack.json
+          node -e '
+            // npm <= 11 emits an array of results; npm >= 12 an object keyed
+            // by package name.
+            const json = require("/tmp/pack.json");
+            const result = Array.isArray(json) ? json[0] : Object.values(json)[0];
+            const files = result.files.map((f) => f.path);
+            const required = [
+              "index.js",
+              "index.d.ts",
+              "pkg/chat_xdk_wasm.js",
+              "pkg/chat_xdk_wasm_bg.wasm",
+            ];
+            const missing = required.filter((f) => !files.includes(f));
+            if (missing.length) {
+              console.error("Missing from npm tarball:", missing);
+              process.exit(1);
+            }
+            console.log("npm tarball OK:", files.length, "files");
+          '
+      # Auth comes from the job's OIDC token (permissions.id-token: write) via
+      # npm trusted publishing; provenance is implied for trusted publishes.
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        working-directory: chat-xdk/crates/wasm/js
+        run: npm publish --access public
+
+  # ---------------------------------------------------------------------------
+  go:
+    name: Release Go module
+    needs: [prepare, go-prebuilt, tag]
+    # `tag` is skipped on dry runs, so success is only required on real ones.
+    if: ${{ !cancelled() && needs.go-prebuilt.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["go","all"]'), inputs.binding) }}
+    runs-on: ubuntu-latest
+    steps:
+      # Real release: the module ships as the go/chatxdk/vX.Y.Z tag pushed by
+      # `tag`; prove the tagged archives are exactly the version-current builds.
+      # Dry run: there is no tag; the go-prebuilt build itself is the check.
+      - uses: actions/checkout@v4
+        if: ${{ !inputs.dry_run }}
+        with:
+          ref: go/chatxdk/v${{ needs.prepare.outputs.version }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: fresh-libs
+          pattern: go-prebuilt-*
+          merge-multiple: true
+      - name: Verify tagged prebuilts match the release builds
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          for lib in linux_amd64 linux_amd64_musl darwin_arm64 darwin_amd64; do
+            cmp "go/chatxdk/libs/$lib/libchat_xdk_go.a" "fresh-libs/$lib/libchat_xdk_go.a"
+            echo "OK: $lib byte-matches at the tag"
+          done
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run }}
+        run: ls -la fresh-libs/*/libchat_xdk_go.a
+
+  # ---------------------------------------------------------------------------
+  # Also runs for `java`: the JVM binding loads the same chat_xdk_dotnet cdylib
+  # (via JNA), so the java job reuses these per-platform artifacts.
+  dotnet-build:
+    name: Build .NET native (${{ matrix.rid }})
+    needs: prepare
+    if: ${{ contains(fromJSON('["dotnet","java","all"]'), inputs.binding) }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: macos-latest
+            rust_target: aarch64-apple-darwin
+            rid: osx-arm64
+            lib: libchat_xdk_dotnet.dylib
+          - runs_on: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            rid: osx-x64
+            lib: libchat_xdk_dotnet.dylib
+          - runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            lib: libchat_xdk_dotnet.so
+          - runs_on: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            rid: win-x64
+            lib: chat_xdk_dotnet.dll
+    defaults:
+      run:
+        working-directory: chat-xdk
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Build cdylib (chat-xdk-dotnet)
+        run: cargo build -p chat-xdk-dotnet --release --target ${{ matrix.rust_target }}
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-native-${{ matrix.rid }}
+          path: chat-xdk/target/${{ matrix.rust_target }}/release/${{ matrix.lib }}
+          if-no-files-found: error
+
+  dotnet-publish:
+    name: Publish .NET (NuGet)
+    needs: [prepare, dotnet-build, tag]
+    # `tag` is skipped on dry runs, so success is only required on real ones.
+    if: ${{ !cancelled() && needs.dotnet-build.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["dotnet","all"]'), inputs.binding) }}
+    runs-on: ubuntu-latest
+    steps:
+      # Real run packs at the release tag; a dry-run packs at the triggering
+      # ref, since the tag only exists after a non-dry-run prepare.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Stamp release version
+        run: ./scripts/version.sh set "${{ needs.prepare.outputs.version }}"
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: dotnet-native-*
+      - name: Stage runtimes/<rid>/native
+        run: |
+          set -euo pipefail
+          base=crates/dotnet/dotnet/ChatXdk/runtimes
+          for rid in osx-arm64 osx-x64 linux-x64 win-x64; do
+            mkdir -p "$base/$rid/native"
+            cp artifacts/dotnet-native-$rid/* "$base/$rid/native/"
+          done
+          find "$base" -type f
+      - name: Pack
+        run: dotnet pack crates/dotnet/dotnet/ChatXdk/ChatXdk.csproj -c Release -o nupkg
+      - name: NuGet login (OIDC trusted publishing → short-lived key)
+        if: ${{ !inputs.dry_run }}
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Push to NuGet
+        if: ${{ !inputs.dry_run }}
+        run: dotnet nuget push "nupkg/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  # ---------------------------------------------------------------------------
+  java:
+    name: Publish Java (Maven Central)
+    needs: [prepare, dotnet-build, tag]
+    # `tag` is skipped on dry runs, so success is only required on real ones.
+    if: ${{ !cancelled() && needs.dotnet-build.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["java","all"]'), inputs.binding) }}
+    runs-on: ubuntu-latest
+    steps:
+      # Real run builds at the release tag; a dry-run builds at the triggering
+      # ref, since the tag only exists after a non-dry-run prepare.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: central
+          server-username: SONATYPE_USERNAME
+          server-password: SONATYPE_TOKEN
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - name: Stamp release version
+        run: ./scripts/version.sh set "${{ needs.prepare.outputs.version }}"
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: dotnet-native-*
+      # JNA extracts the library from the classpath at
+      # <Platform.RESOURCE_PREFIX>/<mapped name>, so bundling the cdylibs under
+      # these resource paths makes the jar self-contained.
+      - name: Stage natives into JNA resource paths (jar-bundled)
+        run: |
+          set -euo pipefail
+          base=crates/jvm/java/chatxdk/src/main/resources
+          declare -A prefix=(
+            [osx-arm64]=darwin-aarch64
+            [osx-x64]=darwin-x86-64
+            [linux-x64]=linux-x86-64
+            [win-x64]=win32-x86-64
+          )
+          for rid in "${!prefix[@]}"; do
+            mkdir -p "$base/${prefix[$rid]}"
+            cp artifacts/dotnet-native-"$rid"/* "$base/${prefix[$rid]}/"
+          done
+          find "$base" -type f
+      - name: Package jar
+        run: mvn -B -DskipTests -f crates/jvm/java/chatxdk/pom.xml package
+      - name: Publish to Maven Central (Central Portal)
+        if: ${{ !inputs.dry_run }}
+        env:
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_TOKEN: ${{ secrets.SONATYPE_TOKEN }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SONATYPE_USERNAME}" ] || [ -z "${SONATYPE_TOKEN}" ]; then
+            echo "::error::Maven publish skipped on a non-dry-run release: SONATYPE_USERNAME / SONATYPE_TOKEN secrets are not configured. Configure a Central Portal token (SONATYPE_USERNAME + SONATYPE_TOKEN) and MAVEN_GPG_PRIVATE_KEY / MAVEN_GPG_PASSPHRASE, then re-run."
+            exit 1
+          fi
+          mvn -B -DskipTests -Prelease -f crates/jvm/java/chatxdk/pom.xml deploy

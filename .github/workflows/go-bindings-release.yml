@@ -1,0 +1,150 @@
+# Push a Go tag → build all libchat_xdk_go.a variants on GitHub runners → GitHub Release
+# with one tarball (libs/ tree) + .sha256.
+#
+# Triggers on the subdir-module tag pushed by release.yml (`go/chatxdk/vX.Y.Z`,
+# the tag `go get` resolves) as well as a manual `go/vX.Y.Z`:
+#
+#   git tag -a go/chatxdk/v0.1.0 -m "go bindings v0.1.0"
+#   git push origin go/chatxdk/v0.1.0
+
+name: Go bindings release
+
+on:
+  push:
+    tags:
+      - "go/v*"
+      - "go/chatxdk/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.lib_subdir }}
+    runs-on: ${{ matrix.runs_on }}
+    env:
+      CARGO_INCREMENTAL: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            lib_subdir: linux_amd64
+            extra_apt: ""
+          - runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
+            lib_subdir: linux_amd64_musl
+            extra_apt: musl-tools
+          # linux_arm64 is intentionally absent: the Go module has no cgo
+          # directive or committed lib for it, so shipping the archive would
+          # advertise a platform the module cannot link.
+          - runs_on: macos-latest
+            rust_target: aarch64-apple-darwin
+            lib_subdir: darwin_arm64
+            extra_apt: ""
+          - runs_on: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            lib_subdir: darwin_amd64
+            extra_apt: ""
+
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Clean chat-xdk-go release for target
+        run: cargo clean -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ${{ matrix.extra_apt }}
+
+      - name: Build static library (chat-xdk-go)
+        run: |
+          cargo build -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+
+      - name: Strip debug symbols (Linux)
+        if: runner.os == 'Linux'
+        run: strip --strip-debug "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+
+      - name: Strip debug symbols (macOS)
+        if: runner.os == 'macOS'
+        run: strip -S "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+
+      - name: Upload libchat_xdk_go.a
+        uses: actions/upload-artifact@v4
+        with:
+          name: libchat_xdk_go-${{ matrix.lib_subdir }}
+          path: chat-xdk/target/${{ matrix.rust_target }}/release/libchat_xdk_go.a
+          if-no-files-found: error
+
+  package-and-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: libchat_xdk_go-*
+
+      - name: Assemble libs/ tree and tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p libs
+          shopt -s nullglob
+          files=(artifacts/libchat_xdk_go-*/libchat_xdk_go.a)
+          if [ "${#files[@]}" -ne 4 ]; then
+            echo "Expected 4 libchat_xdk_go artifacts, got ${#files[@]}"
+            find artifacts -type f -print || true
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            dir=$(dirname "$f")
+            name=$(basename "$dir")
+            sub=${name#libchat_xdk_go-}
+            mkdir -p "libs/${sub}"
+            cp -f "$f" "libs/${sub}/libchat_xdk_go.a"
+          done
+          TAG="${{ github.ref_name }}"
+          SAFE=$(echo "$TAG" | sed 's|/|-|g')
+          ARCHIVE="chat-xdk-go-libs-${SAFE}.tar.gz"
+          tar czvf "$ARCHIVE" libs
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Prebuilt `libchat_xdk_go.a` for all supported platforms (built in GitHub Actions).
+
+            Download **`${{ steps.pack.outputs.archive }}`** and verify with **`${{ steps.pack.outputs.archive }}.sha256`**, then extract so paths are `libs/<os>_<arch>/libchat_xdk_go.a` (same layout as `go/chatxdk/libs/` in this repo).
+          files: |
+            ${{ steps.pack.outputs.archive }}
+            ${{ steps.pack.outputs.archive }}.sha256

@@ -1,0 +1,96 @@
+# Manual CI: build libchat_xdk_go.a per OS/arch and upload workflow artifacts (temporary downloads).
+# Actions → "Go binding prebuilts" → Run workflow.
+#
+# For versioned GitHub Releases, use go-bindings-release.yml (push tag go/v*).
+
+name: Go binding prebuilts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.lib_subdir }}
+    runs-on: ${{ matrix.runs_on }}
+    env:
+      CARGO_INCREMENTAL: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            lib_subdir: linux_amd64
+            extra_apt: ""
+          - runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
+            lib_subdir: linux_amd64_musl
+            extra_apt: musl-tools
+          - runs_on: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            lib_subdir: linux_arm64
+            extra_apt: ""
+          - runs_on: macos-latest
+            rust_target: aarch64-apple-darwin
+            lib_subdir: darwin_arm64
+            extra_apt: ""
+          - runs_on: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            lib_subdir: darwin_amd64
+            extra_apt: ""
+
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      # No rust-cache: artifacts must match the clean builds verified by
+      # go-prebuilt-linux.yml / go-prebuilt-darwin.yml.
+      - name: Clean chat-xdk-go release for target
+        run: cargo clean -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ${{ matrix.extra_apt }}
+
+      - name: Build static library (chat-xdk-go)
+        run: |
+          cargo build -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+
+      - name: Strip debug symbols (Linux)
+        if: runner.os == 'Linux'
+        run: strip --strip-debug "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+
+      - name: Strip debug symbols (macOS)
+        if: runner.os == 'macOS'
+        run: strip -S "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+
+      - name: Upload libchat_xdk_go.a
+        uses: actions/upload-artifact@v4
+        with:
+          name: libchat_xdk_go-${{ matrix.lib_subdir }}
+          path: chat-xdk/target/${{ matrix.rust_target }}/release/libchat_xdk_go.a
+          if-no-files-found: error

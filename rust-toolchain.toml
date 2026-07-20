@@ -1,0 +1,5 @@
+[toolchain]
+# Pin toolchain so rustfmt output is stable across dev machines and CI.
+channel = "1.91.1"
+components = ["rustfmt", "clippy"]
+

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>chat-xdk — encrypted chat (example)</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+      h1 { font-size: 1.3rem; }
+      section { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+      label { display: block; font-size: 0.85rem; margin: 0.5rem 0 0.2rem; }
+      input, textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
+      button { padding: 0.5rem 1rem; font: inherit; cursor: pointer; margin-top: 0.5rem; }
+      #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+      .msg { padding: 0.4rem 0.6rem; border-radius: 6px; margin: 0.3rem 0; background: #8881; }
+      .msg .who { font-size: 0.75rem; opacity: 0.7; }
+      .status { font-size: 0.8rem; opacity: 0.75; }
+    </style>
+  </head>
+  <body>
+    <h1>chat-xdk — encrypted chat</h1>
+    <p class="status">
+      A minimal encrypted chat client. Encryption runs in your browser with the
+      chat-xdk WASM binding; the dev server only relays encrypted blobs to the
+      X Chat API.
+    </p>
+
+    <section id="key-setup">
+      <h2>1. Keys</h2>
+      <label for="privkeys">Private key blob (base64)</label>
+      <textarea id="privkeys" rows="2" placeholder="paste an exported key blob, or generate one"></textarea>
+      <button id="btn-load">Load keys</button>
+      <button id="btn-generate">Generate new identity</button>
+      <div id="key-status" class="status"></div>
+    </section>
+
+    <section id="chat" hidden>
+      <h2>2. Conversation</h2>
+      <label for="convid">Conversation ID (recipient user ID, or g… for a group)</label>
+      <input id="convid" placeholder="1234567890" />
+      <button id="btn-connect">Connect</button>
+      <div id="messages"></div>
+      <label for="compose">Message</label>
+      <input id="compose" placeholder="type a message and press Enter" />
+    </section>
+
+    <section>
+      <h2>Log</h2>
+      <div id="log"></div>
+    </section>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,36 @@
+[project]
+name = "chatxdk"
+version = "0.4.0"
+description = "X Chat SDK - encryption for X Direct Messages (Python bindings)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://github.com/xdevplatform/chat-xdk"
+Repository = "https://github.com/xdevplatform/chat-xdk"
+Documentation = "https://github.com/xdevplatform/chat-xdk/blob/main/docs/API.md"
+
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "chat_xdk._native"
+manifest-path = "Cargo.toml"
