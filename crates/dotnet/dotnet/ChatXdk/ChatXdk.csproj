@@ -10,7 +10,7 @@
     <AssemblyName>ChatXdk</AssemblyName>
     <RootNamespace>ChatXdk</RootNamespace>
     <PackageId>XDevPlatform.ChatXdk</PackageId>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <Authors>X Corp.</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
