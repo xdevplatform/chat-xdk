@@ -535,26 +535,40 @@ jobs:
         with:
           path: artifacts
           pattern: dotnet-native-*
-      # JNA extracts the library from the classpath at
-      # <Platform.RESOURCE_PREFIX>/<mapped name>, so bundling the cdylibs under
-      # these resource paths makes the jar self-contained.
-      - name: Stage natives into JNA resource paths (jar-bundled)
+      # NativeLoader extracts the bundled library from the classpath at
+      # native/<rid>/, so bundling the cdylibs under these resource paths
+      # makes the jar self-contained. The rids match the artifact names.
+      - name: Stage natives into NativeLoader resource paths (jar-bundled)
         run: |
           set -euo pipefail
-          base=crates/jvm/java/chatxdk/src/main/resources
-          declare -A prefix=(
-            [osx-arm64]=darwin-aarch64
-            [osx-x64]=darwin-x86-64
-            [linux-x64]=linux-x86-64
-            [win-x64]=win32-x86-64
-          )
-          for rid in "${!prefix[@]}"; do
-            mkdir -p "$base/${prefix[$rid]}"
-            cp artifacts/dotnet-native-"$rid"/* "$base/${prefix[$rid]}/"
+          base=crates/jvm/java/chatxdk/src/main/resources/native
+          for rid in osx-arm64 osx-x64 linux-x64 win-x64; do
+            mkdir -p "$base/$rid"
+            cp artifacts/dotnet-native-"$rid"/* "$base/$rid/"
           done
           find "$base" -type f
       - name: Package jar
         run: mvn -B -DskipTests -f crates/jvm/java/chatxdk/pom.xml package
+      # A jar without the natives fails every consumer with
+      # UnsatisfiedLinkError, so fail the release rather than publish one.
+      - name: Verify jar bundles all platform natives
+        run: |
+          set -euo pipefail
+          jar="crates/jvm/java/chatxdk/target/chatxdk-${{ needs.prepare.outputs.version }}.jar"
+          contents="$(jar tf "$jar")"
+          for entry in \
+            native/osx-arm64/libchat_xdk_dotnet.dylib \
+            native/osx-x64/libchat_xdk_dotnet.dylib \
+            native/linux-x64/libchat_xdk_dotnet.so \
+            native/win-x64/chat_xdk_dotnet.dll \
+            META-INF/LICENSE \
+            META-INF/THIRD_PARTY_NOTICES.md; do
+            if ! grep -qx "$entry" <<<"$contents"; then
+              echo "::error::$jar is missing $entry — the jar would fail at runtime with UnsatisfiedLinkError. Check the pom <resources> configuration and the staging step."
+              exit 1
+            fi
+          done
+          echo "All platform natives present in $jar"
       - name: Publish to Maven Central (Central Portal)
         if: ${{ !inputs.dry_run }}
         env:

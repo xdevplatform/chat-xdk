@@ -58,8 +58,16 @@
   </dependencies>
 
   <build>
-    <!-- Ship project LICENSE + third-party notices inside the jar (META-INF/). -->
+    <!-- An explicit <resources> block replaces Maven's default resource
+         directory rather than extending it, so src/main/resources must be
+         re-declared here: release builds stage the per-platform
+         chat_xdk_dotnet natives under src/main/resources/native/<rid>/, and
+         NativeLoader loads them from the jar at that path. -->
     <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- Ship project LICENSE + third-party notices inside the jar (META-INF/). -->
       <resource>
         <directory>${project.basedir}/../../../../</directory>
         <includes>
