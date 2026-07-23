@@ -1731,6 +1731,9 @@ impl ChatCore {
             .entities
             .take()
             .map(|e| crate::pipeline::build_thrift_entities(&e));
+        if let Some(a) = params.attachments.as_deref() {
+            crate::pipeline::validate_attachment_descriptors(a)?;
+        }
         let thrift_attachments = params
             .attachments
             .take()
@@ -1780,6 +1783,9 @@ impl ChatCore {
             .entities
             .take()
             .map(|e| crate::pipeline::build_thrift_entities(&e));
+        if let Some(a) = params.attachments.as_deref() {
+            crate::pipeline::validate_attachment_descriptors(a)?;
+        }
         let thrift_attachments = params
             .attachments
             .take()
@@ -2037,6 +2043,10 @@ impl ChatCore {
             .take()
             .map(|e| crate::pipeline::build_thrift_entities(&e))
             .map(|v| v.into_iter().map(|b| *b).collect::<Vec<_>>());
+        // The attachment-combination guard deliberately does not apply here:
+        // a reply preview mirrors an already-sent original (which receivers
+        // validate against the embedded raw event), so rejecting it would
+        // block replying to messages from clients that sent such lists.
         let thrift_reply_attachments = params
             .reply_to_attachments
             .take()
@@ -7858,6 +7868,94 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("sender_id"), "got: {err}");
+    }
+
+    /// Encrypt must fail loudly on attachment combinations first-party
+    /// clients cannot render (temporary client-compat guard) and must not
+    /// produce ciphertext for them, while multi image/gif/video stays allowed.
+    #[test]
+    fn encrypt_message_rejects_disallowed_attachment_combos() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+
+        let media = |mt: Option<i32>| crate::AttachmentDescriptor::Media {
+            media_hash_key: "hash".into(),
+            width: 100,
+            height: 100,
+            filesize_bytes: 1000,
+            filename: "file".into(),
+            media_type: mt,
+            duration_millis: None,
+        };
+        let url = || crate::AttachmentDescriptor::Url {
+            url: "https://example.com".into(),
+            display_title: None,
+            banner_image: None,
+            favicon_image: None,
+        };
+        let params_with = |attachments: Vec<crate::AttachmentDescriptor>| {
+            let mut p = crate::EncryptMessageParams::new("conv-1", "hi")
+                .with_identity("sender-1", "pkv")
+                .with_conversation_key(ckey.to_bytes(), "1");
+            p.attachments = Some(attachments);
+            p
+        };
+
+        // Mixed media + URL card is rejected before any ciphertext exists.
+        let err = core
+            .encrypt_message(params_with(vec![media(Some(1)), url()]))
+            .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(err.to_string().contains("attachment combination"));
+
+        // Two URL cards are rejected.
+        let err = core
+            .encrypt_message(params_with(vec![url(), url()]))
+            .unwrap_err();
+        assert!(err.to_string().contains("attachment combination"));
+
+        // Multiple image/gif/video media stay allowed.
+        core.encrypt_message(params_with(vec![
+            media(Some(1)),
+            media(Some(2)),
+            media(Some(3)),
+        ]))
+        .unwrap();
+
+        // A lone non-multi attachment (file media) stays allowed.
+        core.encrypt_message(params_with(vec![media(Some(5))]))
+            .unwrap();
+    }
+
+    #[test]
+    fn encrypt_reply_rejects_disallowed_attachment_combos() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+
+        let mut params = crate::EncryptReplyParams::new("conv-1", "hi", "")
+            .with_identity("sender-1", "pkv")
+            .with_conversation_key(ckey.to_bytes(), "1");
+        params.reply_to_sequence_id = Some("seq-1".into());
+        params.attachments = Some(vec![
+            crate::AttachmentDescriptor::Post {
+                rest_id: Some("1".into()),
+                post_url: None,
+            },
+            crate::AttachmentDescriptor::Media {
+                media_hash_key: "hash".into(),
+                width: 100,
+                height: 100,
+                filesize_bytes: 1000,
+                filename: "pic.jpg".into(),
+                media_type: Some(1),
+                duration_millis: None,
+            },
+        ]);
+        let err = core.encrypt_reply(params).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(err.to_string().contains("attachment combination"));
     }
 
     #[test]

@@ -653,6 +653,33 @@ class TestApiShapes(unittest.TestCase):
                 ],
             )
 
+    def test_mixed_attachment_types_rejected(self):
+        chat, v = self._unlocked_chat()
+
+        # Only image/gif/video media may appear in multiples; any other
+        # attachment type must be the message's only attachment.
+        with self.assertRaisesRegex(ValueError, "attachment combination"):
+            chat.encrypt_message(
+                "123:456",
+                "hi",
+                sender_id="123",
+                signing_key_version="1",
+                conversation_key=bytes(32),
+                conversation_key_version="1",
+                attachments=[
+                    {
+                        "attachment_type": "media",
+                        "media_hash_key": "hash",
+                        "width": 100,
+                        "height": 100,
+                        "filesize_bytes": 1000,
+                        "filename": "pic.jpg",
+                        "media_type": 1,
+                    },
+                    {"attachment_type": "url", "url": "https://example.com"},
+                ],
+            )
+
     def test_url_attachment_with_banner_image_encrypts(self):
         chat, v = self._unlocked_chat()
 

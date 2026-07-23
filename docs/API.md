@@ -700,6 +700,17 @@ type section.
 The `attachments` parameter takes media, URL-card (optionally with encrypted
 banner/favicon preview images), and post descriptors — see
 [AttachmentDescriptor (send side)](#attachmentdescriptor-send-side).
+**Temporary restriction:** `encrypt_message` and `encrypt_reply` reject
+attachment lists that current first-party clients cannot render — multiple
+attachments are allowed only when every one is image/gif/video media
+(`media_type` 1/2/3, or omitted, which defaults to image), up to 10 per
+message; everything else — audio, file, svg, or unrecognized media types, URL
+cards, and posts — must be the sole attachment. Disallowed combinations fail
+with an "Invalid state: disallowed attachment combination…" (or "…too many
+attachments…") error in every binding rather than producing a message that
+breaks receivers. This mirrors the first-party encrypted-send rules and will
+be relaxed when clients support heterogeneous attachment lists; the wire
+format already carries them.
 
 **Replies are event-based.** The preferred form of `EncryptReplyParams` adds
 `reply_to_event` — the base64 raw signed event being replied to. The SDK
@@ -1466,7 +1477,10 @@ bindings.
 ### AttachmentDescriptor (send side)
 
 Describes an attachment to embed when encrypting a message
-(`encrypt_message`/`encrypt_reply`). Unlike most types, the field names stay
+(`encrypt_message`/`encrypt_reply`). Lists mixing attachment types are
+temporarily rejected on encrypt — only image/gif/video media may appear in
+multiples (up to 10); everything else must be the sole attachment (see the
+note under `encrypt_message` above). Unlike most types, the field names stay
 **snake_case in every binding** — they mirror the wire protocol, so the same
 object shape passes through JS, Python dicts, and the Go/JVM/.NET structs
 (which add their own idiomatic casing on the struct fields but serialize to
