@@ -143,6 +143,14 @@ async function main() {
   assert.equal(forgedReply.event.content.text, v.event_reply_text);
   assert.equal(forgedReply.event.replyPreviewValidation, "invalid");
 
+  // Failure events are unsigned by protocol: the fixture failure decodes with
+  // no keys, and JS camelCases the discriminator values and the tier field.
+  const failure = chat.decryptEvent(v.event_failure_b64, {}, []);
+  assert.equal(failure.type, "failure");
+  assert.equal(failure.failure, "rateLimitUpsell");
+  assert.equal(failure.rateLimitTier, "premium");
+  assert.equal(failure.senderId, v.event_sender_id);
+
   // Session identity + opt-in key cache: importKeys(bytes, version) records
   // the registered key version, decryptEvents populates the cache from the
   // verified KeyChange, and encryptMessage resolves the omitted identity and

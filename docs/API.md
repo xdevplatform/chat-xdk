@@ -1634,7 +1634,8 @@ type RateLimitTier =
 ```
 
 Failure events include an optional `rateLimitTier` (JS) / `rate_limit_tier`
-(Python) when the failure type is `rateLimitUpsell`.
+(Python) when the failure type is `rateLimitUpsell` (JS) / `RateLimitUpsell`
+(other bindings).
 
 ### AttachmentInfo
 

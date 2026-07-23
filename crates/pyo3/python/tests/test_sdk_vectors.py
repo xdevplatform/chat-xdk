@@ -239,6 +239,20 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(messages[0]["reply_preview_validation"], "Valid")
         self.assertEqual(messages[1]["reply_preview_validation"], "Invalid")
 
+    def test_failure_event_decodes_type_and_rate_limit_tier(self):
+        from chat_xdk import Chat
+
+        v = _load_vectors()
+        chat = Chat()  # default reject-unverified policy
+
+        # Failure events are unsigned by protocol, so the fixture failure
+        # decodes with no conversation or signing keys.
+        event = chat.decrypt_event(v["event_failure_b64"], {}, [])
+        self.assertEqual(event["type"], "Failure")
+        self.assertEqual(event["failure"], "RateLimitUpsell")
+        self.assertEqual(event["rate_limit_tier"], "Premium")
+        self.assertEqual(event["sender_id"], v["event_sender_id"])
+
     def test_encrypt_reply_derives_preview_from_raw_event(self):
         from chat_xdk import Chat
 

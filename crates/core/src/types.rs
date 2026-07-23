@@ -891,7 +891,8 @@ pub struct FailureEvent {
 
     /// The account tier whose message-request limit was reached.
     ///
-    /// Present only when `failure` is [`FailureType::RateLimitUpsell`].
+    /// Set by the backend for [`FailureType::RateLimitUpsell`] failures; the
+    /// SDK passes through whatever the event carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub rate_limit_tier: Option<RateLimitTier>,

@@ -29,6 +29,11 @@ const EVENT_REPLY_TEXT: &str = "fixture reply message";
 const EVENT_REPLY_FORGED_PREVIEW_TEXT: &str = "forged preview text";
 const EVENT_GARBAGE: &str = "!!!not-an-event!!!";
 
+// Raw Thrift enum values embedded in the failure vector; suites assert the
+// decoded names ("RateLimitUpsell" / "Premium", camelCased in JS).
+const EVENT_FAILURE_TYPE_RATE_LIMIT_UPSELL: i32 = 12;
+const EVENT_RATE_LIMIT_TIER_PREMIUM: i32 = 3;
+
 fn main() {
     // These are intentionally tiny scalars (1 and 2) so they're obviously valid P-256 keys.
     let identity_private: [u8; 32] = {
@@ -158,6 +163,17 @@ fn main() {
     )
     .expect("frame forged reply event");
 
+    // Failure vector: an unsigned RATE_LIMIT_UPSELL failure carrying the
+    // PREMIUM tier, so every suite can pin the decoded failure metadata.
+    let event_failure_b64 = internals::frame_failure_event(
+        "failure-msg-1",
+        EVENT_SENDER_ID,
+        EVENT_CONVERSATION_ID,
+        EVENT_FAILURE_TYPE_RATE_LIMIT_UPSELL,
+        Some(EVENT_RATE_LIMIT_TIER_PREMIUM),
+    )
+    .expect("frame failure event");
+
     let obj = json!({
         "identity_private_b64": B64.encode(identity_private),
         "signing_private_b64": B64.encode(signing_private),
@@ -169,6 +185,7 @@ fn main() {
         "signing_public_b64": B64.encode(signing_kp.public.encoded()),
         "signature_b64": B64.encode(signature),
         "identity_public_key_signature_b64": B64.encode(identity_binding_signature),
+        "event_failure_b64": event_failure_b64,
         "event_key_change_b64": event_key_change_b64,
         "event_message_b64": event_message_b64,
         "event_reply_valid_b64": event_reply_valid_b64,
