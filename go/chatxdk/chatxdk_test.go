@@ -23,6 +23,7 @@ type sdkVectors struct {
 	SigningPublicB64              string `json:"signing_public_b64"`
 	SignatureB64                  string `json:"signature_b64"`
 	IdentityPublicKeySignatureB64 string `json:"identity_public_key_signature_b64"`
+	EventFailureB64               string `json:"event_failure_b64"`
 	EventKeyChangeB64             string `json:"event_key_change_b64"`
 	EventMessageB64               string `json:"event_message_b64"`
 	EventReplyValidB64            string `json:"event_reply_valid_b64"`
@@ -1275,6 +1276,41 @@ func TestDecryptEventsFixtureVectors(t *testing.T) {
 	// … and errors on the garbage event.
 	if _, err := chat.DecryptEvent(v.EventGarbageB64, nil, signingKeys); err == nil {
 		t.Error("expected DecryptEvent to error on the garbage event")
+	}
+}
+
+// TestFailureEventFixtureVector pins the decoded failure metadata: failure
+// events are unsigned by protocol, so the vector decodes with no conversation
+// or signing keys, and the JSON carries the PascalCase discriminator values.
+func TestFailureEventFixtureVector(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New() // default reject-unverified policy
+	defer chat.Close()
+
+	event, err := chat.DecryptEvent(v.EventFailureB64, nil, nil)
+	if err != nil {
+		t.Fatalf("DecryptEvent failed: %v", err)
+	}
+	if event.Type != "Failure" {
+		t.Fatalf("expected a Failure event, got type %q", event.Type)
+	}
+	var failure struct {
+		EventMeta
+		Failure       string `json:"failure"`
+		RateLimitTier string `json:"rate_limit_tier"`
+	}
+	if err := json.Unmarshal(event.Raw(), &failure); err != nil {
+		t.Fatalf("decode failure event: %v", err)
+	}
+	if failure.Failure != "RateLimitUpsell" {
+		t.Errorf("unexpected failure type: %q", failure.Failure)
+	}
+	if failure.RateLimitTier != "Premium" {
+		t.Errorf("unexpected rate limit tier: %q", failure.RateLimitTier)
+	}
+	if failure.SenderID == nil || *failure.SenderID != v.EventSenderID {
+		t.Errorf("unexpected sender_id: %v", failure.SenderID)
 	}
 }
 

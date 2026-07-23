@@ -171,10 +171,29 @@ enum FailureType {
     RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION = 7
     RECIPIENT_KEY_HAS_CHANGED = 8
     ONLY_ENCRYPTED_MESSAGES_ALLOWED = 9
+    REQUESTER_NOT_ADMIN = 10
+    FLAGGED_AS_SPAM = 11
+    RATE_LIMIT_UPSELL = 12
+    SIGNATURE_FAILED_TO_VERIFY_AGAINST_PUBLIC_KEY = 13
+    GENERIC_ERROR = 14
+    SENDER_NOT_GROUP_MEMBER = 15
+    INVALID_SIGNATURE_VERSION = 16
+    INVALID_PIN_REQUEST = 17
+    TOO_MANY_PINS = 18
 } (persisted='false', strato.graphql.typename='XChatFailureType')
+
+enum RateLimitTier {
+    FREE = 1
+    VERIFIED_PHONE = 2
+    PREMIUM = 3
+    PREMIUM_PLUS = 4
+    PREMIUM_BUSINESS = 5
+} (persisted='false', strato.graphql.typename='XChatRateLimitTier')
 
 struct MessageFailureEvent {
     1: optional FailureType failure_type
+    // Only set when failure_type is RATE_LIMIT_UPSELL.
+    2: optional RateLimitTier rate_limit_tier
 } (persisted='true', strato.graphql.typename='XChatMessageFailureEvent')
 
 enum DeleteMessageAction {

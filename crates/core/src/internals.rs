@@ -2,7 +2,7 @@
 //!
 //! The vector generator (`examples/gen_sdk_vectors.rs`) and the fuzz targets
 //! (`fuzz/`) live outside this crate but need two crate-private capabilities:
-//! framing an encrypted payload in the backend `MessageEvent` envelope that
+//! framing an event in the backend `MessageEvent` envelope that
 //! `decrypt_event(s)` consumes, and reaching the bounded untrusted-parse
 //! entry point directly. This module exposes exactly those, `#[doc(hidden)]`
 //! so the supported API surface stays what `ChatCore` / `Chat` define.
@@ -14,21 +14,22 @@ use crate::protocol::safe_reader::BoundedProtocol;
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::signatures::ActionSignature;
 use crate::thrift::event::{
-    ConversationKeyChangeEvent, ConversationParticipantKey, MessageEvent, MessageEventDetail,
-    MessageEventSignature,
+    ConversationKeyChangeEvent, ConversationParticipantKey, FailureType, MessageEvent,
+    MessageEventDetail, MessageEventSignature, MessageFailureEvent, RateLimitTier,
 };
 use crate::types::SendPayload;
 use std::io::Cursor;
 use thrift::protocol::{TBinaryInputProtocol, TSerializable};
 
-/// Frame a Thrift detail + signature into the base64 `MessageEvent` envelope
-/// the backend delivers on the events endpoint.
+/// Frame a Thrift detail into the base64 `MessageEvent` envelope the backend
+/// delivers on the events endpoint. `signature` is `None` for event types
+/// that are unsigned by protocol (typing, failure, member-account-delete).
 fn frame_event(
     message_id: &str,
     sender_id: &str,
     conversation_id: &str,
     detail: MessageEventDetail,
-    signature: MessageEventSignature,
+    signature: Option<MessageEventSignature>,
 ) -> Result<String, SdkError> {
     let event = MessageEvent::new(
         Some("1".to_string()),
@@ -39,7 +40,7 @@ fn frame_event(
         Some("1700000000000".to_string()),
         Some(detail),
         None::<crate::thrift::event::MessageEventRelaySource>,
-        Some(signature),
+        signature,
         None::<String>,
         None::<bool>,
     );
@@ -79,7 +80,13 @@ pub fn frame_send_payload(
         None,
         None,
     );
-    frame_event(message_id, sender_id, conversation_id, detail, signature)
+    frame_event(
+        message_id,
+        sender_id,
+        conversation_id,
+        detail,
+        Some(signature),
+    )
 }
 
 /// Build a signed `ConversationKeyChangeEvent` in the backend `MessageEvent`
@@ -118,7 +125,31 @@ pub fn frame_signed_key_change(
         sender_id,
         conversation_id,
         MessageEventDetail::ConversationKeyChangeEvent(kce),
-        sig_struct,
+        Some(sig_struct),
+    )
+}
+
+/// Frame an unsigned `MessageFailureEvent` in the backend `MessageEvent`
+/// envelope (base64). Failure events carry no signature by protocol, so the
+/// output is fully deterministic. `failure_type` and `rate_limit_tier` are
+/// raw Thrift enum values.
+pub fn frame_failure_event(
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    failure_type: i32,
+    rate_limit_tier: Option<i32>,
+) -> Result<String, SdkError> {
+    let failure = MessageFailureEvent::new(
+        Some(FailureType::from(failure_type)),
+        rate_limit_tier.map(RateLimitTier::from),
+    );
+    frame_event(
+        message_id,
+        sender_id,
+        conversation_id,
+        MessageEventDetail::MessageFailureEvent(failure),
+        None,
     )
 }
 

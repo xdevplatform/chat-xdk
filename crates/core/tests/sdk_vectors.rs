@@ -18,6 +18,7 @@ struct Vectors {
     signing_public_b64: String,
     signature_b64: String,
     identity_public_key_signature_b64: String,
+    event_failure_b64: String,
     event_key_change_b64: String,
     event_message_b64: String,
     event_reply_valid_b64: String,
@@ -207,6 +208,32 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     assert!(core
         .decrypt_event(&v.event_garbage_b64, &Default::default(), &signing_keys)
         .is_err());
+}
+
+#[test]
+fn vectors_failure_event_decodes_type_and_rate_limit_tier() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+
+    // Failure events are unsigned by protocol, so they decode with no
+    // conversation or signing keys even under the default reject policy.
+    let event = core
+        .decrypt_event(&v.event_failure_b64, &Default::default(), &[])
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::Failure(f) => {
+            assert_eq!(f.failure, chat_xdk_core::FailureType::RateLimitUpsell);
+            assert_eq!(
+                f.rate_limit_tier,
+                Some(chat_xdk_core::RateLimitTier::Premium)
+            );
+            assert_eq!(
+                f.meta.sender_id.as_deref(),
+                Some(v.event_sender_id.as_str())
+            );
+        }
+        other => panic!("Expected Event::Failure, got {:?}", other),
+    }
 }
 
 #[test]

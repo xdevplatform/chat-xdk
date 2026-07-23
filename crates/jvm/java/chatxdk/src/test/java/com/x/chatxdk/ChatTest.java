@@ -678,6 +678,22 @@ class ChatTest {
         }
     }
 
+    // Failure events are unsigned by protocol: the fixture failure decodes
+    // with no conversation or signing keys, and the JSON carries the
+    // PascalCase discriminator values.
+    @Test
+    void vectorsFailureEventDecodesTypeAndRateLimitTier() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) { // default reject-unverified policy
+            JsonNode event = chat.decryptEvent(
+                    v.get("event_failure_b64").asText(), (ConversationKeyBundle) null, List.of());
+            assertEquals("Failure", event.path("type").asText());
+            assertEquals("RateLimitUpsell", event.path("failure").asText());
+            assertEquals("Premium", event.path("rate_limit_tier").asText());
+            assertEquals(v.get("event_sender_id").asText(), event.path("sender_id").asText());
+        }
+    }
+
     // Session identity: setIdentity supplies senderId and signingKeyVersion;
     // an encrypt with only the conversation key explicit signs with the
     // session values, and without any identity the call fails loudly.

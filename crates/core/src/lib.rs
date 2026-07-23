@@ -177,6 +177,7 @@ pub mod js {
         JsPublicKeyInput,
         JsPublicKeyRegistration,
         JsPublicKeyRegistrationPayload,
+        JsRateLimitTier,
         JsReadReceiptEvent,
         JsReplyPreviewValidation,
         // Send/receive types

@@ -149,6 +149,15 @@ impl FailureType {
   pub const RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION: FailureType = FailureType(7);
   pub const RECIPIENT_KEY_HAS_CHANGED: FailureType = FailureType(8);
   pub const ONLY_ENCRYPTED_MESSAGES_ALLOWED: FailureType = FailureType(9);
+  pub const REQUESTER_NOT_ADMIN: FailureType = FailureType(10);
+  pub const FLAGGED_AS_SPAM: FailureType = FailureType(11);
+  pub const RATE_LIMIT_UPSELL: FailureType = FailureType(12);
+  pub const SIGNATURE_FAILED_TO_VERIFY_AGAINST_PUBLIC_KEY: FailureType = FailureType(13);
+  pub const GENERIC_ERROR: FailureType = FailureType(14);
+  pub const SENDER_NOT_GROUP_MEMBER: FailureType = FailureType(15);
+  pub const INVALID_SIGNATURE_VERSION: FailureType = FailureType(16);
+  pub const INVALID_PIN_REQUEST: FailureType = FailureType(17);
+  pub const TOO_MANY_PINS: FailureType = FailureType(18);
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::EMPTY_DETAIL,
     Self::INTERNAL_ERROR,
@@ -159,6 +168,15 @@ impl FailureType {
     Self::RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION,
     Self::RECIPIENT_KEY_HAS_CHANGED,
     Self::ONLY_ENCRYPTED_MESSAGES_ALLOWED,
+    Self::REQUESTER_NOT_ADMIN,
+    Self::FLAGGED_AS_SPAM,
+    Self::RATE_LIMIT_UPSELL,
+    Self::SIGNATURE_FAILED_TO_VERIFY_AGAINST_PUBLIC_KEY,
+    Self::GENERIC_ERROR,
+    Self::SENDER_NOT_GROUP_MEMBER,
+    Self::INVALID_SIGNATURE_VERSION,
+    Self::INVALID_PIN_REQUEST,
+    Self::TOO_MANY_PINS,
   ];
 }
 
@@ -185,6 +203,15 @@ impl From<i32> for FailureType {
       7 => FailureType::RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION,
       8 => FailureType::RECIPIENT_KEY_HAS_CHANGED,
       9 => FailureType::ONLY_ENCRYPTED_MESSAGES_ALLOWED,
+      10 => FailureType::REQUESTER_NOT_ADMIN,
+      11 => FailureType::FLAGGED_AS_SPAM,
+      12 => FailureType::RATE_LIMIT_UPSELL,
+      13 => FailureType::SIGNATURE_FAILED_TO_VERIFY_AGAINST_PUBLIC_KEY,
+      14 => FailureType::GENERIC_ERROR,
+      15 => FailureType::SENDER_NOT_GROUP_MEMBER,
+      16 => FailureType::INVALID_SIGNATURE_VERSION,
+      17 => FailureType::INVALID_PIN_REQUEST,
+      18 => FailureType::TOO_MANY_PINS,
       _ => FailureType(i)
     }
   }
@@ -204,6 +231,66 @@ impl From<FailureType> for i32 {
 
 impl From<&FailureType> for i32 {
   fn from(e: &FailureType) -> i32 {
+    e.0
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RateLimitTier(pub i32);
+
+impl RateLimitTier {
+  pub const FREE: RateLimitTier = RateLimitTier(1);
+  pub const VERIFIED_PHONE: RateLimitTier = RateLimitTier(2);
+  pub const PREMIUM: RateLimitTier = RateLimitTier(3);
+  pub const PREMIUM_PLUS: RateLimitTier = RateLimitTier(4);
+  pub const PREMIUM_BUSINESS: RateLimitTier = RateLimitTier(5);
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::FREE,
+    Self::VERIFIED_PHONE,
+    Self::PREMIUM,
+    Self::PREMIUM_PLUS,
+    Self::PREMIUM_BUSINESS,
+  ];
+}
+
+impl TSerializable for RateLimitTier {
+  #[allow(clippy::trivially_copy_pass_by_ref)]
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    o_prot.write_i32(self.0)
+  }
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<RateLimitTier> {
+    let enum_value = i_prot.read_i32()?;
+    Ok(RateLimitTier::from(enum_value))
+  }
+}
+
+impl From<i32> for RateLimitTier {
+  fn from(i: i32) -> Self {
+    match i {
+      1 => RateLimitTier::FREE,
+      2 => RateLimitTier::VERIFIED_PHONE,
+      3 => RateLimitTier::PREMIUM,
+      4 => RateLimitTier::PREMIUM_PLUS,
+      5 => RateLimitTier::PREMIUM_BUSINESS,
+      _ => RateLimitTier(i)
+    }
+  }
+}
+
+impl From<&i32> for RateLimitTier {
+  fn from(i: &i32) -> Self {
+    RateLimitTier::from(*i)
+  }
+}
+
+impl From<RateLimitTier> for i32 {
+  fn from(e: RateLimitTier) -> i32 {
+    e.0
+  }
+}
+
+impl From<&RateLimitTier> for i32 {
+  fn from(e: &RateLimitTier) -> i32 {
     e.0
   }
 }
@@ -2446,12 +2533,14 @@ impl TSerializable for MessageTypingEvent {
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MessageFailureEvent {
   pub failure_type: Option<FailureType>,
+  pub rate_limit_tier: Option<RateLimitTier>,
 }
 
 impl MessageFailureEvent {
-  pub fn new<F1>(failure_type: F1) -> MessageFailureEvent where F1: Into<Option<FailureType>> {
+  pub fn new<F1, F2>(failure_type: F1, rate_limit_tier: F2) -> MessageFailureEvent where F1: Into<Option<FailureType>>, F2: Into<Option<RateLimitTier>> {
     MessageFailureEvent {
       failure_type: failure_type.into(),
+      rate_limit_tier: rate_limit_tier.into(),
     }
   }
 }
@@ -2460,6 +2549,7 @@ impl TSerializable for MessageFailureEvent {
   fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageFailureEvent> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<FailureType> = None;
+    let mut f_2: Option<RateLimitTier> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -2471,6 +2561,10 @@ impl TSerializable for MessageFailureEvent {
           let val = FailureType::read_from_in_protocol(i_prot)?;
           f_1 = Some(val);
         },
+        2 => {
+          let val = RateLimitTier::read_from_in_protocol(i_prot)?;
+          f_2 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -2480,6 +2574,7 @@ impl TSerializable for MessageFailureEvent {
     i_prot.read_struct_end()?;
     let ret = MessageFailureEvent {
       failure_type: f_1,
+      rate_limit_tier: f_2,
     };
     Ok(ret)
   }
@@ -2488,6 +2583,11 @@ impl TSerializable for MessageFailureEvent {
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.failure_type {
       o_prot.write_field_begin(&TFieldIdentifier::new("failure_type", TType::I32, 1))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.rate_limit_tier {
+      o_prot.write_field_begin(&TFieldIdentifier::new("rate_limit_tier", TType::I32, 2))?;
       fld_var.write_to_out_protocol(o_prot)?;
       o_prot.write_field_end()?
     }

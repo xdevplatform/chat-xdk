@@ -1577,6 +1577,7 @@ impl ChatCore {
                 Event::Failure(FailureEvent {
                     meta,
                     failure: failure_type,
+                    rate_limit_tier: convert_rate_limit_tier(failure.rate_limit_tier.as_ref()),
                 })
             }
             MessageEventDetail::MemberAccountDeleteEvent(member_del) => {
@@ -3605,10 +3606,34 @@ pub(crate) fn convert_failure_type(ft: Option<&crate::thrift::event::FailureType
             6 => FailureType::NonLatestKeyVersion,
             7 => FailureType::RecipientNotTrusted,
             8 => FailureType::RecipientKeyChanged,
+            9 => FailureType::OnlyEncryptedMessagesAllowed,
+            10 => FailureType::RequesterNotAdmin,
+            11 => FailureType::FlaggedAsSpam,
+            12 => FailureType::RateLimitUpsell,
+            13 => FailureType::SignatureFailedToVerifyAgainstPublicKey,
+            14 => FailureType::GenericError,
+            15 => FailureType::SenderNotGroupMember,
+            16 => FailureType::InvalidSignatureVersion,
+            17 => FailureType::InvalidPinRequest,
+            18 => FailureType::TooManyPins,
             _ => FailureType::Unknown,
         },
         None => FailureType::Unknown,
     }
+}
+
+/// Convert generated RateLimitTier to API RateLimitTier.
+pub(crate) fn convert_rate_limit_tier(
+    tier: Option<&crate::thrift::event::RateLimitTier>,
+) -> Option<RateLimitTier> {
+    tier.map(|t| match t.0 {
+        1 => RateLimitTier::Free,
+        2 => RateLimitTier::VerifiedPhone,
+        3 => RateLimitTier::Premium,
+        4 => RateLimitTier::PremiumPlus,
+        5 => RateLimitTier::PremiumBusiness,
+        _ => RateLimitTier::Unknown,
+    })
 }
 
 /// Convert generated GroupChange to API GroupChange.
@@ -3710,7 +3735,8 @@ mod tests {
         MessageCreateEvent as ThriftMCE, MessageDeleteEvent as ThriftMDE, MessageDurationChange,
         MessageDurationRemove, MessageEvent as ThriftMessageEvent,
         MessageEventDetail as ThriftDetail, MessageFailureEvent as ThriftMFE,
-        MessageTypingEvent as ThriftMTE, MuteConversation, UnmuteConversation,
+        MessageTypingEvent as ThriftMTE, MuteConversation, RateLimitTier as ThriftRateLimitTier,
+        UnmuteConversation,
     };
 
     /// Build a base64-encoded MessageEvent wrapping a MessageCreateEvent.
@@ -4786,7 +4812,10 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::INTERNAL_ERROR));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::INTERNAL_ERROR),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4795,7 +4824,31 @@ mod tests {
         match event {
             Event::Failure(f) => {
                 assert_eq!(f.failure, FailureType::InternalError);
+                assert_eq!(f.rate_limit_tier, None);
                 assert_eq!(f.meta.sender_id.as_deref(), Some("sender-1"));
+            }
+            other => panic!("Expected Event::Failure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decrypt_event_failure_rate_limit_tier() {
+        let mut core = ChatCore::new();
+        core.set_reject_unverified(false);
+
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::RATE_LIMIT_UPSELL),
+            Some(ThriftRateLimitTier::PREMIUM),
+        );
+        let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
+
+        let event = core
+            .decrypt_event(&event_b64, &Default::default(), &[])
+            .unwrap();
+        match event {
+            Event::Failure(f) => {
+                assert_eq!(f.failure, FailureType::RateLimitUpsell);
+                assert_eq!(f.rate_limit_tier, Some(RateLimitTier::Premium));
             }
             other => panic!("Expected Event::Failure, got {:?}", other),
         }
@@ -4807,7 +4860,10 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::CONTENTS_TOO_LARGE));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::CONTENTS_TOO_LARGE),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4826,7 +4882,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::TOO_MANY_MESSAGES));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::TOO_MANY_MESSAGES),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4843,7 +4902,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::INVALID_SENDER_SIGNATURE));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::INVALID_SENDER_SIGNATURE),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4860,7 +4922,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::NON_LATEST_CKEY_VERSION));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::NON_LATEST_CKEY_VERSION),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4877,9 +4942,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(Some(
-            ThriftFailureType::RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION,
-        ));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4896,7 +4962,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::RECIPIENT_KEY_HAS_CHANGED));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::RECIPIENT_KEY_HAS_CHANGED),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4913,7 +4982,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::EMPTY_DETAIL));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::EMPTY_DETAIL),
+            None::<ThriftRateLimitTier>,
+        );
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -4930,7 +5002,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let failure = ThriftMFE::new(None::<ThriftFailureType>);
+        let failure = ThriftMFE::new(None::<ThriftFailureType>, None::<ThriftRateLimitTier>);
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
@@ -5726,7 +5798,10 @@ mod tests {
         let typing = ThriftMTE::new(None::<String>);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::INTERNAL_ERROR));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::INTERNAL_ERROR),
+            None::<ThriftRateLimitTier>,
+        );
         let failure_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let member_del = ThriftMADE::new(Some("user-99".to_string()));
@@ -5808,7 +5883,10 @@ mod tests {
         let typing = ThriftMTE::new(None::<String>);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
-        let failure = ThriftMFE::new(Some(ThriftFailureType::INTERNAL_ERROR));
+        let failure = ThriftMFE::new(
+            Some(ThriftFailureType::INTERNAL_ERROR),
+            None::<ThriftRateLimitTier>,
+        );
         let failure_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let result = core.extract_conversation_keys(&[&typing_b64, &failure_b64]);
@@ -6742,44 +6820,73 @@ mod tests {
     #[test]
     fn convert_failure_type_all_variants() {
         use crate::thrift::event::FailureType as TFT;
-        assert_eq!(
-            convert_failure_type(Some(&TFT::EMPTY_DETAIL)),
-            FailureType::EmptyDetail
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::INTERNAL_ERROR)),
-            FailureType::InternalError
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::CONTENTS_TOO_LARGE)),
-            FailureType::ContentsTooLarge
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::TOO_MANY_MESSAGES)),
-            FailureType::TooManyMessages
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::INVALID_SENDER_SIGNATURE)),
-            FailureType::InvalidSenderSignature
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::NON_LATEST_CKEY_VERSION)),
-            FailureType::NonLatestKeyVersion
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION)),
-            FailureType::RecipientNotTrusted
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::RECIPIENT_KEY_HAS_CHANGED)),
-            FailureType::RecipientKeyChanged
-        );
-        assert_eq!(
-            convert_failure_type(Some(&TFT::ONLY_ENCRYPTED_MESSAGES_ALLOWED)),
-            FailureType::Unknown
-        );
+        for (thrift, expected) in [
+            (TFT::EMPTY_DETAIL, FailureType::EmptyDetail),
+            (TFT::INTERNAL_ERROR, FailureType::InternalError),
+            (TFT::CONTENTS_TOO_LARGE, FailureType::ContentsTooLarge),
+            (TFT::TOO_MANY_MESSAGES, FailureType::TooManyMessages),
+            (
+                TFT::INVALID_SENDER_SIGNATURE,
+                FailureType::InvalidSenderSignature,
+            ),
+            (
+                TFT::NON_LATEST_CKEY_VERSION,
+                FailureType::NonLatestKeyVersion,
+            ),
+            (
+                TFT::RECIPIENT_HAS_NOT_TRUSTED_CONVERSATION,
+                FailureType::RecipientNotTrusted,
+            ),
+            (
+                TFT::RECIPIENT_KEY_HAS_CHANGED,
+                FailureType::RecipientKeyChanged,
+            ),
+            (
+                TFT::ONLY_ENCRYPTED_MESSAGES_ALLOWED,
+                FailureType::OnlyEncryptedMessagesAllowed,
+            ),
+            (TFT::REQUESTER_NOT_ADMIN, FailureType::RequesterNotAdmin),
+            (TFT::FLAGGED_AS_SPAM, FailureType::FlaggedAsSpam),
+            (TFT::RATE_LIMIT_UPSELL, FailureType::RateLimitUpsell),
+            (
+                TFT::SIGNATURE_FAILED_TO_VERIFY_AGAINST_PUBLIC_KEY,
+                FailureType::SignatureFailedToVerifyAgainstPublicKey,
+            ),
+            (TFT::GENERIC_ERROR, FailureType::GenericError),
+            (
+                TFT::SENDER_NOT_GROUP_MEMBER,
+                FailureType::SenderNotGroupMember,
+            ),
+            (
+                TFT::INVALID_SIGNATURE_VERSION,
+                FailureType::InvalidSignatureVersion,
+            ),
+            (TFT::INVALID_PIN_REQUEST, FailureType::InvalidPinRequest),
+            (TFT::TOO_MANY_PINS, FailureType::TooManyPins),
+        ] {
+            assert_eq!(convert_failure_type(Some(&thrift)), expected);
+        }
         assert_eq!(convert_failure_type(Some(&TFT(99))), FailureType::Unknown);
         assert_eq!(convert_failure_type(None), FailureType::Unknown);
+    }
+
+    #[test]
+    fn convert_rate_limit_tier_all_variants() {
+        use crate::thrift::event::RateLimitTier as TRT;
+        for (thrift, expected) in [
+            (TRT::FREE, RateLimitTier::Free),
+            (TRT::VERIFIED_PHONE, RateLimitTier::VerifiedPhone),
+            (TRT::PREMIUM, RateLimitTier::Premium),
+            (TRT::PREMIUM_PLUS, RateLimitTier::PremiumPlus),
+            (TRT::PREMIUM_BUSINESS, RateLimitTier::PremiumBusiness),
+        ] {
+            assert_eq!(convert_rate_limit_tier(Some(&thrift)), Some(expected));
+        }
+        assert_eq!(
+            convert_rate_limit_tier(Some(&TRT(99))),
+            Some(RateLimitTier::Unknown)
+        );
+        assert_eq!(convert_rate_limit_tier(None), None);
     }
 
     // convert_group_change coverage

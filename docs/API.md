@@ -1612,8 +1612,30 @@ type FailureType =
   | 'nonLatestKeyVersion'
   | 'recipientNotTrusted'
   | 'recipientKeyChanged'
+  | 'onlyEncryptedMessagesAllowed'
+  | 'requesterNotAdmin'
+  | 'flaggedAsSpam'
+  | 'rateLimitUpsell'
+  | 'signatureFailedToVerifyAgainstPublicKey'
+  | 'genericError'
+  | 'senderNotGroupMember'
+  | 'invalidSignatureVersion'
+  | 'invalidPinRequest'
+  | 'tooManyPins'
+  | 'unknown';
+
+type RateLimitTier =
+  | 'free'
+  | 'verifiedPhone'
+  | 'premium'
+  | 'premiumPlus'
+  | 'premiumBusiness'
   | 'unknown';
 ```
+
+Failure events include an optional `rateLimitTier` (JS) / `rate_limit_tier`
+(Python) when the failure type is `rateLimitUpsell` (JS) / `RateLimitUpsell`
+(other bindings).
 
 ### AttachmentInfo
 

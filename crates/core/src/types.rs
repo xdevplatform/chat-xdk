@@ -888,6 +888,14 @@ pub struct FailureEvent {
     /// The type of failure.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub failure: FailureType,
+
+    /// The account tier whose message-request limit was reached.
+    ///
+    /// Set by the backend for [`FailureType::RateLimitUpsell`] failures; the
+    /// SDK passes through whatever the event carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub rate_limit_tier: Option<RateLimitTier>,
 }
 
 /// Why a message failed to deliver.
@@ -904,6 +912,30 @@ pub enum FailureType {
     NonLatestKeyVersion,
     RecipientNotTrusted,
     RecipientKeyChanged,
+    OnlyEncryptedMessagesAllowed,
+    RequesterNotAdmin,
+    FlaggedAsSpam,
+    RateLimitUpsell,
+    SignatureFailedToVerifyAgainstPublicKey,
+    GenericError,
+    SenderNotGroupMember,
+    InvalidSignatureVersion,
+    InvalidPinRequest,
+    TooManyPins,
+    Unknown,
+}
+
+/// The account tier associated with a rate-limit upsell failure.
+///
+/// Maps to `RateLimitTier` enum in Thrift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+pub enum RateLimitTier {
+    Free,
+    VerifiedPhone,
+    Premium,
+    PremiumPlus,
+    PremiumBusiness,
     Unknown,
 }
 
@@ -1556,10 +1588,12 @@ mod tests {
     fn test_failure_type_serde() {
         let event = Event::Failure(FailureEvent {
             meta: EventMeta::default(),
-            failure: FailureType::ContentsTooLarge,
+            failure: FailureType::RateLimitUpsell,
+            rate_limit_tier: Some(RateLimitTier::Premium),
         });
         let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("ContentsTooLarge"));
+        assert!(json.contains("RateLimitUpsell"));
+        assert!(json.contains("\"rate_limit_tier\":\"Premium\""));
     }
 
     #[test]

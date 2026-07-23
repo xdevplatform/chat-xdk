@@ -38,6 +38,7 @@ namespace ChatXdk.Tests
             [JsonPropertyName("signing_public_b64")] public string SigningPublicB64 { get; init; } = "";
             [JsonPropertyName("signature_b64")] public string SignatureB64 { get; init; } = "";
             [JsonPropertyName("identity_public_key_signature_b64")] public string IdentityPublicKeySignatureB64 { get; init; } = "";
+            [JsonPropertyName("event_failure_b64")] public string EventFailureB64 { get; init; } = "";
             [JsonPropertyName("event_key_change_b64")] public string EventKeyChangeB64 { get; init; } = "";
             [JsonPropertyName("event_message_b64")] public string EventMessageB64 { get; init; } = "";
             [JsonPropertyName("event_reply_valid_b64")] public string EventReplyValidB64 { get; init; } = "";
@@ -881,6 +882,23 @@ namespace ChatXdk.Tests
             // … and throws on the garbage event.
             Assert.Throws<ChatXdkException>(() =>
                 chat.DecryptEvent(v.EventGarbageB64, (ConversationKeyBundle?)null, signingKeys));
+        }
+
+        // Failure events are unsigned by protocol: the fixture failure decodes
+        // with no conversation or signing keys, and the JSON carries the
+        // PascalCase discriminator values.
+        [Fact]
+        public void Vectors_FailureEvent_DecodesTypeAndRateLimitTier()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat(); // default reject-unverified policy
+
+            var e = chat.DecryptEvent(
+                v.EventFailureB64, (ConversationKeyBundle?)null, Array.Empty<SigningKeyEntry>());
+            Assert.Equal("Failure", e.GetProperty("type").GetString());
+            Assert.Equal("RateLimitUpsell", e.GetProperty("failure").GetString());
+            Assert.Equal("Premium", e.GetProperty("rate_limit_tier").GetString());
+            Assert.Equal(v.EventSenderId, e.GetProperty("sender_id").GetString());
         }
 
         // Session identity: SetIdentity supplies sender_id and signing_key_version;
