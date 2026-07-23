@@ -16,6 +16,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 CARGO_TOML="$ROOT_DIR/Cargo.toml"
+CARGO_LOCK="$ROOT_DIR/Cargo.lock"
 PYPROJECT="$ROOT_DIR/crates/pyo3/pyproject.toml"
 NPM_PKG="$ROOT_DIR/crates/wasm/js/package.json"
 POM="$ROOT_DIR/crates/jvm/java/chatxdk/pom.xml"
@@ -66,6 +67,23 @@ set_version() {
   # chat-xdk-macros workspace-dependency version (required by cargo publish for
   # path dependencies; must track the workspace version).
   perl -pi -e "s/^(chat-xdk-macros\\s*=.*version\\s*=\\s*\")[^\"]*(\")/\${1}$v\${2}/" "$CARGO_TOML"
+  # Lockfile entries for the workspace members (every chat-xdk-* package pins
+  # the workspace version). Stamped textually rather than via `cargo update`
+  # so the script works without a toolchain or the juicebox-sdk sibling
+  # checkout; without this, the stamped Cargo.toml and the committed
+  # Cargo.lock disagree and `--locked` builds of the release tag fail.
+  # Workspace members carry no `source` line in the lock; the lookahead skips
+  # any registry crate that happens to share the name prefix (these crates are
+  # also published to crates.io), whose pinned version must not be touched.
+  perl -0pi -e "s/(name = \"chat-xdk[^\"]*\"\\nversion = \")[^\"]*(\")(?!\\nsource)/\${1}$v\${2}/g" "$CARGO_LOCK"
+  # A silent stamp miss (e.g. a lockfile format change) would quietly
+  # reintroduce the manifest/lockfile mismatch, so verify the result.
+  local lock_v
+  lock_v="$(perl -0ne 'print $1 if /name = "chat-xdk-core"\nversion = "([^"]+)"/' "$CARGO_LOCK")"
+  if [[ "$lock_v" != "$v" ]]; then
+    echo "error: Cargo.lock stamp failed (chat-xdk-core at '${lock_v:-missing}', expected '$v')" >&2
+    exit 1
+  fi
   # PyPI project version.
   perl -pi -e "s/^version\\s*=\\s*\"[^\"]*\"/version = \"$v\"/ if !\$done && /^version\\s*=/; \$done=1 if /^version\\s*=/" "$PYPROJECT"
   # npm package version (first "version" key).
@@ -81,6 +99,7 @@ set_version() {
 
 print_all() {
   echo "canonical (Cargo.toml):  $(get_current_version)"
+  echo "lockfile (Cargo.lock):   $(perl -0ne 'print $1 if /name = "chat-xdk-core"\nversion = "([^"]+)"/' "$CARGO_LOCK")"
   echo "macros dep (Cargo.toml): $(perl -ne 'print $1 if /^chat-xdk-macros\s*=.*version\s*=\s*"([^"]+)"/' "$CARGO_TOML")"
   echo "python (pyproject):      $(perl -ne 'print $1 if /^version\s*=\s*"([^"]+)"/' "$PYPROJECT")"
   echo "npm (package.json):      $(perl -0ne 'print $1 if /"version":\s*"([^"]+)"/' "$NPM_PKG")"
