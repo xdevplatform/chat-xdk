@@ -72,7 +72,18 @@ set_version() {
   # so the script works without a toolchain or the juicebox-sdk sibling
   # checkout; without this, the stamped Cargo.toml and the committed
   # Cargo.lock disagree and `--locked` builds of the release tag fail.
-  perl -0pi -e "s/(name = \"chat-xdk[^\"]*\"\\nversion = \")[^\"]*(\")/\${1}$v\${2}/g" "$CARGO_LOCK"
+  # Workspace members carry no `source` line in the lock; the lookahead skips
+  # any registry crate that happens to share the name prefix (these crates are
+  # also published to crates.io), whose pinned version must not be touched.
+  perl -0pi -e "s/(name = \"chat-xdk[^\"]*\"\\nversion = \")[^\"]*(\")(?!\\nsource)/\${1}$v\${2}/g" "$CARGO_LOCK"
+  # A silent stamp miss (e.g. a lockfile format change) would quietly
+  # reintroduce the manifest/lockfile mismatch, so verify the result.
+  local lock_v
+  lock_v="$(perl -0ne 'print $1 if /name = "chat-xdk-core"\nversion = "([^"]+)"/' "$CARGO_LOCK")"
+  if [[ "$lock_v" != "$v" ]]; then
+    echo "error: Cargo.lock stamp failed (chat-xdk-core at '${lock_v:-missing}', expected '$v')" >&2
+    exit 1
+  fi
   # PyPI project version.
   perl -pi -e "s/^version\\s*=\\s*\"[^\"]*\"/version = \"$v\"/ if !\$done && /^version\\s*=/; \$done=1 if /^version\\s*=/" "$PYPROJECT"
   # npm package version (first "version" key).
