@@ -58,8 +58,15 @@
   </dependencies>
 
   <build>
-    <!-- Ship project LICENSE + third-party notices inside the jar (META-INF/). -->
+    <!-- Declaring <resources> replaces Maven's default resource directory, so
+         src/main/resources must be re-declared explicitly: the release build
+         stages the per-platform chat_xdk_dotnet natives there (native/<rid>/)
+         and dropping it ships a jar without them. -->
     <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- Ship project LICENSE + third-party notices inside the jar (META-INF/). -->
       <resource>
         <directory>${project.basedir}/../../../../</directory>
         <includes>
