@@ -433,6 +433,38 @@ export interface UrlAttachmentImageDescriptor {
 }
 
 /**
+ * Why a message failed to deliver.
+ */
+export type FailureType =
+  | 'emptyDetail'
+  | 'internalError'
+  | 'contentsTooLarge'
+  | 'tooManyMessages'
+  | 'invalidSenderSignature'
+  | 'nonLatestKeyVersion'
+  | 'recipientNotTrusted'
+  | 'recipientKeyChanged'
+  | 'onlyEncryptedMessagesAllowed'
+  | 'requesterNotAdmin'
+  | 'flaggedAsSpam'
+  | 'rateLimitUpsell'
+  | 'signatureFailedToVerifyAgainstPublicKey'
+  | 'genericError'
+  | 'senderNotGroupMember'
+  | 'invalidSignatureVersion'
+  | 'invalidPinRequest'
+  | 'tooManyPins'
+  | 'unknown';
+
+export type RateLimitTier =
+  | 'free'
+  | 'verifiedPhone'
+  | 'premium'
+  | 'premiumPlus'
+  | 'premiumBusiness'
+  | 'unknown';
+
+/**
  * Decrypted event from the SDK.
  * Meta fields (sequenceId, id, senderId, etc.) are flattened to top level.
  */
@@ -476,6 +508,10 @@ export interface Event {
   keyVersion?: string;
   /** For keyChange events: encrypted conversation keys, one per participant. */
   participantKeys?: ParticipantKey[];
+  /** For failure events: why the message failed to deliver. */
+  failure?: FailureType;
+  /** For rate-limit upsell failures: the account tier whose limit was reached. */
+  rateLimitTier?: RateLimitTier;
   /** Index signature for additional event-specific fields. */
   [key: string]: any;
 }
