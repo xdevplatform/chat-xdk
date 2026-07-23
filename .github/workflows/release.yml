@@ -549,8 +549,8 @@ jobs:
           find "$base" -type f
       - name: Package jar
         run: mvn -B -DskipTests -f crates/jvm/java/chatxdk/pom.xml package
-      # Guard against resource-configuration regressions: a jar published
-      # without the natives fails every consumer with UnsatisfiedLinkError.
+      # A jar without the natives fails every consumer with
+      # UnsatisfiedLinkError, so fail the release rather than publish one.
       - name: Verify jar bundles all platform natives
         run: |
           set -euo pipefail

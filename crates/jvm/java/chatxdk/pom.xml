@@ -58,10 +58,11 @@
   </dependencies>
 
   <build>
-    <!-- Declaring <resources> replaces Maven's default resource directory, so
-         src/main/resources must be re-declared explicitly: the release build
-         stages the per-platform chat_xdk_dotnet natives there (native/<rid>/)
-         and dropping it ships a jar without them. -->
+    <!-- An explicit <resources> block replaces Maven's default resource
+         directory rather than extending it, so src/main/resources must be
+         re-declared here: release builds stage the per-platform
+         chat_xdk_dotnet natives under src/main/resources/native/<rid>/, and
+         NativeLoader loads them from the jar at that path. -->
     <resources>
       <resource>
         <directory>src/main/resources</directory>
