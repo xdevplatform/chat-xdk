@@ -243,6 +243,26 @@ class ChatTest {
     }
 
     @Test
+    void encryptMessageMixedAttachmentTypesThrows() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            byte[] ckey = newConvKey(chat);
+            EncryptMessageParams p = new EncryptMessageParams("conv-1", "mixed attachments");
+            p.senderId = "user-1";
+            p.signingKeyVersion = "s1";
+            p.conversationKey = ckey;
+            p.conversationKeyVersion = "v1";
+            // Only image/gif/video media may appear in multiples; any other
+            // attachment type must be the message's only attachment.
+            p.attachments = java.util.List.of(
+                    Types.AttachmentDescriptor.media("hash", 100, 100, 1000, "pic.jpg", 1, null),
+                    Types.AttachmentDescriptor.urlCard("https://example.com", null));
+            ChatXdkException ex =
+                    assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+            assertTrue(ex.getMessage().contains("attachment combination"));
+        }
+    }
+
+    @Test
     void encryptMessageUrlAttachmentWithBannerImageSucceeds() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);

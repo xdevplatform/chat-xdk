@@ -28,7 +28,8 @@ pub enum SdkError {
     #[error("Parse error: {0}")]
     Parse(String),
 
-    /// A required value was neither passed nor available from session state.
+    /// A required value was neither passed nor available from session state,
+    /// or a caller-supplied input violates a send-side rule.
     #[error("Invalid state: {0}")]
     InvalidState(String),
 }

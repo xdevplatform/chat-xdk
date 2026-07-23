@@ -1458,6 +1458,47 @@ func TestEncryptMessageWithEntitiesAndAttachments(t *testing.T) {
 	}
 }
 
+func TestEncryptMessageMixedAttachmentTypesRejected(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	// Only image/gif/video media may appear in multiples; any other
+	// attachment type must be the message's only attachment.
+	_, err := chat.EncryptMessage(EncryptMessageParams{
+		SenderID:               "me",
+		ConversationID:         "conv-1",
+		ConversationKey:        v.conversationKey(t),
+		Text:                   "mixed attachments",
+		ConversationKeyVersion: "1",
+		SigningKeyVersion:      "1",
+		Attachments: []AttachmentDescriptor{
+			{
+				AttachmentType: "media",
+				MediaHashKey:   "h",
+				Width:          100,
+				Height:         100,
+				FilesizeBytes:  1000,
+				Filename:       "pic.jpg",
+			},
+			{
+				AttachmentType: "url",
+				URL:            "https://example.com",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected mixed attachment types to be rejected")
+	}
+	if !strings.Contains(err.Error(), "attachment combination") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 	v := loadVectors(t)
 

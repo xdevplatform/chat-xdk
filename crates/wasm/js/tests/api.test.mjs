@@ -552,6 +552,33 @@ async function main() {
     );
   }
 
+  // 4i. Only image/gif/video media may appear in multiples; a list mixing a
+  // media attachment with a URL card is rejected before encryption.
+  assert.throws(
+    () =>
+      chat.encryptMessage({
+        senderId: "111",
+        conversationId: "conv-1",
+        conversationKey: convKey,
+        text: "mixed attachments",
+        conversationKeyVersion: "1",
+        signingKeyVersion: "1",
+        attachments: [
+          {
+            attachment_type: "media",
+            media_hash_key: "h",
+            width: 100,
+            height: 100,
+            filesize_bytes: 1000,
+            filename: "pic.jpg",
+            media_type: 1,
+          },
+          { attachment_type: "url", url: "https://example.com" },
+        ],
+      }),
+    /attachment combination/,
+  );
+
   // 5. decryptEvents / decryptEvent throw on a malformed (3-field) signingKeys entry
   const malformedSigningKeys = [
     { userId: "111", publicKeyVersion: "1", publicKey: v.signing_public_b64 },

@@ -280,6 +280,29 @@ namespace ChatXdk.Tests
             }));
         }
 
+        [Fact]
+        public void EncryptMessage_MixedAttachmentTypes_Throws()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+
+            // Only image/gif/video media may appear in multiples; any other
+            // attachment type must be the message's only attachment.
+            var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "mixed attachments")
+            {
+                SenderId = "me",
+                SigningKeyVersion = "s1",
+                ConversationKey = ckey,
+                ConversationKeyVersion = "v1",
+                Attachments = new List<AttachmentDescriptor>
+                {
+                    AttachmentDescriptor.Media("hash", 100, 100, 1000, "pic.jpg", mediaType: 1),
+                    AttachmentDescriptor.UrlCard("https://example.com"),
+                },
+            }));
+            Assert.Contains("attachment combination", ex.Message);
+        }
+
         // Encrypt / decrypt message
 
         [Fact]

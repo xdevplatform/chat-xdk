@@ -355,6 +355,44 @@ pub fn build_thrift_entities(descs: &[EntityDescriptor]) -> Vec<Box<ThriftRichTe
         .collect()
 }
 
+/// Most attachments a single message may carry.
+const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
+
+/// Reject attachment lists that receiving clients cannot render.
+///
+/// Temporary compatibility guard, not a protocol rule: a message may carry
+/// multiple attachments only when every one is image/gif/video media, capped
+/// at [`MAX_ATTACHMENTS_PER_MESSAGE`]. Any other attachment — audio, file,
+/// svg, or unrecognized media types, URL cards, posts — must be the message's
+/// only attachment. Relax or delete this once clients render heterogeneous
+/// lists; the wire format already carries them.
+pub fn validate_attachment_descriptors(descs: &[AttachmentDescriptor]) -> Result<(), SdkError> {
+    if descs.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        return Err(SdkError::InvalidState(format!(
+            "too many attachments: at most {MAX_ATTACHMENTS_PER_MESSAGE} per message"
+        )));
+    }
+    let multiple_supported = |d: &AttachmentDescriptor| match d {
+        AttachmentDescriptor::Media { media_type, .. } => {
+            // A missing media_type is sent as IMAGE (see build_thrift_attachments).
+            let mt = media_type.map_or(ThriftMediaType::IMAGE, ThriftMediaType::from);
+            mt == ThriftMediaType::IMAGE
+                || mt == ThriftMediaType::GIF
+                || mt == ThriftMediaType::VIDEO
+        }
+        AttachmentDescriptor::Url { .. } | AttachmentDescriptor::Post { .. } => false,
+    };
+    if descs.len() <= 1 || descs.iter().all(multiple_supported) {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidState(
+            "disallowed attachment combination: multiple attachments must all be image/gif/video \
+             media; any other attachment type must be the message's only attachment"
+                .into(),
+        ))
+    }
+}
+
 /// Convert [`AttachmentDescriptor`]s into Thrift `MessageAttachment` objects.
 #[allow(clippy::vec_box)]
 pub fn build_thrift_attachments(
@@ -877,6 +915,99 @@ mod tests {
     fn test_build_empty_attachments() {
         let attachments = build_thrift_attachments(&[]);
         assert!(attachments.is_empty());
+    }
+
+    // validate_attachment_descriptors — first-party client compat matrix
+
+    fn media_desc(media_type: Option<i32>) -> AttachmentDescriptor {
+        AttachmentDescriptor::Media {
+            media_hash_key: "hash".to_string(),
+            width: 100,
+            height: 100,
+            filesize_bytes: 1000,
+            filename: "file".to_string(),
+            media_type,
+            duration_millis: None,
+        }
+    }
+
+    fn url_desc() -> AttachmentDescriptor {
+        AttachmentDescriptor::Url {
+            url: "https://example.com".to_string(),
+            display_title: None,
+            banner_image: None,
+            favicon_image: None,
+        }
+    }
+
+    fn post_desc() -> AttachmentDescriptor {
+        AttachmentDescriptor::Post {
+            rest_id: Some("1".to_string()),
+            post_url: None,
+        }
+    }
+
+    #[test]
+    fn validate_attachments_allows_multi_visual_media_and_singles() {
+        // Image=1, gif=2, video=3 may appear together up to the cap; a
+        // missing media_type is treated as image.
+        let allowed: Vec<Vec<AttachmentDescriptor>> = vec![
+            vec![],
+            vec![
+                media_desc(Some(1)),
+                media_desc(Some(2)),
+                media_desc(Some(3)),
+            ],
+            vec![media_desc(None), media_desc(Some(1))],
+            vec![media_desc(Some(1)); 10],
+            vec![url_desc()],
+            vec![post_desc()],
+            vec![media_desc(Some(4))],
+            vec![media_desc(Some(5))],
+            vec![media_desc(Some(6))],
+        ];
+        for descs in &allowed {
+            assert!(
+                validate_attachment_descriptors(descs).is_ok(),
+                "expected allowed: {descs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_attachments_rejects_multi_non_visual_combinations() {
+        // Audio=4, file=5, svg=6, unknown media types, URL cards, and posts
+        // must be the sole attachment.
+        let rejected: Vec<Vec<AttachmentDescriptor>> = vec![
+            vec![url_desc(), url_desc()],
+            vec![media_desc(Some(1)), url_desc()],
+            vec![media_desc(Some(5)), media_desc(Some(1))],
+            vec![media_desc(Some(4)), media_desc(Some(4))],
+            vec![media_desc(Some(6)), media_desc(Some(1))],
+            vec![media_desc(Some(99)), media_desc(Some(1))],
+            vec![post_desc(), media_desc(Some(1))],
+            vec![post_desc(), url_desc()],
+        ];
+        for descs in &rejected {
+            let err = validate_attachment_descriptors(descs)
+                .expect_err(&format!("expected rejected: {descs:?}"));
+            assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+            assert!(
+                err.to_string().contains("attachment combination"),
+                "got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_attachments_rejects_more_than_the_cap() {
+        let descs = vec![media_desc(Some(1)); 11];
+        let err = validate_attachment_descriptors(&descs).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(
+            err.to_string().contains("too many attachments"),
+            "got: {err}"
+        );
     }
 
     // build_thrift_entities — edge cases
