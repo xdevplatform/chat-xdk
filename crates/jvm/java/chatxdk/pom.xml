@@ -6,7 +6,7 @@
 
   <groupId>com.x</groupId>
   <artifactId>chatxdk</artifactId>
-  <version>0.4.2</version>
+  <version>0.4.3</version>
   <name>chat-xdk JVM bindings</name>
   <description>X Chat SDK - encryption for X Direct Messages (JVM bindings, JNA → chat_xdk_dotnet)</description>
   <url>https://github.com/xdevplatform/chat-xdk</url>

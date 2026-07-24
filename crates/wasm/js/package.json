@@ -1,6 +1,6 @@
 {
   "name": "@xdevplatform/chat-xdk",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "X Chat SDK - encryption for X Direct Messages",
   "type": "module",
   "main": "index.js",

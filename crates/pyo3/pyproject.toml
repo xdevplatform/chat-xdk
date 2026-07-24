@@ -1,6 +1,6 @@
 [project]
 name = "chatxdk"
-version = "0.4.2"
+version = "0.4.3"
 description = "X Chat SDK - encryption for X Direct Messages (Python bindings)"
 readme = "README.md"
 requires-python = ">=3.10"
