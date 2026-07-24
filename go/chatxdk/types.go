@@ -286,7 +286,48 @@ type EncryptReactionParams struct {
 	ConversationKeyVersion  string `json:"conversation_key_version,omitempty"`   // empty = key cache
 }
 
-// ActionSignature authenticates a conversation key change or member add.
+// EncryptEditParams are the parameters for EncryptEdit.
+//
+// The preferred edit target is TargetEvent — the base64 raw event of the
+// message being edited — from which the SDK derives ConversationID and
+// TargetMessageSequenceID; the explicit fields remain as overrides for
+// callers that no longer hold the raw event.
+//
+// The identity and key fields are optional overrides, as on
+// EncryptMessageParams.
+type EncryptEditParams struct {
+	// TargetEvent is the base64 raw event being edited.
+	TargetEvent string `json:"target_event,omitempty"`
+	UpdatedText string `json:"updated_text"`
+	// Entities are rich-text entities for the replacement text; nil clears
+	// any entities the original carried.
+	Entities                []EntityTuple `json:"entities,omitempty"`
+	ConversationID          string        `json:"conversation_id,omitempty"`            // empty = derived from TargetEvent
+	TargetMessageSequenceID string        `json:"target_message_sequence_id,omitempty"` // empty = derived from TargetEvent
+	SenderID                string        `json:"sender_id,omitempty"`                  // empty = session identity
+	SigningKeyVersion       string        `json:"signing_key_version,omitempty"`        // empty = session identity
+	ConversationKey         []byte        `json:"conversation_key,omitempty"`           // raw 32-byte key; nil = key cache
+	ConversationKeyVersion  string        `json:"conversation_key_version,omitempty"`   // empty = key cache
+}
+
+// MessageDeleteParams are the parameters for PrepareMessageDelete.
+//
+// A delete is a signed plaintext event, not an encrypted message, so no
+// conversation key is involved. SenderID and SigningKeyVersion are optional
+// overrides: empty resolves from the session identity set via SetIdentity.
+type MessageDeleteParams struct {
+	ConversationID string `json:"conversation_id"`
+	// SequenceIDs are the sequence_ids of the messages to delete.
+	SequenceIDs []string `json:"sequence_ids"`
+	// DeleteForAll deletes for every participant (true, own messages only)
+	// or only from the caller's view (false).
+	DeleteForAll      bool   `json:"delete_for_all"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
+// ActionSignature authenticates a conversation key change, member add, or
+// message delete.
 type ActionSignature struct {
 	MessageID                 string `json:"message_id"`
 	EncodedMessageEventDetail string `json:"encoded_message_event_detail"`

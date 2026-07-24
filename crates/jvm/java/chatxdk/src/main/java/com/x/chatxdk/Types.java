@@ -128,7 +128,7 @@ public final class Types {
         public boolean shouldNotify;
     }
 
-    /** Signed action payload authenticating a conversation key change or member add. */
+    /** Signed action payload authenticating a conversation key change, member add, or message delete. */
     public static final class ActionSignature {
         /** ID of the message carrying the action. */
         @JsonProperty("message_id")
@@ -661,6 +661,59 @@ public final class Types {
         }
     }
 
+    /**
+     * Parameters for {@link Chat#encryptEdit}.
+     *
+     * <p>The preferred form passes the raw event of the message being edited
+     * ({@code targetEvent}) and lets the SDK derive the conversation id and
+     * target sequence id from it; the explicit field overrides remain for
+     * callers that no longer hold the raw event.
+     */
+    public static final class EncryptEditParams {
+        /** Base64 raw event being edited; the conversation id and target sequence id are derived from it. */
+        public final String targetEvent;
+
+        /** The replacement message text. */
+        public final String updatedText;
+
+        /** Rich-text entities for the replacement text; null clears any entities the original carried. */
+        public List<EntityDescriptor> entities;
+
+        /** ID of the conversation the edit belongs to; derived from {@link #targetEvent} when null. */
+        public String conversationId;
+
+        /** Sequence ID of the message being edited; derived from {@link #targetEvent} when null. */
+        public String targetMessageSequenceId;
+
+        /** User ID of the sender; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Raw 32-byte conversation key; resolves from the key cache when null
+         * (set together with {@link #conversationKeyVersion}).
+         */
+        public byte[] conversationKey;
+
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param targetEvent Base64 raw event being edited. Pass null or ""
+         *     only when supplying {@link #conversationId} and
+         *     {@link #targetMessageSequenceId} directly instead.
+         * @param updatedText The replacement message text.
+         */
+        public EncryptEditParams(String targetEvent, String updatedText) {
+            this.targetEvent = targetEvent == null || targetEvent.isEmpty() ? null : targetEvent;
+            this.updatedText = updatedText;
+        }
+    }
+
     /** Parameters for {@link Chat#prepareConversationKeyChange}. */
     public static final class ConversationKeyChangeParams {
         /** Public keys for every participant the new key is encrypted for. */
@@ -795,6 +848,44 @@ public final class Types {
             this.conversationId = conversationId;
             this.memberIds = memberIds;
             this.adminIds = adminIds;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#prepareMessageDelete}.
+     *
+     * <p>A delete is a signed plaintext event, not an encrypted message, so no
+     * conversation key is involved: the result is an action signature the
+     * caller submits alongside the delete request.
+     */
+    public static final class MessageDeleteParams {
+        /** ID of the conversation the messages belong to. */
+        public final String conversationId;
+
+        /** Sequence IDs of the messages to delete. */
+        public final List<String> sequenceIds;
+
+        /** Delete for every participant (true, own messages only) or only from the caller's view (false). */
+        public final boolean deleteForAll;
+
+        /** User ID of the sender signing the delete; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param conversationId ID of the conversation the messages belong to.
+         * @param sequenceIds Sequence IDs of the messages to delete.
+         * @param deleteForAll Delete for every participant (true, own messages
+         *     only) or only from the caller's view (false).
+         */
+        public MessageDeleteParams(String conversationId, List<String> sequenceIds, boolean deleteForAll) {
+            this.conversationId = conversationId;
+            this.sequenceIds = sequenceIds;
+            this.deleteForAll = deleteForAll;
         }
     }
 }

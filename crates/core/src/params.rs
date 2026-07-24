@@ -405,6 +405,170 @@ impl std::fmt::Debug for EncryptReactionParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::encrypt_edit`].
+///
+/// The preferred form passes `target_event` — the base64 raw event of the
+/// message being edited — and lets the SDK derive the conversation id and
+/// target sequence id from it. The explicit field overrides remain for
+/// callers that no longer hold the raw event.
+///
+/// The conversation key is zeroized when the params are dropped and is
+/// redacted from `Debug` output. No `PartialEq` is derived:
+/// equality would byte-compare the key non-constant-time.
+#[derive(Clone)]
+pub struct EncryptEditParams {
+    /// Base64 of the raw event being edited. The conversation id and target
+    /// sequence id are derived from it.
+    pub target_event: Option<String>,
+    /// The replacement message text.
+    pub updated_text: String,
+    /// Rich-text entities for the replacement text; `None` clears any
+    /// entities the original carried.
+    pub entities: Option<Vec<EntityDescriptor>>,
+    /// ID of the conversation the edit belongs to; derived from
+    /// `target_event` when unset.
+    pub conversation_id: Option<String>,
+    /// The `sequence_id` of the message being edited; derived from
+    /// `target_event` when unset.
+    pub target_message_sequence_id: Option<String>,
+    /// User ID of the sender; resolves from the session identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the edit; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key used to encrypt the edit content;
+    /// resolves from the key cache when unset (set together with
+    /// `conversation_key_version`).
+    pub conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key used for encryption; resolves from the
+    /// key cache when unset (set together with `conversation_key`).
+    pub conversation_key_version: Option<String>,
+}
+
+impl EncryptEditParams {
+    /// Create params with required fields; all optional fields default to
+    /// `None`. `target_event` is the base64 raw event being edited; pass an
+    /// empty string only when supplying `conversation_id` and
+    /// `target_message_sequence_id` directly instead.
+    pub fn new(target_event: impl Into<String>, updated_text: impl Into<String>) -> Self {
+        Self {
+            target_event: non_empty(target_event),
+            updated_text: updated_text.into(),
+            entities: None,
+            conversation_id: None,
+            target_message_sequence_id: None,
+            sender_id: None,
+            signing_key_version: None,
+            conversation_key: None,
+            conversation_key_version: None,
+        }
+    }
+
+    /// Set the explicit conversation key and its version.
+    ///
+    /// The two travel together: the version names the key the recipients use
+    /// to decrypt, so setting one without the other is rejected at encrypt
+    /// time.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = Some(conversation_key_version.into());
+        self
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+impl Drop for EncryptEditParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for EncryptEditParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptEditParams")
+            .field("target_event", &self.target_event)
+            .field("updated_text", &self.updated_text)
+            .field("entities", &self.entities)
+            .field("conversation_id", &self.conversation_id)
+            .field(
+                "target_message_sequence_id",
+                &self.target_message_sequence_id,
+            )
+            .field("sender_id", &self.sender_id)
+            .field("signing_key_version", &self.signing_key_version)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .finish()
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_message_delete`].
+///
+/// A delete is a signed plaintext event, not an encrypted message, so no
+/// conversation key is involved: the result is an action signature the
+/// caller submits alongside the delete request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MessageDeleteParams {
+    /// ID of the conversation the messages belong to.
+    pub conversation_id: String,
+    /// The `sequence_id`s of the messages to delete.
+    pub sequence_ids: Vec<String>,
+    /// Delete for every participant (`true`, own messages only) or only from
+    /// the caller's view (`false`).
+    pub delete_for_all: bool,
+    /// User ID of the sender signing the delete; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the delete; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl MessageDeleteParams {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(
+        conversation_id: impl Into<String>,
+        sequence_ids: Vec<String>,
+        delete_for_all: bool,
+    ) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            sequence_ids,
+            delete_for_all,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
 /// Parameters for [`crate::ChatCore::prepare_conversation_key_change`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConversationKeyChangeParams {

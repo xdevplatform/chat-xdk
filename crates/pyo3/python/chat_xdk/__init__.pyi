@@ -1,6 +1,6 @@
 """Type stubs for chat-xdk Python bindings."""
 
-from typing import Optional, Union
+from typing import Optional, Union, overload
 
 __version__: str
 
@@ -117,6 +117,15 @@ class Chat:
         avatar_url: Optional[str] = None,
         ttl_msec: Optional[int] = None,
     ) -> dict: ...
+    def prepare_message_delete(
+        self,
+        conversation_id: str,
+        sequence_ids: list[str],
+        delete_for_all: bool,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> dict: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> dict: ...
@@ -188,6 +197,34 @@ class Chat:
         *,
         conversation_id: Optional[str] = None,
         target_message_sequence_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+    ) -> SendPayload: ...
+    # `updated_text` is required at runtime (missing it raises TypeError)
+    # even though it sits after the optional `target_event` positional; the
+    # overloads keep static checkers flagging calls that omit it.
+    @overload
+    def encrypt_edit(
+        self,
+        target_event: str,
+        updated_text: str,
+        *,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+    ) -> SendPayload: ...
+    @overload
+    def encrypt_edit(
+        self,
+        *,
+        updated_text: str,
+        conversation_id: str,
+        target_message_sequence_id: str,
+        entities: Optional[list[tuple[int, int, str]]] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,

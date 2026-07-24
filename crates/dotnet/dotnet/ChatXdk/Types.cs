@@ -117,7 +117,8 @@ namespace ChatXdk
     // Action signatures (group operations)
 
     /// <summary>
-    /// Signed action payload authenticating a conversation key change or member add.
+    /// Signed action payload authenticating a conversation key change, member
+    /// add, or message delete.
     /// </summary>
     public sealed class ActionSignature
     {
@@ -619,6 +620,50 @@ namespace ChatXdk
         public string? ConversationKeyVersion { get; init; }
     }
 
+    /// <summary>
+    /// Parameters for <see cref="Chat.EncryptEdit"/>.
+    /// The preferred form passes the raw event of the message being edited
+    /// (<see cref="TargetEvent"/>) and lets the SDK derive the conversation id
+    /// and target sequence id from it; the explicit field overrides remain for
+    /// callers that no longer hold the raw event.
+    /// </summary>
+    public sealed class EncryptEditParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="targetEvent">
+        /// Base64 raw event being edited. Pass null or "" only when supplying
+        /// <see cref="ConversationId"/> and <see cref="TargetMessageSequenceId"/> directly instead.
+        /// </param>
+        /// <param name="updatedText">The replacement message text.</param>
+        public EncryptEditParams(string? targetEvent, string updatedText)
+        {
+            TargetEvent = string.IsNullOrEmpty(targetEvent) ? null : targetEvent;
+            UpdatedText = updatedText;
+        }
+
+        /// <summary>Base64 raw event being edited; the conversation id and target sequence id are derived from it.</summary>
+        public string? TargetEvent { get; }
+        /// <summary>The replacement message text.</summary>
+        public string UpdatedText { get; }
+        /// <summary>Rich-text entities for the replacement text; null clears any entities the original carried.</summary>
+        public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
+        /// <summary>ID of the conversation the edit belongs to; derived from <see cref="TargetEvent"/> when null.</summary>
+        public string? ConversationId { get; init; }
+        /// <summary>Sequence ID of the message being edited; derived from <see cref="TargetEvent"/> when null.</summary>
+        public string? TargetMessageSequenceId { get; init; }
+        /// <summary>User ID of the sender; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
+        /// <summary>
+        /// Raw 32-byte conversation key; resolves from the key cache when null
+        /// (set together with <see cref="ConversationKeyVersion"/>).
+        /// </summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
+    }
+
     /// <summary>Parameters for <see cref="Chat.PrepareConversationKeyChange"/>.</summary>
     public sealed class ConversationKeyChangeParams
     {
@@ -729,5 +774,42 @@ namespace ChatXdk
         public string? AvatarUrl { get; init; }
         /// <summary>Disappearing-message TTL in milliseconds, if set.</summary>
         public long? TtlMsec { get; init; }
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareMessageDelete"/>.
+    /// A delete is a signed plaintext event, not an encrypted message, so no
+    /// conversation key is involved: the result is an action signature the
+    /// caller submits alongside the delete request.
+    /// </summary>
+    public sealed class MessageDeleteParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="conversationId">ID of the conversation the messages belong to.</param>
+        /// <param name="sequenceIds">Sequence IDs of the messages to delete.</param>
+        /// <param name="deleteForAll">
+        /// Delete for every participant (true, own messages only) or only from
+        /// the caller's view (false).
+        /// </param>
+        public MessageDeleteParams(
+            string conversationId,
+            IReadOnlyList<string> sequenceIds,
+            bool deleteForAll)
+        {
+            ConversationId = conversationId;
+            SequenceIds = sequenceIds;
+            DeleteForAll = deleteForAll;
+        }
+
+        /// <summary>ID of the conversation the messages belong to.</summary>
+        public string ConversationId { get; }
+        /// <summary>Sequence IDs of the messages to delete.</summary>
+        public IReadOnlyList<string> SequenceIds { get; }
+        /// <summary>Delete for every participant (true, own messages only) or only from the caller's view (false).</summary>
+        public bool DeleteForAll { get; }
+        /// <summary>User ID of the sender signing the delete; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
     }
 }

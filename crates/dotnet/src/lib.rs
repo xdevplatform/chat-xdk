@@ -21,9 +21,9 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, EntityDescriptor, GroupCreateParams, GroupMembersChangeParams,
-    PublicKeyInput, SigningKeyEntry,
+    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, SigningKeyEntry,
 };
 
 // FFI result type
@@ -288,6 +288,38 @@ struct FfiEncryptReactionParams {
     conversation_key: Option<String>,
     #[serde(default)]
     conversation_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiEncryptEditParams {
+    updated_text: String,
+    #[serde(default)]
+    target_event: Option<String>,
+    #[serde(default)]
+    entities: Option<Vec<(i32, i32, String)>>,
+    #[serde(default)]
+    conversation_id: Option<String>,
+    #[serde(default)]
+    target_message_sequence_id: Option<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiMessageDeleteParams {
+    conversation_id: String,
+    sequence_ids: Vec<String>,
+    delete_for_all: bool,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1093,6 +1125,45 @@ pub extern "C" fn chat_xdk_prepare_group_create(
     })
 }
 
+/// Build the signed action for deleting messages from a conversation.
+///
+/// `params_json` — single JSON document: `conversation_id`, `sequence_ids`
+/// (the messages to delete), `delete_for_all` (every participant vs only the
+/// caller's view), plus optional `sender_id` / `signing_key_version` (absent
+/// resolves from the session identity).
+///
+/// Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+/// on it.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_message_delete(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiMessageDeleteParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+
+        let mut params =
+            MessageDeleteParams::new(p.conversation_id, p.sequence_ids, p.delete_for_all);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+
+        match h.inner.prepare_message_delete(&params) {
+            Ok(signature) => match serde_json::to_string(&signature) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_result(&e.to_string()),
+            },
+            Err(e) => err_from(e),
+        }
+    })
+}
+
 /// Decrypt a webhook event.
 ///
 /// - `event_b64` — base64-encoded raw event from the webhook.
@@ -1355,6 +1426,55 @@ fn encrypt_reaction_impl(
         },
         Err(e) => err_from(e),
     }
+}
+
+/// Encrypt a message edit for the X API.
+///
+/// `params_json` — single JSON document: `updated_text` and `target_event`
+/// (base64 raw event being edited; the conversation id and target sequence
+/// id are derived from it), plus optional explicit overrides
+/// `conversation_id` / `target_message_sequence_id` for callers that no
+/// longer hold the raw event, `entities` (`[start, end, type]` tuples for
+/// the replacement text), and the optional identity/key overrides described
+/// on `chat_xdk_encrypt_message`.
+///
+/// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+#[no_mangle]
+pub extern "C" fn chat_xdk_encrypt_edit(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiEncryptEditParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let ckey_bytes = match decode_opt_ckey_bytes(p.conversation_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+
+        let mut params = EncryptEditParams::new(p.target_event.unwrap_or_default(), p.updated_text);
+        params.entities = p.entities.map(entity_tuples_to_descs);
+        params.conversation_id = p.conversation_id;
+        params.target_message_sequence_id = p.target_message_sequence_id;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        params.conversation_key = ckey_bytes;
+        params.conversation_key_version = p.conversation_key_version;
+
+        match h.inner.encrypt_edit(&params) {
+            Ok(payload) => match serde_json::to_string(&payload) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_result(&e.to_string()),
+            },
+            Err(e) => err_from(e),
+        }
+    })
 }
 
 // Conversation key operations

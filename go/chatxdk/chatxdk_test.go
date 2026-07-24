@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -831,6 +832,95 @@ func TestEncryptRemoveReaction(t *testing.T) {
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
+	}
+}
+
+func TestEncryptEdit(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	payload, err := chat.EncryptEdit(EncryptEditParams{
+		SenderID:                "111",
+		ConversationID:          "conv-1",
+		ConversationKey:         v.conversationKey(t),
+		TargetMessageSequenceID: "seq-99",
+		UpdatedText:             "see https://example.com",
+		Entities:                []EntityTuple{NewEntity(4, 23, "url")},
+		ConversationKeyVersion:  "1",
+		SigningKeyVersion:       "1",
+	})
+	if err != nil {
+		t.Fatalf("EncryptEdit failed: %v", err)
+	}
+	if payload.EncryptedContent == "" {
+		t.Error("expected non-empty encrypted_content")
+	}
+	if payload.Signature == "" {
+		t.Error("expected non-empty signature")
+	}
+	if payload.EncodedEventSignature == "" {
+		t.Error("expected non-empty encoded_event_signature")
+	}
+	if payload.MessageID == "" {
+		t.Error("expected non-empty message_id")
+	}
+}
+
+func TestPrepareMessageDelete(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	// A 1:1 id is signed in its canonical colon form; delete-for-all signs
+	// the wire action 2.
+	sig, err := chat.PrepareMessageDelete(MessageDeleteParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "222-111",
+		SequenceIDs:       []string{"seq-10", "seq-11"},
+		DeleteForAll:      true,
+	})
+	if err != nil {
+		t.Fatalf("PrepareMessageDelete failed: %v", err)
+	}
+	if sig.MessageID == "" {
+		t.Error("expected non-empty message_id")
+	}
+	if sig.EncodedMessageEventDetail == "" {
+		t.Error("expected non-empty encoded_message_event_detail")
+	}
+	if sig.Signature == "" {
+		t.Error("expected non-empty signature")
+	}
+	want := fmt.Sprintf("MessageDeleteEvent,%s,111,111:222,2,seq-10,seq-11", sig.MessageID)
+	if sig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
+	}
+
+	// Group ids pass through unchanged; delete-for-self signs the wire
+	// action 1.
+	selfSig, err := chat.PrepareMessageDelete(MessageDeleteParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g999",
+		SequenceIDs:       []string{"seq-1"},
+		DeleteForAll:      false,
+	})
+	if err != nil {
+		t.Fatalf("PrepareMessageDelete (delete-for-self) failed: %v", err)
+	}
+	want = fmt.Sprintf("MessageDeleteEvent,%s,111,g999,1,seq-1", selfSig.MessageID)
+	if selfSig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, selfSig.SignaturePayload)
 	}
 }
 

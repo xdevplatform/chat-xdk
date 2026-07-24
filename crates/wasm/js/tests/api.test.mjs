@@ -382,6 +382,81 @@ async function main() {
   assert.ok(removePayload.signature.length > 0);
   assert.ok(removePayload.encodedEventSignature.length > 0);
 
+  // 4c2. encryptEdit produces a signed payload whose encrypted contents
+  // decrypt back to the edit: updated text, target sequence id, and the
+  // [start, end, type] entity tuple all survive the WASM boundary.
+  const editPayload = chat.encryptEdit({
+    senderId: "111",
+    conversationId: "conv-1",
+    conversationKey: convKey,
+    targetMessageSequenceId: "seq-99",
+    updatedText: "see https://example.com",
+    entities: [[4, 23, "url"]],
+    conversationKeyVersion: "1",
+    signingKeyVersion: "1",
+  });
+  assert.ok(editPayload.encryptedContent.length > 0);
+  assert.ok(editPayload.signature.length > 0);
+  assert.ok(editPayload.encodedEventSignature.length > 0);
+  assert.ok(editPayload.messageId.length > 0);
+  // Same extraction as 4b2: the ciphertext is the `contents` binary field
+  // (id 100) of the Thrift MessageCreateEvent, and the edit plaintext is
+  // all-ASCII Thrift, so chat.decrypt returns it intact as a string.
+  const editEventBytes = b64ToBytes(editPayload.encryptedContent);
+  assert.equal(editEventBytes[0], 0x0b);
+  assert.equal((editEventBytes[1] << 8) | editEventBytes[2], 100);
+  const editCtLen =
+    (editEventBytes[3] << 24) |
+    (editEventBytes[4] << 16) |
+    (editEventBytes[5] << 8) |
+    editEventBytes[6];
+  const editCiphertext = editEventBytes.subarray(7, 7 + editCtLen);
+  const decodedEdit = chat.decrypt(bytesToBase64(editCiphertext), convKey);
+  assert.ok(
+    decodedEdit.includes("see https://example.com"),
+    "decrypted edit content must embed the updated text",
+  );
+  assert.ok(
+    decodedEdit.includes("seq-99"),
+    "decrypted edit content must embed the target sequence id",
+  );
+  // Thrift RichTextEntity serializes field 1 (i32 startIndex) then field 2
+  // (i32 endIndex): the [4, 23, "url"] tuple must land as start=4, end=23.
+  assert.ok(
+    decodedEdit.includes(
+      "\u0008\u0000\u0001\u0000\u0000\u0000\u0004\u0008\u0000\u0002\u0000\u0000\u0000\u0017",
+    ),
+    "decrypted edit content must carry the entity's start/end indexes",
+  );
+
+  // 4c3. prepareMessageDelete returns a signed action with the encoded
+  // MessageDeleteEvent detail; 1:1 ids are signed in canonical colon form.
+  const deleteSig = chat.prepareMessageDelete({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "222-111",
+    sequenceIds: ["seq-10", "seq-11"],
+    deleteForAll: true,
+  });
+  assert.ok(deleteSig.messageId.length > 0);
+  assert.ok(deleteSig.encodedMessageEventDetail.length > 0);
+  assert.ok(deleteSig.signature.length > 0);
+  assert.equal(
+    deleteSig.signaturePayload,
+    `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`,
+  );
+  const deleteForSelfSig = chat.prepareMessageDelete({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g999",
+    sequenceIds: ["seq-1"],
+    deleteForAll: false,
+  });
+  assert.equal(
+    deleteForSelfSig.signaturePayload,
+    `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
+  );
+
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({

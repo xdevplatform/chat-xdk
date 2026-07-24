@@ -568,6 +568,10 @@ pub enum MessageContent {
         target_message_id: String,
         /// The new text.
         new_text: String,
+        /// Rich text entities in the new text.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "js", js_camel(wrap))]
+        entities: Option<Vec<RichTextEntity>>,
     },
 
     /// Conversation marked as read (encrypted marker).

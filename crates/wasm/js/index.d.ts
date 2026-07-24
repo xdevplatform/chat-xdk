@@ -64,7 +64,7 @@ export interface SendPayload {
 }
 
 /**
- * An action signature authenticating a conversation key change or member add.
+ * An action signature authenticating a conversation key change, member add, or message delete.
  */
 export interface ActionSignature {
   messageId: string;
@@ -72,7 +72,11 @@ export interface ActionSignature {
   signature: string;
   signatureVersion: string;
   publicKeyVersion: string;
-  /** Omitted for conversation-key changes; the signed payload embeds the plaintext conversation key. */
+  /**
+   * The comma-separated payload string that was signed; populated for group
+   * changes and message deletes. Omitted for conversation-key changes, whose
+   * payload embeds the plaintext conversation key.
+   */
   signaturePayload?: string;
 }
 
@@ -319,6 +323,58 @@ export interface EncryptReactionParams {
 }
 
 /**
+ * Parameters for encryptEdit.
+ *
+ * The preferred form passes `targetEvent` — the base64 raw event of the
+ * message being edited — and lets the SDK derive the conversation id and
+ * target sequence id from it.
+ */
+export interface EncryptEditParams {
+  /** The replacement message text. */
+  updatedText: string;
+  /** Rich-text entities for the replacement text; omitting clears any entities the original carried. */
+  entities?: EntityTuple[] | null;
+  /** Base64 of the raw event being edited; the conversation id and target sequence id are derived from it. */
+  targetEvent?: string | null;
+  /** ID of the conversation the edit belongs to; derived from targetEvent when omitted. */
+  conversationId?: string | null;
+  /** The sequenceId of the message being edited; derived from targetEvent when omitted. */
+  targetMessageSequenceId?: string | null;
+  /** User ID of the sender; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the message; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+  /**
+   * Raw 32-byte conversation key used to encrypt the edit content;
+   * resolves from the opt-in key cache (setCacheKeys) when omitted. Set
+   * together with conversationKeyVersion.
+   */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
+}
+
+/**
+ * Parameters for prepareMessageDelete.
+ *
+ * A delete is a signed plaintext event, not an encrypted message, so no
+ * conversation key is involved: the result is an action signature the
+ * caller submits alongside the delete request.
+ */
+export interface MessageDeleteParams {
+  /** ID of the conversation the messages belong to. */
+  conversationId: string;
+  /** The sequenceIds of the messages to delete. */
+  sequenceIds: string[];
+  /** Delete for every participant (true, own messages only) or only from the caller's view (false). */
+  deleteForAll: boolean;
+  /** User ID of the sender signing the delete; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the delete; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
+/**
  * Parameters for prepareConversationKeyChange.
  */
 export interface ConversationKeyChangeParams {
@@ -535,7 +591,7 @@ export interface MessageContent {
   emoji?: string;
   /** Present on 'reaction', 'reactionRemoved', and 'edit' content. */
   targetMessageId?: string;
-  /** Present on 'text' content: rich-text entities. */
+  /** Present on 'text' and 'edit' content: rich-text entities. */
   entities?: unknown[];
   /** Present on 'text' content: message attachments. */
   attachments?: unknown[];
@@ -799,6 +855,12 @@ interface ChatCrypto {
   /** Encrypt a reaction-remove. */
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
 
+  /** Encrypt a message edit. */
+  encryptEdit(params: EncryptEditParams): SendPayload;
+
+  /** Build the signed action for deleting messages from a conversation. */
+  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+
   /** Encrypt a stream (e.g. media). */
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
 
@@ -894,6 +956,8 @@ declare class Chat implements ChatCrypto {
   encryptReply(params: EncryptReplyParams): SendPayload;
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
+  encryptEdit(params: EncryptEditParams): SendPayload;
+  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
@@ -950,6 +1014,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptReply(params: EncryptReplyParams): SendPayload;
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
+  encryptEdit(params: EncryptEditParams): SendPayload;
+  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;

@@ -523,6 +523,76 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(payload.EncryptedContent);
         }
 
+        // EncryptEdit
+
+        [Fact]
+        public void EncryptEdit_ReturnsValidPayload()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+
+            // Explicit-field form: conversation id + target sequence id instead
+            // of the raw target event.
+            var payload = chat.EncryptEdit(new EncryptEditParams(targetEvent: null, "see https://example.com")
+            {
+                ConversationId = "conv-1",
+                TargetMessageSequenceId = "seq-99",
+                Entities = new[] { new EntityDescriptor { Start = 4, End = 23, EntityType = "url" } },
+                SenderId = "user-1",
+                SigningKeyVersion = "s1",
+                ConversationKey = ckey,
+                ConversationKeyVersion = "v1",
+            });
+
+            Assert.NotEmpty(payload.MessageId);
+            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.Signature);
+            Assert.NotEmpty(payload.EncodedEventSignature);
+        }
+
+        // PrepareMessageDelete
+
+        [Fact]
+        public void PrepareMessageDelete_SignsCanonicalPayload()
+        {
+            using var chat = CreateUnlocked();
+
+            // A 1:1 id is signed in its canonical colon form; delete-for-all
+            // signs the wire action 2.
+            var sig = chat.PrepareMessageDelete(new MessageDeleteParams(
+                "222-111", new[] { "seq-10", "seq-11" }, deleteForAll: true)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.NotEmpty(sig.MessageId);
+            Assert.NotEmpty(sig.EncodedMessageEventDetail);
+            Assert.NotEmpty(sig.Signature);
+            Assert.Equal(
+                $"MessageDeleteEvent,{sig.MessageId},111,111:222,2,seq-10,seq-11",
+                sig.SignaturePayload);
+        }
+
+        [Fact]
+        public void PrepareMessageDelete_ForSelf()
+        {
+            using var chat = CreateUnlocked();
+
+            // Group ids pass through unchanged; delete-for-self signs the wire
+            // action 1.
+            var sig = chat.PrepareMessageDelete(new MessageDeleteParams(
+                "g999", new[] { "seq-1" }, deleteForAll: false)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.Equal(
+                $"MessageDeleteEvent,{sig.MessageId},111,g999,1,seq-1",
+                sig.SignaturePayload);
+        }
+
         // Conversation key encrypt / decrypt
 
         [Fact]

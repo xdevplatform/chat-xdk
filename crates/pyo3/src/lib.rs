@@ -33,8 +33,9 @@ use std::sync::Arc;
 
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, EntityDescriptor, GroupCreateParams, GroupMembersChangeParams,
+    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams,
 };
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
@@ -216,25 +217,33 @@ fn prepared_change_to_pydict(
 
     let action_signatures = pyo3::types::PyList::empty(py);
     for sig in &result.action_signatures {
-        let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("message_id", &sig.message_id)?;
-        dict.set_item(
-            "encoded_message_event_detail",
-            &sig.encoded_message_event_detail,
-        )?;
-        dict.set_item("signature", &sig.signature)?;
-        dict.set_item("signature_version", &sig.signature_version)?;
-        dict.set_item("public_key_version", &sig.public_key_version)?;
-        // Absent for conversation-key changes: the signed payload embeds the
-        // plaintext conversation key and is withheld.
-        if !sig.signature_payload.is_empty() {
-            dict.set_item("signature_payload", &sig.signature_payload)?;
-        }
-        action_signatures.append(dict)?;
+        action_signatures.append(action_signature_to_pydict(py, sig)?)?;
     }
     outer.set_item("action_signatures", action_signatures)?;
 
     Ok(outer.into())
+}
+
+/// Build the Python dict for a signed action.
+fn action_signature_to_pydict<'py>(
+    py: Python<'py>,
+    sig: &chat_xdk_core::signatures::ActionSignature,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("message_id", &sig.message_id)?;
+    dict.set_item(
+        "encoded_message_event_detail",
+        &sig.encoded_message_event_detail,
+    )?;
+    dict.set_item("signature", &sig.signature)?;
+    dict.set_item("signature_version", &sig.signature_version)?;
+    dict.set_item("public_key_version", &sig.public_key_version)?;
+    // Absent for conversation-key changes: the signed payload embeds the
+    // plaintext conversation key and is withheld.
+    if !sig.signature_payload.is_empty() {
+        dict.set_item("signature_payload", &sig.signature_payload)?;
+    }
+    Ok(dict)
 }
 
 /// Convert the core SendPayload to the Python SendPayload with matching shape.
@@ -977,6 +986,71 @@ impl Chat {
         Ok(to_py_send_payload(payload))
     }
 
+    /// Encrypt a message edit for the X API.
+    ///
+    /// The preferred form passes ``target_event`` — the base64 raw event of
+    /// the message being edited — so the conversation id and target sequence
+    /// id are derived from it. The explicit overrides remain for callers that
+    /// no longer hold the raw event.
+    ///
+    /// The SDK generates the message id and returns it in the payload; read it
+    /// back from ``payload.message_id`` (do not pass one in).
+    ///
+    /// Args:
+    ///     target_event: Base64 raw event being edited. Omit it only when
+    ///         supplying ``conversation_id`` and ``target_message_sequence_id``.
+    ///     updated_text: The replacement message text.
+    ///     entities: Optional list of (start, end, entity_type) tuples for
+    ///         rich-text in the replacement text; omitting clears any entities
+    ///         the original carried. Keyword-only, like every optional
+    ///         argument below it.
+    ///     conversation_id: The conversation ID; derived from ``target_event``
+    ///         when omitted.
+    ///     target_message_sequence_id: Message sequence ID being edited;
+    ///         derived from ``target_event`` when omitted.
+    ///     sender_id: Your user ID; defaults to the ``set_identity`` value.
+    ///     signing_key_version: Your registered signing public key version;
+    ///         defaults to the ``set_identity`` value.
+    ///     conversation_key: Raw 32-byte conversation key (``bytes``). Pass it
+    ///         together with ``conversation_key_version``, or omit both to
+    ///         resolve from the opt-in ``set_cache_keys`` cache.
+    ///     conversation_key_version: Current conversation key version.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (target_event=None, updated_text=None, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    fn encrypt_edit(
+        &self,
+        target_event: Option<String>,
+        updated_text: Option<String>,
+        entities: Option<Vec<(i32, i32, String)>>,
+        conversation_id: Option<String>,
+        target_message_sequence_id: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
+    ) -> PyResult<SendPayload> {
+        // `updated_text` sits after the optional `target_event` positional,
+        // so it carries a `None` sentinel instead of being required in the
+        // pyo3 signature; a missing text raises `TypeError` like any other
+        // missing required argument.
+        let updated_text = updated_text.ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "missing required argument: 'updated_text'",
+            )
+        })?;
+        let mut params = EncryptEditParams::new(target_event.unwrap_or_default(), updated_text);
+        params.entities = entities.map(parse_entity_descs);
+        params.conversation_id = conversation_id;
+        params.target_message_sequence_id = target_message_sequence_id;
+        params.sender_id = sender_id;
+        params.signing_key_version = signing_key_version;
+        params.conversation_key = conversation_key;
+        params.conversation_key_version = conversation_key_version;
+        let payload = self.inner.encrypt_edit(&params).map_err(to_py_err)?;
+
+        Ok(to_py_send_payload(payload))
+    }
+
     /// Decrypt an encrypted conversation key (ECIES).
     ///
     /// Call this once per key version, then pass the result to ``decrypt_event()``.
@@ -1274,6 +1348,46 @@ impl Chat {
         params.ttl_msec = ttl_msec;
         let result = self.inner.prepare_group_create(params).map_err(to_py_err)?;
         Python::attach(|py| prepared_change_to_pydict(py, &result))
+    }
+
+    /// Build the signed action for deleting messages from a conversation.
+    ///
+    /// A delete is a signed plaintext event, not an encrypted message, so no
+    /// conversation key is involved: the result is a single action-signature
+    /// dict to submit alongside the delete request. The SDK generates the
+    /// action's message id; read it back from the result.
+    ///
+    /// Args:
+    ///     conversation_id: The conversation the messages belong to.
+    ///     sequence_ids: The ``sequence_id``s of the messages to delete.
+    ///     delete_for_all: Delete for every participant (``True``, own
+    ///         messages only) or only from the caller's view (``False``).
+    ///     sender_id: Your user ID; defaults to the ``set_identity`` value.
+    ///         Keyword-only, like every optional argument below it.
+    ///     signing_key_version: Your registered signing public key version;
+    ///         defaults to the ``set_identity`` value.
+    ///
+    /// Returns:
+    ///     A dict with ``message_id``, ``encoded_message_event_detail``,
+    ///     ``signature``, ``signature_version``, ``public_key_version``,
+    ///     ``signature_payload``.
+    #[pyo3(signature = (conversation_id, sequence_ids, delete_for_all, *, sender_id=None, signing_key_version=None))]
+    fn prepare_message_delete(
+        &self,
+        conversation_id: &str,
+        sequence_ids: Vec<String>,
+        delete_for_all: bool,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut params = MessageDeleteParams::new(conversation_id, sequence_ids, delete_for_all);
+        params.sender_id = sender_id;
+        params.signing_key_version = signing_key_version;
+        let signature = self
+            .inner
+            .prepare_message_delete(&params)
+            .map_err(to_py_err)?;
+        Python::attach(|py| Ok(action_signature_to_pydict(py, &signature)?.into()))
     }
 
     /// Export private keys as raw bytes for secure storage.

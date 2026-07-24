@@ -16,12 +16,12 @@ use crate::thrift::product::{
     AddressRichTextContent, CashtagRichTextContent, EmailRichTextContent, HashtagRichTextContent,
     MediaAttachment as ThriftMediaAttachmentStruct, MediaDimensions as ThriftMediaDimensions,
     MediaType as ThriftMediaType, MentionRichTextContent,
-    MessageAttachment as ThriftMessageAttachment, MessageContents, MessageEntryContents,
-    MessageEntryHolder, MessageReactionAdd, MessageReactionRemove, PhoneNumberRichTextContent,
-    PostAttachment as ThriftPostAttachment, ReplyingToPreview as ThriftReplyingToPreview,
-    RichTextContent as ThriftRichTextContent, RichTextEntity as ThriftRichTextEntity,
-    UrlAttachment as ThriftUrlAttachment, UrlAttachmentImage as ThriftUrlAttachmentImage,
-    UrlRichTextContent,
+    MessageAttachment as ThriftMessageAttachment, MessageContents, MessageEdit,
+    MessageEntryContents, MessageEntryHolder, MessageReactionAdd, MessageReactionRemove,
+    PhoneNumberRichTextContent, PostAttachment as ThriftPostAttachment,
+    ReplyingToPreview as ThriftReplyingToPreview, RichTextContent as ThriftRichTextContent,
+    RichTextEntity as ThriftRichTextEntity, UrlAttachment as ThriftUrlAttachment,
+    UrlAttachmentImage as ThriftUrlAttachmentImage, UrlRichTextContent,
 };
 use crate::types::{AttachmentDescriptor, EntityDescriptor, SendPayload, SignatureInfo};
 
@@ -297,6 +297,30 @@ pub fn build_reaction_add_content(
         None,
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::ReactionAdd(
+        Box::new(content),
+    ))));
+    serialize_thrift(&holder)
+}
+
+/// Build a message-edit content payload.
+pub fn build_message_edit_content(
+    target_message_sequence_id: &str,
+    updated_text: &str,
+    entities: Option<&[EntityDescriptor]>,
+) -> Result<Vec<u8>, SdkError> {
+    // MessageEdit carries entities unboxed, unlike MessageContents.
+    let entities = entities.map(|descs| {
+        build_thrift_entities(descs)
+            .into_iter()
+            .map(|e| *e)
+            .collect::<Vec<_>>()
+    });
+    let content = MessageEdit::new(
+        Some(target_message_sequence_id.to_string()),
+        Some(updated_text.to_string()),
+        entities,
+    );
+    let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::MessageEdit(
         Box::new(content),
     ))));
     serialize_thrift(&holder)

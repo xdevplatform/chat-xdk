@@ -366,6 +366,65 @@ class ChatTest {
     }
 
     @Test
+    void encryptEditReturnsValidPayload() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            byte[] ckey = newConvKey(chat);
+            // Explicit-field form: conversation id + target sequence id instead
+            // of the raw target event.
+            EncryptEditParams p = new EncryptEditParams(null, "see https://example.com");
+            EntityDescriptor url = new EntityDescriptor();
+            url.start = 4;
+            url.end = 23;
+            url.entityType = "url";
+            p.entities = List.of(url);
+            p.conversationId = "conv-1";
+            p.targetMessageSequenceId = "seq-99";
+            p.senderId = "111";
+            p.signingKeyVersion = "s1";
+            p.conversationKey = ckey;
+            p.conversationKeyVersion = "v1";
+            SendPayload payload = chat.encryptEdit(p);
+            assertFalse(payload.messageId.isEmpty());
+            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.signature.isEmpty());
+            assertFalse(payload.encodedEventSignature.isEmpty());
+        }
+    }
+
+    @Test
+    void prepareMessageDeleteSignsCanonicalPayload() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            // A 1:1 id is signed in its canonical colon form; delete-for-all
+            // signs the wire action 2.
+            MessageDeleteParams p = new MessageDeleteParams("222-111", List.of("seq-10", "seq-11"), true);
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareMessageDelete(p);
+            assertFalse(sig.messageId.isEmpty());
+            assertFalse(sig.encodedMessageEventDetail.isEmpty());
+            assertFalse(sig.signature.isEmpty());
+            assertEquals(
+                    "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
+    void prepareMessageDeleteForSelf() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            // Group ids pass through unchanged; delete-for-self signs the wire
+            // action 1.
+            MessageDeleteParams p = new MessageDeleteParams("g999", List.of("seq-1"), false);
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareMessageDelete(p);
+            assertEquals(
+                    "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
     void utilitiesHexRoundTrip() {
         byte[] raw = {(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef};
         String hex = ChatXdkUtilities.bytesToHex(raw);

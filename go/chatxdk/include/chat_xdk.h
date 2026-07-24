@@ -298,6 +298,20 @@ struct FfiResult chat_xdk_prepare_group_create(const struct ChatHandle *handle,
                                                const char *params_json);
 
 /**
+ * Build the signed action for deleting messages from a conversation.
+ *
+ * `params_json` — single JSON document: `conversation_id`, `sequence_ids`
+ * (the messages to delete), `delete_for_all` (every participant vs only the
+ * caller's view), plus optional `sender_id` / `signing_key_version` (unset
+ * resolves from the session identity).
+ *
+ * Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+ * on it.
+ */
+struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle,
+                                                 const char *params_json);
+
+/**
  * Decrypt a webhook event.
  *
  * `event_b64`: Base64-encoded event from webhook.
@@ -373,6 +387,23 @@ struct FfiResult chat_xdk_encrypt_add_reaction(const struct ChatHandle *handle,
  */
 struct FfiResult chat_xdk_encrypt_remove_reaction(const struct ChatHandle *handle,
                                                   const char *params_json);
+
+/**
+ * Encrypt a message edit for the X API.
+ *
+ * `params_json` — single JSON document: `updated_text` plus the edit
+ * target: preferably `target_event` (base64 raw event being edited; the
+ * conversation id and target sequence id are derived from it), with
+ * explicit `conversation_id` / `target_message_sequence_id` overrides for
+ * callers that no longer hold the raw event. Optional `entities`
+ * (`[start, end, type]` tuples for the replacement text), `sender_id` /
+ * `signing_key_version` (unset resolves from the session identity), and
+ * `conversation_key` (base64) / `conversation_key_version` (unset resolves
+ * from the opt-in key cache).
+ *
+ * Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+ */
+struct FfiResult chat_xdk_encrypt_edit(const struct ChatHandle *handle, const char *params_json);
 
 /**
  * Decrypt an encrypted conversation key.

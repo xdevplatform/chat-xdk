@@ -556,6 +556,25 @@ public final class Chat implements AutoCloseable {
                 ChatNative.INSTANCE::chat_xdk_prepare_group_create);
     }
 
+    /**
+     * Build the signed action for deleting messages from a conversation, ready
+     * to submit alongside the delete request.
+     *
+     * <p>A delete is a signed plaintext event, not an encrypted message, so no
+     * conversation key is involved. The SDK generates the action's message id;
+     * read it back from the result.
+     */
+    public ActionSignature prepareMessageDelete(MessageDeleteParams parameters) throws Exception {
+        throwIfDisposed();
+        try (Memory j = FfiStrings.utf8(buildPrepareMessageDeleteJson(parameters))) {
+            String resultJson = FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_prepare_message_delete(handle, j));
+            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
     private PreparedConversationChange callPrepare(String paramsJson, ParamsJsonFn fn) throws Exception {
         try (Memory j = FfiStrings.utf8(paramsJson)) {
             String resultJson = FfiStrings.consume(fn.apply(handle, j));
@@ -623,6 +642,12 @@ public final class Chat implements AutoCloseable {
     public SendPayload encryptRemoveReaction(EncryptReactionParams parameters) throws Exception {
         throwIfDisposed();
         return callEncrypt(buildReactionJson(parameters), ChatNative.INSTANCE::chat_xdk_encrypt_remove_reaction);
+    }
+
+    /** Encrypt a message edit for the X API. */
+    public SendPayload encryptEdit(EncryptEditParams parameters) throws Exception {
+        throwIfDisposed();
+        return callEncrypt(buildEncryptEditJson(parameters), ChatNative.INSTANCE::chat_xdk_encrypt_edit);
     }
 
     @FunctionalInterface
@@ -954,6 +979,35 @@ public final class Chat implements AutoCloseable {
             n.put("target_message_sequence_id", p.targetMessageSequenceId);
         }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildEncryptEditJson(EncryptEditParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("updated_text", p.updatedText);
+        if (p.targetEvent != null) {
+            n.put("target_event", p.targetEvent);
+        }
+        if (p.entities != null) {
+            n.set("entities", ChatJson.MAPPER.valueToTree(serializeEntities(p.entities)));
+        }
+        if (p.conversationId != null) {
+            n.put("conversation_id", p.conversationId);
+        }
+        if (p.targetMessageSequenceId != null) {
+            n.put("target_message_sequence_id", p.targetMessageSequenceId);
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareMessageDeleteJson(MessageDeleteParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.set("sequence_ids", ChatJson.MAPPER.valueToTree(
+                p.sequenceIds == null ? List.of() : p.sequenceIds));
+        n.put("delete_for_all", p.deleteForAll);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 

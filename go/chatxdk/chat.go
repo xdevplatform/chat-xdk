@@ -367,6 +367,32 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 	return &out, nil
 }
 
+// PrepareMessageDelete builds the signed action for deleting messages from a
+// conversation, ready to submit alongside the delete request.
+//
+// A delete is a signed plaintext event, not an encrypted message, so no
+// conversation key is involved. The SDK generates the action's message id;
+// read it back from the result.
+func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error) {
+	defer runtime.KeepAlive(c)
+	// Sequence ids are a required field; marshal a nil slice as [] rather
+	// than null.
+	params.SequenceIDs = orEmpty(params.SequenceIDs)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiPrepareMessageDelete(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out ActionSignature
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DecryptEvent decrypts a single webhook event and errors on failure.
 //
 // conversationKeys is a map of version -> raw 32-byte conversation key,
@@ -476,6 +502,24 @@ func (c *Chat) EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload
 		return nil, err
 	}
 	data, err := ffiEncryptRemoveReaction(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var payload SendPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
+// EncryptEdit encrypts a message edit for the X API.
+func (c *Chat) EncryptEdit(params EncryptEditParams) (*SendPayload, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiEncryptEdit(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}
