@@ -628,6 +628,24 @@ namespace ChatXdk
                 NativeMethods.chat_xdk_prepare_group_create);
         }
 
+        /// <summary>
+        /// Build the signed action for deleting messages from a conversation,
+        /// ready to submit alongside the delete request.
+        /// A delete is a signed plaintext event, not an encrypted message, so no
+        /// conversation key is involved. The SDK generates the action's message
+        /// id; read it back from the result.
+        /// </summary>
+        public ActionSignature PrepareMessageDelete(MessageDeleteParams parameters)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(BuildPrepareMessageDeleteJson(parameters));
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_message_delete(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+        }
+
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
         private PreparedConversationChange CallPrepareEndpoint(string paramsJson, ParamsJsonDelegate fn)
@@ -713,6 +731,14 @@ namespace ChatXdk
             ThrowIfDisposed();
             var json = BuildReactionJson(parameters);
             return CallEncryptEndpoint(json, NativeMethods.chat_xdk_encrypt_remove_reaction);
+        }
+
+        /// <summary>Encrypt a message edit for the X API.</summary>
+        public SendPayload EncryptEdit(EncryptEditParams parameters)
+        {
+            ThrowIfDisposed();
+            var json = BuildEncryptEditJson(parameters);
+            return CallEncryptEndpoint(json, NativeMethods.chat_xdk_encrypt_edit);
         }
 
         // Shared helper: marshal JSON, call the delegate, deserialise SendPayload.
@@ -1000,6 +1026,36 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
+            };
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildEncryptEditJson(EncryptEditParams p)
+        {
+            var dict = new Dictionary<string, object?>
+            {
+                ["target_event"] = p.TargetEvent,
+                ["updated_text"] = p.UpdatedText,
+                ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
+                ["conversation_id"] = p.ConversationId,
+                ["target_message_sequence_id"] = p.TargetMessageSequenceId,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
+                ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+            };
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildPrepareMessageDeleteJson(MessageDeleteParams p)
+        {
+            var dict = new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["sequence_ids"] = p.SequenceIds,
+                ["delete_for_all"] = p.DeleteForAll,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
             };
             return JsonSerializer.Serialize(dict, JsonOpts);
         }

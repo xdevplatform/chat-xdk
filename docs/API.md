@@ -672,6 +672,8 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 | 27 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
+| 30 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
+| 31 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(conversation_id, sequence_ids, delete_for_all, *, sender_id=None, signing_key_version=None) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
 
 Required fields of `EncryptMessageParams` (all bindings, names per language
 idiom): `conversation_id` and `text`. Everything else is an optional override:
@@ -733,6 +735,34 @@ being reacted to, and the SDK derives `conversation_id` and
 `target_message_sequence_id` from it; or set those two fields explicitly
 instead.
 
+**Edits target an event the same way.** `EncryptEditParams` requires
+`updated_text` — the replacement message text — plus the same target choice
+as a reaction: `target_event` (the base64 raw event of the message being
+edited) or the explicit `conversation_id` / `target_message_sequence_id`
+pair. Optional `entities` describe rich text in the replacement text;
+omitting them clears any entities the original carried. The edit is
+encrypted and signed like a regular message (the identity/key overrides
+above apply) and returns a `SendPayload` with its own fresh `message_id`.
+
+> **Delivery-race warning.** Receiving clients apply an edit to their stored
+> copy of the original and park it when the original has not arrived yet;
+> the backend stops serving a superseded original, so an edit that reaches a
+> client before the original leaves the message permanently invisible on
+> that client. Give a freshly sent message a few seconds to be delivered
+> before sending its first edit.
+
+**Message deletes are signed, not encrypted.** `MessageDeleteParams`
+requires `conversation_id`, the `sequence_ids` of the messages to delete,
+and `delete_for_all` — `true` deletes for every participant (own messages
+only), `false` only from the caller's view. No conversation key is involved:
+`prepare_message_delete` returns a single `ActionSignature` (the same shape
+as the prepare methods' `actionSignatures` entries, with its
+`signature_payload` populated) whose `encodedMessageEventDetail` carries the
+`MessageDeleteEvent`, ready to submit alongside the delete request. The
+optional `sender_id` / `signing_key_version` overrides resolve from the
+session identity, and a one-to-one id is signed in its canonical colon form,
+as everywhere.
+
 The Rust structs pair a `new(…required…)` constructor with public optional
 fields:
 
@@ -790,14 +820,14 @@ reaction = chat.encrypt_add_reaction(original_event_b64, "👍")
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 30 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
-| 31 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
-| 32 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
-| 33 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
+| 32 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
+| 33 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
+| 34 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
+| 35 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
 
-Methods 30/31 take the **decrypted** conversation key (raw bytes) and process the whole payload in memory.
+Methods 32/33 take the **decrypted** conversation key (raw bytes) and process the whole payload in memory.
 
-Methods 32/33 return an incremental object for large payloads: feed chunks with `push`, then call `finish` once. `finish` errors if the stream ended before its final frame (truncation detection), so output from `push` must not be treated as complete until `finish` succeeds. The native bindings (Go, JVM, .NET) free the object via `Close`/`close`/`Dispose`. In JS/WASM, `finish()` consumes and frees the object; call `free()` only when abandoning a stream without finishing it (calling it after `finish()` throws).
+Methods 34/35 return an incremental object for large payloads: feed chunks with `push`, then call `finish` once. `finish` errors if the stream ended before its final frame (truncation detection), so output from `push` must not be treated as complete until `finish` succeeds. The native bindings (Go, JVM, .NET) free the object via `Close`/`close`/`Dispose`. In JS/WASM, `finish()` consumes and frees the object; call `free()` only when abandoning a stream without finishing it (calling it after `finish()` throws).
 
 **Picking the key.** A conversation can have multiple key versions over its lifetime, and every payload decrypts only with the key of the version it was encrypted under. Each decrypted message event carries that version (`keyVersion` / `key_version`), and `decryptEvents` returns the full version → key map — always select the key by the event's version rather than assuming a single conversation key:
 
@@ -810,8 +840,8 @@ const plaintext = chat.decryptStream(encryptedMedia, key);
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 34 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
-| 35 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
+| 36 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
+| 37 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
 
 Encrypt/decrypt arbitrary UTF-8 strings using XSalsa20-Poly1305 with a conversation key. Use for encrypted metadata fields like `group_name`, `group_avatar_url`, and `group_description` returned by the XChat API.
 
@@ -834,16 +864,17 @@ group_name = chat.decrypt(conversation["group_name"], conv_key)
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 36 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
-| 37 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
-| 38 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
-| 39 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
+| 38 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
+| 39 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
+| 40 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
+| 41 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
 
 Conversation-key changes, group creates, and group member-adds are signed by the
 one-call prepare methods (`prepare_conversation_key_change`,
 `prepare_group_create`, `prepare_group_members_change`), which return the
 `actionSignatures` ready to POST. Group create and member-add each return two
-signatures (a conversation-key change plus the group change).
+signatures (a conversation-key change plus the group change). Message deletes
+are signed by `prepare_message_delete`, which returns a single `ActionSignature`.
 
 ### Utilities
 
@@ -851,12 +882,12 @@ Common helpers exported as module-level functions (Rust crate root / JS module /
 
 | # | Function | Rust | JS | Python | Go | JVM | .NET |
 |---|----------|------|-----|--------|-----|------|------|
-| 40 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
-| 41 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
-| 42 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
-| 43 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
-| 44 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
-| 45 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
+| 42 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
+| 43 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
+| 44 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
+| 45 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
+| 46 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
+| 47 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
 
 **Failure modes differ by binding.** On undecodable input,
 `base64_to_bytes` / `hex_to_bytes` return `None` (Rust `Option`), `undefined`
@@ -1394,7 +1425,7 @@ type MessageContent =
     }
   | { contentType: 'reaction'; emoji: string; targetMessageId: string }
   | { contentType: 'reactionRemoved'; emoji: string; targetMessageId: string }
-  | { contentType: 'edit'; targetMessageId: string; newText: string }
+  | { contentType: 'edit'; targetMessageId: string; newText: string; entities?: RichTextEntity[] }
   | { contentType: 'markRead' }
   | { contentType: 'markUnread' }
   | { contentType: 'unknown'; typeId?: number };

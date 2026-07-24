@@ -419,6 +419,8 @@ export class ChatWithJuicebox {
   encryptReply(params) { return this.#inner.encryptReply(params); }
   encryptAddReaction(params) { return this.#inner.encryptAddReaction(params); }
   encryptRemoveReaction(params) { return this.#inner.encryptRemoveReaction(params); }
+  encryptEdit(params) { return this.#inner.encryptEdit(params); }
+  prepareMessageDelete(params) { return this.#inner.prepareMessageDelete(params); }
   encryptStream(plaintext, key) { return this.#inner.encryptStream(plaintext, key); }
   decryptStream(encrypted, key) { return this.#inner.decryptStream(encrypted, key); }
   streamEncryptor(key) { return this.#inner.streamEncryptor(key); }

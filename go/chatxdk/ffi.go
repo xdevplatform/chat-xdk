@@ -212,6 +212,12 @@ func ffiPrepareGroupCreate(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_prepare_group_create(h, c))
 }
 
+func ffiPrepareMessageDelete(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_message_delete(h, c))
+}
+
 // decrypt
 
 func ffiDecryptEvent(h handle, eventB64, convKeysJSON, signingKeysJSON string) (string, error) {
@@ -256,6 +262,12 @@ func ffiEncryptRemoveReaction(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
 	return ffiResult(C.chat_xdk_encrypt_remove_reaction(h, c))
+}
+
+func ffiEncryptEdit(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_encrypt_edit(h, c))
 }
 
 func ffiEncryptStream(h handle, plaintextB64, ckeyB64 string) (string, error) {

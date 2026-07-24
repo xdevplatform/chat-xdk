@@ -35,8 +35,8 @@ use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
 use chat_xdk_core::js::{
-    JsEvent, JsPreparedConversationChange, JsPublicKeyInput, JsPublicKeyRegistrationPayload,
-    JsSendPayload, JsSigningKeyEntry,
+    JsActionSignature, JsEvent, JsPreparedConversationChange, JsPublicKeyInput,
+    JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
 };
 
 // Utility Functions (free functions, not methods)
@@ -533,6 +533,48 @@ impl Chat {
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
+    }
+
+    /// Encrypt a message edit.
+    ///
+    /// Takes a single params object with camelCase keys: `updatedText`,
+    /// plus `targetEvent` — the base64 raw event being edited, from which the
+    /// conversation id and target sequence id are derived — or explicit
+    /// `conversationId` / `targetMessageSequenceId` overrides. `entities`
+    /// (array of `[start, end, "type"]` tuples) describes the replacement
+    /// text; `senderId`, `signingKeyVersion`, `conversationKey` (Uint8Array),
+    /// and `conversationKeyVersion` resolve from the session identity and key
+    /// cache when omitted. The SDK generates the message id and returns it as
+    /// `messageId` on the result.
+    #[wasm_bindgen(js_name = encryptEdit)]
+    pub fn encrypt_edit(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsEncryptEditParams = from_js_params("encryptEdit", params)?;
+        let payload = self
+            .inner
+            .encrypt_edit(&p.into_core())
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let js_payload: JsSendPayload = payload.into();
+        to_js_value(&js_payload)
+    }
+
+    /// Build the signed action for deleting messages from a conversation.
+    ///
+    /// Takes a single params object with camelCase keys: `conversationId`,
+    /// `sequenceIds` (array of message sequence ids), `deleteForAll`
+    /// (boolean: every participant vs only the caller's view), plus optional
+    /// `senderId` / `signingKeyVersion` (resolved from the session identity
+    /// when omitted). Returns the action signature to submit alongside the
+    /// delete request; the SDK generates the action's message id
+    /// (`messageId` on the result).
+    #[wasm_bindgen(js_name = prepareMessageDelete)]
+    pub fn prepare_message_delete(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsMessageDeleteParams = from_js_params("prepareMessageDelete", params)?;
+        let signature = self
+            .inner
+            .prepare_message_delete(&p.into_core())
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let js_signature: JsActionSignature = signature.into();
+        to_js_value(&js_signature)
     }
 
     /// Encrypt a stream (e.g. media).
@@ -1046,6 +1088,60 @@ impl JsEncryptReactionParams {
         params.signing_key_version = self.signing_key_version;
         params.conversation_key = self.conversation_key;
         params.conversation_key_version = self.conversation_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsEncryptEditParams {
+    updated_text: String,
+    target_event: Option<String>,
+    entities: Option<Vec<(i32, i32, String)>>,
+    conversation_id: Option<String>,
+    target_message_sequence_id: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
+}
+
+impl JsEncryptEditParams {
+    fn into_core(self) -> chat_xdk_core::EncryptEditParams {
+        let mut params = chat_xdk_core::EncryptEditParams::new(
+            self.target_event.unwrap_or_default(),
+            self.updated_text,
+        );
+        params.entities = self.entities.map(entity_tuples_to_descs);
+        params.conversation_id = self.conversation_id;
+        params.target_message_sequence_id = self.target_message_sequence_id;
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params.conversation_key = self.conversation_key;
+        params.conversation_key_version = self.conversation_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsMessageDeleteParams {
+    conversation_id: String,
+    sequence_ids: Vec<String>,
+    delete_for_all: bool,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsMessageDeleteParams {
+    fn into_core(self) -> chat_xdk_core::MessageDeleteParams {
+        let mut params = chat_xdk_core::MessageDeleteParams::new(
+            self.conversation_id,
+            self.sequence_ids,
+            self.delete_for_all,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
         params
     }
 }

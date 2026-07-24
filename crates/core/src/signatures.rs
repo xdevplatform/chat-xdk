@@ -236,6 +236,39 @@ pub fn build_ckey_change_signature(
     })
 }
 
+/// Build and sign a MessageDelete action signature.
+///
+/// Payload format:
+/// ```text
+/// MessageDeleteEvent,{msg_id},{sender_id},{conv_id},{delete_action},{sequence_ids...}
+/// ```
+///
+/// `delete_action` is the wire integer: `1` delete-for-self, `2`
+/// delete-for-all.
+///
+/// The payload is comma-joined with no escaping, so signing fails with a
+/// parse error if any component contains a comma.
+pub fn build_message_delete_signature(
+    signing_key: &XChatPrivateKey,
+    public_key_version: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    sequence_ids: &[String],
+    delete_action: i32,
+) -> Result<ActionSignature, SdkError> {
+    let action_str = delete_action.to_string();
+    let mut components: Vec<&str> = vec![
+        "MessageDeleteEvent",
+        message_id,
+        sender_id,
+        conversation_id,
+        &action_str,
+    ];
+    components.extend(sequence_ids.iter().map(|s| s.as_str()));
+    sign_payload(signing_key, public_key_version, message_id, &components)
+}
+
 /// Sign a comma-joined payload and return an [`ActionSignature`].
 ///
 /// Rejects any component containing `,`: the payload has no escaping, so an

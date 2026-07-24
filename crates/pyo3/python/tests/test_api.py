@@ -329,6 +329,40 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.signature)
         self.assertTrue(payload.encoded_event_signature)
 
+    def test_encrypt_edit_shape(self):
+        chat, v = self._unlocked_chat()
+
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        payload = chat.encrypt_edit(
+            None, "see https://example.com",
+            entities=[(4, 23, "url")],
+            conversation_id="conv-1",
+            target_message_sequence_id="seq-99",
+            sender_id="111",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+        )
+
+        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.signature)
+        self.assertTrue(payload.encoded_event_signature)
+        self.assertTrue(payload.message_id)
+
+    def test_encrypt_edit_requires_updated_text(self):
+        chat, v = self._unlocked_chat()
+
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        with self.assertRaises(TypeError):
+            chat.encrypt_edit(
+                conversation_id="conv-1",
+                target_message_sequence_id="seq-99",
+                sender_id="me",
+                signing_key_version="1",
+                conversation_key=conv_key,
+                conversation_key_version="1",
+            )
+
     def test_prepare_conversation_key_change_shape(self):
         chat, v = self._unlocked_chat()
 
@@ -491,6 +525,45 @@ class TestApiShapes(unittest.TestCase):
                 payload.endswith(",null,null,null"),
                 f"title/avatar must sign as the null sentinel, got: {payload}",
             )
+
+    def test_prepare_message_delete_shape(self):
+        chat, v = self._unlocked_chat()
+
+        # A 1:1 id is signed in its canonical colon form; delete-for-all
+        # signs the wire action 2.
+        sig = chat.prepare_message_delete(
+            "222-111",
+            ["seq-10", "seq-11"],
+            True,
+            sender_id="111",
+            signing_key_version="1",
+        )
+
+        self.assertTrue(sig["message_id"])
+        self.assertTrue(sig["encoded_message_event_detail"])
+        self.assertTrue(sig["signature"])
+        self.assertEqual(
+            sig["signature_payload"],
+            f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11",
+        )
+
+    def test_prepare_message_delete_for_self(self):
+        chat, v = self._unlocked_chat()
+
+        # Group ids pass through unchanged; delete-for-self signs the wire
+        # action 1.
+        sig = chat.prepare_message_delete(
+            "g999",
+            ["seq-1"],
+            False,
+            sender_id="111",
+            signing_key_version="1",
+        )
+
+        self.assertEqual(
+            sig["signature_payload"],
+            f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1",
+        )
 
     def test_optional_arguments_are_keyword_only(self):
         chat, v = self._unlocked_chat()

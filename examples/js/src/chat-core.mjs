@@ -201,6 +201,35 @@ export class ChatCore {
     };
   }
 
+  /**
+   * Encrypt + sign a message edit. `targetEvent` is the base64 raw event of
+   * the message being edited; the conversation id and target sequence id are
+   * derived from it.
+   */
+  encryptEdit({ targetEvent, updatedText, entities, conversationKey, conversationKeyVersion }) {
+    const payload = this.#chat.encryptEdit({
+      targetEvent,
+      updatedText,
+      entities,
+      conversationKey,
+      conversationKeyVersion,
+    });
+    return {
+      // The SDK generates the message id and returns it in the payload.
+      message_id: payload.messageId,
+      encoded_message_create_event: payload.encryptedContent,
+      encoded_message_event_signature: payload.encodedEventSignature,
+    };
+  }
+
+  /**
+   * Sign a message delete. Returns the action signature to submit alongside
+   * the delete request.
+   */
+  prepareMessageDelete({ conversationId, sequenceIds, deleteForAll }) {
+    return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
+  }
+
   // -- Group management ------------------------------------------------------
 
   /** Prepare a group creation: fresh key + the two required signatures. */

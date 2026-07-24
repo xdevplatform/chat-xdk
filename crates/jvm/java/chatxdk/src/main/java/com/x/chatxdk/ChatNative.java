@@ -66,6 +66,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_group_create(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_prepare_message_delete(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_decrypt_event(
             Pointer handle, Pointer eventB64, Pointer conversationKeysJson, Pointer signingKeysJson);
 
@@ -76,6 +78,8 @@ public interface ChatNative extends Library {
     FfiResult.ByValue chat_xdk_encrypt_add_reaction(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_remove_reaction(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_encrypt_edit(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_decrypt_conversation_key(Pointer handle, Pointer encryptedKeyB64);
 

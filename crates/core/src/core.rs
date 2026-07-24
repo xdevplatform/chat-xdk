@@ -12,8 +12,8 @@ use crate::error::{CryptoError, SdkError};
 use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
-    ConversationKeyChangeParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    GroupCreateParams, GroupMembersChangeParams,
+    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -1885,21 +1885,143 @@ impl ChatCore {
         ))
     }
 
+    /// Encrypt a message edit.
+    ///
+    /// The edit replaces the target message's text (and entities) for every
+    /// recipient; it is sent through the same message-create channel as a
+    /// regular message and carries its own fresh message id.
+    ///
+    /// When `target_event` is set, the conversation id and target sequence id
+    /// are derived from that raw event; explicit fields override them.
+    pub fn encrypt_edit(&self, params: &EncryptEditParams) -> Result<SendPayload, SdkError> {
+        let (conversation_id, target_sequence_id) = Self::resolve_event_target(
+            params.target_event.as_deref(),
+            params.conversation_id.as_deref(),
+            params.target_message_sequence_id.as_deref(),
+        )?;
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let (ckey, conversation_key_version) = self.resolve_conversation_key(
+            params.conversation_key.as_deref(),
+            params.conversation_key_version.as_deref(),
+            &conversation_id,
+            &sender_id,
+        )?;
+        let signing_kp = self.get_signing_keypair_arc()?;
+        let content_bytes = crate::pipeline::build_message_edit_content(
+            &target_sequence_id,
+            &params.updated_text,
+            params.entities.as_deref(),
+        )?;
+        let message_id = Self::generate_message_id();
+        crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
+        ))
+    }
+
+    /// Build the signed action for deleting messages from a conversation.
+    ///
+    /// A delete is a plaintext `MessageDeleteEvent`, not an encrypted
+    /// message: the result carries the encoded event detail and its
+    /// signature, ready to submit alongside the delete request. The SDK
+    /// generates the action's message id; read it back from the result.
+    pub fn prepare_message_delete(
+        &self,
+        params: &MessageDeleteParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        if params.sequence_ids.is_empty() {
+            return Err(SdkError::InvalidState(
+                "sequence_ids is empty: pass at least one message to delete".into(),
+            ));
+        }
+        if params.sequence_ids.iter().any(String::is_empty) {
+            return Err(SdkError::InvalidState(
+                "sequence_ids contains an empty id: every entry must name a message".into(),
+            ));
+        }
+        if params.conversation_id.is_empty() {
+            return Err(SdkError::InvalidState(
+                "conversation_id is empty: pass the conversation the messages belong to".into(),
+            ));
+        }
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let conversation_id =
+            crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
+        let signing_key = self.get_signing_private_key()?;
+
+        let delete_action = if params.delete_for_all {
+            crate::thrift::event::DeleteMessageAction::DELETE_FOR_ALL
+        } else {
+            crate::thrift::event::DeleteMessageAction::DELETE_FOR_SELF
+        };
+        let message_id = Self::generate_message_id();
+        let mut signature = crate::signatures::build_message_delete_signature(
+            &signing_key,
+            &signing_key_version,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &params.sequence_ids,
+            delete_action.0,
+        )?;
+        signature.encoded_message_event_detail =
+            Self::encode_message_delete_detail(&params.sequence_ids, delete_action)?;
+        Ok(signature)
+    }
+
+    /// Serialize the `MessageDeleteEvent` the API validates and relays.
+    ///
+    /// Encoded as a base64 `MessageEventDetail` carrying the sequence ids and
+    /// the delete action.
+    fn encode_message_delete_detail(
+        sequence_ids: &[String],
+        delete_action: crate::thrift::event::DeleteMessageAction,
+    ) -> Result<String, SdkError> {
+        let detail = crate::thrift::event::MessageEventDetail::MessageDeleteEvent(
+            crate::thrift::event::MessageDeleteEvent {
+                sequence_ids: Some(sequence_ids.to_vec()),
+                delete_message_action: Some(delete_action),
+            },
+        );
+        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+    }
+
     /// Resolve a reaction's conversation id and target sequence id from the
     /// explicit fields or, when unset, from the parsed `target_event`.
     fn resolve_reaction_target(
         params: &EncryptReactionParams,
     ) -> Result<(String, String), SdkError> {
-        let explicit_conv = params.conversation_id.as_deref().filter(|v| !v.is_empty());
-        let explicit_seq = params
-            .target_message_sequence_id
-            .as_deref()
-            .filter(|v| !v.is_empty());
+        Self::resolve_event_target(
+            params.target_event.as_deref(),
+            params.conversation_id.as_deref(),
+            params.target_message_sequence_id.as_deref(),
+        )
+    }
+
+    /// Resolve a target message's conversation id and sequence id from the
+    /// explicit fields or, when unset, from the parsed `target_event`.
+    fn resolve_event_target(
+        target_event: Option<&str>,
+        conversation_id: Option<&str>,
+        target_message_sequence_id: Option<&str>,
+    ) -> Result<(String, String), SdkError> {
+        let explicit_conv = conversation_id.filter(|v| !v.is_empty());
+        let explicit_seq = target_message_sequence_id.filter(|v| !v.is_empty());
         if let (Some(conv), Some(seq)) = (explicit_conv, explicit_seq) {
             return Ok((conv.to_string(), seq.to_string()));
         }
 
-        let parsed = match params.target_event.as_deref().filter(|v| !v.is_empty()) {
+        let parsed = match target_event.filter(|v| !v.is_empty()) {
             Some(event_b64) => Some(Self::parse_event_b64(event_b64)?),
             None => None,
         };
@@ -3274,6 +3396,7 @@ pub(crate) fn parse_message_content(data: &[u8]) -> Result<ParsedMessageContent,
             MessageEntryContents::MessageEdit(e) => MessageContent::Edit {
                 target_message_id: e.message_sequence_id.unwrap_or_default(),
                 new_text: e.updated_text.unwrap_or_default(),
+                entities: map_rich_text_entities(e.entities.as_deref()),
             },
             MessageEntryContents::MarkConversationRead(_) => MessageContent::MarkRead,
             MessageEntryContents::MarkConversationUnread(_) => MessageContent::MarkUnread,
@@ -3855,6 +3978,63 @@ mod tests {
             Event::Message(msg) => {
                 assert!(msg.verified, "self-signed v7 message must verify");
                 assert_eq!(msg.text(), Some("hello v7"));
+            }
+            other => panic!("expected Message, got {:?}", other),
+        }
+    }
+
+    /// An edit produced by `encrypt_edit` must decrypt and verify like any
+    /// other message, surfacing the target sequence id, replacement text, and
+    /// entities. Catches producer/consumer divergence on the edit wire shape.
+    #[test]
+    fn encrypt_edit_round_trips_through_decrypt() {
+        let core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+
+        let mut params = crate::EncryptEditParams::new("", "read https://example.com")
+            .with_identity("sender-1", "1733889755256")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        params.conversation_id = Some("conv-1".into());
+        params.target_message_sequence_id = Some("seq-orig".into());
+        params.entities = Some(vec![crate::types::EntityDescriptor {
+            start: 5,
+            end: 24,
+            entity_type: "url".into(),
+        }]);
+        let payload = core.encrypt_edit(&params).unwrap();
+
+        let event_b64 = wrap_signed_payload_with_seq(&payload, "sender-1", "conv-1", "seq-edit");
+        let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
+        let signing_keys = [SigningKeyEntry {
+            user_id: "sender-1".to_string(),
+            public_key_version: "1733889755256".to_string(),
+            public_key: reg.public_key.signing_public_key.clone(),
+            identity_public_key: reg.public_key.public_key.clone(),
+            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
+        }];
+
+        let event = core
+            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .unwrap();
+        match event {
+            Event::Message(msg) => {
+                assert!(msg.verified, "self-signed edit must verify");
+                match msg.content {
+                    MessageContent::Edit {
+                        target_message_id,
+                        new_text,
+                        entities,
+                    } => {
+                        assert_eq!(target_message_id, "seq-orig");
+                        assert_eq!(new_text, "read https://example.com");
+                        let entities = entities.expect("entities survive the round trip");
+                        assert_eq!(entities.len(), 1);
+                        assert_eq!(entities[0].start_index, Some(5));
+                        assert_eq!(entities[0].end_index, Some(24));
+                    }
+                    other => panic!("expected Edit content, got {:?}", other),
+                }
             }
             other => panic!("expected Message, got {:?}", other),
         }
@@ -6577,6 +6757,104 @@ mod tests {
             _ => panic!("expected GroupChangeEvent"),
         }
         assert_action_signature_round_trips(&core, blocked_add, "user-1", "g555", None);
+    }
+
+    #[test]
+    fn message_delete_signature_verifies_against_own_reconstruction() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let params = crate::MessageDeleteParams::new(
+            "222-111",
+            vec!["seq-10".to_string(), "seq-11".to_string()],
+            true,
+        )
+        .with_identity("111", "1");
+        let sig = core.prepare_message_delete(&params).unwrap();
+
+        // The 1:1 conversation id is signed in canonical colon form even when
+        // the params carry the hyphen form.
+        assert_eq!(
+            sig.signature_payload,
+            format!(
+                "MessageDeleteEvent,{},111,111:222,2,seq-10,seq-11",
+                sig.message_id
+            )
+        );
+
+        match decode_detail(&sig.encoded_message_event_detail) {
+            MessageEventDetail::MessageDeleteEvent(del) => {
+                assert_eq!(
+                    del.sequence_ids,
+                    Some(vec!["seq-10".to_string(), "seq-11".to_string()])
+                );
+                assert_eq!(
+                    del.delete_message_action,
+                    Some(crate::thrift::event::DeleteMessageAction::DELETE_FOR_ALL)
+                );
+            }
+            other => panic!("expected MessageDeleteEvent, got {:?}", other),
+        }
+
+        assert_action_signature_round_trips(&core, &sig, "111", "111:222", None);
+    }
+
+    #[test]
+    fn message_delete_for_self_signs_action_one() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let params = crate::MessageDeleteParams::new("g999", vec!["seq-1".to_string()], false)
+            .with_identity("111", "1");
+        let sig = core.prepare_message_delete(&params).unwrap();
+
+        assert_eq!(
+            sig.signature_payload,
+            format!("MessageDeleteEvent,{},111,g999,1,seq-1", sig.message_id)
+        );
+        assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+    }
+
+    #[test]
+    fn prepare_message_delete_rejects_empty_sequence_ids() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let params =
+            crate::MessageDeleteParams::new("g999", vec![], true).with_identity("111", "1");
+        assert!(core.prepare_message_delete(&params).is_err());
+    }
+
+    /// Empty id components would sign a degenerate payload with empty
+    /// comma-separated slots (e.g. `...,111,,2,,seq-2`) that only fails
+    /// server-side; reject them up front instead.
+    #[test]
+    fn prepare_message_delete_rejects_empty_id_components() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let empty_conversation =
+            crate::MessageDeleteParams::new("", vec!["seq-1".to_string()], true)
+                .with_identity("111", "1");
+        let err = core
+            .prepare_message_delete(&empty_conversation)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("conversation_id is empty"),
+            "unexpected error: {err}"
+        );
+
+        let empty_member = crate::MessageDeleteParams::new(
+            "g999",
+            vec!["".to_string(), "seq-2".to_string()],
+            true,
+        )
+        .with_identity("111", "1");
+        let err = core.prepare_message_delete(&empty_member).unwrap_err();
+        assert!(
+            err.to_string().contains("empty id"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

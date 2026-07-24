@@ -250,6 +250,20 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_group_create(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Build the signed action for deleting messages from a conversation.
+        ///
+        ///  `params_json` — single JSON document: `conversation_id`, `sequence_ids`
+        ///  (the messages to delete), `delete_for_all` (every participant vs only the
+        ///  caller's view), plus optional `sender_id` / `signing_key_version` (absent
+        ///  resolves from the session identity).
+        ///
+        ///  Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+        ///  on it.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_message_delete", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Decrypt a webhook event.
         ///
         ///  - `event_b64` — base64-encoded raw event from the webhook.
@@ -324,6 +338,22 @@ namespace ChatXdk
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_remove_reaction", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_encrypt_remove_reaction(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Encrypt a message edit for the X API.
+        ///
+        ///  `params_json` — single JSON document: `updated_text` and `target_event`
+        ///  (base64 raw event being edited; the conversation id and target sequence
+        ///  id are derived from it), plus optional explicit overrides
+        ///  `conversation_id` / `target_message_sequence_id` for callers that no
+        ///  longer hold the raw event, `entities` (`[start, end, type]` tuples for
+        ///  the replacement text), and the optional identity/key overrides described
+        ///  on `chat_xdk_encrypt_message`.
+        ///
+        ///  Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_edit", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_encrypt_edit(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Decrypt an ECIES-encrypted conversation key.
