@@ -138,7 +138,27 @@ async function initWasmModule() {
   return wasmModule;
 }
 
-async function loadJuiceboxSdk() {
+// The juicebox-sdk glue module is a process-wide singleton: its JS side keeps
+// cached typed-array views of one wasm instance's memory, so binding a second
+// instance via __wbg_set_wasm leaves those views pointing at the previous
+// memory and later calls (as early as `new Configuration`) read garbage or
+// trap. Load once and share the promise across every createChat call;
+// concurrent first calls must share the same in-flight load for the same
+// reason. A failed load is not cached so a later call can retry (and callers
+// get the install guidance each time).
+let juiceboxSdkPromise = null;
+
+function loadJuiceboxSdk() {
+  if (!juiceboxSdkPromise) {
+    juiceboxSdkPromise = loadJuiceboxSdkOnce().catch((err) => {
+      juiceboxSdkPromise = null;
+      throw err;
+    });
+  }
+  return juiceboxSdkPromise;
+}
+
+async function loadJuiceboxSdkOnce() {
   if (isNodeRuntime()) {
     const juiceboxBg = await import("juicebox-sdk/juicebox-sdk_bg.js");
     const { createRequire } = await import("module");

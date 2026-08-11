@@ -602,10 +602,45 @@ async function firstBootTests() {
   );
 }
 
+// The juicebox-sdk WASM must be loaded once per process: its glue keeps
+// typed-array views of a single instance's memory, and a second instantiation
+// leaves those views stale, crashing the next `new Configuration`. This suite
+// needs the real juicebox-sdk package (the stubs bypass the loader), so it
+// runs only when the optional peer dependency is installed.
+async function realJuiceboxSingletonTests() {
+  try {
+    await import("juicebox-sdk/juicebox-sdk_bg.js");
+  } catch {
+    console.log("wrapper.test.mjs: juicebox-sdk not installed; skipping singleton tests");
+    return;
+  }
+
+  const juiceboxConfig = JSON.stringify({
+    realms: [{ id: "0f".repeat(16), address: "https://realm.invalid/" }],
+    register_threshold: 1,
+    recover_threshold: 1,
+    pin_hashing_mode: "Standard2019",
+  });
+  const opts = { juiceboxConfig, getAuthToken: async () => "stub-token" };
+
+  // Sequential createChat calls share one loaded module — the second call
+  // used to crash inside the Juicebox Configuration constructor.
+  const first = await createChat(opts);
+  first.free();
+  const second = await createChat(opts);
+  second.free();
+
+  // Concurrent first loads share the same in-flight load.
+  const [a, b] = await Promise.all([createChat(opts), createChat(opts)]);
+  a.free();
+  b.free();
+}
+
 async function main() {
   await delegationTests();
   await guessBudgetTests();
   await firstBootTests();
+  await realJuiceboxSingletonTests();
   console.log("wrapper.test.mjs: all assertions passed");
 }
 
