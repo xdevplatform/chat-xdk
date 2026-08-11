@@ -623,17 +623,17 @@ async function realJuiceboxSingletonTests() {
   });
   const opts = { juiceboxConfig, getAuthToken: async () => "stub-token" };
 
-  // Sequential createChat calls share one loaded module — the second call
-  // used to crash inside the Juicebox Configuration constructor.
-  const first = await createChat(opts);
-  first.free();
-  const second = await createChat(opts);
-  second.free();
-
-  // Concurrent first loads share the same in-flight load.
+  // First use of the loader: concurrent createChat calls must share the same
+  // in-flight load rather than instantiate the WASM twice.
   const [a, b] = await Promise.all([createChat(opts), createChat(opts)]);
   a.free();
   b.free();
+
+  // Later calls reuse the settled module; a fresh instantiation here would
+  // leave the glue's memory views stale and crash the Configuration
+  // constructor.
+  const later = await createChat(opts);
+  later.free();
 }
 
 async function main() {
