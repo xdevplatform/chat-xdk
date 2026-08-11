@@ -96,11 +96,11 @@ export class XChatClient {
     const config = latest.juiceboxConfig ?? latest.juicebox_config;
     if (!config) {
       throw new Error(
-        "no juicebox_config on the account. The browser-safe binding stores keys " +
-          "only in Juicebox, so it needs the account's realm config to register. " +
-          "Register the first identity with a native binding (which persists a key " +
-          "blob), or use an already-provisioned account (juicebox_config is always " +
-          "returned once provisioned).",
+        "no juicebox_config on the account yet. It is created by " +
+          "POST /2/users/:id/public_keys, so register a public key first — " +
+          "src/register.mjs does this: createChat with no config, " +
+          "generateKeypairs, POST, then updateConfig + setup(pin). Once " +
+          "provisioned, juicebox_config is always returned.",
       );
     }
     // Passed to the SDK as-is: it reads `key_store_token_map_json` verbatim.

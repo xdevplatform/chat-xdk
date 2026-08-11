@@ -8,18 +8,23 @@
  * JS-specific difference from the other bindings: the browser-safe WASM
  * binding deliberately exposes NO exportKeys/importKeys, so there is no
  * private-key blob to write to disk. Juicebox IS the durable store here, so a
- * PIN is required. The identity is made durable BEFORE the network call:
- * generate, `setup(pin)` (store in Juicebox), record the marker — then POST.
- * An interrupted run is resumed by recovering the same identity with
- * `unlock(pin)` and re-sending the saved registration body, so it never mints
- * a new identity or wastes the strict daily budget. Safety properties:
+ * PIN is required. The account's `juicebox_config` is created BY the
+ * public-key POST, so a brand-new user necessarily runs first boot in this
+ * order: create the chat with no config, generate keys, POST the public key,
+ * fetch the now-existing `juicebox_config`, then `updateConfig` + `setup(pin)`
+ * to make the identity durable. Safety properties:
  *   1. the one-time marker (state/registration.json) — refuse to re-register;
- *   2. resume via unlock(pin) — a run interrupted after setup recovers the same
- *      identity instead of generating a new one;
+ *   2. the marker (with the public POST body) is written only after a
+ *      successful setup(pin), so a marker body always denotes an identity that
+ *      is recoverable from Juicebox via unlock(pin) — a run that finds a body
+ *      without registered:true recovers that identity and re-sends the saved
+ *      body instead of minting a new one;
  *   3. reconcile-before-POST — if our exact public key is already on the
  *      account (a prior POST can apply server-side even after erroring), adopt
  *      it and skip the POST.
- * Stop cleanly on HTTP 429 rather than retrying.
+ * Stop cleanly on HTTP 429 rather than retrying. A 429 on a freshly minted
+ * identity discards it — nothing durable was stored and the failed POST
+ * consumed no budget — so the re-run simply mints a new one.
  *
  * Environment (see .env.example):
  *   X_ACCESS_TOKEN     OAuth2 user token for the bot (dm.read + dm.write)
@@ -66,18 +71,52 @@ async function writeMarker(marker) {
 }
 
 /**
- * Build the per-realm auth-token callback createChat needs. Realm tokens live
- * in the `token_map` of the X API `juicebox_config`, keyed by hex realm id.
+ * Realm auth tokens live in the `token_map` of the X API `juicebox_config`,
+ * which does not exist until the first public-key POST. The getter handed to
+ * createChat therefore reads a mutable map, (re)filled from whichever config
+ * is fetched later in the run.
  */
-function authTokenGetter(configJson) {
+const realmTokens = new Map();
+
+function loadRealmTokens(configJson) {
   const parsed = JSON.parse(configJson);
-  const tokens = new Map();
+  realmTokens.clear();
   for (const entry of parsed.token_map ?? parsed.tokenMap ?? []) {
     const realm = String(entry?.key ?? "").toLowerCase();
     const token = entry?.value?.token;
-    if (realm && typeof token === "string") tokens.set(realm, token);
+    if (realm && typeof token === "string") realmTokens.set(realm, token);
   }
-  return async (realmId) => tokens.get(String(realmId).toLowerCase()) ?? "";
+}
+
+const getAuthToken = async (realmId) => realmTokens.get(String(realmId).toLowerCase()) ?? "";
+
+/**
+ * The PIN rules setup() enforces, checked before any budget is spent:
+ * setup() can only run after the public-key POST (the config it needs is
+ * created by that POST), so a PIN it would reject must fail the run before
+ * the POST rather than strand a freshly registered key. Returns the reason
+ * the PIN is unacceptable, or null when it is fine.
+ */
+function weakPinReason(pin) {
+  const bytes = new TextEncoder().encode(pin);
+  if (bytes.length < 4) return "must be at least 4 characters";
+  if (bytes.every((b) => b === bytes[0])) return "must not be a single repeated character";
+  const allDigits = bytes.every((b) => b >= 0x30 && b <= 0x39);
+  let ascending = true;
+  let descending = true;
+  for (let i = 1; i < bytes.length; i++) {
+    if (bytes[i] !== bytes[i - 1] + 1) ascending = false;
+    if (bytes[i] !== bytes[i - 1] - 1) descending = false;
+  }
+  if (allDigits && (ascending || descending)) return "must not be a sequential run of digits";
+  return null;
+}
+
+/** Fetch juicebox_config, feed its realm tokens to getAuthToken, and arm the chat with it. */
+async function applyJuiceboxConfig(api, chat, userId) {
+  const { configJson } = await api.getJuiceboxConfig(userId);
+  loadRealmTokens(configJson);
+  chat.updateConfig(configJson);
 }
 
 async function register({ force }) {
@@ -107,24 +146,34 @@ async function register({ force }) {
   const api = new XChatClient(token);
   const userId = process.env.CHAT_BOT_USER_ID || (await api.getMyUserId());
 
-  // Juicebox config is needed up front (before generating keys) because it is
-  // the only place the identity can be persisted in this binding.
-  const { configJson } = await api.getJuiceboxConfig(userId);
-  const chat = await createChat({ juiceboxConfig: configJson, getAuthToken: authTokenGetter(configJson) });
+  // No juicebox_config yet on first boot (the POST below creates it), so the
+  // chat is created without one; crypto and generateKeypairs work regardless.
+  const chat = await createChat({ getAuthToken });
 
-  // Resume an interrupted run with the SAME identity: recover it from Juicebox
-  // and reuse the saved registration body. Only generate + store a fresh
-  // identity when there is no in-progress one. Storing in Juicebox and
-  // recording the body BEFORE the POST is what makes a failed POST safe to
-  // retry without minting a new identity or wasting the daily budget.
+  // A marker body without registered:true denotes an identity whose
+  // setup(pin) succeeded but whose registration was never confirmed complete:
+  // it is durable in Juicebox and juicebox_config exists. Recover that SAME
+  // identity and re-send the saved registration body instead of minting a new
+  // one (which would waste the strict daily budget). Without a saved body
+  // there is nothing to resume — mint a fresh identity.
   let body;
   let version;
+  let minted = false;
   if (marker.body && !force) {
+    await applyJuiceboxConfig(api, chat, userId);
     await chat.unlock(pin);
     body = marker.body;
     version = String(marker.version ?? "1");
     console.log("Resuming the saved identity (recovered from Juicebox).");
   } else {
+    const weak = weakPinReason(pin);
+    if (weak) {
+      console.error(
+        `CHAT_PIN ${weak}. setup(pin) would reject it after the rate-limited ` +
+          "POST and strand the new key — pick a stronger PIN and re-run.",
+      );
+      process.exit(1);
+    }
     const reg = chat.generateKeypairs();
     version = String(reg.version ?? "1");
     // Snake_case wire form — the exact body the X API public-key endpoint takes.
@@ -139,9 +188,8 @@ async function register({ force }) {
       version,
       generate_version: Boolean(reg.generateVersion),
     };
-    await chat.setup(pin); // durable store BEFORE the POST
-    await writeMarker({ registered: false, user_id: userId, version, body });
-    console.log("Generated a new identity; stored in Juicebox under your PIN.");
+    minted = true;
+    console.log("Generated a new identity.");
   }
   const ourPublicKey = body.public_key.public_key;
 
@@ -166,12 +214,50 @@ async function register({ force }) {
           : "the next window";
         console.error(
           "Registration is rate limited (429). The daily budget is exhausted; " +
-            `wait until ${when} and re-run — the saved identity resumes, so no budget is wasted.`,
+            `wait until ${when} and re-run. ` +
+            (minted
+              ? "The just-minted identity is discarded (nothing durable was stored " +
+                "and the failed POST consumed no budget); the re-run mints a new one."
+              : "The saved identity resumes, so no budget is wasted."),
         );
         process.exit(1);
       }
       throw err;
     }
+  }
+
+  // First boot only: the POST above created juicebox_config, so the identity
+  // can now be made durable. The private key exists only in this process
+  // until setup() stores it, so a transient failure fetching the just-created
+  // config or reaching the realms is retried before declaring the freshly
+  // registered key lost. The marker is written only after setup succeeds — it
+  // must never point at an identity that cannot be recovered via unlock.
+  if (minted) {
+    let stored = false;
+    let lastErr;
+    for (let attempt = 1; attempt <= 3 && !stored; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.log(`Storing keys in Juicebox failed; retrying (attempt ${attempt}/3) …`);
+          await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+        }
+        await applyJuiceboxConfig(api, chat, userId);
+        await chat.setup(pin);
+        stored = true;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (!stored) {
+      console.error(
+        `Storing the keys in Juicebox failed AFTER public key version ${version} was ` +
+          "registered on the account. This binding has no key export, so that key is " +
+          "now unusable; re-run with --force to mint and register a replacement " +
+          "(this consumes registration budget).",
+      );
+      throw lastErr;
+    }
+    console.log("Keys stored in Juicebox under your PIN.");
   }
 
   // Records the registered key version and the session identity in one call.
@@ -181,6 +267,7 @@ async function register({ force }) {
     registered: true,
     user_id: userId,
     version,
+    body,
     registered_at: new Date().toISOString(),
   });
 

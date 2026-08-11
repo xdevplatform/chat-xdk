@@ -30,8 +30,11 @@ function b64ToBytes(b64) {
 
 // Network-backend stubs (Juicebox realm I/O lives outside the SDK).
 class StubJuiceboxConfiguration {
+  static instances = [];
+
   constructor(value) {
     this.value = value;
+    StubJuiceboxConfiguration.instances.push(this);
   }
 }
 
@@ -517,9 +520,92 @@ async function guessBudgetTests() {
   });
 }
 
+// First boot: the account's juicebox_config is created by the public-key
+// POST, so createChat must work without one — crypto (including
+// generateKeypairs) available immediately, Juicebox lifecycle gated until
+// updateConfig supplies the real config.
+async function firstBootTests() {
+  const clientsBefore = StubJuiceboxClient.instances.length;
+  const configsBefore = StubJuiceboxConfiguration.instances.length;
+  const chat = await createChat({
+    getAuthToken: async () => "stub-token",
+    juiceboxModule,
+  });
+  // No config ⇒ no Juicebox Configuration/Client is constructed.
+  assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
+  assert.equal(StubJuiceboxConfiguration.instances.length, configsBefore);
+
+  // Crypto works before any config: generateKeypairs yields a full
+  // registration payload the caller can POST.
+  const payload = chat.generateKeypairs();
+  assert.ok(payload.publicKey.publicKey.length > 0);
+  assert.ok(payload.publicKey.signingPublicKey.length > 0);
+  assert.equal(chat.isUnlocked(), true);
+
+  // Juicebox lifecycle before any config fails with the deliberate error —
+  // not a constructor crash — and never reaches a client.
+  for (const op of [
+    () => chat.setup("2580"),
+    () => chat.unlock("2580"),
+    () => chat.changePin("2580", "1359"),
+    () => chat.delete(),
+  ]) {
+    await assert.rejects(op, /No Juicebox config/);
+  }
+  assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
+
+  // updateConfig with the real (post-POST) config enables setup: exactly one
+  // register call, on the client built from that config.
+  chat.updateConfig(JSON.stringify({ realms: [], max_guess_count: 6 }));
+  assert.equal(StubJuiceboxClient.instances.length, clientsBefore + 1);
+  const client = lastClient();
+  assert.equal(client.registerCalls, 0);
+  const keys = await chat.setup("2580");
+  assert.equal(client.registerCalls, 1);
+  assert.equal(client.lastNumGuesses, 6);
+  assert.equal(keys.identity, chat.getPublicKeys().identity);
+
+  // The stored identity round-trips through unlock on the same instance.
+  chat.lock();
+  await chat.unlock("2580");
+  assert.equal(chat.isUnlocked(), true);
+  assert.equal(chat.getPublicKeys().identity, keys.identity);
+
+  // An explicit createChat maxGuessCount override survives a config-less
+  // construction and still beats the config supplied later by updateConfig.
+  const pinned = await createChat({
+    getAuthToken: async () => "stub-token",
+    juiceboxModule,
+    maxGuessCount: 9,
+  });
+  pinned.updateConfig(JSON.stringify({ realms: [], max_guess_count: 3 }));
+  pinned.generateKeypairs();
+  await pinned.setup("2580");
+  assert.equal(lastClient().lastNumGuesses, 9);
+
+  // A present-but-empty config is a caller bug, not first boot: it fails at
+  // createChat rather than deferring to a missing-config error at setup.
+  await assert.rejects(
+    () =>
+      createChat({
+        juiceboxConfig: "",
+        getAuthToken: async () => "stub-token",
+        juiceboxModule,
+      }),
+    SyntaxError,
+  );
+
+  // getAuthToken stays mandatory even when the config is omitted.
+  await assert.rejects(
+    () => createChat({ juiceboxModule }),
+    /getAuthToken must be an async function/,
+  );
+}
+
 async function main() {
   await delegationTests();
   await guessBudgetTests();
+  await firstBootTests();
   console.log("wrapper.test.mjs: all assertions passed");
 }
 

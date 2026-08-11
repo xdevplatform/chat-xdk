@@ -16,7 +16,7 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`) | `Chat(config_json?: str)` | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
+| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`; `juiceboxConfig` optional) | `Chat(config_json?: str)` | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
 | 2 | **update_config** | `update_config(&mut self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&mut self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 
@@ -43,6 +43,16 @@ In JS, realm auth tokens always come from the `getAuthToken` callback
 instead of the config, so the `tokens`/`token_map` token fields are not
 validated there (and a raw realms config is accepted as a fourth shape);
 a config accepted by JS may still be rejected by the native bindings.
+
+`createChat`'s `juiceboxConfig` is optional to support **JS first boot**: the
+account's `juicebox_config` is created by `POST /2/users/:id/public_keys`, so
+a brand-new user has none yet. Created without a config, the instance runs
+every crypto method (including `generateKeypairs`) but builds no Juicebox
+client; `setup`/`unlock`/`changePin`/`delete` throw a clear error until
+`updateConfig` supplies a real config. The first-boot flow is:
+`createChat({ getAuthToken })` → `generateKeypairs()` → caller POSTs the
+payload → `updateConfig(configFromGet)` → `setup(pin)`. Already-provisioned
+accounts keep passing `juiceboxConfig` at creation, unchanged.
 
 ### Juicebox Key Storage
 
@@ -953,6 +963,23 @@ ImageDimensions? dims = ChatXdkUtilities.DetectImageDimensions(imageBytes);
 ## Quick Start
 
 ### JavaScript/WASM
+
+First boot — `juicebox_config` is created by `POST /2/users/:id/public_keys`,
+so a brand-new user creates the chat without one:
+
+```typescript
+import { createChat } from '@xdevplatform/chat-xdk';
+
+const chat = await createChat({
+  getAuthToken: async (realmId) => await backend.getToken(realmId),
+});
+const payload = chat.generateKeypairs();
+// … POST payload to /2/users/:id/public_keys, GET juicebox_config back …
+chat.updateConfig(configJson);
+await chat.setup("2580");
+```
+
+Later sessions — the account is provisioned:
 
 ```typescript
 import { createChat } from '@xdevplatform/chat-xdk';

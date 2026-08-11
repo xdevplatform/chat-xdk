@@ -659,6 +659,13 @@ export interface CreateChatOptions {
    * Obtain this from the `juicebox_config` field of
    * GET /2/users/:id/public_keys (your own user, `public_key.fields=juicebox_config`).
    *
+   * Optional to support first boot: `juicebox_config` is created by
+   * POST /2/users/:id/public_keys, so a brand-new user has none yet. Omit
+   * it, call `generateKeypairs()` and POST the payload yourself, then call
+   * `updateConfig()` with the config returned by the GET and `setup(pin)`.
+   * Until a config is supplied, `setup`/`unlock`/`changePin`/`delete`
+   * throw; all crypto methods work.
+   *
    * Accepted shapes match the native bindings and are checked in this
    * order: the `sdk_config` wrapper (its embedded SDK config string is
    * unwrapped for the Juicebox client), the X API `juicebox_config` object
@@ -669,10 +676,13 @@ export interface CreateChatOptions {
    * them), or a raw realms config. Realm auth tokens always come from
    * `getAuthToken`, not the config.
    */
-  juiceboxConfig: string;
+  juiceboxConfig?: string;
   
   /**
    * Async function to get a Juicebox auth token for a realm.
+   *
+   * Required even when `juiceboxConfig` is omitted: the first Juicebox
+   * operation after `updateConfig()` (typically first-boot `setup`) needs it.
    * 
    * @param realmId - Hex-encoded realm ID
    * @returns Promise resolving to the auth token string
@@ -979,16 +989,26 @@ export declare class ChatWithJuicebox implements ChatCrypto {
    * Register keys with Juicebox. The PIN must meet strength requirements
    * (4+ characters, not a single repeated character or sequential digit
    * run). Pass a Uint8Array to be able to zero the buffer afterwards.
+   *
+   * Requires a Juicebox config: throws if the instance was created without
+   * `juiceboxConfig` and `updateConfig()` has not been called yet.
    */
   setup(pin: string | Uint8Array): Promise<PublicKeys>;
+  /** Requires a Juicebox config, like setup(). */
   unlock(pin: string | Uint8Array): Promise<void>;
+  /** Requires a Juicebox config, like setup(). */
   delete(): Promise<void>;
-  /** The new PIN must meet the same strength requirements as setup(). */
+  /**
+   * The new PIN must meet the same strength requirements as setup().
+   * Requires a Juicebox config, like setup().
+   */
   changePin(oldPin: string | Uint8Array, newPin: string | Uint8Array): Promise<void>;
   /**
-   * Re-create the Juicebox client from a new config (e.g. refreshed auth
+   * (Re-)create the Juicebox client from a config (e.g. refreshed auth
    * tokens) and re-resolve the PIN guess budget from it; an explicit
-   * createChat `maxGuessCount` override keeps winning.
+   * createChat `maxGuessCount` override keeps winning. On an instance
+   * created without `juiceboxConfig`, this is the first-boot step that
+   * enables `setup`/`unlock`/`changePin`/`delete`.
    */
   updateConfig(juiceboxConfig: string): void;
 
@@ -1037,6 +1057,10 @@ export declare class ChatWithJuicebox implements ChatCrypto {
 
 /**
  * Create a Chat instance with integrated Juicebox key storage.
+ *
+ * `juiceboxConfig` is optional: on first boot (no `juicebox_config` on the
+ * account yet) create with just `getAuthToken`, `generateKeypairs()`, POST
+ * the payload, then `updateConfig()` + `setup(pin)`.
  *
  * Each call creates an independent instance with its own Juicebox client.
  * The Juicebox auth-token callback is a process-wide global that each
