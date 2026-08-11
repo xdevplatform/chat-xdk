@@ -101,7 +101,14 @@ class ChatBot:
         st = self._state(conversation_id)
         page = self.api.get_events(conversation_id, max_results=100)
         raw = page.get("data") or []
-        events_b64 = [e["encoded_event"] for e in raw if e.get("encoded_event")]
+        # KeyChange events arrive in meta.conversation_key_events, separate
+        # from data. They must go into the same decrypt_events batch — without
+        # them no conversation key is extracted and every message lands in
+        # the result's errors.
+        key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
+        events_b64 = list(key_events_b64) + [
+            e["encoded_event"] for e in raw if e.get("encoded_event")
+        ]
         self._register_signing_keys(raw)
 
         batch = self.core.decrypt_batch(events_b64)
@@ -127,6 +134,16 @@ class ChatBot:
             conversation_id, max_results=50, pagination_token=st.pagination_token
         )
         raw = page.get("data") or []
+        # Key changes for this page arrive in meta, not data; route them
+        # through the batch path so the rotated keys are verified and cached
+        # before this loop decrypts the messages that need them.
+        key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
+        if key_events_b64:
+            rotated = self.core.decrypt_batch(list(key_events_b64))
+            st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
+            st.latest_key_version = (
+                rotated["conversation_keys"].get("latest_version") or st.latest_key_version
+            )
         self._register_signing_keys(raw)
 
         for item in raw:

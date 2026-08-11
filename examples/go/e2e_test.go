@@ -61,12 +61,12 @@ func TestE2ELive(t *testing.T) {
 	}
 
 	// -- 1. Inbound history: batch decrypt (+ pagination when available) ----
-	raw, next, err := api.GetEvents(conv, 10, "")
+	raw, keyEventsPage1, next, err := api.GetEvents(conv, 10, "")
 	if err != nil {
 		t.Fatalf("GetEvents: %v", err)
 	}
 	if next != "" {
-		raw2, _, err := api.GetEvents(conv, 10, next)
+		raw2, _, _, err := api.GetEvents(conv, 10, next)
 		if err != nil {
 			t.Fatalf("GetEvents page 2: %v", err)
 		}
@@ -121,7 +121,9 @@ func TestE2ELive(t *testing.T) {
 		t.Fatalf("SetSigningKeys: %v", err)
 	}
 
-	var eventsB64 []string
+	// The KeyChange events from meta.conversation_key_events carry the
+	// conversation keys; they must be in the same batch as the messages.
+	eventsB64 := append([]string{}, keyEventsPage1...)
 	for _, e := range raw {
 		if e.EncodedEvent != "" {
 			eventsB64 = append(eventsB64, e.EncodedEvent)
@@ -203,11 +205,12 @@ func TestE2ELive(t *testing.T) {
 	kv := prep.ConversationKeyVersion
 	var convKeys map[string][]byte
 	for attempt := 0; attempt < 5; attempt++ {
-		raw, _, err = api.GetEvents(conv, 10, "")
+		var pageKeyEvents []string
+		raw, pageKeyEvents, _, err = api.GetEvents(conv, 10, "")
 		if err != nil {
 			t.Fatalf("GetEvents: %v", err)
 		}
-		eventsB64 = eventsB64[:0]
+		eventsB64 = append(eventsB64[:0], pageKeyEvents...)
 		for _, e := range raw {
 			if e.EncodedEvent != "" {
 				eventsB64 = append(eventsB64, e.EncodedEvent)
@@ -488,7 +491,7 @@ func awaitDecrypted(t *testing.T, api *XChatClient, core *ChatCore, conversation
 	t.Helper()
 	var lastErr error
 	for try := 0; try < 10; try++ {
-		events, _, err := api.GetEvents(conversationID, 25, "")
+		events, _, _, err := api.GetEvents(conversationID, 25, "")
 		if err != nil {
 			t.Fatalf("GetEvents: %v", err)
 		}

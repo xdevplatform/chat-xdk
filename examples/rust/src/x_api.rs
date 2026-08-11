@@ -19,12 +19,18 @@ pub struct EventItem {
 pub trait ChatApi {
     fn get_my_user_id(&self) -> Result<String, String>;
     fn get_public_keys(&self, user_id: &str) -> Result<Vec<SigningKeyEntry>, String>;
+    /// Fetch a page of raw (encrypted) events.
+    ///
+    /// Returns `(events, key_events, next_token)`. KeyChange events arrive in
+    /// `meta.conversation_key_events`, separate from `data`; they carry the
+    /// conversation keys and must go into the same `decrypt_events` batch as
+    /// the data events.
     fn get_events(
         &self,
         conversation_id: &str,
         max_results: u32,
         pagination_token: Option<&str>,
-    ) -> Result<(Vec<EventItem>, Option<String>), String>;
+    ) -> Result<(Vec<EventItem>, Vec<String>, Option<String>), String>;
     fn send_message(
         &self,
         conversation_id: &str,
@@ -333,7 +339,7 @@ mod http_impl {
             conversation_id: &str,
             max_results: u32,
             pagination_token: Option<&str>,
-        ) -> Result<(Vec<EventItem>, Option<String>), String> {
+        ) -> Result<(Vec<EventItem>, Vec<String>, Option<String>), String> {
             let mut path = format!(
                 "/2/chat/conversations/{}/events?max_results={max_results}",
                 conversation_id.replace(':', "-")
@@ -352,8 +358,16 @@ mod http_impl {
                     });
                 }
             }
+            let mut key_events = Vec::new();
+            if let Value::Array(arr) = &v["meta"]["conversation_key_events"] {
+                for e in arr {
+                    if let Some(s) = e.as_str() {
+                        key_events.push(s.to_string());
+                    }
+                }
+            }
             let next = v["meta"]["next_token"].as_str().map(str::to_string);
-            Ok((items, next))
+            Ok((items, key_events, next))
         }
 
         fn send_message(

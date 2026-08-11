@@ -73,7 +73,7 @@ fn await_decrypted(
 ) -> (Event, String, String) {
     let mut last_err: Option<String> = None;
     for _ in 0..10 {
-        let (events, _) = api
+        let (events, _, _) = api
             .get_events(conversation_id, 25, None)
             .expect("get_events");
         for e in &events {
@@ -131,9 +131,9 @@ fn e2e_live() {
     core.set_identity(&my_id);
 
     // -- 1. Inbound history: batch decrypt (+ pagination when available) ----
-    let (mut raw, next_token) = api.get_events(&conv, 10, None).expect("get_events");
+    let (mut raw, key_events, next_token) = api.get_events(&conv, 10, None).expect("get_events");
     if let Some(next_token) = next_token {
-        let (raw2, _) = api
+        let (raw2, _, _) = api
             .get_events(&conv, 10, Some(&next_token))
             .expect("get_events page 2");
         let ids1: Vec<&str> = raw.iter().map(|e| e.id.as_str()).collect();
@@ -160,10 +160,16 @@ fn e2e_live() {
         }
     }
 
-    let refs: Vec<&str> = raw
+    // The KeyChange events from meta.conversation_key_events carry the
+    // conversation keys; they must be in the same batch as the messages.
+    let refs: Vec<&str> = key_events
         .iter()
-        .filter(|e| !e.encoded_event.is_empty())
-        .map(|e| e.encoded_event.as_str())
+        .map(String::as_str)
+        .chain(
+            raw.iter()
+                .filter(|e| !e.encoded_event.is_empty())
+                .map(|e| e.encoded_event.as_str()),
+        )
         .collect();
     let batch = core.decrypt_batch(&refs, &signing);
     let decrypted = batch
@@ -249,11 +255,15 @@ fn e2e_live() {
     let kv = prep.conversation_key_version.clone();
     let mut conv_keys = HashMap::new();
     for _ in 0..5 {
-        let (raw, _) = api.get_events(&conv, 10, None).expect("get_events");
-        let refs: Vec<&str> = raw
+        let (raw, page_key_events, _) = api.get_events(&conv, 10, None).expect("get_events");
+        let refs: Vec<&str> = page_key_events
             .iter()
-            .filter(|e| !e.encoded_event.is_empty())
-            .map(|e| e.encoded_event.as_str())
+            .map(String::as_str)
+            .chain(
+                raw.iter()
+                    .filter(|e| !e.encoded_event.is_empty())
+                    .map(|e| e.encoded_event.as_str()),
+            )
             .collect();
         conv_keys = core.decrypt_batch(&refs, &signing).conversation_keys.keys;
         if conv_keys.contains_key(&kv) {

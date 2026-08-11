@@ -99,12 +99,14 @@ func (b *Bot) refreshSigningKeys(events []EventItem) {
 // filling the SDK's conversation-key cache from the KeyChange events.
 func (b *Bot) LoadBacklog(conversationID string) error {
 	st := b.stateFor(conversationID)
-	events, next, err := b.api.GetEvents(conversationID, 100, "")
+	events, keyEvents, next, err := b.api.GetEvents(conversationID, 100, "")
 	if err != nil {
 		return err
 	}
 	b.refreshSigningKeys(events)
-	var eventsB64 []string
+	// The key events must be in the same batch as the messages: they are the
+	// only source of the conversation keys the messages decrypt under.
+	eventsB64 := append([]string{}, keyEvents...)
 	for _, e := range events {
 		if e.EncodedEvent != "" {
 			eventsB64 = append(eventsB64, e.EncodedEvent)
@@ -122,9 +124,16 @@ func (b *Bot) LoadBacklog(conversationID string) error {
 // PollOnce fetches new events and replies using the single-event decrypt path.
 func (b *Bot) PollOnce(conversationID string) error {
 	st := b.stateFor(conversationID)
-	events, next, err := b.api.GetEvents(conversationID, 50, st.paginationToken)
+	events, keyEvents, next, err := b.api.GetEvents(conversationID, 50, st.paginationToken)
 	if err != nil {
 		return err
+	}
+	// Key changes for this page arrive in meta, not data; only the batch
+	// path feeds the key cache, so route them through it before decrypting.
+	if len(keyEvents) > 0 {
+		if _, err := b.core.DecryptBatch(keyEvents, nil); err != nil {
+			log.Printf("key_events_decrypt_failed conv=%s err=%v", conversationID, err)
+		}
 	}
 	b.refreshSigningKeys(events)
 	for _, item := range events {

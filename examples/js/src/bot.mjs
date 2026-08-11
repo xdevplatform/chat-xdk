@@ -74,7 +74,15 @@ export class ChatBot {
     const st = this.#state(conversationId);
     const page = await this.api.getEvents(conversationId, { maxResults: 100 });
     const raw = page.data ?? [];
-    const eventsB64 = raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean);
+    // KeyChange events arrive in meta.conversation_key_events, separate from
+    // data. They must go into the same decryptEvents batch — without them no
+    // conversation key is extracted and every message lands in errors.
+    const keyEventsB64 =
+      page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
+    const eventsB64 = [
+      ...keyEventsB64,
+      ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
+    ];
     await this.#storeSigningKeysFor(raw);
 
     // Signing keys come from the store; the verified conversation keys land
@@ -97,6 +105,11 @@ export class ChatBot {
       paginationToken: st.paginationToken,
     });
     const raw = page.data ?? [];
+    // Key changes for this page arrive in meta, not data; only the batch
+    // path feeds the key cache, so route them through it before decrypting.
+    const keyEventsB64 =
+      page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
+    if (keyEventsB64.length) this.core.decryptBatch(keyEventsB64);
     await this.#storeSigningKeysFor(raw);
 
     for (const item of raw) {

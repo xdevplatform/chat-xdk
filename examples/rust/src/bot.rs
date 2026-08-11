@@ -69,12 +69,19 @@ impl<A: ChatApi> Bot<A> {
 
     /// Initial load: batch-decrypt the backlog (decrypt_events path).
     pub fn load_backlog(&mut self, conversation_id: &str) -> Result<(), String> {
-        let (events, next) = self.api.get_events(conversation_id, 100, None)?;
+        let (events, key_events, next) = self.api.get_events(conversation_id, 100, None)?;
         let signing_keys = self.signing_keys_for(&events);
-        let refs: Vec<&str> = events
+        // The key events carry the conversation keys the messages decrypt
+        // under; they must be in the same batch.
+        let refs: Vec<&str> = key_events
             .iter()
-            .filter(|e| !e.encoded_event.is_empty())
-            .map(|e| e.encoded_event.as_str())
+            .map(String::as_str)
+            .chain(
+                events
+                    .iter()
+                    .filter(|e| !e.encoded_event.is_empty())
+                    .map(|e| e.encoded_event.as_str()),
+            )
             .collect();
         let result = self.core.decrypt_batch(&refs, &signing_keys);
 
@@ -97,8 +104,21 @@ impl<A: ChatApi> Bot<A> {
             .state
             .get(conversation_id)
             .and_then(|s| s.pagination_token.clone());
-        let (events, next) = self.api.get_events(conversation_id, 50, token.as_deref())?;
+        let (events, key_events, next) =
+            self.api.get_events(conversation_id, 50, token.as_deref())?;
         let signing_keys = self.signing_keys_for(&events);
+
+        // Key changes for this page arrive in meta, not data; adopt their
+        // keys before decrypting the messages that need them.
+        if !key_events.is_empty() {
+            let refs: Vec<&str> = key_events.iter().map(String::as_str).collect();
+            let rotated = self.core.decrypt_batch(&refs, &signing_keys);
+            let st = self.state.entry(conversation_id.to_string()).or_default();
+            st.conversation_keys.extend(rotated.conversation_keys.keys);
+            if let Some(v) = rotated.conversation_keys.latest_version {
+                st.latest_key_version = Some(v);
+            }
+        }
 
         for item in &events {
             if item.encoded_event.is_empty() {
