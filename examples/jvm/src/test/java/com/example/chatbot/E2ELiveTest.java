@@ -91,6 +91,25 @@ class E2ELiveTest {
         return out;
     }
 
+    /**
+     * KeyChange events from a GET events page. They arrive in
+     * meta.conversation_key_events, separate from data, and carry the
+     * conversation keys — they must go into the same decryptBatch call as the
+     * data events.
+     */
+    private static List<String> keyEvents(JsonNode page) {
+        List<String> out = new ArrayList<>();
+        JsonNode arr = page.path("meta").path("conversation_key_events");
+        if (arr.isArray()) {
+            for (JsonNode e : arr) {
+                if (e.isTextual()) {
+                    out.add(e.asText());
+                }
+            }
+        }
+        return out;
+    }
+
     /** A decrypted event plus its raw base64 envelope (the reply/reaction
      * target for the by-event API). */
     private record Decrypted(ObjectNode event, String rawB64) {}
@@ -157,14 +176,17 @@ class E2ELiveTest {
             // -- 1. Inbound history: batch decrypt (+ pagination when available)
             JsonNode page = api.getEvents(conv, 10, null);
             List<JsonNode> raw = new ArrayList<>(dataArray(page));
+            List<String> keyEventsB64 = new ArrayList<>(keyEvents(page));
             String nextToken = page.path("meta").path("next_token").asText("");
             if (!nextToken.isEmpty()) {
-                List<JsonNode> raw2 = dataArray(api.getEvents(conv, 10, nextToken));
+                JsonNode page2 = api.getEvents(conv, 10, nextToken);
+                List<JsonNode> raw2 = dataArray(page2);
                 Set<String> ids1 = new LinkedHashSet<>();
                 raw.forEach(e -> ids1.add(e.path("id").asText()));
                 boolean overlap = raw2.stream().anyMatch(e -> ids1.contains(e.path("id").asText()));
                 assertTrue(!raw2.isEmpty() && !overlap, "pagination made no progress");
                 raw.addAll(raw2);
+                keyEventsB64.addAll(keyEvents(page2));
                 System.out.println("pagination: fetched second page with " + raw2.size() + " events");
             }
 
@@ -190,7 +212,7 @@ class E2ELiveTest {
                 }
             }
 
-            List<String> eventsB64 = new ArrayList<>();
+            List<String> eventsB64 = new ArrayList<>(keyEventsB64);
             for (JsonNode e : raw) {
                 String ev = e.path("encoded_event").asText("");
                 if (!ev.isEmpty()) {
@@ -249,8 +271,9 @@ class E2ELiveTest {
             // and the cache includes the new version.
             String kv = prep.conversationKeyVersion;
             for (int i = 0; i < 5; i++) {
-                List<String> refetch = new ArrayList<>();
-                for (JsonNode e : dataArray(api.getEvents(conv, 10, null))) {
+                JsonNode refetchPage = api.getEvents(conv, 10, null);
+                List<String> refetch = new ArrayList<>(keyEvents(refetchPage));
+                for (JsonNode e : dataArray(refetchPage)) {
                     String ev = e.path("encoded_event").asText("");
                     if (!ev.isEmpty()) {
                         refetch.add(ev);

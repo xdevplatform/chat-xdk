@@ -66,10 +66,11 @@ func TestE2ELive(t *testing.T) {
 		t.Fatalf("GetEvents: %v", err)
 	}
 	if next != "" {
-		raw2, _, _, err := api.GetEvents(conv, 10, next)
+		raw2, keyEventsPage2, _, err := api.GetEvents(conv, 10, next)
 		if err != nil {
 			t.Fatalf("GetEvents page 2: %v", err)
 		}
+		keyEventsPage1 = append(keyEventsPage1, keyEventsPage2...)
 		ids1 := map[string]bool{}
 		for _, e := range raw {
 			ids1[e.ID] = true

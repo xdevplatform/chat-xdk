@@ -128,14 +128,16 @@ func (b *Bot) PollOnce(conversationID string) error {
 	if err != nil {
 		return err
 	}
+	b.refreshSigningKeys(events)
 	// Key changes for this page arrive in meta, not data; only the batch
 	// path feeds the key cache, so route them through it before decrypting.
+	// This runs after the signing-key refresh: a key change from a sender not
+	// yet in the store would fail verification and never be cached.
 	if len(keyEvents) > 0 {
 		if _, err := b.core.DecryptBatch(keyEvents, nil); err != nil {
 			log.Printf("key_events_decrypt_failed conv=%s err=%v", conversationID, err)
 		}
 	}
-	b.refreshSigningKeys(events)
 	for _, item := range events {
 		if item.EncodedEvent == "" {
 			continue

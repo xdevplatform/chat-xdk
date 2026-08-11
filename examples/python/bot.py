@@ -134,9 +134,12 @@ class ChatBot:
             conversation_id, max_results=50, pagination_token=st.pagination_token
         )
         raw = page.get("data") or []
+        self._register_signing_keys(raw)
         # Key changes for this page arrive in meta, not data; route them
         # through the batch path so the rotated keys are verified and cached
-        # before this loop decrypts the messages that need them.
+        # before this loop decrypts the messages that need them. This runs
+        # after the signing keys are registered: a key change from a sender
+        # not yet in the store would fail verification and be dropped.
         key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
         if key_events_b64:
             rotated = self.core.decrypt_batch(list(key_events_b64))
@@ -144,7 +147,6 @@ class ChatBot:
             st.latest_key_version = (
                 rotated["conversation_keys"].get("latest_version") or st.latest_key_version
             )
-        self._register_signing_keys(raw)
 
         for item in raw:
             event_b64 = item.get("encoded_event")

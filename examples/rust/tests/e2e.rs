@@ -131,11 +131,13 @@ fn e2e_live() {
     core.set_identity(&my_id);
 
     // -- 1. Inbound history: batch decrypt (+ pagination when available) ----
-    let (mut raw, key_events, next_token) = api.get_events(&conv, 10, None).expect("get_events");
+    let (mut raw, mut key_events, next_token) =
+        api.get_events(&conv, 10, None).expect("get_events");
     if let Some(next_token) = next_token {
-        let (raw2, _, _) = api
+        let (raw2, key_events2, _) = api
             .get_events(&conv, 10, Some(&next_token))
             .expect("get_events page 2");
+        key_events.extend(key_events2);
         let ids1: Vec<&str> = raw.iter().map(|e| e.id.as_str()).collect();
         assert!(
             !raw2.is_empty() && raw2.iter().all(|e| !ids1.contains(&e.id.as_str())),

@@ -115,8 +115,17 @@ impl<A: ChatApi> Bot<A> {
             let rotated = self.core.decrypt_batch(&refs, &signing_keys);
             let st = self.state.entry(conversation_id.to_string()).or_default();
             st.conversation_keys.extend(rotated.conversation_keys.keys);
+            // The sending key only moves forward: a replayed older key change
+            // stays usable for decryption but must not roll the version we
+            // encrypt with backwards.
             if let Some(v) = rotated.conversation_keys.latest_version {
-                st.latest_key_version = Some(v);
+                let newer = match (&st.latest_key_version, v.parse::<u64>()) {
+                    (Some(cur), Ok(new)) => cur.parse::<u64>().map_or(true, |cur| new > cur),
+                    _ => true,
+                };
+                if newer {
+                    st.latest_key_version = Some(v);
+                }
             }
         }
 

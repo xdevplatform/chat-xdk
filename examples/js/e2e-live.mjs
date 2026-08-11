@@ -104,9 +104,16 @@ const myId = await api.getMyUserId();
 // signingKeyVersion arguments are gone.
 core.setIdentity(myId);
 
+// KeyChange events arrive in meta.conversation_key_events, separate from
+// data; they carry the conversation keys and must go into the same
+// decryptEvents batch as the data events.
+const keyEventsOf = (p) =>
+  p.meta?.conversationKeyEvents ?? p.meta?.conversation_key_events ?? [];
+
 // -- 1. Inbound history: batch decrypt (+ pagination when available) --------
 const page = await api.getEvents(conv, { maxResults: 10 });
 let raw = page.data ?? [];
+const keyEventsB64 = [...keyEventsOf(page)];
 const nextToken = page.meta?.nextToken ?? page.meta?.next_token;
 if (nextToken) {
   const page2 = await api.getEvents(conv, { maxResults: 10, paginationToken: nextToken });
@@ -117,6 +124,7 @@ if (nextToken) {
     "pagination made no progress",
   );
   raw = raw.concat(raw2);
+  keyEventsB64.push(...keyEventsOf(page2));
   console.log(`pagination: fetched second page with ${raw2.length} events`);
 }
 
@@ -137,7 +145,10 @@ for (const id of ids) {
   }
 }
 
-const eventsB64 = raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean);
+const eventsB64 = [
+  ...keyEventsB64,
+  ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
+];
 let batch = core.decryptBatch(eventsB64, signing);
 const decrypted = batch.messages.filter((m) => messageText(m.event)).length;
 let convKeys = { ...batch.conversationKeys.keys };
@@ -190,7 +201,10 @@ const kv = prep.conversationKeyVersion;
 for (let i = 0; i < 5; i++) {
   const page3 = await api.getEvents(conv, { maxResults: 10 });
   batch = core.decryptBatch(
-    (page3.data ?? []).map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
+    [
+      ...keyEventsOf(page3),
+      ...(page3.data ?? []).map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
+    ],
     signing,
   );
   convKeys = { ...batch.conversationKeys.keys };

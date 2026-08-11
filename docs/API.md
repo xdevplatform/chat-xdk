@@ -428,17 +428,24 @@ interface DecryptedMessage {
 }
 ```
 
-**Some per-event errors are permanent.** Signatures are immutable and verified
-by rebuilding the signed payload from the event, so an event whose signature was
-produced from the wrong input (or never signed at all) fails verification on
-every future load — it cannot be healed by retrying, refreshing keys, or any
-API call. Treat these as tombstones, not transient failures:
+**Rule out a missing-key-events batch first.** The most common cause of
+`Message encrypted with key version '…' but no matching key found` is caller
+input: the KeyChange events were left out of the batch (they arrive in
+`meta.conversation_key_events`, not `data` — see the events argument above).
+That case is fixed by re-batching with the key events included.
+
+**The remaining per-event errors are permanent.** Signatures are immutable and
+verified by rebuilding the signed payload from the event, so an event whose
+signature was produced from the wrong input (or never signed at all) fails
+verification on every future load — it cannot be healed by retrying,
+refreshing keys, or any API call. Treat these as tombstones, not transient
+failures:
 
 | Error | Meaning |
 |---|---|
 | `…signature missing or no matching signing key` on a KeyChange | The key change was never signed (or signed with an unpublished key). Its conversation key is never extracted. |
 | `ECDSA mismatch: key_version=…` | The signer fed different bytes into the signature than the event carries (e.g. a non-canonical conversation id). |
-| `Message encrypted with key version '…' but no matching key found` | Usually the KeyChange events were left out of the batch (they arrive in `meta.conversation_key_events`, not `data`). If they were included, the key came from an unverifiable KeyChange above — collateral of the first row, and permanent. |
+| `Message encrypted with key version '…' but no matching key found` (key events included in the batch) | The message's key came from an unverifiable KeyChange above — collateral of the first row. |
 
 New messages are unaffected: rotating the key starts a clean, verifiable
 history from that point forward. (Verifiability only — rotation does not

@@ -105,12 +105,15 @@ export class ChatBot {
       paginationToken: st.paginationToken,
     });
     const raw = page.data ?? [];
+    await this.#storeSigningKeysFor(raw);
     // Key changes for this page arrive in meta, not data; only the batch
     // path feeds the key cache, so route them through it before decrypting.
+    // This runs after the signing keys are stored: a key change from a
+    // sender not yet in the store would fail verification and never be
+    // cached.
     const keyEventsB64 =
       page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
     if (keyEventsB64.length) this.core.decryptBatch(keyEventsB64);
-    await this.#storeSigningKeysFor(raw);
 
     for (const item of raw) {
       const eventB64 = item.encodedEvent ?? item.encoded_event;
