@@ -81,13 +81,15 @@ X_ACCESS_TOKEN=... CHAT_PIN=... npm run register -- --confirm
 The browser-safe WASM binding has no key export, so — unlike the other
 language examples — this persists the identity in **Juicebox** under `CHAT_PIN`
 (required) instead of a local blob; the bot then recovers it with `unlock(pin)`.
-It needs the optional `juicebox-sdk` peer dependency installed, and the account
-must already have a Juicebox realm config — if it does not, register the first
-identity with a native binding (which stores a local key blob). Before POSTing,
-it checks whether the key is already on the account and skips the write if so;
-on HTTP 429 it stops and prints when the window resets rather than retrying. A
-marker under `state/` records that registration is done (`--force` overrides to
-mint a new identity). `state/` is gitignored — never commit key material.
+It needs the optional `juicebox-sdk` peer dependency installed. A brand-new
+account works too: the account's `juicebox_config` is created by the
+public-key POST itself, so the script creates the chat with no config,
+generates keys, POSTs the public key, then fetches the config and stores the
+keys with `updateConfig` + `setup(pin)`. Before POSTing, it checks whether the
+key is already on the account and skips the write if so; on HTTP 429 it stops
+and prints when the window resets rather than retrying. A marker under
+`state/` records that registration is done (`--force` overrides to mint a new
+identity). `state/` is gitignored — never commit key material.
 
 ## Key generation in the browser
 

@@ -39,6 +39,24 @@ make wasm   # from the repo root; builds --target web and stages js/pkg/
 
 ## Quick Start
 
+First boot — the account's `juicebox_config` is created by
+`POST /2/users/:id/public_keys`, so a brand-new user has none yet. Create the
+chat without it, generate and POST the keys, then wire up Juicebox:
+
+```typescript
+import { createChat } from "@xdevplatform/chat-xdk";
+
+const chat = await createChat({
+  getAuthToken: async (realmId) => await myBackend.getToken(realmId),
+});
+const payload = chat.generateKeypairs();
+// … POST payload to /2/users/:id/public_keys, GET juicebox_config back …
+chat.updateConfig(configJson);
+await chat.setup("2580");
+```
+
+Later sessions pass the config up front and unlock:
+
 ```typescript
 import { createChat } from "@xdevplatform/chat-xdk";
 
