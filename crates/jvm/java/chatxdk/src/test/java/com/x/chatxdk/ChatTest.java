@@ -124,6 +124,31 @@ class ChatTest {
     }
 
     @Test
+    void guessesRemainingParsedFromInvalidPinMessage() {
+        // The core's invalid-PIN unlock error carries the stable
+        // "guesses_remaining=N" token in the message; 0 means exhausted.
+        assertEquals(
+                3,
+                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=3")
+                        .getGuessesRemaining());
+        assertEquals(
+                0,
+                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=0")
+                        .getGuessesRemaining());
+        assertNull(
+                new ChatXdkException("Juicebox error: Invalid PIN").getGuessesRemaining());
+    }
+
+    @Test
+    void guessesRemainingNullOnNonPinErrors() {
+        try (Chat chat = new Chat()) {
+            ChatXdkException ex =
+                    assertThrows(ChatXdkException.class, () -> chat.updateConfig("not json"));
+            assertNull(ex.getGuessesRemaining());
+        }
+    }
+
+    @Test
     void generateKeypairsReturnsValidPayload() throws Exception {
         try (Chat chat = new Chat()) {
             PublicKeyRegistrationPayload payload = chat.generateKeypairs();

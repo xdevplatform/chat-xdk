@@ -1130,6 +1130,27 @@ namespace ChatXdk
     /// </summary>
     public sealed class ChatXdkException : Exception
     {
-        public ChatXdkException(string message) : base(message) { }
+        // Stable token the core emits on invalid-PIN failures ("guesses_remaining=N").
+        private static readonly System.Text.RegularExpressions.Regex GuessesRemainingPattern =
+            new(@"\bguesses_remaining=(\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        public ChatXdkException(string message) : base(message)
+        {
+            var match = GuessesRemainingPattern.Match(message ?? "");
+            if (match.Success && int.TryParse(match.Groups[1].Value, out var n))
+            {
+                GuessesRemaining = n;
+            }
+        }
+
+        /// <summary>
+        /// Remaining PIN attempts reported by Juicebox, or <see langword="null"/> when the
+        /// message carries no count.
+        ///
+        /// <para>Present only on invalid-PIN <see cref="Chat.Unlock"/> /
+        /// <see cref="Chat.ChangePin"/> failures. <c>0</c> means the guess budget is
+        /// exhausted and the stored keys are locked.</para>
+        /// </summary>
+        public int? GuessesRemaining { get; }
     }
 }

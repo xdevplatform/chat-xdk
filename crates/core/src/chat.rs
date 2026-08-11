@@ -244,10 +244,15 @@ impl Chat {
                 self.inner.import_keys(&secret)?;
                 Ok(())
             }
+            // Invalid PIN carries the remaining-attempt count from Juicebox so
+            // callers can warn the user before the guess budget runs out.
             RecoverResult::Failure {
-                reason,
-                guesses_remaining: _,
-            } => Err(SdkError::Juicebox(reason.into())),
+                reason: crate::keys::juicebox::RecoverFailureReason::InvalidPin,
+                guesses_remaining,
+            } => Err(SdkError::Juicebox(JuiceboxError::InvalidPin {
+                guesses_remaining,
+            })),
+            RecoverResult::Failure { reason, .. } => Err(SdkError::Juicebox(reason.into())),
             RecoverResult::KeyReconstructionFailed => Err(SdkError::Key(
                 KeyError::ReconstructionFailed("Failed to reconstruct keys".into()),
             )),
@@ -565,6 +570,100 @@ mod tests {
 
         let keys_after = chat.get_public_keys().unwrap();
         assert!(!keys_after.identity.is_empty());
+    }
+
+    /// A Juicebox stub whose recover always fails with an invalid PIN,
+    /// reporting a fixed remaining-guess count.
+    struct InvalidPinJuicebox {
+        guesses_remaining: Option<u16>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::keys::juicebox::JuiceboxApi for InvalidPinJuicebox {
+        async fn register_private_key(
+            &self,
+            _pin: &[u8],
+            _config: &JuiceboxConfig,
+            _secret: &[u8],
+        ) -> RegisterResult {
+            RegisterResult::Success
+        }
+
+        async fn recover_private_key(
+            &self,
+            _pin: &[u8],
+            _config: &JuiceboxConfig,
+        ) -> crate::keys::juicebox::RecoverResult {
+            crate::keys::juicebox::RecoverResult::Failure {
+                reason: crate::keys::juicebox::RecoverFailureReason::InvalidPin,
+                guesses_remaining: self.guesses_remaining,
+            }
+        }
+
+        async fn delete_keys(
+            &self,
+            _config: &JuiceboxConfig,
+        ) -> crate::keys::juicebox::DeleteResult {
+            crate::keys::juicebox::DeleteResult::Success
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unlock_invalid_pin_carries_guesses_remaining() {
+        let chat = Chat::with_juicebox(
+            test_config(),
+            Arc::new(InvalidPinJuicebox {
+                guesses_remaining: Some(3),
+            }),
+        );
+        let err = chat.unlock(b"0000").await.unwrap_err();
+        match &err {
+            SdkError::Juicebox(JuiceboxError::InvalidPin { guesses_remaining }) => {
+                assert_eq!(*guesses_remaining, Some(3));
+            }
+            other => panic!("expected InvalidPin, got {other:?}"),
+        }
+        assert_eq!(
+            err.to_string(),
+            "Juicebox error: Invalid PIN: guesses_remaining=3"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unlock_invalid_pin_without_count() {
+        let chat = Chat::with_juicebox(
+            test_config(),
+            Arc::new(InvalidPinJuicebox {
+                guesses_remaining: None,
+            }),
+        );
+        let err = chat.unlock(b"0000").await.unwrap_err();
+        assert!(matches!(
+            err,
+            SdkError::Juicebox(JuiceboxError::InvalidPin {
+                guesses_remaining: None
+            })
+        ));
+        assert_eq!(err.to_string(), "Juicebox error: Invalid PIN");
+    }
+
+    /// `change_pin` unlocks with the old PIN first, so a wrong old PIN
+    /// surfaces the same count-carrying error as `unlock`.
+    #[tokio::test]
+    async fn test_change_pin_invalid_old_pin_carries_guesses_remaining() {
+        let chat = Chat::with_juicebox(
+            test_config(),
+            Arc::new(InvalidPinJuicebox {
+                guesses_remaining: Some(0),
+            }),
+        );
+        let err = chat.change_pin(b"0000", b"2580").await.unwrap_err();
+        assert!(matches!(
+            err,
+            SdkError::Juicebox(JuiceboxError::InvalidPin {
+                guesses_remaining: Some(0)
+            })
+        ));
     }
 
     #[tokio::test]

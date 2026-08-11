@@ -116,6 +116,18 @@ Rust core takes PINs as `&[u8]` and Go takes `[]byte` so callers can
 zeroize their buffers; the JS wrapper additionally accepts `Uint8Array`
 PINs for the same reason.
 
+A wrong PIN fails `unlock` (and `change_pin`, which unlocks with the old PIN
+first) with an invalid-PIN error whose message carries the stable token
+`guesses_remaining=N` — the attempt budget Juicebox reports after the failure.
+`0` means the budget is exhausted and the stored keys are locked; the token is
+absent when no count is available. Read it structurally instead of parsing the
+message: Rust `JuiceboxError::InvalidPin { guesses_remaining: Option<u16> }`,
+JVM `ChatXdkException.getGuessesRemaining()` (`Integer`, `null` when absent),
+.NET `ChatXdkException.GuessesRemaining` (`int?`), Go
+`GuessesRemaining(err) (int, bool)`, Python `chat_xdk.guesses_remaining(exc)`
+(`int | None`). The JS wrapper reports the same token in its error string
+(`reason=InvalidPin guesses_remaining=N`).
+
 ### Conversation Keys
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |

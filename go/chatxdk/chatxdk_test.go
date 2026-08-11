@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1474,6 +1475,35 @@ func TestUpdateConfigInvalid(t *testing.T) {
 	err := chat.UpdateConfig("not-valid-json")
 	if err == nil {
 		t.Error("expected error for invalid JSON config")
+	}
+}
+
+// TestGuessesRemaining pins the parsing of the stable "guesses_remaining=N"
+// token the core emits on invalid-PIN unlock failures; 0 means the guess
+// budget is exhausted. Errors without the token report ok=false.
+func TestGuessesRemaining(t *testing.T) {
+	if n, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN: guesses_remaining=3")); !ok || n != 3 {
+		t.Errorf("expected (3, true), got (%d, %v)", n, ok)
+	}
+	if n, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN: guesses_remaining=0")); !ok || n != 0 {
+		t.Errorf("expected (0, true), got (%d, %v)", n, ok)
+	}
+	if _, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN")); ok {
+		t.Error("expected ok=false without the token")
+	}
+	if _, ok := GuessesRemaining(nil); ok {
+		t.Error("expected ok=false for nil error")
+	}
+
+	// A real error from the binding's own path carries no count.
+	chat := New()
+	defer chat.Close()
+	err := chat.UpdateConfig("not-valid-json")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON config")
+	}
+	if _, ok := GuessesRemaining(err); ok {
+		t.Error("expected ok=false for a non-PIN error")
 	}
 }
 

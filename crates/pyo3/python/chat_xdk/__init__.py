@@ -23,6 +23,8 @@ Quick Start:
 
 __version__ = "0.1.0"
 
+import re as _re
+
 from chat_xdk._native import (
     Chat,
     PublicKeyRegistration,
@@ -40,6 +42,21 @@ from chat_xdk._native import (
     hex_to_bytes,
 )
 
+# Stable token the core emits on invalid-PIN failures ("guesses_remaining=N").
+_GUESSES_REMAINING = _re.compile(r"\bguesses_remaining=(\d+)")
+
+
+def guesses_remaining(exc):
+    """Remaining PIN attempts from an invalid-PIN unlock failure, or None.
+
+    Present only on the exception raised by ``Chat.unlock`` /
+    ``Chat.change_pin`` for a wrong PIN; 0 means the guess budget is
+    exhausted and the stored keys are locked.
+    """
+    match = _GUESSES_REMAINING.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
 __all__ = [
     "Chat",
     "PublicKeyRegistration",
@@ -54,5 +71,6 @@ __all__ = [
     "bytes_to_hex",
     "detect_image_dimensions",
     "detect_mime_type",
+    "guesses_remaining",
     "hex_to_bytes",
 ]
