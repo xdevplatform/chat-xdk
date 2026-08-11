@@ -1130,9 +1130,11 @@ namespace ChatXdk
     /// </summary>
     public sealed class ChatXdkException : Exception
     {
-        // Stable token the core emits on invalid-PIN failures ("guesses_remaining=N").
+        // Stable invalid-PIN message form the core emits
+        // ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a
+        // count embedded in an unrelated pass-through message is not misread.
         private static readonly System.Text.RegularExpressions.Regex GuessesRemainingPattern =
-            new(@"\bguesses_remaining=(\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+            new(@"\bInvalid PIN: guesses_remaining=(\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
 
         public ChatXdkException(string message) : base(message)
         {

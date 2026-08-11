@@ -137,6 +137,11 @@ class ChatTest {
                         .getGuessesRemaining());
         assertNull(
                 new ChatXdkException("Juicebox error: Invalid PIN").getGuessesRemaining());
+        // The count is read only from the invalid-PIN form, not from
+        // unrelated messages that happen to contain the token.
+        assertNull(
+                new ChatXdkException("Delete failed: guesses_remaining=7")
+                        .getGuessesRemaining());
     }
 
     @Test

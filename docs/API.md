@@ -125,8 +125,8 @@ message: Rust `JuiceboxError::InvalidPin { guesses_remaining: Option<u16> }`,
 JVM `ChatXdkException.getGuessesRemaining()` (`Integer`, `null` when absent),
 .NET `ChatXdkException.GuessesRemaining` (`int?`), Go
 `GuessesRemaining(err) (int, bool)`, Python `chat_xdk.guesses_remaining(exc)`
-(`int | None`). The JS wrapper reports the same token in its error string
-(`reason=InvalidPin guesses_remaining=N`).
+(`int | None`), JS `guessesRemaining(err)` (`number | null`, reading the
+wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 
 ### Conversation Keys
 

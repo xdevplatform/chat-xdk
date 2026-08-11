@@ -173,6 +173,9 @@ namespace ChatXdk.Tests
             Assert.Equal(0,
                 new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=0").GuessesRemaining);
             Assert.Null(new ChatXdkException("Juicebox error: Invalid PIN").GuessesRemaining);
+            // The count is read only from the invalid-PIN form, not from
+            // unrelated messages that happen to contain the token.
+            Assert.Null(new ChatXdkException("Delete failed: guesses_remaining=7").GuessesRemaining);
         }
 
         [Fact]

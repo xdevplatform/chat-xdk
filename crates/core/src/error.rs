@@ -148,15 +148,17 @@ pub enum JuiceboxError {
 impl JuiceboxError {
     /// Returns true if this error is retryable.
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            JuiceboxError::InvalidPin { .. }
-                | JuiceboxError::NotRegistered
-                | JuiceboxError::InvalidAuth
-                | JuiceboxError::Transient
-                | JuiceboxError::RateLimitExceeded
-                | JuiceboxError::StorageFailed
-        )
+        match self {
+            // A zero remaining budget means the stored keys are locked;
+            // another attempt cannot succeed.
+            JuiceboxError::InvalidPin { guesses_remaining } => *guesses_remaining != Some(0),
+            JuiceboxError::NotRegistered
+            | JuiceboxError::InvalidAuth
+            | JuiceboxError::Transient
+            | JuiceboxError::RateLimitExceeded
+            | JuiceboxError::StorageFailed => true,
+            _ => false,
+        }
     }
 }
 
@@ -275,6 +277,16 @@ mod tests {
     fn test_juicebox_error_retryable() {
         assert!(JuiceboxError::InvalidPin {
             guesses_remaining: None
+        }
+        .is_retryable());
+        assert!(JuiceboxError::InvalidPin {
+            guesses_remaining: Some(1)
+        }
+        .is_retryable());
+        // An exhausted guess budget locks the stored keys; retrying a PIN
+        // cannot succeed.
+        assert!(!JuiceboxError::InvalidPin {
+            guesses_remaining: Some(0)
         }
         .is_retryable());
         assert!(JuiceboxError::NotRegistered.is_retryable());

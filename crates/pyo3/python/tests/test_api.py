@@ -197,6 +197,9 @@ class TestApiShapes(unittest.TestCase):
             0,
         )
         self.assertIsNone(guesses_remaining(ValueError("Juicebox error: Invalid PIN")))
+        # The count is read only from the invalid-PIN form, not from unrelated
+        # messages that happen to contain the token.
+        self.assertIsNone(guesses_remaining(ValueError("Delete failed: guesses_remaining=7")))
 
     def test_guesses_remaining_none_on_non_pin_errors(self):
         from chat_xdk import Chat, guesses_remaining

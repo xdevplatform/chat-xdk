@@ -6,8 +6,13 @@ import java.util.regex.Pattern;
 /** Thrown when the native chat-xdk library returns an error string. */
 public class ChatXdkException extends RuntimeException {
 
-    /** Stable token the core emits on invalid-PIN failures ("guesses_remaining=N"). */
-    private static final Pattern GUESSES_REMAINING = Pattern.compile("\\bguesses_remaining=(\\d+)");
+    /**
+     * Stable invalid-PIN message form the core emits ("Invalid PIN: guesses_remaining=N").
+     * Anchored on the full form so a count embedded in an unrelated pass-through message is
+     * not misread.
+     */
+    private static final Pattern GUESSES_REMAINING =
+            Pattern.compile("\\bInvalid PIN: guesses_remaining=(\\d+)");
 
     public ChatXdkException(String message) {
         super(message);

@@ -58,8 +58,10 @@ func (c *Chat) ChangePin(oldPin, newPin []byte) error {
 	return err
 }
 
-// Stable token the core emits on invalid-PIN failures ("guesses_remaining=N").
-var guessesRemainingPattern = regexp.MustCompile(`\bguesses_remaining=(\d+)`)
+// Stable invalid-PIN message form the core emits
+// ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a count
+// embedded in an unrelated pass-through message is not misread.
+var guessesRemainingPattern = regexp.MustCompile(`\bInvalid PIN: guesses_remaining=(\d+)`)
 
 // GuessesRemaining extracts the remaining PIN-attempt count Juicebox reports
 // on an invalid-PIN [Chat.Unlock] / [Chat.ChangePin] failure. It returns

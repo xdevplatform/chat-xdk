@@ -42,8 +42,10 @@ from chat_xdk._native import (
     hex_to_bytes,
 )
 
-# Stable token the core emits on invalid-PIN failures ("guesses_remaining=N").
-_GUESSES_REMAINING = _re.compile(r"\bguesses_remaining=(\d+)")
+# Stable invalid-PIN message form the core emits
+# ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a count
+# embedded in an unrelated pass-through message is not misread.
+_GUESSES_REMAINING = _re.compile(r"\bInvalid PIN: guesses_remaining=(\d+)")
 
 
 def guesses_remaining(exc):

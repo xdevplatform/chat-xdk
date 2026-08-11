@@ -1491,6 +1491,11 @@ func TestGuessesRemaining(t *testing.T) {
 	if _, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN")); ok {
 		t.Error("expected ok=false without the token")
 	}
+	// The count is read only from the invalid-PIN form, not from unrelated
+	// messages that happen to contain the token.
+	if _, ok := GuessesRemaining(errors.New("Delete failed: guesses_remaining=7")); ok {
+		t.Error("expected ok=false for a non-PIN message carrying the token")
+	}
 	if _, ok := GuessesRemaining(nil); ok {
 		t.Error("expected ok=false for nil error")
 	}
