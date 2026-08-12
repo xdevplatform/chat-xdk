@@ -120,6 +120,13 @@ jobs:
           python -c "import chat_xdk"
           python -m unittest discover -s crates/pyo3/python/tests -v
 
+      # The suites stub the Juicebox network client, but the wrapper's
+      # loader-singleton tests drive the real juicebox-sdk package and skip
+      # when it is absent — install it so they run in CI.
+      - name: Install juicebox-sdk (optional peer dependency)
+        run: npm install --no-save juicebox-sdk
+        working-directory: chat-xdk/crates/wasm/js
+
       - name: Test (Node/wasm SDK)
         run: |
           node crates/wasm/js/tests/sdk_vectors.test.mjs
