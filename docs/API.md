@@ -174,6 +174,12 @@ omitted/empty key arguments and fall back to two opt-in session stores:
   `conversation_key` / `conversation_key_version` pair from it. Disabling
   clears the cache; the cached keys zeroize on drop.
 
+  Only `decrypt_events` populates the cache, and only from KeyChange events
+  in its own batch whose signature verified. `extract_conversation_keys`
+  never feeds it: that method adopts every decryptable key without signature
+  checks, and the cache holds verified keys only. To use its result, pass
+  the returned key map to `decrypt_event` explicitly.
+
 An explicit non-empty argument always wins over the stores. The two decrypt
 contracts are unchanged: `decrypt_events` never throws (per-event errors are
 collected in the result) and `decrypt_event` throws on failure.
@@ -403,7 +409,7 @@ Decrypts multiple events in one call. Handles everything internally:
 
 | Param | JS | Python | Rust | Go | JVM | .NET | Description |
 |---|---|---|---|---|---|---|---|
-| events | `string[]` | `list[str]` | `&[&str]` | `[]string` | `List<String>` | `IEnumerable<string>` | All base64-encoded raw events. **Must include KeyChange events** — without them, messages depending on those keys will land in `errors`. |
+| events | `string[]` | `list[str]` | `&[&str]` | `[]string` | `List<String>` | `IEnumerable<string>` | All base64-encoded raw events. **Must include KeyChange events** — without them, messages depending on those keys will land in `errors`. The events endpoint returns KeyChange events in **`meta.conversation_key_events`**, separate from the `data` array; concatenate both into this argument. |
 | signingKeys | `SigningKeyEntry[]` | `list[dict]` | `&[SigningKeyEntry]` | `[]SigningKeyEntry` or `nil` | `List<SigningKeyEntry>` or `null` | `IEnumerable<SigningKeyEntry>?` | Signing keys for **all participants**. The SDK extracts each event's `senderId` internally and filters to the matching keys. Omitting the parameter (or passing `[]` / `nil` / `null`) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
 **Returns: `DecryptEventsResult`** — never throws/raises. Errors are collected.
@@ -434,17 +440,24 @@ interface DecryptedMessage {
 }
 ```
 
-**Some per-event errors are permanent.** Signatures are immutable and verified
-by rebuilding the signed payload from the event, so an event whose signature was
-produced from the wrong input (or never signed at all) fails verification on
-every future load — it cannot be healed by retrying, refreshing keys, or any
-API call. Treat these as tombstones, not transient failures:
+**Rule out a missing-key-events batch first.** The most common cause of
+`Message encrypted with key version '…' but no matching key found` is caller
+input: the KeyChange events were left out of the batch (they arrive in
+`meta.conversation_key_events`, not `data` — see the events argument above).
+That case is fixed by re-batching with the key events included.
+
+**The remaining per-event errors are permanent.** Signatures are immutable and
+verified by rebuilding the signed payload from the event, so an event whose
+signature was produced from the wrong input (or never signed at all) fails
+verification on every future load — it cannot be healed by retrying,
+refreshing keys, or any API call. Treat these as tombstones, not transient
+failures:
 
 | Error | Meaning |
 |---|---|
 | `…signature missing or no matching signing key` on a KeyChange | The key change was never signed (or signed with an unpublished key). Its conversation key is never extracted. |
 | `ECDSA mismatch: key_version=…` | The signer fed different bytes into the signature than the event carries (e.g. a non-canonical conversation id). |
-| `Message encrypted with key version '…' but no matching key found` | The message's key came from an unverifiable KeyChange above — collateral of the first row. |
+| `Message encrypted with key version '…' but no matching key found` (key events included in the batch) | The message's key came from an unverifiable KeyChange above — collateral of the first row. |
 
 New messages are unaffected: rotating the key starts a clean, verifiable
 history from that point forward. (Verifiability only — rotation does not

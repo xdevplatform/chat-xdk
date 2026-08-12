@@ -79,12 +79,29 @@ public final class Bot {
         return nt.isTextual() ? nt.asText() : null;
     }
 
+    /**
+     * KeyChange events from a GET events page. They arrive in
+     * meta.conversation_key_events, separate from data, and carry the
+     * conversation keys — they must go into the same decryptEvents batch as
+     * the data events.
+     */
+    private static List<String> keyEvents(JsonNode page) {
+        List<String> out = new ArrayList<>();
+        JsonNode arr = page.path("meta").path("conversation_key_events");
+        if (arr.isArray()) {
+            for (JsonNode e : arr) {
+                if (e.isTextual()) out.add(e.asText());
+            }
+        }
+        return out;
+    }
+
     /** Initial load: batch-decrypt the backlog (decryptEvents path). */
     public void loadBacklog(String conversationId) throws Exception {
         ConversationState st = stateFor(conversationId);
         JsonNode page = api.getEvents(conversationId, 100, null);
         List<JsonNode> raw = dataArray(page);
-        List<String> eventsB64 = new ArrayList<>();
+        List<String> eventsB64 = new ArrayList<>(keyEvents(page));
         for (JsonNode e : raw) {
             String ev = e.path("encoded_event").asText("");
             if (!ev.isEmpty()) eventsB64.add(ev);
@@ -103,6 +120,17 @@ public final class Bot {
         JsonNode page = api.getEvents(conversationId, 50, st.paginationToken);
         List<JsonNode> raw = dataArray(page);
         List<SigningKeyEntry> signingKeys = signingKeysFor(raw);
+
+        // Key changes for this page arrive in meta, not data; adopt their
+        // keys before decrypting the messages that need them.
+        List<String> pageKeyEvents = keyEvents(page);
+        if (!pageKeyEvents.isEmpty()) {
+            var rotated = core.decryptBatch(pageKeyEvents, signingKeys);
+            st.conversationKeys.putAll(rotated.conversationKeys.keys);
+            if (rotated.conversationKeys.latestVersion != null) {
+                st.latestKeyVersion = rotated.conversationKeys.latestVersion;
+            }
+        }
 
         for (JsonNode item : raw) {
             String eventB64 = item.path("encoded_event").asText("");

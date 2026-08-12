@@ -117,7 +117,12 @@ func (c *XChatClient) GetPublicKeys(userID string) ([]map[string]any, error) {
 }
 
 // GetEvents fetches the raw (encrypted) events for a conversation.
-func (c *XChatClient) GetEvents(conversationID string, maxResults int, paginationToken string) ([]EventItem, string, error) {
+//
+// KeyChange events arrive in meta.conversation_key_events, separate from
+// data; they are returned as keyEvents and must go into the same
+// DecryptEvents batch as the data events — without them no conversation key
+// is extracted and every message lands in the result's errors.
+func (c *XChatClient) GetEvents(conversationID string, maxResults int, paginationToken string) (items []EventItem, keyEvents []string, next string, err error) {
 	q := url.Values{}
 	q.Set("max_results", fmt.Sprintf("%d", maxResults))
 	if paginationToken != "" {
@@ -126,10 +131,17 @@ func (c *XChatClient) GetEvents(conversationID string, maxResults int, paginatio
 	path := fmt.Sprintf("/2/chat/conversations/%s/events?%s", url.PathEscape(apiConvID(conversationID)), q.Encode())
 	var out eventsResponse
 	if err := c.do(http.MethodGet, path, nil, &out); err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	next, _ := out.Meta["next_token"].(string)
-	return out.Data, next, nil
+	if rawKeyEvents, ok := out.Meta["conversation_key_events"].([]any); ok {
+		for _, v := range rawKeyEvents {
+			if s, ok := v.(string); ok {
+				keyEvents = append(keyEvents, s)
+			}
+		}
+	}
+	next, _ = out.Meta["next_token"].(string)
+	return out.Data, keyEvents, next, nil
 }
 
 // -- Conversation / key management -------------------------------------------

@@ -107,9 +107,16 @@ def main() -> None:
     # All signed actions below resolve their sender from the session identity.
     core.set_identity(my_id)
 
+    # KeyChange events arrive in meta.conversation_key_events, separate from
+    # data; they carry the conversation keys and must go into the same
+    # decrypt_events batch as the data events.
+    def key_events_of(p: dict) -> list[str]:
+        return list((p.get("meta") or {}).get("conversation_key_events") or [])
+
     # -- 1. Inbound history: batch decrypt (+ pagination when available) ----
     page = api.get_events(conversation_id, max_results=10)
     raw = list(page.get("data") or [])
+    key_events_b64 = key_events_of(page)
     next_token = (page.get("meta") or {}).get("next_token")
     if next_token:
         page2 = api.get_events(conversation_id, max_results=10, pagination_token=next_token)
@@ -117,6 +124,7 @@ def main() -> None:
         ids1 = {str(e.get("id")) for e in raw}
         assert raw2 and not ids1 & {str(e.get("id")) for e in raw2}, "pagination made no progress"
         raw += raw2
+        key_events_b64 += key_events_of(page2)
         print(f"pagination: fetched second page with {len(raw2)} events")
 
     ids = {my_id} | {str(e.get("sender_id")) for e in raw if e.get("sender_id")}
@@ -130,7 +138,7 @@ def main() -> None:
         except Exception:
             pass
 
-    events_b64 = [e["encoded_event"] for e in raw if e.get("encoded_event")]
+    events_b64 = key_events_b64 + [e["encoded_event"] for e in raw if e.get("encoded_event")]
     batch = core.decrypt_batch(events_b64, signing)
     decrypted = sum(1 for m in batch["messages"] if message_text(m["event"]))
     conv_keys = dict(batch["conversation_keys"]["keys"])
@@ -168,7 +176,9 @@ def main() -> None:
     kv = prep["conversation_key_version"]
     for _ in range(5):
         page = api.get_events(conversation_id, max_results=10)
-        events_b64 = [e["encoded_event"] for e in (page.get("data") or []) if e.get("encoded_event")]
+        events_b64 = key_events_of(page) + [
+            e["encoded_event"] for e in (page.get("data") or []) if e.get("encoded_event")
+        ]
         batch = core.decrypt_batch(events_b64, signing)
         conv_keys = dict(batch["conversation_keys"]["keys"])
         if kv in conv_keys:

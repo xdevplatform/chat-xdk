@@ -43,7 +43,8 @@ Python/Rust, PascalCase in .NET/Go):
 3. **Initial load** — `decryptEvents(events)`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
    keys by user automatically. Never throws; per-event errors are collected in
-   the result.
+   the result. The events endpoint returns the `KeyChange` events in
+   `meta.conversation_key_events`, separate from `data` — pass both together.
 4. **Each new event** — `decryptEvent(event)`: decrypts one event
    (webhook / poll). Throws on failure.
 5. **Reply** — `encryptMessage({conversationId, text})` or
