@@ -52,6 +52,20 @@ public class E2ELiveTests
     private static List<string> EventsB64(IEnumerable<JsonElement> raw) =>
         raw.Select(e => Str(e, "encoded_event")).Where(s => !string.IsNullOrEmpty(s)).Select(s => s!).ToList();
 
+    // KeyChange events arrive in meta.conversation_key_events, separate from
+    // data; they carry the conversation keys and must go into the same
+    // DecryptBatch call as the data events.
+    private static List<string> KeyEvents(JsonElement page) =>
+        page.TryGetProperty("meta", out var meta)
+        && meta.ValueKind == JsonValueKind.Object
+        && meta.TryGetProperty("conversation_key_events", out var arr)
+        && arr.ValueKind == JsonValueKind.Array
+            ? arr.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.String)
+                .Select(e => e.GetString()!)
+                .ToList()
+            : new List<string>();
+
     private static SigningKeyEntry SigningFrom(JsonElement pk, string userId) => new()
     {
         UserId = userId,
@@ -137,6 +151,7 @@ public class E2ELiveTests
         // -- 1. Inbound history: batch decrypt (+ pagination when available) ----
         var page = await api.GetEventsAsync(conv, 10);
         var raw = Data(page);
+        var keyEventsB64 = KeyEvents(page);
         var nextToken = page.TryGetProperty("meta", out var meta) ? Str(meta, "next_token") : null;
         if (!string.IsNullOrEmpty(nextToken))
         {
@@ -146,6 +161,7 @@ public class E2ELiveTests
             Assert.True(raw2.Count > 0 && !raw2.Any(e => ids1.Contains(Str(e, "id") ?? "")),
                 "pagination made no progress");
             raw.AddRange(raw2);
+            keyEventsB64.AddRange(KeyEvents(page2));
             Console.WriteLine($"pagination: fetched second page with {raw2.Count} events");
         }
 
@@ -170,7 +186,7 @@ public class E2ELiveTests
             }
         }
 
-        var batch = core.DecryptBatch(EventsB64(raw), signing);
+        var batch = core.DecryptBatch(keyEventsB64.Concat(EventsB64(raw)).ToList(), signing);
         var decrypted = batch.Messages.Count(m => !string.IsNullOrEmpty(EventHelpers.MessageText(m.Event)));
         var convKeys = new Dictionary<string, byte[]>(batch.ConversationKeys.Keys);
         Console.WriteLine($"live inbound messages decrypted: {decrypted}; conversation keys: {convKeys.Count}");
@@ -213,7 +229,7 @@ public class E2ELiveTests
         for (var i = 0; i < 5; i++)
         {
             page = await api.GetEventsAsync(conv, 10);
-            batch = core.DecryptBatch(EventsB64(Data(page)), signing);
+            batch = core.DecryptBatch(KeyEvents(page).Concat(EventsB64(Data(page))).ToList(), signing);
             convKeys = new Dictionary<string, byte[]>(batch.ConversationKeys.Keys);
             if (convKeys.ContainsKey(kv)) break;
             await Task.Delay(1500);

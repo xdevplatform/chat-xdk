@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
 import init, { Chat, bytesToBase64 } from "../pkg/chat_xdk_wasm.js";
-import { ChatWithJuicebox, createChat } from "../index.js";
+import { ChatWithJuicebox, createChat, guessesRemaining } from "../index.js";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
@@ -602,6 +602,36 @@ async function firstBootTests() {
   );
 }
 
+// guessesRemaining reads the attempt count out of the wrapper's own
+// invalid-PIN unlock error; 0 means the guess budget is exhausted.
+async function guessesRemainingTests() {
+  class InvalidPinClient extends StubJuiceboxClient {
+    async recover() {
+      // The wire shape juicebox-sdk rejects a wrong PIN with:
+      // reason 0 = InvalidPin, plus the remaining attempt budget.
+      throw { reason: 0, guesses_remaining: 3 };
+    }
+  }
+  const chat = await createChat({
+    juiceboxConfig: JSON.stringify({ realms: [] }),
+    getAuthToken: async () => "stub-token",
+    juiceboxModule: { Client: InvalidPinClient, Configuration: StubJuiceboxConfiguration },
+  });
+  let unlockErr;
+  try {
+    await chat.unlock("2580");
+  } catch (err) {
+    unlockErr = err;
+  }
+  assert.equal(guessesRemaining(unlockErr), 3);
+
+  // No count on non-PIN failures, unrelated messages that happen to carry
+  // the token, or non-errors.
+  assert.equal(guessesRemaining(new Error("Juicebox recovery failed: reason=Transient")), null);
+  assert.equal(guessesRemaining(new Error("delete failed: guesses_remaining=7")), null);
+  assert.equal(guessesRemaining(undefined), null);
+}
+
 // The juicebox-sdk WASM must be loaded once per process: its glue keeps
 // typed-array views of a single instance's memory, and a second instantiation
 // leaves those views stale, crashing the next `new Configuration`. This suite
@@ -640,6 +670,7 @@ async function main() {
   await delegationTests();
   await guessBudgetTests();
   await firstBootTests();
+  await guessesRemainingTests();
   await realJuiceboxSingletonTests();
   console.log("wrapper.test.mjs: all assertions passed");
 }

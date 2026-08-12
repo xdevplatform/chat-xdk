@@ -183,6 +183,32 @@ class TestApiShapes(unittest.TestCase):
             chat.update_config(bad_config)
         self.assertIn("Invalid key_store_token_map_json", str(ctx.exception))
 
+    def test_guesses_remaining_parses_invalid_pin_message(self):
+        from chat_xdk import guesses_remaining
+
+        # The core's invalid-PIN unlock error carries the stable
+        # "guesses_remaining=N" token in the message; 0 means exhausted.
+        self.assertEqual(
+            guesses_remaining(ValueError("Juicebox error: Invalid PIN: guesses_remaining=3")),
+            3,
+        )
+        self.assertEqual(
+            guesses_remaining(ValueError("Juicebox error: Invalid PIN: guesses_remaining=0")),
+            0,
+        )
+        self.assertIsNone(guesses_remaining(ValueError("Juicebox error: Invalid PIN")))
+        # The count is read only from the invalid-PIN form, not from unrelated
+        # messages that happen to contain the token.
+        self.assertIsNone(guesses_remaining(ValueError("Delete failed: guesses_remaining=7")))
+
+    def test_guesses_remaining_none_on_non_pin_errors(self):
+        from chat_xdk import Chat, guesses_remaining
+
+        chat = Chat()
+        with self.assertRaises(ValueError) as ctx:
+            chat.update_config("not json")
+        self.assertIsNone(guesses_remaining(ctx.exception))
+
     def test_pin_accepts_str_bytes_and_bytearray(self):
         from chat_xdk import Chat
 

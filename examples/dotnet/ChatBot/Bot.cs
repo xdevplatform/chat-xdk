@@ -47,6 +47,23 @@ public sealed class Bot
             ? nt.GetString()
             : null;
 
+    /// <summary>
+    /// KeyChange events from a GET events page. They arrive in
+    /// meta.conversation_key_events, separate from data, and carry the
+    /// conversation keys — they must go into the same DecryptEvents batch as
+    /// the data events.
+    /// </summary>
+    private static List<string> KeyEvents(JsonElement page) =>
+        page.TryGetProperty("meta", out var meta)
+        && meta.ValueKind == JsonValueKind.Object
+        && meta.TryGetProperty("conversation_key_events", out var arr)
+        && arr.ValueKind == JsonValueKind.Array
+            ? arr.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.String)
+                .Select(e => e.GetString()!)
+                .ToList()
+            : new List<string>();
+
     private async Task<List<SigningKeyEntry>> SigningKeysForAsync(IEnumerable<JsonElement> events)
     {
         var senders = events
@@ -88,11 +105,11 @@ public sealed class Bot
         var raw = page.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Array
             ? d.EnumerateArray().ToList()
             : new List<JsonElement>();
-        var eventsB64 = raw
+        var eventsB64 = KeyEvents(page);
+        eventsB64.AddRange(raw
             .Select(e => e.TryGetProperty("encoded_event", out var ev) ? ev.GetString() : null)
             .Where(s => !string.IsNullOrEmpty(s))
-            .Select(s => s!)
-            .ToList();
+            .Select(s => s!));
 
         var result = _core.DecryptBatch(eventsB64, await SigningKeysForAsync(raw));
         foreach (var (version, key) in result.ConversationKeys.Keys)
@@ -111,6 +128,18 @@ public sealed class Bot
             ? d.EnumerateArray().ToList()
             : new List<JsonElement>();
         var signingKeys = await SigningKeysForAsync(raw);
+
+        // Key changes for this page arrive in meta, not data; adopt their
+        // keys before decrypting the messages that need them.
+        var pageKeyEvents = KeyEvents(page);
+        if (pageKeyEvents.Count > 0)
+        {
+            var rotated = _core.DecryptBatch(pageKeyEvents, signingKeys);
+            foreach (var (version, key) in rotated.ConversationKeys.Keys)
+                st.ConversationKeys[version] = key;
+            if (rotated.ConversationKeys.LatestVersion is { } lv)
+                st.LatestKeyVersion = lv;
+        }
 
         foreach (var item in raw)
         {

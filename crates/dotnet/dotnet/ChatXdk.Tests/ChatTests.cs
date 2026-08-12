@@ -163,6 +163,29 @@ namespace ChatXdk.Tests
             Assert.Contains("Invalid key_store_token_map_json", ex.Message);
         }
 
+        [Fact]
+        public void GuessesRemaining_ParsedFromInvalidPinMessage()
+        {
+            // The core's invalid-PIN unlock error carries the stable
+            // "guesses_remaining=N" token in the message; 0 means exhausted.
+            Assert.Equal(3,
+                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=3").GuessesRemaining);
+            Assert.Equal(0,
+                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=0").GuessesRemaining);
+            Assert.Null(new ChatXdkException("Juicebox error: Invalid PIN").GuessesRemaining);
+            // The count is read only from the invalid-PIN form, not from
+            // unrelated messages that happen to contain the token.
+            Assert.Null(new ChatXdkException("Delete failed: guesses_remaining=7").GuessesRemaining);
+        }
+
+        [Fact]
+        public void GuessesRemaining_NullOnNonPinErrors()
+        {
+            using var chat = new Chat();
+            var ex = Assert.Throws<ChatXdkException>(() => chat.UpdateConfig("not json"));
+            Assert.Null(ex.GuessesRemaining);
+        }
+
         // Key generation
 
         [Fact]

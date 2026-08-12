@@ -1660,8 +1660,9 @@ impl ChatCore {
                                     .join(", ");
                                 SdkError::Crypto(CryptoError::DecryptionFailed(format!(
                                     "Message encrypted with key version '{}' but no matching key \
-                                     found. Available versions: [{}]. Call \
-                                     extract_conversation_keys() first.",
+                                     found. Available versions: [{}]. Include the conversation's \
+                                     KeyChange events in the batch passed to decrypt_events(), \
+                                     or pass the matching key map to decrypt_event().",
                                     version, available
                                 )))
                             })?
