@@ -94,6 +94,26 @@ function formatJuiceboxError(err, reasonMap) {
   return parts.join(" ");
 }
 
+// Stable invalid-PIN error form this wrapper emits
+// ("reason=InvalidPin guesses_remaining=N"). Anchored on the full form so a
+// count embedded in an unrelated message is not misread.
+const GUESSES_REMAINING = /\breason=InvalidPin guesses_remaining=(\d+)\b/;
+
+/**
+ * Remaining PIN attempts from an invalid-PIN unlock()/changePin() failure,
+ * or null when the error carries no count. 0 means the guess budget is
+ * exhausted and the stored keys are locked.
+ *
+ * @param {unknown} err - The error thrown by unlock() or changePin()
+ * @returns {number | null}
+ */
+export function guessesRemaining(err) {
+  const message =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const match = GUESSES_REMAINING.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
 async function initWasmModule() {
   let wasmModule;
   let init;
