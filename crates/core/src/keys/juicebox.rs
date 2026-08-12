@@ -579,7 +579,11 @@ impl JuiceboxApi for JuiceboxClient {
 impl From<RecoverFailureReason> for JuiceboxError {
     fn from(reason: RecoverFailureReason) -> Self {
         match reason {
-            RecoverFailureReason::InvalidPin => JuiceboxError::InvalidPin,
+            // Conversion from the bare reason has no count; `Chat::unlock`
+            // builds the variant directly to carry `guesses_remaining`.
+            RecoverFailureReason::InvalidPin => JuiceboxError::InvalidPin {
+                guesses_remaining: None,
+            },
             RecoverFailureReason::NotRegistered => JuiceboxError::NotRegistered,
             RecoverFailureReason::InvalidAuth => JuiceboxError::InvalidAuth,
             RecoverFailureReason::UpgradeRequired => JuiceboxError::UpgradeRequired,

@@ -4,7 +4,9 @@ package chatxdk
 
 import (
 	"encoding/json"
+	"regexp"
 	"runtime"
+	"strconv"
 )
 
 // UpdateConfig updates the Juicebox configuration (e.g., to refresh auth tokens).
@@ -54,4 +56,28 @@ func (c *Chat) ChangePin(oldPin, newPin []byte) error {
 	defer runtime.KeepAlive(c)
 	_, err := ffiChangePin(c.h, oldPin, newPin)
 	return err
+}
+
+// Stable invalid-PIN message form the core emits
+// ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a count
+// embedded in an unrelated pass-through message is not misread.
+var guessesRemainingPattern = regexp.MustCompile(`\bInvalid PIN: guesses_remaining=(\d+)`)
+
+// GuessesRemaining extracts the remaining PIN-attempt count Juicebox reports
+// on an invalid-PIN [Chat.Unlock] / [Chat.ChangePin] failure. It returns
+// ok=false when the error carries no count (any non-PIN failure). A count of
+// 0 means the guess budget is exhausted and the stored keys are locked.
+func GuessesRemaining(err error) (n int, ok bool) {
+	if err == nil {
+		return 0, false
+	}
+	m := guessesRemainingPattern.FindStringSubmatch(err.Error())
+	if m == nil {
+		return 0, false
+	}
+	n, convErr := strconv.Atoi(m[1])
+	if convErr != nil {
+		return 0, false
+	}
+	return n, true
 }

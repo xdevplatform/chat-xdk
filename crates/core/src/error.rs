@@ -93,9 +93,16 @@ pub enum KeyError {
 /// Errors from Juicebox SDK integration.
 #[derive(Debug, Error)]
 pub enum JuiceboxError {
-    /// Wrong PIN provided.
-    #[error("Invalid PIN")]
-    InvalidPin,
+    /// Wrong PIN provided. `guesses_remaining` is the attempt budget Juicebox
+    /// reports after the failure (0 = exhausted, keys locked); `None` when the
+    /// count is unavailable. The `guesses_remaining=N` message token is stable
+    /// — bindings parse it out of the error string, so the format must not
+    /// change (the bare `Invalid PIN` prefix likewise stays as-is).
+    #[error("Invalid PIN{}", .guesses_remaining.map(|n| format!(": guesses_remaining={n}")).unwrap_or_default())]
+    InvalidPin {
+        /// Remaining PIN attempts reported by Juicebox, if known.
+        guesses_remaining: Option<u16>,
+    },
 
     /// Keys not registered yet.
     #[error("Keys not registered")]
@@ -141,15 +148,17 @@ pub enum JuiceboxError {
 impl JuiceboxError {
     /// Returns true if this error is retryable.
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            JuiceboxError::InvalidPin
-                | JuiceboxError::NotRegistered
-                | JuiceboxError::InvalidAuth
-                | JuiceboxError::Transient
-                | JuiceboxError::RateLimitExceeded
-                | JuiceboxError::StorageFailed
-        )
+        match self {
+            // A zero remaining budget means the stored keys are locked;
+            // another attempt cannot succeed.
+            JuiceboxError::InvalidPin { guesses_remaining } => *guesses_remaining != Some(0),
+            JuiceboxError::NotRegistered
+            | JuiceboxError::InvalidAuth
+            | JuiceboxError::Transient
+            | JuiceboxError::RateLimitExceeded
+            | JuiceboxError::StorageFailed => true,
+            _ => false,
+        }
     }
 }
 
@@ -213,7 +222,9 @@ mod tests {
 
     #[test]
     fn test_sdk_error_from_juicebox() {
-        let jb = JuiceboxError::InvalidPin;
+        let jb = JuiceboxError::InvalidPin {
+            guesses_remaining: None,
+        };
         let sdk: SdkError = jb.into();
         assert!(matches!(sdk, SdkError::Juicebox(_)));
     }
@@ -264,7 +275,20 @@ mod tests {
 
     #[test]
     fn test_juicebox_error_retryable() {
-        assert!(JuiceboxError::InvalidPin.is_retryable());
+        assert!(JuiceboxError::InvalidPin {
+            guesses_remaining: None
+        }
+        .is_retryable());
+        assert!(JuiceboxError::InvalidPin {
+            guesses_remaining: Some(1)
+        }
+        .is_retryable());
+        // An exhausted guess budget locks the stored keys; retrying a PIN
+        // cannot succeed.
+        assert!(!JuiceboxError::InvalidPin {
+            guesses_remaining: Some(0)
+        }
+        .is_retryable());
         assert!(JuiceboxError::NotRegistered.is_retryable());
         assert!(JuiceboxError::InvalidAuth.is_retryable());
         assert!(JuiceboxError::Transient.is_retryable());
@@ -279,7 +303,27 @@ mod tests {
 
     #[test]
     fn test_juicebox_error_display() {
-        assert!(JuiceboxError::InvalidPin.to_string().contains("PIN"));
+        assert_eq!(
+            JuiceboxError::InvalidPin {
+                guesses_remaining: None
+            }
+            .to_string(),
+            "Invalid PIN"
+        );
+        assert_eq!(
+            JuiceboxError::InvalidPin {
+                guesses_remaining: Some(3)
+            }
+            .to_string(),
+            "Invalid PIN: guesses_remaining=3"
+        );
+        assert_eq!(
+            JuiceboxError::InvalidPin {
+                guesses_remaining: Some(0)
+            }
+            .to_string(),
+            "Invalid PIN: guesses_remaining=0"
+        );
         assert!(JuiceboxError::NoTokens.to_string().contains("token"));
         assert!(JuiceboxError::Other("custom".into())
             .to_string()

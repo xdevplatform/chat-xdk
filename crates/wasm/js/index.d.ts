@@ -1072,6 +1072,13 @@ export declare function createChat(options: CreateChatOptions): Promise<ChatWith
 
 // Utility Functions
 
+/**
+ * Remaining PIN attempts from an invalid-PIN unlock()/changePin() failure,
+ * or null when the error carries no count. 0 means the guess budget is
+ * exhausted and the stored keys are locked.
+ */
+export declare function guessesRemaining(err: unknown): number | null;
+
 /** Encode bytes to base64 string. */
 export declare function bytesToBase64(bytes: Uint8Array): string;
 
