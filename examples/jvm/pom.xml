@@ -14,7 +14,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- Stamped by scripts/version.sh in lockstep with the binding, so the
          example always resolves the jar that `mvn install` just produced. -->
-    <chatxdk.version>0.4.3</chatxdk.version>
+    <chatxdk.version>0.5.0</chatxdk.version>
   </properties>
 
   <dependencies>
