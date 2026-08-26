@@ -429,6 +429,10 @@ jobs:
             rust_target: x86_64-unknown-linux-gnu
             rid: linux-x64
             lib: libchat_xdk_dotnet.so
+          - runs_on: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            rid: linux-arm64
+            lib: libchat_xdk_dotnet.so
           - runs_on: windows-latest
             rust_target: x86_64-pc-windows-msvc
             rid: win-x64
@@ -489,7 +493,7 @@ jobs:
         run: |
           set -euo pipefail
           base=crates/dotnet/dotnet/ChatXdk/runtimes
-          for rid in osx-arm64 osx-x64 linux-x64 win-x64; do
+          for rid in osx-arm64 osx-x64 linux-x64 linux-arm64 win-x64; do
             mkdir -p "$base/$rid/native"
             cp artifacts/dotnet-native-$rid/* "$base/$rid/native/"
           done
@@ -542,7 +546,7 @@ jobs:
         run: |
           set -euo pipefail
           base=crates/jvm/java/chatxdk/src/main/resources/native
-          for rid in osx-arm64 osx-x64 linux-x64 win-x64; do
+          for rid in osx-arm64 osx-x64 linux-x64 linux-arm64 win-x64; do
             mkdir -p "$base/$rid"
             cp artifacts/dotnet-native-"$rid"/* "$base/$rid/"
           done
@@ -560,6 +564,7 @@ jobs:
             native/osx-arm64/libchat_xdk_dotnet.dylib \
             native/osx-x64/libchat_xdk_dotnet.dylib \
             native/linux-x64/libchat_xdk_dotnet.so \
+            native/linux-arm64/libchat_xdk_dotnet.so \
             native/win-x64/chat_xdk_dotnet.dll \
             META-INF/LICENSE \
             META-INF/THIRD_PARTY_NOTICES.md; do
