@@ -41,6 +41,31 @@ use chat_xdk_core::js::{
 
 // Utility Functions (free functions, not methods)
 
+/// Return the exact ciphertext size produced by stream encryption.
+#[wasm_bindgen(js_name = encryptedStreamSize)]
+pub fn encrypted_stream_size(plaintext_size: f64) -> Result<f64, JsError> {
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+    if !plaintext_size.is_finite()
+        || plaintext_size < 0.0
+        || plaintext_size.fract() != 0.0
+        || plaintext_size > MAX_SAFE_INTEGER
+    {
+        return Err(JsError::new(
+            "Plaintext size must be a non-negative safe integer",
+        ));
+    }
+
+    let encrypted_size = chat_xdk_core::utils::encrypted_stream_size(plaintext_size as u64)
+        .ok_or_else(|| JsError::new("Encrypted stream size overflow"))?;
+    if encrypted_size > MAX_SAFE_INTEGER as u64 {
+        return Err(JsError::new(
+            "Encrypted stream size exceeds Number.MAX_SAFE_INTEGER",
+        ));
+    }
+    Ok(encrypted_size as f64)
+}
+
 /// Encode bytes to base64 string.
 #[wasm_bindgen(js_name = bytesToBase64)]
 pub fn bytes_to_base64(bytes: &[u8]) -> String {

@@ -50,6 +50,16 @@ class TestUtilityFunctions(unittest.TestCase):
         self.assertIsInstance(encoded, str)
         self.assertEqual(base64_to_bytes(encoded), data)
 
+    def test_encrypted_stream_size(self):
+        from chat_xdk import encrypted_stream_size
+
+        self.assertEqual(encrypted_stream_size(0), 24)
+        self.assertEqual(encrypted_stream_size(1), 42)
+        self.assertEqual(encrypted_stream_size(1024), 1065)
+        self.assertEqual(encrypted_stream_size(1025), 1083)
+        with self.assertRaises(OverflowError):
+            encrypted_stream_size(2**64 - 1)
+
     def test_base64_invalid_returns_none(self):
         from chat_xdk import base64_to_bytes
 

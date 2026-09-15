@@ -8,7 +8,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
 import init, { Chat, bytesToBase64 } from "../pkg/chat_xdk_wasm.js";
-import { ChatWithJuicebox, createChat, guessesRemaining } from "../index.js";
+import {
+  ChatWithJuicebox,
+  createChat,
+  encryptedStreamSize,
+  guessesRemaining,
+} from "../index.js";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
@@ -668,6 +673,7 @@ async function realJuiceboxSingletonTests() {
 
 async function main() {
   await delegationTests();
+  assert.equal(encryptedStreamSize(5000), 5109);
   await guessBudgetTests();
   await firstBootTests();
   await guessesRemainingTests();

@@ -640,6 +640,7 @@ export async function createChat(options) {
 
 // Re-export utility functions.
 export {
+  encryptedStreamSize,
   bytesToBase64,
   base64ToBytes,
   bytesToHex,

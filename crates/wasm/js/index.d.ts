@@ -1079,6 +1079,9 @@ export declare function createChat(options: CreateChatOptions): Promise<ChatWith
  */
 export declare function guessesRemaining(err: unknown): number | null;
 
+/** Return the exact ciphertext size produced by stream encryption. */
+export declare function encryptedStreamSize(plaintextSize: number): number;
+
 /** Encode bytes to base64 string. */
 export declare function bytesToBase64(bytes: Uint8Array): string;
 

@@ -1510,6 +1510,13 @@ impl Chat {
 
 // Module-level utility functions
 
+/// Return the exact ciphertext size produced by stream encryption.
+#[pyfunction]
+fn encrypted_stream_size(plaintext_size: u64) -> PyResult<u64> {
+    chat_xdk_core::utils::encrypted_stream_size(plaintext_size)
+        .ok_or_else(|| pyo3::exceptions::PyOverflowError::new_err("Encrypted stream size overflow"))
+}
+
 /// Encode bytes to base64 string.
 #[pyfunction]
 fn bytes_to_base64(bytes: &[u8]) -> String {
@@ -1628,6 +1635,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<SignatureInfo>()?;
 
     // Utility functions
+    m.add_function(wrap_pyfunction!(encrypted_stream_size, m)?)?;
     m.add_function(wrap_pyfunction!(bytes_to_base64, m)?)?;
     m.add_function(wrap_pyfunction!(base64_to_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(bytes_to_hex, m)?)?;

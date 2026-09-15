@@ -5,6 +5,13 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
+/// Return the exact ciphertext size produced by stream encryption.
+///
+/// Returns `None` when the result cannot be represented as a `u64`.
+pub fn encrypted_stream_size(plaintext_size: u64) -> Option<u64> {
+    crate::crypto::encryption::encrypted_stream_size(plaintext_size)
+}
+
 // Base64 Encoding/Decoding
 
 /// Encode bytes to base64 string.

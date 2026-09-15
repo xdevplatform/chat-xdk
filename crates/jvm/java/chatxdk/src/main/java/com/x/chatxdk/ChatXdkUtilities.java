@@ -14,6 +14,20 @@ public final class ChatXdkUtilities {
 
     private ChatXdkUtilities() {}
 
+    /** Return the exact ciphertext size produced by stream encryption. */
+    public static long encryptedStreamSize(long plaintextSize) {
+        if (plaintextSize < 0) {
+            throw new IllegalArgumentException("Plaintext size must be non-negative");
+        }
+        String value = FfiStrings.consume(
+                ChatNative.INSTANCE.chat_xdk_encrypted_stream_size(plaintextSize));
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            throw new ArithmeticException("Encrypted stream size exceeds Long.MAX_VALUE");
+        }
+    }
+
     /** Encode bytes to standard base64. */
     public static String bytesToBase64(byte[] data) {
         if (data == null || data.length == 0) {

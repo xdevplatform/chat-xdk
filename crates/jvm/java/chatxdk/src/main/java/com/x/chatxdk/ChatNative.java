@@ -115,6 +115,8 @@ public interface ChatNative extends Library {
 
     int chat_xdk_matches_registered_key(Pointer handle, Pointer publicKeyB64);
 
+    FfiResult.ByValue chat_xdk_encrypted_stream_size(long plaintextSize);
+
     FfiResult.ByValue chat_xdk_bytes_to_base64(Pointer data, long dataLen);
 
     FfiResult.ByValue chat_xdk_base64_to_bytes(Pointer b64);

@@ -216,6 +216,18 @@ class ChatTest {
     }
 
     @Test
+    void utilitiesEncryptedStreamSize() {
+        assertEquals(24, ChatXdkUtilities.encryptedStreamSize(0));
+        assertEquals(42, ChatXdkUtilities.encryptedStreamSize(1));
+        assertEquals(1065, ChatXdkUtilities.encryptedStreamSize(1024));
+        assertEquals(1083, ChatXdkUtilities.encryptedStreamSize(1025));
+        assertThrows(IllegalArgumentException.class, () -> ChatXdkUtilities.encryptedStreamSize(-1));
+        assertThrows(
+                ArithmeticException.class,
+                () -> ChatXdkUtilities.encryptedStreamSize(Long.MAX_VALUE));
+    }
+
+    @Test
     void exportImportRoundTrip() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys original = chat.getPublicKeys();

@@ -493,6 +493,12 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_bytes_to_base64(byte* data, nuint data_len);
 
         /// <summary>
+        ///  Return the exact ciphertext size produced by stream encryption.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_encrypted_stream_size", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_encrypted_stream_size(ulong plaintext_size);
+
+        /// <summary>
         ///  Decode base64 to bytes. On success, `data` holds base64 of the decoded bytes (FFI-safe).
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_base64_to_bytes", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

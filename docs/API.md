@@ -923,6 +923,12 @@ Common helpers exported as module-level functions (Rust crate root / JS module /
 | 45 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
 | 46 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
 | 47 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
+| 48 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
+
+`encrypted_stream_size` returns the exact byte length that `encrypt_stream`
+or `stream_encryptor` will produce, without encrypting or requiring a key:
+`24 + plaintext_size + 17 × ceil(plaintext_size / 1024)` for non-empty input,
+and `24` for empty input.
 
 **Failure modes differ by binding.** On undecodable input,
 `base64_to_bytes` / `hex_to_bytes` return `None` (Rust `Option`), `undefined`

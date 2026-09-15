@@ -41,6 +41,20 @@ pub const SECRETSTREAM_ABYTES: usize = 17;
 /// `DECRYPTED_CHUNK_SIZE + SECRETSTREAM_ABYTES` (1024 + 17 = 1041).
 pub const ENCRYPTED_CHUNK_SIZE: usize = DECRYPTED_CHUNK_SIZE + SECRETSTREAM_ABYTES;
 
+/// Return the exact ciphertext size produced by stream encryption.
+///
+/// Returns `None` when the result cannot be represented as a `u64`.
+pub fn encrypted_stream_size(plaintext_size: u64) -> Option<u64> {
+    if plaintext_size == 0 {
+        return Some(SECRETSTREAM_HEADER_SIZE as u64);
+    }
+
+    let chunk_count = plaintext_size.div_ceil(DECRYPTED_CHUNK_SIZE as u64);
+    plaintext_size
+        .checked_add(SECRETSTREAM_HEADER_SIZE as u64)?
+        .checked_add(chunk_count.checked_mul(SECRETSTREAM_ABYTES as u64)?)
+}
+
 /// Encrypt a message using XSalsa20-Poly1305.
 ///
 /// # Wire Format
@@ -548,6 +562,22 @@ mod tests {
         let mut decrypted = Vec::new();
         decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_encrypted_stream_size() {
+        for plaintext_size in [0, 1, 1024, 1025, 2048, 5000] {
+            let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+            let plaintext = vec![0xAB; plaintext_size];
+            let mut encrypted = Vec::new();
+            encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+
+            assert_eq!(
+                encrypted_stream_size(plaintext_size as u64),
+                Some(encrypted.len() as u64)
+            );
+        }
+        assert_eq!(encrypted_stream_size(u64::MAX), None);
     }
 
     #[test]
