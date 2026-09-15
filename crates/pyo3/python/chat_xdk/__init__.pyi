@@ -4,6 +4,8 @@ from typing import Optional, Union, overload
 
 __version__: str
 
+def encrypted_stream_size(plaintext_size: int) -> int: ...
+
 # ---------------------------------------------------------------------------
 # Classes
 # ---------------------------------------------------------------------------

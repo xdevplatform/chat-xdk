@@ -3,12 +3,22 @@ package chatxdk
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 )
 
 // ImageDimensions is returned by [DetectImageDimensions] when a supported image header is recognized.
 type ImageDimensions struct {
 	Width  uint32 `json:"width"`
 	Height uint32 `json:"height"`
+}
+
+// EncryptedStreamSize returns the exact ciphertext size produced by stream encryption.
+func EncryptedStreamSize(plaintextSize uint64) (uint64, error) {
+	value, err := ffiEncryptedStreamSize(plaintextSize)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(value, 10, 64)
 }
 
 // BytesToBase64 encodes bytes to standard base64.

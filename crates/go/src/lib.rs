@@ -181,6 +181,17 @@ pub extern "C" fn chat_xdk_bytes_to_base64(data: *const u8, data_len: usize) -> 
     })
 }
 
+/// Return the exact ciphertext size produced by stream encryption.
+#[no_mangle]
+pub extern "C" fn chat_xdk_encrypted_stream_size(plaintext_size: u64) -> FfiResult {
+    catch_ffi(
+        || match chat_xdk_core::utils::encrypted_stream_size(plaintext_size) {
+            Some(size) => ok_data(&size.to_string()),
+            None => err_result("Encrypted stream size overflow"),
+        },
+    )
+}
+
 /// Decode base64 to bytes. On success, `data` holds base64 of the decoded bytes (FFI-safe).
 #[no_mangle]
 pub extern "C" fn chat_xdk_base64_to_bytes(b64: *const c_char) -> FfiResult {

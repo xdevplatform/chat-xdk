@@ -36,6 +36,10 @@ type handle = *C.struct_ChatHandle
 
 // utilities (stateless; no Chat handle)
 
+func ffiEncryptedStreamSize(plaintextSize uint64) (string, error) {
+	return ffiResult(C.chat_xdk_encrypted_stream_size(C.uint64_t(plaintextSize)))
+}
+
 func ffiBytesToBase64(data []byte) (string, error) {
 	var ptr *C.uint8_t
 	if len(data) > 0 {

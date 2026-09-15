@@ -9,6 +9,7 @@ import init, {
   hexToBytes,
   detectMimeType,
   detectImageDimensions,
+  encryptedStreamSize,
 } from "../../pkg/chat_xdk_wasm.js";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
@@ -46,6 +47,12 @@ async function main() {
   assert.deepEqual(base64ToBytes(b64), someBytes);
   // matches Node's own base64 encoding
   assert.equal(b64, Buffer.from(someBytes).toString("base64"));
+
+  assert.equal(encryptedStreamSize(0), 24);
+  assert.equal(encryptedStreamSize(1), 42);
+  assert.equal(encryptedStreamSize(1024), 1065);
+  assert.equal(encryptedStreamSize(1025), 1083);
+  assert.throws(() => encryptedStreamSize(-1), /non-negative safe integer/);
 
   // hex roundtrip
   const hex = bytesToHex(someBytes);

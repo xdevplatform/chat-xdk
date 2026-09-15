@@ -1294,6 +1294,16 @@ namespace ChatXdk.Tests
         // ChatXdkUtilities (stateless helpers)
 
         [Fact]
+        public void Utilities_EncryptedStreamSize()
+        {
+            Assert.Equal(24UL, ChatXdkUtilities.EncryptedStreamSize(0));
+            Assert.Equal(42UL, ChatXdkUtilities.EncryptedStreamSize(1));
+            Assert.Equal(1065UL, ChatXdkUtilities.EncryptedStreamSize(1024));
+            Assert.Equal(1083UL, ChatXdkUtilities.EncryptedStreamSize(1025));
+            Assert.Throws<ChatXdkException>(() => ChatXdkUtilities.EncryptedStreamSize(ulong.MaxValue));
+        }
+
+        [Fact]
         public void Utilities_Base64_RoundTrip()
         {
             var data = new byte[] { 1, 2, 3, 4, 250, 0, 128 };

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -38,6 +39,13 @@ namespace ChatXdk
             byte[] buf = new byte[len + 1];
             Encoding.UTF8.GetBytes(s, 0, s.Length, buf, 0);
             return buf;
+        }
+
+        /// <summary>Return the exact ciphertext size produced by stream encryption.</summary>
+        public static ulong EncryptedStreamSize(ulong plaintextSize)
+        {
+            string value = Consume(NativeMethods.chat_xdk_encrypted_stream_size(plaintextSize));
+            return ulong.Parse(value, CultureInfo.InvariantCulture);
         }
 
         /// <summary>Encode bytes to standard base64.</summary>

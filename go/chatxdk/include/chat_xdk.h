@@ -55,6 +55,11 @@ extern "C" {
 struct FfiResult chat_xdk_bytes_to_base64(const uint8_t *data, uintptr_t data_len);
 
 /**
+ * Return the exact ciphertext size produced by stream encryption.
+ */
+struct FfiResult chat_xdk_encrypted_stream_size(uint64_t plaintext_size);
+
+/**
  * Decode base64 to bytes. On success, `data` holds base64 of the decoded bytes (FFI-safe).
  */
 struct FfiResult chat_xdk_base64_to_bytes(const char *b64);

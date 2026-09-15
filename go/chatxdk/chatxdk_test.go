@@ -250,6 +250,21 @@ func TestLockAndUnlockState(t *testing.T) {
 }
 
 func TestUtilityHelpers(t *testing.T) {
+	for plaintextSize, want := range map[uint64]uint64{
+		0: 24, 1: 42, 1024: 1065, 1025: 1083,
+	} {
+		got, err := EncryptedStreamSize(plaintextSize)
+		if err != nil {
+			t.Fatalf("EncryptedStreamSize(%d): %v", plaintextSize, err)
+		}
+		if got != want {
+			t.Fatalf("EncryptedStreamSize(%d): got %d want %d", plaintextSize, got, want)
+		}
+	}
+	if _, err := EncryptedStreamSize(^uint64(0)); err == nil {
+		t.Fatal("expected overflow error")
+	}
+
 	// Base64 / hex roundtrip (parity with core utils tests)
 	b64, err := BytesToBase64([]byte("Hello, World!"))
 	if err != nil {

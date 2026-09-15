@@ -39,6 +39,7 @@ from chat_xdk._native import (
     bytes_to_hex,
     detect_image_dimensions,
     detect_mime_type,
+    encrypted_stream_size,
     hex_to_bytes,
 )
 
@@ -73,6 +74,7 @@ __all__ = [
     "bytes_to_hex",
     "detect_image_dimensions",
     "detect_mime_type",
+    "encrypted_stream_size",
     "guesses_remaining",
     "hex_to_bytes",
 ]
