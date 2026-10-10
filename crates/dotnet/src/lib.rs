@@ -157,8 +157,9 @@ fn catch_ffi_or<T>(fallback: T, body: impl FnOnce() -> T) -> T {
 /// Parse the signing-keys JSON passed across the FFI boundary.
 ///
 /// `null`, an empty string, or `[]` yields an empty list — under the default
-/// reject-unverified policy signed events then fail decryption; they are
-/// returned with `verified: false` only after reject-unverified is disabled.
+/// reject-unverified policy encrypted messages and key changes then fail
+/// decryption; they are returned with `verified: false` only after
+/// reject-unverified is disabled.
 /// A non-empty but malformed array is a caller error and is surfaced rather
 /// than silently dropped (which would weaken verification).
 fn parse_signing_keys(json: &str) -> Result<Vec<SigningKeyEntry>, String> {
@@ -482,8 +483,10 @@ pub extern "C" fn chat_xdk_has_identity_key(handle: *const ChatHandle) -> i32 {
 }
 
 /// When `reject` is non-zero — the default — `chat_xdk_decrypt_event` returns
-/// an error for any signed event whose signature cannot be verified (invalid,
-/// missing, or no matching signing key) instead of returning it with
+/// an error for an encrypted message or key change whose signature cannot be
+/// verified (invalid, missing, or no matching signing key), and for any other
+/// signed event whose signature is present but invalid. Unencrypted messages
+/// and other events without a checkable signature are returned with
 /// `verified: false`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_reject_unverified(handle: *mut ChatHandle, reject: i32) {
@@ -1174,9 +1177,10 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
 ///   "identity_public_key","identity_public_key_signature"},...]` for the sender.
 ///   The SDK selects the matching version automatically. An empty array falls
 ///   back to the keys stored via `chat_xdk_set_signing_keys`; if none are
-///   stored either, signed events fail decryption under the default
-///   reject-unverified policy (disable it via `chat_xdk_set_reject_unverified`
-///   to have them returned with `verified: false` instead).
+///   stored either, encrypted messages and key changes fail decryption under
+///   the default reject-unverified policy (disable it via
+///   `chat_xdk_set_reject_unverified` to have them returned with
+///   `verified: false` instead).
 ///
 /// Returns a JSON representation of the decrypted `Event`.
 #[no_mangle]

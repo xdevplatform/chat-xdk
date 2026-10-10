@@ -160,8 +160,11 @@ int32_t chat_xdk_has_identity_key(const struct ChatHandle *handle);
  * Enable or disable rejection of unverified events.
  *
  * When enabled — the default — `chat_xdk_decrypt_event` returns an error for
- * any signed event whose signature cannot be verified (invalid, missing, or
- * no matching signing key) instead of returning it with `verified: false`.
+ * an encrypted message or key change whose signature cannot be verified
+ * (invalid, missing, or no matching signing key), and for any other signed
+ * event whose signature is present but invalid. Unencrypted messages and
+ * other events without a checkable signature are returned with
+ * `verified: false`.
  */
 void chat_xdk_set_reject_unverified(struct ChatHandle *handle, int32_t reject);
 
@@ -327,9 +330,10 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
  * `signing_keys_json`: JSON array of `{"user_id","public_key_version","public_key",
  *     "identity_public_key","identity_public_key_signature"}`. An empty array
  *     falls back to the keys stored via `chat_xdk_set_signing_keys`; with
- *     nothing stored either, signed events fail decryption under the default
- *     reject-unverified policy (disable it via `chat_xdk_set_reject_unverified`
- *     to have them returned with `verified: false` instead).
+ *     nothing stored either, encrypted messages and key changes fail decryption
+ *     under the default reject-unverified policy (disable it via
+ *     `chat_xdk_set_reject_unverified` to have them returned with
+ *     `verified: false` instead).
  *
  * Returns JSON representation of the decrypted Event.
  */

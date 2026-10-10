@@ -547,9 +547,9 @@ Developer                          SDK
     │  Step 4: Unencrypted messages (conversation_key_version is None)
     │  chat.decrypt_event(event_b64, &keys, &signing_keys)
     │──────────────────────────────▶│  1. Detect: conversation_key_version is None
-    │                               │  2. No signature → rejected under reject_unverified
-    │  Event::Message               │     (default); returned verified=false only when
-    │  (verified=false)             │     reject_unverified is disabled
+    │                               │  2. No signature to check → returned with
+    │  Event::Message               │     key_version=None, verified=false under
+    │  (verified=false)             │     either reject_unverified setting
     │◀──────────────────────────────│
     ▼                               ▼
 ```

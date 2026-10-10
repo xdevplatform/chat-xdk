@@ -197,9 +197,11 @@ namespace ChatXdk
 
         /// <summary>
         /// When <paramref name="reject"/> is true — the default — <see cref="DecryptEvent"/>
-        /// throws <see cref="ChatXdkException"/> for any signed event whose signature cannot
-        /// be verified (invalid, missing, or no matching signing key) instead of returning
-        /// it with <c>verified: false</c>.
+        /// throws <see cref="ChatXdkException"/> for an encrypted message or key change whose
+        /// signature cannot be verified (invalid, missing, or no matching signing key), and
+        /// for any other signed event whose signature is present but invalid. Unencrypted
+        /// messages (<c>key_version: null</c>) and other events without a checkable
+        /// signature are returned with <c>verified: false</c>.
         /// </summary>
         public void SetRejectUnverified(bool reject)
         {
@@ -468,9 +470,9 @@ namespace ChatXdk
         /// <param name="signingKeys">
         /// Signing keys for the sender. The SDK picks the matching version automatically.
         /// <see langword="null"/> (or an empty list) falls back to the keys stored via
-        /// <see cref="SetSigningKeys"/>; if none are stored either, every signed event
-        /// throws under the default reject-unverified policy (only after
-        /// <see cref="SetRejectUnverified"/>(false) are such events returned with
+        /// <see cref="SetSigningKeys"/>; if none are stored either, every encrypted message
+        /// and key change throws under the default reject-unverified policy (only after
+        /// <see cref="SetRejectUnverified"/>(false) are those returned with
         /// <c>verified: false</c>).
         /// </param>
         /// <returns>

@@ -419,9 +419,12 @@ impl Chat {
         self.inner.has_identity_key()
     }
 
-    /// When enabled — the default — `decrypt_event` raises for any signed
-    /// event whose signature cannot be verified (invalid, missing, or no
-    /// matching signing key) instead of returning it with `verified: false`.
+    /// When enabled — the default — `decrypt_event` raises for an encrypted
+    /// message or key change whose signature cannot be verified (invalid,
+    /// missing, or no matching signing key), and for any other signed event
+    /// whose signature is present but invalid. Unencrypted messages
+    /// (``key_version: None``) and other events without a checkable signature
+    /// are returned with ``verified: False``.
     fn set_reject_unverified(&mut self, reject: bool) {
         self.inner.set_reject_unverified(reject);
     }
@@ -708,8 +711,8 @@ impl Chat {
     ///         straight from the X API public keys response. The SDK picks the matching version
     ///         automatically. When omitted (or empty), the keys stored via ``set_signing_keys``
     ///         are used. Under the default reject-unverified policy no usable signing key makes
-    ///         every signed event raise; only after ``set_reject_unverified(False)`` are such
-    ///         events returned with ``verified: False``.
+    ///         every encrypted message and key change raise; only after
+    ///         ``set_reject_unverified(False)`` are those returned with ``verified: False``.
     ///
     /// Returns:
     ///     A dictionary representing the decrypted event.

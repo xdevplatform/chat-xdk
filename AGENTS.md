@@ -60,10 +60,12 @@ Don't add speculative configurability or one-off helpers.
 
 ## 4. Security invariants — never weaken to make something pass
 
-- **Verification is not optional.** `decryptEvent` rejects unverified events by
-  default; a below-floor key version must never verify; an invalid signature must
-  never yield plaintext. Verify against caller-supplied signing keys — **never** a
-  key carried inside the event. Verification covers every signed event type, not
+- **Verification is not optional.** `decryptEvent` rejects unverified encrypted
+  messages and key changes by default, and any event whose signature is present
+  but invalid; other events without a checkable signature are returned with
+  `verified: false`, never silently dropped. A below-floor key version must never
+  verify; an invalid signature must never yield plaintext. Verify against
+  caller-supplied signing keys — **never** a key carried inside the event. Verification covers every signed event type, not
   just messages. Signature mismatches are bugs to investigate, not checks to silence.
 - **Key downgrade protection is automatic.** Conversation-key versions move
   forward only (monotonic high-water mark held for the `Chat` lifetime); the

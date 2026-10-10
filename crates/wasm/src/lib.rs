@@ -154,9 +154,12 @@ impl Chat {
         }
     }
 
-    /// When enabled — the default — `decryptEvent` throws for any signed
-    /// event whose signature cannot be verified (invalid, missing, or no
-    /// matching signing key) instead of returning it with `verified: false`.
+    /// When enabled — the default — `decryptEvent` throws for an encrypted
+    /// message or key change whose signature cannot be verified (invalid,
+    /// missing, or no matching signing key), and for any other signed event
+    /// whose signature is present but invalid. Unencrypted messages
+    /// (`keyVersion: null`) and other events without a checkable signature
+    /// are returned with `verified: false`.
     #[wasm_bindgen(js_name = setRejectUnverified)]
     pub fn set_reject_unverified(&mut self, reject: bool) {
         self.inner.set_reject_unverified(reject);
@@ -418,9 +421,9 @@ impl Chat {
     /// filtered to the event's sender and the SDK picks the matching version
     /// automatically. Omitting it falls back to the keys stored via
     /// `setSigningKeys`. Under the default reject-unverified policy no
-    /// signing keys from either source makes every signed event throw; only
-    /// after `setRejectUnverified(false)` are such events returned with
-    /// `verified: false`.
+    /// signing keys from either source makes every encrypted message and key
+    /// change throw; only after `setRejectUnverified(false)` are those
+    /// returned with `verified: false`.
     #[wasm_bindgen(js_name = decryptEvent)]
     pub fn decrypt_event(
         &self,

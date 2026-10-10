@@ -410,7 +410,7 @@ Decrypts multiple events in one call. Handles everything internally:
 | Param | JS | Python | Rust | Go | JVM | .NET | Description |
 |---|---|---|---|---|---|---|---|
 | events | `string[]` | `list[str]` | `&[&str]` | `[]string` | `List<String>` | `IEnumerable<string>` | All base64-encoded raw events. **Must include KeyChange events** — without them, messages depending on those keys will land in `errors`. The events endpoint returns KeyChange events in **`meta.conversation_key_events`**, separate from the `data` array; concatenate both into this argument. |
-| signingKeys | `SigningKeyEntry[]` | `list[dict]` | `&[SigningKeyEntry]` | `[]SigningKeyEntry` or `nil` | `List<SigningKeyEntry>` or `null` | `IEnumerable<SigningKeyEntry>?` | Signing keys for **all participants**. The SDK extracts each event's `senderId` internally and filters to the matching keys. Omitting the parameter (or passing `[]` / `nil` / `null`) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
+| signingKeys | `SigningKeyEntry[]` | `list[dict]` | `&[SigningKeyEntry]` | `[]SigningKeyEntry` or `nil` | `List<SigningKeyEntry>` or `null` | `IEnumerable<SigningKeyEntry>?` | Signing keys for **all participants**. The SDK extracts each event's `senderId` internally and filters to the matching keys. Omitting the parameter (or passing `[]` / `nil` / `null`) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **encrypted message and KeyChange** fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are those returned with `verified: false`. Other signed events are returned with `verified: false` either way (see [Verification policy](#verification-policy)). |
 
 **Returns: `DecryptEventsResult`** — never throws/raises. Errors are collected.
 
@@ -563,7 +563,7 @@ Decrypts a single event using conversation keys you already have — cached from
 |---|---|---|---|---|---|---|---|
 | eventB64 | `string` | `str` | `&str` | `string` | `String` | `string` | One base64-encoded raw event. |
 | conversationKeys | `ConversationKeyMap` | `dict` | `&HashMap<String, Key>` | `map[string][]byte` | `Map<String, byte[]>` or `ConversationKeyBundle` | `Dictionary<string, byte[]>` or `ConversationKeyBundle` | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. Omitting it (or passing `{}` / `None` / `nil` / `null`) falls back to the opt-in key cache (`setCacheKeys`); non-message events (typing, read receipts) need no keys at all. |
-| signingKeys | `SigningKeyEntry[]` | `list[dict]` | `&[SigningKeyEntry]` | `[]SigningKeyEntry` or `nil` | `List<SigningKeyEntry>` or `null` | `IEnumerable<SigningKeyEntry>?` | Signing keys for **the event's sender**. The SDK matches by `publicKeyVersion` against the version in the event's signature. Omitting the parameter (or passing `[]` / `nil` / `null`) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails with an error. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
+| signingKeys | `SigningKeyEntry[]` | `list[dict]` | `&[SigningKeyEntry]` | `[]SigningKeyEntry` or `nil` | `List<SigningKeyEntry>` or `null` | `IEnumerable<SigningKeyEntry>?` | Signing keys for **the event's sender**. The SDK matches by `publicKeyVersion` against the version in the event's signature. Omitting the parameter (or passing `[]` / `nil` / `null`) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **encrypted message and KeyChange** fails with an error. Only after `setRejectUnverified(false)` are those returned with `verified: false`. Other signed events are returned with `verified: false` either way (see [Verification policy](#verification-policy)). |
 
 **Returns: `Event`** directly — or **throws/raises** on failure (unlike `decryptEvents` which collects errors).
 
@@ -574,7 +574,8 @@ decryptEvent(
   conversationKeys?: ConversationKeyMap | null,  // omitted ⇒ opt-in key cache
                                                  // (setCacheKeys)
   signingKeys?: SigningKeyEntry[]  // omitted ⇒ keys from setSigningKeys; if none
-                                   // stored, signed events throw, unless
+                                   // stored, encrypted messages and key
+                                   // changes throw, unless
                                    // setRejectUnverified(false) was called
 ): Event
 ```
@@ -586,8 +587,9 @@ decrypt_event(
     conversation_keys: dict | None = None,  # { version: bytes }; None ⇒ opt-in
                                             # key cache (set_cache_keys)
     signing_keys: list[dict] | None = None  # None ⇒ keys from set_signing_keys;
-                                            # if none stored, signed events raise,
-                                            # unless set_reject_unverified(False)
+                                            # if none stored, encrypted messages and
+                                            # key changes raise, unless
+                                            # set_reject_unverified(False)
 ) -> dict
 ```
 
@@ -697,7 +699,21 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 { "1": b"\x01\x02...", "2": b"\x03\x04..." }
 ```
 
-**Unencrypted events**: Events without a `conversationKeyVersion` carry no verifiable signature, so under the default reject-unverified policy they are **rejected** (`decryptEvent` throws; `decryptEvents` records them in `errors`). After `setRejectUnverified(false)` they are returned with `keyVersion: null` and `verified: false`.
+#### Verification policy
+
+`setRejectUnverified(true)` (the default) enforces signatures on the events that carry encrypted state. Everything else is returned with an explicit flag rather than dropped, so check `verified` (and `keyVersion` on messages) before acting on an event.
+
+| Event | Signature verifies | Signature missing / no matching signing key | Signature present but invalid |
+|---|---|---|---|
+| Encrypted message (`keyVersion` set) | `verified: true` | **rejected** | **rejected** |
+| KeyChange | `verified: true` | **rejected** | **rejected** |
+| Unencrypted message (`keyVersion: null`) | — (carries no signature) | `verified: false` | — |
+| ReadReceipt, MarkedUnread, MessageDeleted, ConversationDeleted, GroupChange, SettingsChange | `verified: true` | `verified: false` | **rejected** |
+| Typing, Failure, MemberDeleted | unsigned by protocol, always returned | | |
+
+"Rejected" means `decryptEvent` throws and `decryptEvents` records the event in `errors`. With `setRejectUnverified(false)` nothing is rejected for signature reasons; events that do not verify are returned with `verified: false`.
+
+**Unencrypted events**: Events without a `conversationKeyVersion` carry no signature. They are returned with `keyVersion: null` and `verified: false` under either policy; their contents are not authenticated by the sender.
 
 ### Message Encryption
 
@@ -1462,7 +1478,7 @@ absent-on-a-preview) as an untrusted preview — render the claim only from the
 validated original. The validation contract is specified in
 [CRYPTO.md — Reply preview validation](CRYPTO.md#reply-preview-validation).
 
-**Unencrypted messages**: When `keyVersion` is `null`, the message was delivered without encryption. Because there is no signature to verify, the default reject-unverified policy **rejects** these messages (`decryptEvent` throws; `decryptEvents` records them in `errors`); they are returned only after `setRejectUnverified(false)`, with `verified: false`. When returned, the `content` is parsed identically to encrypted messages.
+**Unencrypted messages**: When `keyVersion` is `null`, the message was delivered without encryption. There is no signature to verify, so it is always returned with `verified: false` (see [Verification policy](#verification-policy)); its contents are not authenticated by the sender. The `content` is parsed identically to encrypted messages.
 
 ### MessageContent
 

@@ -91,8 +91,9 @@ impl std::fmt::Debug for CachedConversationKey {
 impl ChatCore {
     /// Create a new `ChatCore` with no keys loaded.
     ///
-    /// `reject_unverified` defaults to `true` — unverified events are
-    /// rejected.  Call `set_reject_unverified(false)` to opt out.
+    /// `reject_unverified` defaults to `true` — unverified encrypted messages
+    /// and key changes are rejected.  Call `set_reject_unverified(false)` to
+    /// opt out.
     pub fn new() -> Self {
         Self {
             keypair_manager: KeypairManager::new(),
@@ -105,13 +106,17 @@ impl ChatCore {
         }
     }
 
-    /// When enabled — the default — `decrypt_event` returns an error for any
-    /// signed event type that cannot be positively verified: an invalid
-    /// signature, a missing signature, no matching signing key (including an
-    /// empty signing-key list), or an unencrypted message (which carries no
-    /// verifiable signature). When disabled, such events are returned with
-    /// `verified: false` instead. Event types that never carry a signature
-    /// (typing, failure, member-account-delete) are unaffected either way.
+    /// When enabled — the default — `decrypt_event` returns an error for an
+    /// encrypted message or key change that cannot be positively verified:
+    /// an invalid signature, a missing signature, or no matching signing key
+    /// (including an empty signing-key list). Other signed event types
+    /// (receipts, deletes, group and settings changes) are rejected only when
+    /// a signature is present but invalid; without a checkable signature they
+    /// are returned with `verified: false`. Unencrypted messages carry no
+    /// signature and are returned with `key_version: None, verified: false`.
+    /// When disabled, every event is returned, with `verified: false` when it
+    /// does not verify. Event types that never carry a signature (typing,
+    /// failure, member-account-delete) are unaffected either way.
     pub fn set_reject_unverified(&mut self, reject: bool) {
         self.reject_unverified = reject;
     }
@@ -1392,9 +1397,12 @@ impl ChatCore {
     /// matches the event's sender, then picks the one matching the version
     /// embedded in the message signature — the same selection
     /// [`Self::decrypt_events`] applies. Under the default reject-unverified
-    /// policy an empty slice makes every signed event fail; only after
-    /// [`Self::set_reject_unverified`]`(false)` are such events returned with
-    /// `verified: false`.
+    /// policy an empty slice makes every encrypted message and key change
+    /// fail; only after [`Self::set_reject_unverified`]`(false)` are those
+    /// returned with `verified: false`. Unencrypted messages
+    /// (`key_version: None`) and other signed event types without a
+    /// checkable signature are always returned with `verified: false`; a
+    /// signature that is present but invalid is still rejected.
     pub fn decrypt_event(
         &self,
         event_b64: &str,
@@ -1523,7 +1531,7 @@ impl ChatCore {
             MessageEventDetail::MarkConversationReadEvent(read_event) => {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "ReadReceipt")?;
+                self.reject_if_invalid(&sig_result, "ReadReceipt")?;
                 Event::ReadReceipt(ReadReceiptEvent {
                     meta,
                     verified,
@@ -1534,7 +1542,7 @@ impl ChatCore {
             MessageEventDetail::MarkConversationUnreadEvent(unread_event) => {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "MarkedUnread")?;
+                self.reject_if_invalid(&sig_result, "MarkedUnread")?;
                 Event::MarkedUnread(MarkedUnreadEvent {
                     meta,
                     verified,
@@ -1544,7 +1552,7 @@ impl ChatCore {
             MessageEventDetail::MessageDeleteEvent(del_event) => {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "MessageDelete")?;
+                self.reject_if_invalid(&sig_result, "MessageDelete")?;
                 let delete_for_all = del_event
                     .delete_message_action
                     .as_ref()
@@ -1560,7 +1568,7 @@ impl ChatCore {
             MessageEventDetail::ConversationDeleteEvent(conv_del) => {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "ConversationDelete")?;
+                self.reject_if_invalid(&sig_result, "ConversationDelete")?;
                 let clear_all = conv_del
                     .clear_conversation_options
                     .as_ref()
@@ -1589,7 +1597,7 @@ impl ChatCore {
             MessageEventDetail::GroupChangeEvent(group_change) => {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "GroupChange")?;
+                self.reject_if_invalid(&sig_result, "GroupChange")?;
                 let change = convert_group_change(group_change.group_change.as_ref());
                 Event::GroupChange(GroupChangeEvent {
                     meta,
@@ -1600,7 +1608,7 @@ impl ChatCore {
             MessageEventDetail::ConversationMetadataChangeEvent(settings) => {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "SettingsChange")?;
+                self.reject_if_invalid(&sig_result, "SettingsChange")?;
                 let change =
                     convert_settings_change(settings.conversation_metadata_change.as_ref());
                 Event::SettingsChange(SettingsChangeEvent {
@@ -1622,21 +1630,19 @@ impl ChatCore {
 
                 // Unencrypted MCE: conversation_key_version is None — contents
                 // are already plaintext Thrift bytes, no signature to verify.
+                // They are returned with `key_version: None, verified: false`
+                // and reject_unverified does not apply to them.
                 let is_unencrypted = mce.conversation_key_version.is_none();
 
                 // Verify before decrypt so that an invalid signature never
                 // results in plaintext being returned (when reject_unverified).
-                // Unencrypted messages carry no signature, so they are treated
-                // as unverifiable and rejected under reject_unverified too.
-                let (verified, sig_result) = if is_unencrypted {
-                    (false, Ok(false))
+                let verified = if is_unencrypted {
+                    false
                 } else {
                     let r = self.verify_event_signature(parsed, detail, signing_keys, None);
-                    let v = matches!(r, Ok(true));
-                    (v, r)
+                    self.reject_if_unverified(&r, "Message")?;
+                    matches!(r, Ok(true))
                 };
-
-                self.reject_if_unverified(&sig_result, "Message")?;
 
                 let plaintext = if is_unencrypted {
                     contents.clone()
@@ -2651,12 +2657,12 @@ impl ChatCore {
         Ok(signing.private.clone())
     }
 
-    /// Enforce `reject_unverified` policy on a signature result.
+    /// Enforce `reject_unverified` policy on a signature result for an
+    /// encrypted message or a key change.
     ///
     /// When `reject_unverified` is enabled, both `Err(reason)` (signature
     /// present but cryptographically invalid) and `Ok(false)` (signature
-    /// missing or no matching key) are rejected for event types that carry
-    /// a signature.
+    /// missing or no matching key) are rejected.
     fn reject_if_unverified(
         &self,
         sig_result: &Result<bool, String>,
@@ -2676,6 +2682,24 @@ impl ChatCore {
                 "{} signature verification failed: {}",
                 event_label, reason
             )))),
+        }
+    }
+
+    /// Enforce `reject_unverified` policy on a signature result for an event
+    /// that carries no encrypted content (read receipts, deletes, group and
+    /// settings changes).
+    ///
+    /// Only `Err(reason)` (signature present but cryptographically invalid)
+    /// is rejected. `Ok(false)` passes so the event is returned with
+    /// `verified: false`; these events may be legitimately unsigned.
+    fn reject_if_invalid(
+        &self,
+        sig_result: &Result<bool, String>,
+        event_label: &str,
+    ) -> Result<(), SdkError> {
+        match sig_result {
+            Ok(_) => Ok(()),
+            Err(_) => self.reject_if_unverified(sig_result, event_label),
         }
     }
 
@@ -4462,20 +4486,23 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_event_unencrypted_mce_reject_unverified_errors() {
-        // Unencrypted MCEs carry no signature, so under reject_unverified
-        // (the default) they are unverifiable and must be rejected.
+    fn decrypt_event_unencrypted_mce_returned_under_reject_unverified() {
+        // Unencrypted MCEs carry no signature; under the default
+        // reject_unverified they are returned flagged, not rejected.
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
 
         let content = build_plaintext_content("No sig");
         let event_b64 = build_test_message_event(&content, None);
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
-        assert!(
-            result.is_err(),
-            "unencrypted message must be rejected under reject_unverified"
-        );
+        match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+            Ok(Event::Message(msg)) => {
+                assert_eq!(msg.text(), Some("No sig"));
+                assert!(msg.key_version.is_none());
+                assert!(!msg.verified);
+            }
+            other => panic!("Expected unencrypted Event::Message, got {:?}", other),
+        }
     }
 
     #[test]
@@ -4633,9 +4660,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_unverified_rejects_group_title_change_without_signing_keys() {
-        // GroupTitleChange with no signing keys — reject_unverified=true
-        // must reject it (not silently pass it through).
+    fn reject_unverified_returns_unsigned_group_title_change_unverified() {
         let mut core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
@@ -4648,25 +4673,20 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
-        assert!(result.is_err(), "Should reject unsigned GroupChange");
-
-        // With reject_unverified=false it passes through with verified=false.
-        core.set_reject_unverified(false);
-        let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
-            .unwrap();
-        match event {
-            Event::GroupChange(gc) => {
-                assert!(!gc.verified);
-                assert!(matches!(gc.change, GroupChange::TitleChanged { .. }));
+        for reject in [true, false] {
+            core.set_reject_unverified(reject);
+            match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+                Ok(Event::GroupChange(gc)) => {
+                    assert!(!gc.verified);
+                    assert!(matches!(gc.change, GroupChange::TitleChanged { .. }));
+                }
+                other => panic!("Expected Event::GroupChange, got {:?}", other),
             }
-            other => panic!("Expected Event::GroupChange, got {:?}", other),
         }
     }
 
     #[test]
-    fn reject_unverified_rejects_group_member_add_without_signing_keys() {
+    fn reject_unverified_returns_unsigned_group_member_add_unverified() {
         let mut core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
@@ -4691,12 +4711,50 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
-        assert!(result.is_err(), "Should reject unsigned GroupChange");
+        match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+            Ok(Event::GroupChange(gc)) => assert!(!gc.verified),
+            other => panic!("Expected Event::GroupChange, got {:?}", other),
+        }
     }
 
     #[test]
-    fn reject_unverified_rejects_message_delete_without_signing_keys() {
+    fn reject_unverified_returns_unsigned_group_member_remove_unverified() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let gc = ThriftGCE::new(
+            Some(crate::thrift::event::GroupChange::GroupMemberRemove(
+                GroupMemberRemoveChange::new(Some(vec!["removed-user".to_string()])),
+            )),
+            None,
+        );
+        let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
+
+        match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+            Ok(Event::GroupChange(gc)) => {
+                assert!(!gc.verified);
+                assert!(matches!(gc.change, GroupChange::MembersRemoved { .. }));
+            }
+            other => panic!("Expected Event::GroupChange, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reject_unverified_returns_unsigned_read_receipt_unverified() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let read = ThriftMCRE::new(Some("seq-50".to_string()), Some(1700000050000i64));
+        let event_b64 = build_test_event(ThriftDetail::MarkConversationReadEvent(read));
+
+        match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+            Ok(Event::ReadReceipt(r)) => assert!(!r.verified),
+            other => panic!("Expected Event::ReadReceipt, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reject_unverified_returns_unsigned_message_delete_unverified() {
         let mut core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
@@ -4707,12 +4765,65 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
-        assert!(result.is_err(), "Should reject unsigned MessageDelete");
+        match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+            Ok(Event::MessageDeleted(md)) => assert!(!md.verified),
+            other => panic!("Expected Event::MessageDeleted, got {:?}", other),
+        }
     }
 
     #[test]
-    fn reject_unverified_rejects_group_change_with_no_inner_change() {
+    fn reject_unverified_rejects_message_delete_with_invalid_signature() {
+        // A signature that is present and checked against the sender's key
+        // but does not verify is still rejected.
+        let mut core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+
+        let del = ThriftMDE::new(
+            Some(vec!["seq-99".to_string()]),
+            Some(DeleteMessageAction::DELETE_FOR_ALL),
+        );
+        let sig = crate::thrift::event::MessageEventSignature::new(
+            Some("AAAA".to_string()),
+            Some("pkv".to_string()),
+            Some(crate::signatures::CURRENT_SIGNATURE_VERSION.to_string()),
+            None,
+            None,
+        );
+        let event = ThriftMessageEvent::new(
+            Some("seq-1".to_string()),
+            Some("msg-1".to_string()),
+            Some("sender-1".to_string()),
+            Some("conv-1".to_string()),
+            None::<String>,
+            None::<String>,
+            Some(ThriftDetail::MessageDeleteEvent(del)),
+            None::<crate::thrift::event::MessageEventRelaySource>,
+            Some(sig),
+            None::<String>,
+            None::<bool>,
+        );
+        let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
+        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+
+        let err = core
+            .decrypt_event(&event_b64, &Default::default(), &signing_keys)
+            .expect_err("invalid MessageDelete signature must be rejected");
+        assert!(
+            err.to_string()
+                .contains("MessageDelete signature verification failed"),
+            "unexpected error: {}",
+            err
+        );
+
+        core.set_reject_unverified(false);
+        match core.decrypt_event(&event_b64, &Default::default(), &signing_keys) {
+            Ok(Event::MessageDeleted(md)) => assert!(!md.verified),
+            other => panic!("Expected Event::MessageDeleted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reject_unverified_returns_group_change_with_no_inner_change_unverified() {
         let mut core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
@@ -4720,8 +4831,10 @@ mod tests {
         let gc = ThriftGCE::new(None::<crate::thrift::event::GroupChange>, None);
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
-        assert!(result.is_err(), "Should reject unsigned GroupChange");
+        match core.decrypt_event(&event_b64, &Default::default(), &[]) {
+            Ok(Event::GroupChange(gc)) => assert!(!gc.verified),
+            other => panic!("Expected Event::GroupChange, got {:?}", other),
+        }
     }
 
     /// `generate_keypairs` produces a bidirectional cross-signature.
@@ -8023,20 +8136,65 @@ mod tests {
     }
 
     #[test]
-    fn reject_unverified_rejects_unencrypted_message_by_default() {
-        // An unencrypted message (no conversation_key_version) carries no
-        // signature, so under the default reject_unverified it is rejected.
+    fn reject_unverified_rejects_unsigned_encrypted_message() {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+        let encrypted = crate::crypto::encryption::encrypt_message(
+            &ckey,
+            &build_plaintext_content("ciphertext"),
+        )
+        .unwrap();
+        let event_b64 = build_test_message_event(&encrypted, Some("42"));
+        let conv_keys = [("42".to_string(), ckey)].into_iter().collect();
 
-        let content = build_plaintext_content("plaintext");
-        let event_b64 = build_test_message_event(&content, None);
+        let err = core
+            .decrypt_event(&event_b64, &conv_keys, &[])
+            .expect_err("unsigned encrypted message must be rejected");
+        assert!(err
+            .to_string()
+            .contains("Message signature could not be verified"));
+    }
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
-        assert!(
-            result.is_err(),
-            "unencrypted message must be rejected under default reject_unverified"
-        );
+    #[test]
+    fn decrypt_events_returns_unencrypted_and_unsigned_events_flagged() {
+        // Default reject_unverified: an unencrypted message and an unsigned
+        // read receipt are returned flagged, while an unsigned encrypted
+        // message in the same batch is still reported as an error.
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+
+        let plain_b64 = build_test_message_event(&build_plaintext_content("plaintext"), None);
+        let read_b64 = build_test_event(ThriftDetail::MarkConversationReadEvent(ThriftMCRE::new(
+            Some("seq-50".to_string()),
+            Some(1700000050000i64),
+        )));
+        let encrypted = crate::crypto::encryption::encrypt_message(
+            &ckey,
+            &build_plaintext_content("ciphertext"),
+        )
+        .unwrap();
+        let enc_b64 = build_test_message_event(&encrypted, Some("42"));
+
+        let events: Vec<&str> = vec![&plain_b64, &read_b64, &enc_b64];
+        let result = core.decrypt_events(&events, &[]);
+
+        assert_eq!(result.messages.len(), 2);
+        match &result.messages[0].event {
+            Event::Message(m) => {
+                assert!(m.key_version.is_none());
+                assert!(!m.verified);
+                assert_eq!(m.text(), Some("plaintext"));
+            }
+            other => panic!("Expected Event::Message, got {:?}", other),
+        }
+        match &result.messages[1].event {
+            Event::ReadReceipt(r) => assert!(!r.verified),
+            other => panic!("Expected Event::ReadReceipt, got {:?}", other),
+        }
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[&2].contains("Message signature could not be verified"));
     }
 
     // ChatCore-level roundtrips: reply / add-reaction / remove-reaction
