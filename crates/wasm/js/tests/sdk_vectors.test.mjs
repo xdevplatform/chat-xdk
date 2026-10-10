@@ -151,6 +151,22 @@ async function main() {
   assert.equal(failure.rateLimitTier, "premium");
   assert.equal(failure.senderId, v.event_sender_id);
 
+  // Unencrypted messages and unsigned read receipts decode under the default
+  // reject-unverified policy, flagged with verified: false.
+  {
+    const strict = new Chat();
+    const plain = strict.decryptEvent(v.event_unencrypted_message_b64, {}, []);
+    assert.equal(plain.type, "message");
+    assert.equal(plain.content.text, v.event_unencrypted_message_text);
+    assert.equal(plain.keyVersion ?? null, null);
+    assert.equal(plain.verified, false);
+
+    const receipt = strict.decryptEvent(v.event_unsigned_read_receipt_b64, {}, []);
+    assert.equal(receipt.type, "readReceipt");
+    assert.equal(receipt.seenUntilId, v.event_read_seen_until_id);
+    assert.equal(receipt.verified, false);
+  }
+
   // Session identity + opt-in key cache: importKeys(bytes, version) records
   // the registered key version, decryptEvents populates the cache from the
   // verified KeyChange, and encryptMessage resolves the omitted identity and

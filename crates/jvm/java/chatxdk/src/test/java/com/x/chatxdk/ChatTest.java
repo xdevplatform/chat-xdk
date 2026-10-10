@@ -795,6 +795,28 @@ class ChatTest {
         }
     }
 
+    // Unencrypted messages and unsigned read receipts decode under the default
+    // reject-unverified policy, flagged as unverified.
+    @Test
+    void vectorsUnencryptedMessageAndUnsignedReceiptDecodeByDefault() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) { // default reject-unverified policy
+            JsonNode msg = chat.decryptEvent(
+                    v.get("event_unencrypted_message_b64").asText(), (ConversationKeyBundle) null, List.of());
+            assertEquals("Message", msg.path("type").asText());
+            assertEquals(v.get("event_unencrypted_message_text").asText(),
+                    msg.path("content").path("text").asText());
+            assertTrue(msg.path("key_version").isNull());
+            assertFalse(msg.path("verified").asBoolean());
+
+            JsonNode receipt = chat.decryptEvent(
+                    v.get("event_unsigned_read_receipt_b64").asText(), (ConversationKeyBundle) null, List.of());
+            assertEquals("ReadReceipt", receipt.path("type").asText());
+            assertEquals(v.get("event_read_seen_until_id").asText(), receipt.path("seen_until_id").asText());
+            assertFalse(receipt.path("verified").asBoolean());
+        }
+    }
+
     // Session identity: setIdentity supplies senderId and signingKeyVersion;
     // an encrypt with only the conversation key explicit signs with the
     // session values, and without any identity the call fails loudly.

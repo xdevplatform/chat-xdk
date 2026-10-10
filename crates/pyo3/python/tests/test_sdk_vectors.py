@@ -253,6 +253,28 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(event["rate_limit_tier"], "Premium")
         self.assertEqual(event["sender_id"], v["event_sender_id"])
 
+    def test_unencrypted_message_and_unsigned_receipt_decode_by_default(self):
+        from chat_xdk import Chat
+
+        v = _load_vectors()
+        chat = Chat()  # default reject-unverified policy
+
+        message = chat.decrypt_event(v["event_unencrypted_message_b64"], {}, [])
+        self.assertEqual(message["type"], "Message")
+        self.assertEqual(message["content"]["text"], v["event_unencrypted_message_text"])
+        self.assertIsNone(message["key_version"])
+        self.assertFalse(message["verified"])
+
+        receipt = chat.decrypt_event(v["event_unsigned_read_receipt_b64"], {}, [])
+        self.assertEqual(receipt["type"], "ReadReceipt")
+        self.assertEqual(receipt["seen_until_id"], v["event_read_seen_until_id"])
+        self.assertFalse(receipt["verified"])
+
+        # An encrypted message without a usable signing key is still rejected.
+        result = chat.decrypt_events([v["event_message_b64"]], [])
+        self.assertEqual(result["messages"], [])
+        self.assertEqual(list(result["errors"].keys()), ["0"])
+
     def test_encrypt_reply_derives_preview_from_raw_event(self):
         from chat_xdk import Chat
 
