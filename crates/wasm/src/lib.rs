@@ -157,9 +157,9 @@ impl Chat {
     /// When enabled — the default — `decryptEvent` throws for an encrypted
     /// message or key change whose signature cannot be verified (invalid,
     /// missing, or no matching signing key), and for any other signed event
-    /// whose signature is present but invalid. Unencrypted messages
-    /// (`keyVersion: null`) and other events without a checkable signature
-    /// are returned with `verified: false`.
+    /// whose signature is present but invalid. Unencrypted messages (no
+    /// `keyVersion`) and other events without a checkable signature are
+    /// returned with `verified: false`.
     #[wasm_bindgen(js_name = setRejectUnverified)]
     pub fn set_reject_unverified(&mut self, reject: bool) {
         self.inner.set_reject_unverified(reject);
