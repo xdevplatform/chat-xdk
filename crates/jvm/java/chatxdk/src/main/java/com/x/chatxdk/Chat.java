@@ -136,9 +136,11 @@ public final class Chat implements AutoCloseable {
 
     /**
      * When {@code reject} is true — the default — {@link #decryptEvent} throws
-     * {@link ChatXdkException} for any signed event whose signature cannot be verified
-     * (invalid, missing, or no matching signing key) instead of returning it with
-     * {@code verified: false}.
+     * {@link ChatXdkException} for an encrypted message or key change whose signature
+     * cannot be verified (invalid, missing, or no matching signing key), and for any
+     * other signed event whose signature is present but invalid. Unencrypted messages
+     * ({@code key_version: null}) and other events without a checkable signature are
+     * returned with {@code verified: false}.
      *
      * @param reject whether to reject events with unverifiable signatures.
      */
@@ -416,9 +418,9 @@ public final class Chat implements AutoCloseable {
      *     the opt-in key cache ({@link #setCacheKeys}).
      * @param signingKeys Signing keys for the sender. The SDK picks the matching version
      *     automatically. {@code null} (or an empty list) falls back to the keys stored via
-     *     {@link #setSigningKeys}; if none are stored either, every signed event throws
-     *     under the default reject-unverified policy (only after
-     *     {@link #setRejectUnverified}(false) are such events returned with
+     *     {@link #setSigningKeys}; if none are stored either, every encrypted message and
+     *     key change throws under the default reject-unverified policy (only after
+     *     {@link #setRejectUnverified}(false) are those returned with
      *     {@code verified: false}).
      * @return A {@link JsonNode} with a {@code "type"} field indicating the event kind
      *     ({@code "Message"}, {@code "KeyChange"}, {@code "GroupChange"}, etc.).

@@ -51,6 +51,10 @@ namespace ChatXdk.Tests
             [JsonPropertyName("event_signing_key_version")] public string EventSigningKeyVersion { get; init; } = "";
             [JsonPropertyName("event_recipient_key_version")] public string EventRecipientKeyVersion { get; init; } = "";
             [JsonPropertyName("event_message_text")] public string EventMessageText { get; init; } = "";
+            [JsonPropertyName("event_unencrypted_message_b64")] public string EventUnencryptedMessageB64 { get; init; } = "";
+            [JsonPropertyName("event_unencrypted_message_text")] public string EventUnencryptedMessageText { get; init; } = "";
+            [JsonPropertyName("event_unsigned_read_receipt_b64")] public string EventUnsignedReadReceiptB64 { get; init; } = "";
+            [JsonPropertyName("event_read_seen_until_id")] public string EventReadSeenUntilId { get; init; } = "";
         }
 
         private static SdkVectors LoadVectors()
@@ -992,6 +996,29 @@ namespace ChatXdk.Tests
             Assert.Equal("RateLimitUpsell", e.GetProperty("failure").GetString());
             Assert.Equal("Premium", e.GetProperty("rate_limit_tier").GetString());
             Assert.Equal(v.EventSenderId, e.GetProperty("sender_id").GetString());
+        }
+
+        // Unencrypted messages and unsigned read receipts decode under the
+        // default reject-unverified policy, flagged as unverified.
+        [Fact]
+        public void Vectors_UnencryptedMessageAndUnsignedReceipt_DecodeByDefault()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat(); // default reject-unverified policy
+
+            var msg = chat.DecryptEvent(
+                v.EventUnencryptedMessageB64, (ConversationKeyBundle?)null, Array.Empty<SigningKeyEntry>());
+            Assert.Equal("Message", msg.GetProperty("type").GetString());
+            Assert.Equal(v.EventUnencryptedMessageText,
+                msg.GetProperty("content").GetProperty("text").GetString());
+            Assert.Equal(JsonValueKind.Null, msg.GetProperty("key_version").ValueKind);
+            Assert.False(msg.GetProperty("verified").GetBoolean());
+
+            var receipt = chat.DecryptEvent(
+                v.EventUnsignedReadReceiptB64, (ConversationKeyBundle?)null, Array.Empty<SigningKeyEntry>());
+            Assert.Equal("ReadReceipt", receipt.GetProperty("type").GetString());
+            Assert.Equal(v.EventReadSeenUntilId, receipt.GetProperty("seen_until_id").GetString());
+            Assert.False(receipt.GetProperty("verified").GetBoolean());
         }
 
         // Session identity: SetIdentity supplies sender_id and signing_key_version;

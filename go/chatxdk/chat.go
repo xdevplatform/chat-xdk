@@ -100,9 +100,11 @@ func (c *Chat) HasIdentityKey() bool {
 }
 
 // SetRejectUnverified enables or disables rejection of unverified events.
-// When enabled — the default — DecryptEvent returns an error for any signed
-// event whose signature cannot be verified (invalid, missing, or no matching
-// signing key) instead of returning it with Verified=false.
+// When enabled — the default — DecryptEvent returns an error for an encrypted
+// message or key change whose signature cannot be verified (invalid, missing,
+// or no matching signing key), and for any other signed event whose signature
+// is present but invalid. Unencrypted messages (nil KeyVersion) and other
+// events without a checkable signature are returned with Verified=false.
 func (c *Chat) SetRejectUnverified(reject bool) {
 	defer runtime.KeepAlive(c)
 	ffiSetRejectUnverified(c.h, reject)
@@ -252,8 +254,8 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 // Errors map, keyed by event index.
 //
 // A nil (or empty) signingKeys falls back to the keys stored via
-// SetSigningKeys; with nothing stored either, signed events fail decryption
-// under the default reject-unverified policy.
+// SetSigningKeys; with nothing stored either, encrypted messages and key
+// changes fail decryption under the default reject-unverified policy.
 func (c *Chat) DecryptEvents(events []string, signingKeys []SigningKeyEntry) (*DecryptEventsResult, error) {
 	defer runtime.KeepAlive(c)
 	eventsJSON, err := json.Marshal(events)
@@ -402,9 +404,9 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 //
 // signingKeys is a list of signing keys for the sender; the SDK picks the
 // matching version. A nil (or empty) list falls back to the keys stored via
-// SetSigningKeys. With nothing stored either, every signed event fails under
-// the default reject-unverified policy; only after SetRejectUnverified(false)
-// are such events returned with Verified=false.
+// SetSigningKeys. With nothing stored either, every encrypted message and key
+// change fails under the default reject-unverified policy; only after
+// SetRejectUnverified(false) are those returned with Verified=false.
 func (c *Chat) DecryptEvent(eventB64 string, conversationKeys map[string][]byte, signingKeys []SigningKeyEntry) (*Event, error) {
 	defer runtime.KeepAlive(c)
 	var convKeysJSON, signingKeysJSON string

@@ -177,10 +177,12 @@ impl Chat {
         }
     }
 
-    /// When enabled — the default — `decrypt_event` returns an error for any
-    /// signed event whose signature cannot be verified (invalid, missing, or
-    /// no matching signing key) instead of returning it with
-    /// `verified: false`.
+    /// When enabled — the default — `decrypt_event` returns an error for an
+    /// encrypted message or key change whose signature cannot be verified
+    /// (invalid, missing, or no matching signing key), and for any other
+    /// signed event whose signature is present but invalid. Unencrypted
+    /// messages and other events without a checkable signature are returned
+    /// with `verified: false`. See `ChatCore::set_reject_unverified`.
     pub fn set_reject_unverified(&mut self, reject: bool) {
         self.inner.set_reject_unverified(reject);
     }

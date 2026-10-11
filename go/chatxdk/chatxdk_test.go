@@ -38,6 +38,10 @@ type sdkVectors struct {
 	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
 	EventMessageText              string `json:"event_message_text"`
 	EventReplyText                string `json:"event_reply_text"`
+	EventUnencryptedMessageB64    string `json:"event_unencrypted_message_b64"`
+	EventUnencryptedMessageText   string `json:"event_unencrypted_message_text"`
+	EventUnsignedReadReceiptB64   string `json:"event_unsigned_read_receipt_b64"`
+	EventReadSeenUntilID          string `json:"event_read_seen_until_id"`
 }
 
 // eventSigningKeys builds the SigningKeyEntry list matching the fixture's
@@ -1417,6 +1421,52 @@ func TestFailureEventFixtureVector(t *testing.T) {
 	}
 	if failure.SenderID == nil || *failure.SenderID != v.EventSenderID {
 		t.Errorf("unexpected sender_id: %v", failure.SenderID)
+	}
+}
+
+// TestUnencryptedAndUnsignedFixtureVectors pins that unencrypted messages and
+// unsigned read receipts decode under the default reject-unverified policy,
+// flagged as unverified.
+func TestUnencryptedAndUnsignedFixtureVectors(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New() // default reject-unverified policy
+	defer chat.Close()
+
+	event, err := chat.DecryptEvent(v.EventUnencryptedMessageB64, nil, nil)
+	if err != nil {
+		t.Fatalf("DecryptEvent(unencrypted message) failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil {
+		t.Fatalf("expected a Message event, got type %q", event.Type)
+	}
+	if msg.Text() != v.EventUnencryptedMessageText {
+		t.Errorf("unexpected text: %q", msg.Text())
+	}
+	if msg.KeyVersion != nil {
+		t.Errorf("unencrypted message must have no key version, got %q", *msg.KeyVersion)
+	}
+	if msg.Verified {
+		t.Error("unencrypted message must not be verified")
+	}
+
+	event, err = chat.DecryptEvent(v.EventUnsignedReadReceiptB64, nil, nil)
+	if err != nil {
+		t.Fatalf("DecryptEvent(unsigned read receipt) failed: %v", err)
+	}
+	if event.Type != "ReadReceipt" {
+		t.Fatalf("expected a ReadReceipt event, got type %q", event.Type)
+	}
+	var receipt ReadReceiptEvent
+	if err := json.Unmarshal(event.Raw(), &receipt); err != nil {
+		t.Fatalf("decode read receipt: %v", err)
+	}
+	if receipt.SeenUntilID == nil || *receipt.SeenUntilID != v.EventReadSeenUntilID {
+		t.Errorf("unexpected seen_until_id: %v", receipt.SeenUntilID)
+	}
+	if receipt.Verified {
+		t.Error("unsigned read receipt must not be verified")
 	}
 }
 

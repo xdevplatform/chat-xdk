@@ -30,6 +30,10 @@ struct Vectors {
     event_signing_key_version: String,
     event_recipient_key_version: String,
     event_message_text: String,
+    event_unencrypted_message_b64: String,
+    event_unencrypted_message_text: String,
+    event_unsigned_read_receipt_b64: String,
+    event_read_seen_until_id: String,
 }
 
 fn load_vectors() -> Vectors {
@@ -234,6 +238,48 @@ fn vectors_failure_event_decodes_type_and_rate_limit_tier() {
         }
         other => panic!("Expected Event::Failure, got {:?}", other),
     }
+}
+
+#[test]
+fn vectors_unencrypted_message_and_unsigned_receipt_decode_under_default_policy() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+
+    match core
+        .decrypt_event(&v.event_unencrypted_message_b64, &Default::default(), &[])
+        .unwrap()
+    {
+        chat_xdk_core::Event::Message(msg) => {
+            assert_eq!(msg.text(), Some(v.event_unencrypted_message_text.as_str()));
+            assert!(msg.key_version.is_none());
+            assert!(!msg.verified);
+        }
+        other => panic!("Expected Event::Message, got {:?}", other),
+    }
+
+    match core
+        .decrypt_event(&v.event_unsigned_read_receipt_b64, &Default::default(), &[])
+        .unwrap()
+    {
+        chat_xdk_core::Event::ReadReceipt(r) => {
+            assert_eq!(
+                r.seen_until_id.as_deref(),
+                Some(v.event_read_seen_until_id.as_str())
+            );
+            assert!(!r.verified);
+        }
+        other => panic!("Expected Event::ReadReceipt, got {:?}", other),
+    }
+
+    // An encrypted message without a usable signing key is still rejected.
+    let ckey =
+        XChatConversationKey::from_bytes(B64.decode(&v.conversation_key_b64).unwrap()).unwrap();
+    let conv_keys = [(v.event_conversation_key_version.clone(), ckey)]
+        .into_iter()
+        .collect();
+    assert!(core
+        .decrypt_event(&v.event_message_b64, &conv_keys, &[])
+        .is_err());
 }
 
 #[test]

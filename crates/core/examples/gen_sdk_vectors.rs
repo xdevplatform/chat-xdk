@@ -28,6 +28,8 @@ const EVENT_MESSAGE_TEXT: &str = "fixture event message";
 const EVENT_REPLY_TEXT: &str = "fixture reply message";
 const EVENT_REPLY_FORGED_PREVIEW_TEXT: &str = "forged preview text";
 const EVENT_GARBAGE: &str = "!!!not-an-event!!!";
+const EVENT_UNENCRYPTED_MESSAGE_TEXT: &str = "fixture unencrypted message";
+const EVENT_READ_SEEN_UNTIL_ID: &str = "42";
 
 // Raw Thrift enum values embedded in the failure vector; suites assert the
 // decoded names ("RateLimitUpsell" / "Premium", camelCased in JS).
@@ -174,6 +176,23 @@ fn main() {
     )
     .expect("frame failure event");
 
+    // Unencrypted message and unsigned read receipt: both decode under the
+    // default reject-unverified policy with `verified: false`.
+    let event_unencrypted_message_b64 = internals::frame_unencrypted_message(
+        "plain-msg-1",
+        EVENT_SENDER_ID,
+        EVENT_CONVERSATION_ID,
+        EVENT_UNENCRYPTED_MESSAGE_TEXT,
+    )
+    .expect("frame unencrypted message event");
+    let event_unsigned_read_receipt_b64 = internals::frame_unsigned_read_receipt(
+        "read-msg-1",
+        EVENT_SENDER_ID,
+        EVENT_CONVERSATION_ID,
+        EVENT_READ_SEEN_UNTIL_ID,
+    )
+    .expect("frame unsigned read receipt event");
+
     let obj = json!({
         "identity_private_b64": B64.encode(identity_private),
         "signing_private_b64": B64.encode(signing_private),
@@ -199,6 +218,10 @@ fn main() {
         "event_signing_key_version": EVENT_SIGNING_KEY_VERSION,
         "event_recipient_key_version": EVENT_RECIPIENT_KEY_VERSION,
         "event_message_text": EVENT_MESSAGE_TEXT,
+        "event_unencrypted_message_b64": event_unencrypted_message_b64,
+        "event_unencrypted_message_text": EVENT_UNENCRYPTED_MESSAGE_TEXT,
+        "event_unsigned_read_receipt_b64": event_unsigned_read_receipt_b64,
+        "event_read_seen_until_id": EVENT_READ_SEEN_UNTIL_ID,
     });
 
     println!("{}", serde_json::to_string_pretty(&obj).unwrap());

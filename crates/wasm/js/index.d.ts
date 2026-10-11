@@ -752,9 +752,12 @@ export declare class StreamDecryptor {
  */
 interface ChatCrypto {
   /**
-   * When enabled — the default — `decryptEvent` throws for any signed event
-   * whose signature cannot be verified (invalid, missing, or no matching
-   * signing key) instead of returning it with `verified: false`.
+   * When enabled — the default — `decryptEvent` throws for an encrypted
+   * message or key change whose signature cannot be verified (invalid,
+   * missing, or no matching signing key), and for any other signed event
+   * whose signature is present but invalid. Unencrypted messages (no
+   * `keyVersion`) and other events without a checkable signature are
+   * returned with `verified: false`.
    */
   setRejectUnverified(reject: boolean): void;
 
@@ -819,9 +822,9 @@ interface ChatCrypto {
    * @param signingKeys - All known signing keys for all participants (with
    * userId). Omitting this falls back to the keys stored via
    * `setSigningKeys`. Under the default reject-unverified policy, no signing
-   * keys from either source makes every signed event land in `errors`; only
-   * after `setRejectUnverified(false)` are such events returned with
-   * `verified: false`.
+   * keys from either source makes every encrypted message and key change land
+   * in `errors`; only after `setRejectUnverified(false)` are those returned
+   * with `verified: false`.
    */
   decryptEvents(events: string[], signingKeys?: SigningKeyEntry[]): DecryptEventsResult;
 
@@ -831,9 +834,9 @@ interface ChatCrypto {
    * Omitting `conversationKeys` falls back to the opt-in key cache
    * (`setCacheKeys(true)`); omitting `signingKeys` falls back to the keys
    * stored via `setSigningKeys`. Under the default reject-unverified policy,
-   * no signing keys from either source makes every signed event throw; only
-   * after `setRejectUnverified(false)` are such events returned with
-   * `verified: false`.
+   * no signing keys from either source makes every encrypted message and key
+   * change throw; only after `setRejectUnverified(false)` are those returned
+   * with `verified: false`.
    */
   decryptEvent(eventB64: string, conversationKeys?: ConversationKeyMap | null, signingKeys?: SigningKeyEntry[]): Event;
 

@@ -14,8 +14,9 @@ use crate::protocol::safe_reader::BoundedProtocol;
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::signatures::ActionSignature;
 use crate::thrift::event::{
-    ConversationKeyChangeEvent, ConversationParticipantKey, FailureType, MessageEvent,
-    MessageEventDetail, MessageEventSignature, MessageFailureEvent, RateLimitTier,
+    ConversationKeyChangeEvent, ConversationParticipantKey, FailureType, MarkConversationReadEvent,
+    MessageCreateEvent, MessageEvent, MessageEventDetail, MessageEventSignature,
+    MessageFailureEvent, RateLimitTier,
 };
 use crate::types::SendPayload;
 use std::io::Cursor;
@@ -149,6 +150,55 @@ pub fn frame_failure_event(
         sender_id,
         conversation_id,
         MessageEventDetail::MessageFailureEvent(failure),
+        None,
+    )
+}
+
+/// Frame an unencrypted text message (no conversation key version, no
+/// signature) in the backend `MessageEvent` envelope (base64). The output is
+/// fully deterministic.
+pub fn frame_unencrypted_message(
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    text: &str,
+) -> Result<String, SdkError> {
+    let mce = MessageCreateEvent::new(
+        Some(crate::pipeline::build_message_content(text, None, None)?),
+        None::<String>,
+        None::<bool>,
+        None::<i64>,
+        None::<i64>,
+        None::<bool>,
+        None::<crate::thrift::event::EventQueuePriority>,
+        None::<Vec<crate::thrift::event::AdditionalAction>>,
+        None,
+        None,
+    );
+    frame_event(
+        message_id,
+        sender_id,
+        conversation_id,
+        MessageEventDetail::MessageCreateEvent(mce),
+        None,
+    )
+}
+
+/// Frame a read receipt without a signature in the backend `MessageEvent`
+/// envelope (base64). The output is fully deterministic.
+pub fn frame_unsigned_read_receipt(
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    seen_until_sequence_id: &str,
+) -> Result<String, SdkError> {
+    let read =
+        MarkConversationReadEvent::new(Some(seen_until_sequence_id.to_string()), None::<i64>);
+    frame_event(
+        message_id,
+        sender_id,
+        conversation_id,
+        MessageEventDetail::MarkConversationReadEvent(read),
         None,
     )
 }
