@@ -7,6 +7,7 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 
 use crate::crypto::encryption::encrypt_message;
+use crate::crypto::hash::{derive_message_key, resolve_attachment_id};
 use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
 use crate::error::SdkError;
@@ -164,10 +165,21 @@ pub(crate) fn canonical_conversation_id<'a>(
 pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload, SdkError> {
     let should_notify = params.should_notify.unwrap_or(true);
 
-    // 1. Encrypt content
-    let encrypted = encrypt_message(params.conversation_key, params.content_bytes)?;
+    // Message contents are encrypted under a key derived for this message.
+    // The secretbox layout is unchanged; only the key differs from the
+    // conversation key.
+    let message_key_bytes = derive_message_key(
+        params.conversation_key.encoded(),
+        params.sender_id,
+        params.message_id,
+    )?;
+    let message_key = XChatConversationKey::from_bytes(message_key_bytes).ok_or_else(|| {
+        SdkError::Crypto(crate::error::CryptoError::HkdfFailed(
+            "message key was not 32 bytes".into(),
+        ))
+    })?;
+    let encrypted = encrypt_message(&message_key, params.content_bytes)?;
 
-    // 2. Build MessageCreateEvent Thrift
     let event = MessageCreateEvent::new(
         Some(encrypted.clone()),
         Some(params.conversation_key_version.to_string()),
@@ -179,42 +191,50 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
         None,
         None,
+        None,
+        Some(crate::signatures::CONTENTS_ENCRYPTION_VERSION),
     );
     let event_bytes = serialize_thrift(&event)?;
 
-    // 3. Build signature payload.
-    //
     // The conversation id is signed in its canonical, colon-separated form —
     // the form carried inside fanned-out events and reconstructed by verifiers.
     // Callers commonly hold the hyphen-separated form from conversation listing
     // and URL paths, or the bare recipient id the REST paths accept, so
     // normalize here to keep signatures verifiable regardless of input form.
     let conversation_id = canonical_conversation_id(params.conversation_id, params.sender_id);
-    let contents_b64_no_pad = STANDARD_NO_PAD.encode(&encrypted);
-    let components = [
-        "MessageCreateEvent",
-        params.message_id,
-        params.sender_id,
-        conversation_id.as_ref(),
-        params.conversation_key_version,
-        contents_b64_no_pad.as_str(),
-    ];
-    if components.iter().any(|c| c.contains(',')) {
+    if params.message_id.contains(',')
+        || params.sender_id.contains(',')
+        || conversation_id.contains(',')
+    {
         return Err(SdkError::Parse(
             "Signature payload contains comma-separated component".into(),
         ));
     }
-    let payload = components.join(",").into_bytes();
+    let detail = crate::thrift::event::MessageEventDetail::MessageCreateEvent(event);
+    let envelope = crate::thrift::event::MessageEvent {
+        message_id: Some(params.message_id.to_string()),
+        sender_id: Some(params.sender_id.to_string()),
+        conversation_id: Some(conversation_id.into_owned()),
+        detail: Some(detail.clone()),
+        message_event_signature: Some(MessageEventSignature::new(
+            None::<String>,
+            None::<String>,
+            Some(crate::signatures::MESSAGE_SIGNATURE_VERSION.to_string()),
+            None::<String>,
+            None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
+        )),
+        ..Default::default()
+    };
+    let payload = crate::core::build_event_signature_payload(&envelope, &detail, None)
+        .ok_or_else(|| SdkError::Parse("could not build the message signature payload".into()))?;
 
-    // 4. Sign
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
     let signature_b64 = STANDARD_NO_PAD.encode(&signature);
 
-    // 5. Build MessageEventSignature Thrift
     let signature_struct = MessageEventSignature::new(
         Some(signature_b64.clone()),
         Some(params.signing_key_version.to_string()),
-        Some(crate::signatures::SIGNATURE_VERSION.to_string()),
+        Some(crate::signatures::MESSAGE_SIGNATURE_VERSION.to_string()),
         None,
         None,
     );
@@ -228,7 +248,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         encoded_event_signature,
         signature_info: SignatureInfo {
             public_key_version: params.signing_key_version.to_string(),
-            signature_version: crate::signatures::SIGNATURE_VERSION.to_string(),
+            signature_version: crate::signatures::MESSAGE_SIGNATURE_VERSION.to_string(),
         },
         conversation_key_version: params.conversation_key_version.to_string(),
         should_notify,
@@ -307,6 +327,7 @@ pub fn build_message_edit_content(
     target_message_sequence_id: &str,
     updated_text: &str,
     entities: Option<&[EntityDescriptor]>,
+    message_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     // MessageEdit carries entities unboxed, unlike MessageContents.
     let entities = entities.map(|descs| {
@@ -319,6 +340,7 @@ pub fn build_message_edit_content(
         Some(target_message_sequence_id.to_string()),
         Some(updated_text.to_string()),
         entities,
+        message_id.map(|id| id.to_string()),
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::MessageEdit(
         Box::new(content),
@@ -419,59 +441,86 @@ pub fn validate_attachment_descriptors(descs: &[AttachmentDescriptor]) -> Result
 
 /// Convert [`AttachmentDescriptor`]s into Thrift `MessageAttachment` objects.
 #[allow(clippy::vec_box)]
+#[cfg(test)]
 pub fn build_thrift_attachments(
     descs: &[AttachmentDescriptor],
 ) -> Vec<Box<ThriftMessageAttachment>> {
+    build_thrift_attachments_with_ids(descs, "")
+}
+
+#[allow(clippy::vec_box)]
+pub fn build_thrift_attachments_with_ids(
+    descs: &[AttachmentDescriptor],
+    message_id: &str,
+) -> Vec<Box<ThriftMessageAttachment>> {
     descs
         .iter()
-        .map(|d| match d {
-            AttachmentDescriptor::Media {
-                media_hash_key,
-                width,
-                height,
-                filesize_bytes,
-                filename,
-                media_type,
-                duration_millis,
-            } => {
-                let dimensions = ThriftMediaDimensions::new(Some(*width), Some(*height));
-                let resolved_media_type = match media_type {
-                    Some(i) => ThriftMediaType::from(*i),
-                    None => ThriftMediaType::IMAGE,
-                };
-                let media = ThriftMediaAttachmentStruct::new(
-                    Some(media_hash_key.clone()),
-                    Some(Box::new(dimensions)),
-                    Some(Box::new(resolved_media_type)),
-                    *duration_millis,
-                    Some(*filesize_bytes),
-                    Some(filename.clone()),
-                    None::<String>,
-                    None::<String>,
-                    None::<String>,
-                    None::<String>,
-                );
-                Box::new(ThriftMessageAttachment::Media(Box::new(media)))
-            }
-            AttachmentDescriptor::Url {
-                url,
-                display_title,
-                banner_image,
-                favicon_image,
-            } => {
-                let url_att = ThriftUrlAttachment::new(
-                    Some(url.clone()),
-                    banner_image.as_ref().map(build_thrift_url_image),
-                    favicon_image.as_ref().map(build_thrift_url_image),
-                    display_title.clone(),
-                    None::<String>,
-                );
-                Box::new(ThriftMessageAttachment::Url(Box::new(url_att)))
-            }
-            AttachmentDescriptor::Post { rest_id, post_url } => {
-                let post =
-                    ThriftPostAttachment::new(rest_id.clone(), post_url.clone(), None::<String>);
-                Box::new(ThriftMessageAttachment::Post(Box::new(post)))
+        .enumerate()
+        .map(|(index, d)| {
+            let stored = match d {
+                AttachmentDescriptor::Media { attachment_id, .. }
+                | AttachmentDescriptor::Url { attachment_id, .. }
+                | AttachmentDescriptor::Post { attachment_id, .. } => attachment_id.as_deref(),
+            };
+            let resolved_id = resolve_attachment_id(stored, message_id, index);
+            match d {
+                AttachmentDescriptor::Media {
+                    media_hash_key,
+                    width,
+                    height,
+                    filesize_bytes,
+                    filename,
+                    media_type,
+                    duration_millis,
+                    plaintext_sha256,
+                    ..
+                } => {
+                    let dimensions = ThriftMediaDimensions::new(Some(*width), Some(*height));
+                    let resolved_media_type = match media_type {
+                        Some(i) => ThriftMediaType::from(*i),
+                        None => ThriftMediaType::IMAGE,
+                    };
+                    let media = ThriftMediaAttachmentStruct::new(
+                        Some(media_hash_key.clone()),
+                        Some(Box::new(dimensions)),
+                        Some(Box::new(resolved_media_type)),
+                        *duration_millis,
+                        Some(*filesize_bytes),
+                        Some(filename.clone()),
+                        Some(resolved_id),
+                        None::<String>,
+                        None::<String>,
+                        None::<String>,
+                        plaintext_sha256.clone(),
+                    );
+                    Box::new(ThriftMessageAttachment::Media(Box::new(media)))
+                }
+                AttachmentDescriptor::Url {
+                    url,
+                    display_title,
+                    banner_image,
+                    favicon_image,
+                    ..
+                } => {
+                    let url_att = ThriftUrlAttachment::new(
+                        Some(url.clone()),
+                        banner_image.as_ref().map(build_thrift_url_image),
+                        favicon_image.as_ref().map(build_thrift_url_image),
+                        display_title.clone(),
+                        Some(resolved_id),
+                    );
+                    Box::new(ThriftMessageAttachment::Url(Box::new(url_att)))
+                }
+                AttachmentDescriptor::Post {
+                    rest_id, post_url, ..
+                } => {
+                    let post = ThriftPostAttachment::new(
+                        rest_id.clone(),
+                        post_url.clone(),
+                        Some(resolved_id),
+                    );
+                    Box::new(ThriftMessageAttachment::Post(Box::new(post)))
+                }
             }
         })
         .collect()
@@ -672,6 +721,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
     }
 
@@ -709,6 +760,8 @@ mod tests {
             duration_millis: None,
             filesize_bytes: 150000,
             filename: "photo.jpg".to_string(),
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -720,6 +773,7 @@ mod tests {
             display_title: Some("Example".to_string()),
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -729,6 +783,7 @@ mod tests {
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Post {
             rest_id: Some("123456".to_string()),
             post_url: Some("https://x.com/user/status/123456".to_string()),
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -764,6 +819,7 @@ mod tests {
             display_title: None,
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -775,6 +831,7 @@ mod tests {
             display_title: Some("X (formerly Twitter)".to_string()),
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -798,6 +855,7 @@ mod tests {
                 width: None,
                 height: None,
             }),
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
         let ThriftMessageAttachment::Url(url_att) = attachments[0].as_ref() else {
@@ -832,6 +890,7 @@ mod tests {
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Post {
             rest_id: Some("1234567890".to_string()),
             post_url: Some("https://x.com/user/status/1234567890".to_string()),
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -841,6 +900,7 @@ mod tests {
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Post {
             rest_id: Some("9876543210".to_string()),
             post_url: None,
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -850,6 +910,7 @@ mod tests {
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Post {
             rest_id: None,
             post_url: Some("https://x.com/user/status/111".to_string()),
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -859,6 +920,7 @@ mod tests {
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Post {
             rest_id: None,
             post_url: None,
+            attachment_id: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -875,6 +937,8 @@ mod tests {
             filename: "image.png".to_string(),
             media_type: None, // should default to IMAGE
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -889,6 +953,8 @@ mod tests {
             filename: "clip.mp4".to_string(),
             media_type: Some(3), // video
             duration_millis: Some(15000),
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -903,6 +969,8 @@ mod tests {
             filename: "funny.gif".to_string(),
             media_type: Some(2), // gif
             duration_millis: Some(3000),
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -920,16 +988,20 @@ mod tests {
                 filename: "thumb.jpg".to_string(),
                 media_type: Some(1),
                 duration_millis: None,
+                attachment_id: None,
+                plaintext_sha256: None,
             },
             AttachmentDescriptor::Url {
                 url: "https://example.com".to_string(),
                 display_title: Some("Example".to_string()),
                 banner_image: None,
                 favicon_image: None,
+                attachment_id: None,
             },
             AttachmentDescriptor::Post {
                 rest_id: Some("tweet-1".to_string()),
                 post_url: Some("https://x.com/u/status/1".to_string()),
+                attachment_id: None,
             },
         ]);
         assert_eq!(attachments.len(), 3);
@@ -952,6 +1024,8 @@ mod tests {
             filename: "file".to_string(),
             media_type,
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }
     }
 
@@ -961,6 +1035,7 @@ mod tests {
             display_title: None,
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         }
     }
 
@@ -968,6 +1043,7 @@ mod tests {
         AttachmentDescriptor::Post {
             rest_id: Some("1".to_string()),
             post_url: None,
+            attachment_id: None,
         }
     }
 
@@ -1161,6 +1237,7 @@ mod tests {
             display_title: Some("Example".to_string()),
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         }]);
         let content = build_message_content(
             "https://example.com text",
@@ -1181,6 +1258,8 @@ mod tests {
             filename: "pic.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content("Check this out", None, Some(attachments)).unwrap();
         assert!(!content.is_empty());
@@ -1221,6 +1300,8 @@ mod tests {
             filename: "reply.png".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content_with_preview(
             "Here's a photo reply",
@@ -1260,6 +1341,7 @@ mod tests {
         let reply_attachments = build_thrift_attachments(&[AttachmentDescriptor::Post {
             rest_id: Some("tweet-42".to_string()),
             post_url: Some("https://x.com/u/status/42".to_string()),
+            attachment_id: None,
         }]);
         let content = build_message_content_with_preview(
             "Re: that post",
@@ -1301,6 +1383,7 @@ mod tests {
             display_title: None,
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         }]);
         let reply_entities = build_thrift_entities(&[EntityDescriptor {
             start: 0,
@@ -1315,6 +1398,8 @@ mod tests {
             filename: "original.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content_with_preview(
             "@user check https://reply-link.com",
@@ -1432,7 +1517,9 @@ mod tests {
             "1,2", // comma in key version
             "1",
         );
-        assert!(encrypt_and_sign(params).is_err());
+        // A non-numeric key version is the null sentinel in the payload, so a
+        // comma in that field never reaches the signed bytes.
+        assert!(encrypt_and_sign(params).is_ok());
     }
 
     #[test]
@@ -1452,7 +1539,7 @@ mod tests {
         );
         let payload = encrypt_and_sign(params).unwrap();
         assert_eq!(payload.signature_info.public_key_version, "3");
-        assert_eq!(payload.signature_info.signature_version, "7");
+        assert_eq!(payload.signature_info.signature_version, "10");
         assert_eq!(payload.conversation_key_version, "5");
         assert!(payload.should_notify); // default
     }

@@ -347,7 +347,7 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(payload.Signature);
             Assert.NotEmpty(payload.EncodedEventSignature);
             Assert.Equal("v1", payload.ConversationKeyVersion);
-            Assert.Equal("7", payload.SignatureInfo.SignatureVersion);
+            Assert.Equal("10", payload.SignatureInfo.SignatureVersion);
             Assert.True(payload.ShouldNotify);
             // The SDK generates and returns the message id.
             Assert.NotEmpty(payload.MessageId);

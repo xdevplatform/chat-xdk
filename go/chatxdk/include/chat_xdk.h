@@ -433,6 +433,31 @@ struct FfiResult chat_xdk_decrypt(const struct ChatHandle *handle,
                                   const char *conversation_key_b64);
 
 /**
+ * 32-byte key for a message's contents. Returns base64.
+ *
+ * `contents_encryption_version` below 0 means the field is unset.
+ */
+struct FfiResult chat_xdk_message_key(const struct ChatHandle *handle,
+                                      const char *conversation_key_b64,
+                                      const char *sender_id,
+                                      const char *message_id,
+                                      int32_t contents_encryption_version);
+
+/**
+ * 32-byte key for one attachment. Returns base64.
+ *
+ * A null `attachment_id` is missing. An empty string is a real id.
+ * `contents_encryption_version` below 0 means the field is unset.
+ */
+struct FfiResult chat_xdk_attachment_key(const struct ChatHandle *handle,
+                                         const char *conversation_key_b64,
+                                         const char *sender_id,
+                                         const char *message_id,
+                                         int32_t contents_encryption_version,
+                                         const char *attachment_id,
+                                         int32_t attachment_index);
+
+/**
  * Decrypt a streaming-encrypted payload.
  *
  * Returns base64-encoded decrypted bytes.

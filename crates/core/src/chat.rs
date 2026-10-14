@@ -367,6 +367,43 @@ impl Chat {
     ) -> Result<Vec<u8>, SdkError> {
         self.inner.encrypt_stream(plaintext, conversation_key)
     }
+    /// Key that encrypts one message's contents. See [`ChatCore::message_key`].
+    pub fn message_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+    ) -> Result<Vec<u8>, SdkError> {
+        self.inner.message_key(
+            conversation_key,
+            sender_id,
+            message_id,
+            contents_encryption_version,
+        )
+    }
+
+    /// Key that encrypts one attachment. See [`ChatCore::attachment_key`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn attachment_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+        attachment_id: Option<&str>,
+        attachment_index: u32,
+    ) -> Result<Vec<u8>, SdkError> {
+        self.inner.attachment_key(
+            conversation_key,
+            sender_id,
+            message_id,
+            contents_encryption_version,
+            attachment_id,
+            attachment_index,
+        )
+    }
+
     /// Decrypt a stream.
     pub fn decrypt_stream(
         &self,
@@ -935,6 +972,8 @@ mod tests {
             filename: "photo.jpg".into(),
             media_type: Some(1),
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         params.should_notify = Some(false);
         params.ttl_msec = Some(60_000);
@@ -1371,7 +1410,7 @@ mod tests {
         assert!(!payload.signature.is_empty());
         assert!(!payload.encoded_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
-        assert_eq!(payload.signature_info.signature_version, "7");
+        assert_eq!(payload.signature_info.signature_version, "10");
         assert!(payload.should_notify);
     }
 

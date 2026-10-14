@@ -14,6 +14,19 @@ pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 /// Current signature protocol version.
 pub const SIGNATURE_VERSION: &str = "7";
 
+/// Highest signature version this SDK can verify.
+pub const MAX_SIGNATURE_VERSION: i32 = 11;
+
+/// Signature version used for message-key sends. `contents_encryption_version`
+/// is part of the signed payload from this version on.
+pub const MESSAGE_SIGNATURE_VERSION: &str = "10";
+
+/// Integer form of [`MESSAGE_SIGNATURE_VERSION`].
+pub const MESSAGE_SIGNATURE_VERSION_INT: i32 = 10;
+
+/// `contents_encryption_version` written on message-key sends.
+pub const CONTENTS_ENCRYPTION_VERSION: i16 = 1;
+
 /// Minimum signature version accepted on verification. v1 payloads omit
 /// the event-type discriminant and conversation-key version, so accepting
 /// them would let a forger downgrade to the weaker payload via the

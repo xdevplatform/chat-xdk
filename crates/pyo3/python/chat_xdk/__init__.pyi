@@ -235,6 +235,22 @@ class Chat:
 
     # Streams
     def encrypt_stream(self, plaintext: bytes, conversation_key: bytes) -> bytes: ...
+    def message_key(
+        self,
+        conversation_key: bytes,
+        sender_id: str,
+        message_id: str,
+        contents_encryption_version: Optional[int] = None,
+    ) -> bytes: ...
+    def attachment_key(
+        self,
+        conversation_key: bytes,
+        sender_id: str,
+        message_id: str,
+        contents_encryption_version: Optional[int] = None,
+        attachment_id: Optional[str] = None,
+        attachment_index: int = 0,
+    ) -> bytes: ...
     def decrypt_stream(self, encrypted: bytes, conversation_key: bytes) -> bytes: ...
     def stream_encryptor(self, conversation_key: bytes) -> StreamEncryptor: ...
     def stream_decryptor(self, conversation_key: bytes) -> StreamDecryptor: ...

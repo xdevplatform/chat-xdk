@@ -234,6 +234,31 @@ func ffiDecryptEvent(h handle, eventB64, convKeysJSON, signingKeysJSON string) (
 	return ffiResult(C.chat_xdk_decrypt_event(h, cEv, cConvKeys, cSigningKeys))
 }
 
+func ffiMessageKey(h handle, ckeyB64, senderID, messageID string, contentsVersion int32) (string, error) {
+	cKey := C.CString(ckeyB64)
+	defer C.free(unsafe.Pointer(cKey))
+	cSender := C.CString(senderID)
+	defer C.free(unsafe.Pointer(cSender))
+	cMessage := C.CString(messageID)
+	defer C.free(unsafe.Pointer(cMessage))
+	return ffiResult(C.chat_xdk_message_key(h, cKey, cSender, cMessage, C.int(contentsVersion)))
+}
+
+func ffiAttachmentKey(h handle, ckeyB64, senderID, messageID string, contentsVersion int32, attachmentID *string, attachmentIndex int32) (string, error) {
+	cKey := C.CString(ckeyB64)
+	defer C.free(unsafe.Pointer(cKey))
+	cSender := C.CString(senderID)
+	defer C.free(unsafe.Pointer(cSender))
+	cMessage := C.CString(messageID)
+	defer C.free(unsafe.Pointer(cMessage))
+	var cAttachment *C.char
+	if attachmentID != nil {
+		cAttachment = C.CString(*attachmentID)
+		defer C.free(unsafe.Pointer(cAttachment))
+	}
+	return ffiResult(C.chat_xdk_attachment_key(h, cKey, cSender, cMessage, C.int(contentsVersion), cAttachment, C.int(attachmentIndex)))
+}
+
 func ffiDecryptStream(h handle, encB64, ckeyB64 string) (string, error) {
 	cEnc := C.CString(encB64)
 	defer C.free(unsafe.Pointer(cEnc))

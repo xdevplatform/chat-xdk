@@ -339,7 +339,9 @@ The signature protocol is versioned, and the version travels with each signature
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `SIGNATURE_VERSION` (current) | `"7"` | Stamped on every signature the SDK produces |
+| `MESSAGE_SIGNATURE_VERSION` | `"10"` | Stamped on message-key sends (`encrypt_message`, replies, reactions, edits). The payload includes `contents_encryption_version` and a `signature_version=` suffix |
+| `SIGNATURE_VERSION` | `"7"` | Stamped on group and conversation-key action signatures |
+| `MAX_SIGNATURE_VERSION` | `11` | Newest version accepted on verification |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
 | `CKEY_PLAINTEXT_SIGNATURE_VERSION` | `6` | First version whose conversation-key-change payload signs the plaintext conversation key (so a recipient can reproduce and verify it) |
 

@@ -6,6 +6,7 @@
 //! feature) and the WASM bindings wrap this struct.
 
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
+use crate::crypto::hash::derive_message_key;
 use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{KeypairPurpose, XChatConversationKey, XChatKeyPair, XChatPrivateKey};
 use crate::error::{CryptoError, SdkError};
@@ -713,6 +714,7 @@ impl ChatCore {
             conversation_key_version: Some(conversation_key_version.to_string()),
             is_legacy_group_upgrade,
             ttl_msec,
+            group_type: None,
         };
         let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
@@ -751,6 +753,10 @@ impl ChatCore {
             screen_capture_blocking_enabled: current_screen_capture_blocking_enabled,
             group_invite_enable: None,
             admin_settings: None,
+            current_pmk_bundle: None,
+            group_created_by_user_id: None,
+            rotated_pmk_bundle: None,
+            current_description: None,
         };
         let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
@@ -1668,7 +1674,24 @@ impl ChatCore {
                             })?
                         }
                     };
-                    decrypt_message_bytes(ckey, contents)?
+                    let content_key =
+                        if crate::crypto::hash::uses_message_key(mce.contents_encryption_version) {
+                            let sender = parsed.sender_id.as_deref().ok_or_else(|| {
+                                SdkError::Parse("message-key event has no sender_id".into())
+                            })?;
+                            let message_id = parsed.message_id.as_deref().ok_or_else(|| {
+                                SdkError::Parse("message-key event has no message_id".into())
+                            })?;
+                            let bytes = derive_message_key(ckey.encoded(), sender, message_id)?;
+                            XChatConversationKey::from_bytes(bytes).ok_or_else(|| {
+                                SdkError::Crypto(CryptoError::DecryptionFailed(
+                                    "message key must be 32 bytes".into(),
+                                ))
+                            })?
+                        } else {
+                            ckey.clone()
+                        };
+                    decrypt_message_bytes(&content_key, contents)?
                 };
 
                 let parsed_content = parse_message_content(&plaintext)?;
@@ -1736,17 +1759,16 @@ impl ChatCore {
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
         }
+        let message_id = Self::generate_message_id();
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+            .map(|a| crate::pipeline::build_thrift_attachments_with_ids(&a, &message_id));
         let content_bytes = crate::pipeline::build_message_content(
             &params.text,
             thrift_entities,
             thrift_attachments,
         )?;
-
-        let message_id = Self::generate_message_id();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
             &ckey,
             &signing_kp.private,
@@ -1788,10 +1810,11 @@ impl ChatCore {
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
         }
+        let message_id = Self::generate_message_id();
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+            .map(|a| crate::pipeline::build_thrift_attachments_with_ids(&a, &message_id));
 
         let preview = self.build_reply_preview(&mut params, &ckey, &conversation_key_version)?;
 
@@ -1802,7 +1825,6 @@ impl ChatCore {
             thrift_attachments,
         )?;
 
-        let message_id = Self::generate_message_id();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
             &ckey,
             &signing_kp.private,
@@ -1910,10 +1932,18 @@ impl ChatCore {
             &sender_id,
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
+        let target_message_id = params.target_message_id.clone().or_else(|| {
+            params
+                .target_event
+                .as_deref()
+                .and_then(|b64| Self::parse_event_b64(b64).ok())
+                .and_then(|event| event.message_id)
+        });
         let content_bytes = crate::pipeline::build_message_edit_content(
             &target_sequence_id,
             &params.updated_text,
             params.entities.as_deref(),
+            target_message_id.as_deref(),
         )?;
         let message_id = Self::generate_message_id();
         crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
@@ -1992,6 +2022,7 @@ impl ChatCore {
             crate::thrift::event::MessageDeleteEvent {
                 sequence_ids: Some(sequence_ids.to_vec()),
                 delete_message_action: Some(delete_action),
+                pme_sequence_ids: None,
             },
         );
         Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
@@ -2089,6 +2120,15 @@ impl ChatCore {
         }
     }
 
+    fn event_uses_message_key(event: &MessageEvent) -> bool {
+        match &event.detail {
+            Some(MessageEventDetail::MessageCreateEvent(mce)) => {
+                crate::crypto::hash::uses_message_key(mce.contents_encryption_version)
+            }
+            _ => false,
+        }
+    }
+
     /// Decrypt the contents of a raw `MessageCreateEvent`, resolving the key
     /// from the reply's own key, the supplied key-change events, or the key
     /// cache.
@@ -2102,7 +2142,8 @@ impl ChatCore {
         outer_version: Option<&str>,
         key_changes: &[MessageEvent],
         extra_keys: &HashMap<String, XChatConversationKey>,
-    ) -> Result<Vec<u8>, SdkError> {
+        carried_message_key: Option<&[u8]>,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), SdkError> {
         let Some(MessageEventDetail::MessageCreateEvent(mce)) = &raw.detail else {
             return Err(SdkError::Parse(
                 "raw event is not a MessageCreateEvent".into(),
@@ -2114,39 +2155,77 @@ impl ChatCore {
             .ok_or_else(|| SdkError::Parse("raw event has no contents".into()))?;
         // No key version means the contents are already plaintext.
         let Some(version) = mce.conversation_key_version.as_deref() else {
-            return Ok(contents.clone());
+            return Ok((contents.clone(), None));
         };
 
-        if let Some(key) = extra_keys.get(version) {
-            return Ok(decrypt_message_bytes(key, contents)?);
-        }
-        if outer_version == Some(version) {
-            if let Some(key) = outer_key {
-                return Ok(decrypt_message_bytes(key, contents)?);
+        let outer = if outer_version == Some(version) {
+            outer_key.cloned()
+        } else {
+            None
+        };
+        let ckey = if let Some(key) = extra_keys.get(version) {
+            key.clone()
+        } else if let Some(key) = outer {
+            key
+        } else if let Some(key) = raw
+            .conversation_id
+            .as_deref()
+            .and_then(|conv_id| self.cached_key_for(conv_id, version))
+        {
+            key
+        } else {
+            let mut found = None;
+            for kce_event in key_changes {
+                let Some(MessageEventDetail::ConversationKeyChangeEvent(kce)) = &kce_event.detail
+                else {
+                    continue;
+                };
+                if kce.conversation_key_version.as_deref() != Some(version) {
+                    continue;
+                }
+                if let Some(key) = self.decrypt_key_change_ckey(kce) {
+                    found = Some(key);
+                    break;
+                }
             }
+            found.ok_or_else(|| {
+                SdkError::Crypto(CryptoError::DecryptionFailed(format!(
+                    "no conversation key for version '{}' of the replied-to message; \
+                     pass reply_to_ckces with its key-change event",
+                    version
+                )))
+            })?
+        };
+        // A carried key is the message key itself. It is used only when the
+        // event was encrypted under a message key; otherwise the conversation
+        // key still decrypts the contents.
+        if crate::crypto::hash::uses_message_key(mce.contents_encryption_version) {
+            let bytes =
+                if let Some(carried) = carried_message_key {
+                    if carried.len() != XChatConversationKey::KEY_SIZE {
+                        return Err(SdkError::Crypto(CryptoError::DecryptionFailed(
+                            "carried message key must be 32 bytes".into(),
+                        )));
+                    }
+                    carried.to_vec()
+                } else {
+                    let sender = raw.sender_id.as_deref().ok_or_else(|| {
+                        SdkError::Parse("message-key event has no sender_id".into())
+                    })?;
+                    let message_id = raw.message_id.as_deref().ok_or_else(|| {
+                        SdkError::Parse("message-key event has no message_id".into())
+                    })?;
+                    derive_message_key(ckey.encoded(), sender, message_id)?
+                };
+            let key = XChatConversationKey::from_bytes(bytes.clone()).ok_or_else(|| {
+                SdkError::Crypto(CryptoError::DecryptionFailed(
+                    "message key must be 32 bytes".into(),
+                ))
+            })?;
+            Ok((decrypt_message_bytes(&key, contents)?, Some(bytes)))
+        } else {
+            Ok((decrypt_message_bytes(&ckey, contents)?, None))
         }
-        if let Some(conv_id) = raw.conversation_id.as_deref() {
-            if let Some(key) = self.cached_key_for(conv_id, version) {
-                return Ok(decrypt_message_bytes(&key, contents)?);
-            }
-        }
-        for kce_event in key_changes {
-            let Some(MessageEventDetail::ConversationKeyChangeEvent(kce)) = &kce_event.detail
-            else {
-                continue;
-            };
-            if kce.conversation_key_version.as_deref() != Some(version) {
-                continue;
-            }
-            if let Some(key) = self.decrypt_key_change_ckey(kce) {
-                return Ok(decrypt_message_bytes(&key, contents)?);
-            }
-        }
-        Err(SdkError::Crypto(CryptoError::DecryptionFailed(format!(
-            "no conversation key for version '{}' of the replied-to message; \
-             pass reply_to_ckces with its key-change event",
-            version
-        ))))
     }
 
     /// Build the wire `ReplyingToPreview` for an outgoing reply.
@@ -2171,10 +2250,7 @@ impl ChatCore {
         // a reply preview mirrors an already-sent original (which receivers
         // validate against the embedded raw event), so rejecting it would
         // block replying to messages from clients that sent such lists.
-        let thrift_reply_attachments = params
-            .reply_to_attachments
-            .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+        let reply_attachment_descs = params.reply_to_attachments.take();
         let explicit_sequence_id = params.reply_to_sequence_id.take().filter(|v| !v.is_empty());
 
         let Some(raw_b64) = params.reply_to_event.take().filter(|v| !v.is_empty()) else {
@@ -2183,6 +2259,9 @@ impl ChatCore {
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
                 )
             })?;
+            let thrift_reply_attachments = reply_attachment_descs
+                .as_ref()
+                .map(|a| crate::pipeline::build_thrift_attachments_with_ids(a, &sequence_id));
             return Ok(crate::thrift::product::ReplyingToPreview::new(
                 params.reply_to_sender_id,
                 params.reply_to_text.take(),
@@ -2196,10 +2275,16 @@ impl ChatCore {
                 None,
                 None,
                 None,
+                None,
+                None,
             ));
         };
 
         let raw = Self::parse_event_b64(&raw_b64)?;
+        let preview_message_id = raw.message_id.clone().unwrap_or_default();
+        let thrift_reply_attachments = reply_attachment_descs
+            .as_ref()
+            .map(|a| crate::pipeline::build_thrift_attachments_with_ids(a, &preview_message_id));
         let edit_event = match params.reply_to_edit_event.take().filter(|v| !v.is_empty()) {
             Some(b64) => Some(Self::parse_event_b64(&b64)?),
             None => None,
@@ -2219,35 +2304,48 @@ impl ChatCore {
         let need_original = params.reply_to_text.is_none()
             || thrift_reply_entities.is_none()
             || thrift_reply_attachments.is_none();
-        let original = if need_original {
-            let plaintext = self.decrypt_raw_event_contents(
+        let open_original = if need_original || Self::event_uses_message_key(&raw) {
+            Some(self.decrypt_raw_event_contents(
                 &raw,
                 Some(outer_key),
                 Some(outer_version),
                 &key_changes,
                 &HashMap::new(),
-            )?;
-            Some(Self::parse_thrift_message_contents(&plaintext)?)
+                None,
+            )?)
         } else {
             None
         };
+        let original = match &open_original {
+            Some((plaintext, _)) if need_original => {
+                Some(Self::parse_thrift_message_contents(plaintext)?)
+            }
+            _ => None,
+        };
+        let original_message_key = open_original.and_then(|(_, key)| key);
 
         // When the original was edited, the preview quotes what the message
         // says now, so text and entities derive from the edit's contents;
         // attachments stay with the original (edits do not carry them).
-        let edited = match &edit_event {
-            Some(edit) if params.reply_to_text.is_none() || thrift_reply_entities.is_none() => {
-                let plaintext = self.decrypt_raw_event_contents(
+        let need_edit = params.reply_to_text.is_none() || thrift_reply_entities.is_none();
+        let open_edit = match &edit_event {
+            Some(edit) if need_edit || Self::event_uses_message_key(edit) => {
+                Some(self.decrypt_raw_event_contents(
                     edit,
                     Some(outer_key),
                     Some(outer_version),
                     &key_changes,
                     &HashMap::new(),
-                )?;
-                Some(Self::parse_thrift_message_edit(&plaintext)?)
+                    None,
+                )?)
             }
             _ => None,
         };
+        let edited = match &open_edit {
+            Some((plaintext, _)) if need_edit => Some(Self::parse_thrift_message_edit(plaintext)?),
+            _ => None,
+        };
+        let edit_message_key = open_edit.and_then(|(_, key)| key);
 
         let sequence_id = explicit_sequence_id
             .or_else(|| raw.sequence_id.clone())
@@ -2269,18 +2367,6 @@ impl ChatCore {
         let attachments = thrift_reply_attachments
             .or_else(|| original.as_ref().and_then(|m| m.attachments.clone()));
 
-        // A key-change event is only useful to a recipient when it carries a
-        // key version this reply's own version does not already imply.
-        let embedded_ckces: Vec<MessageEvent> = key_changes
-            .into_iter()
-            .filter(|e| match &e.detail {
-                Some(MessageEventDetail::ConversationKeyChangeEvent(kce)) => {
-                    kce.conversation_key_version.as_deref() != Some(outer_version)
-                }
-                _ => false,
-            })
-            .collect();
-
         Ok(crate::thrift::product::ReplyingToPreview::new(
             sender_id,
             message_text,
@@ -2291,9 +2377,11 @@ impl ChatCore {
             raw.message_id.clone(),
             raw,
             edit_event,
-            (!embedded_ckces.is_empty()).then_some(embedded_ckces),
             None,
             None,
+            None,
+            original_message_key,
+            edit_message_key,
         ))
     }
 
@@ -2339,10 +2427,14 @@ impl ChatCore {
             return ReplyPreviewValidation::Invalid;
         }
 
-        let embedded_ckces: Vec<MessageEvent> = preview.raw_event_ckces.clone().unwrap_or_default();
-        let Ok(plaintext) =
-            self.decrypt_raw_event_contents(raw, None, None, &embedded_ckces, conversation_keys)
-        else {
+        let Ok((plaintext, _)) = self.decrypt_raw_event_contents(
+            raw,
+            None,
+            None,
+            &[],
+            conversation_keys,
+            preview.raw_event_message_key.as_deref(),
+        ) else {
             return ReplyPreviewValidation::Invalid;
         };
         let Ok(original) = Self::parse_thrift_message_contents(&plaintext) else {
@@ -2392,18 +2484,23 @@ impl ChatCore {
                 ) {
                     return ReplyPreviewValidation::Invalid;
                 }
-                let Ok(edit_plaintext) = self.decrypt_raw_event_contents(
+                let Ok((edit_plaintext, _)) = self.decrypt_raw_event_contents(
                     edit,
                     None,
                     None,
-                    &embedded_ckces,
+                    &[],
                     conversation_keys,
+                    preview.raw_event_edit_message_key.as_deref(),
                 ) else {
                     return ReplyPreviewValidation::Invalid;
                 };
                 let Ok(edit_contents) = Self::parse_thrift_message_edit(&edit_plaintext) else {
                     return ReplyPreviewValidation::Invalid;
                 };
+                match edit_contents.message_id.as_deref() {
+                    Some(id) if raw.message_id.as_deref() == Some(id) => {}
+                    _ => return ReplyPreviewValidation::Invalid,
+                }
                 Some(edit_contents)
             }
         };
@@ -2451,6 +2548,58 @@ impl ChatCore {
     }
 
     // Stream (Media)
+
+    /// Key that encrypts one message's contents.
+    ///
+    /// `contents_encryption_version` of 1 or greater derives a 32-byte key
+    /// from `conversation_key`. Any other version returns that conversation
+    /// key unchanged.
+    pub fn message_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+    ) -> Result<Vec<u8>, SdkError> {
+        if !crate::crypto::hash::uses_message_key(contents_encryption_version) {
+            return Ok(conversation_key.to_vec());
+        }
+        derive_message_key(conversation_key, sender_id, message_id).map_err(SdkError::Crypto)
+    }
+
+    /// Key that encrypts one attachment.
+    ///
+    /// Without a message key this is the conversation key. With one, it is
+    /// derived from that message key and the attachment id. A stored id is
+    /// used as given, including empty; a missing id is `message_id` at index
+    /// 0 and `<message_id>#<index>` after that. A URL card's banner and
+    /// favicon both use the card's id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attachment_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+        attachment_id: Option<&str>,
+        attachment_index: u32,
+    ) -> Result<Vec<u8>, SdkError> {
+        let message_key = self.message_key(
+            conversation_key,
+            sender_id,
+            message_id,
+            contents_encryption_version,
+        )?;
+        if !crate::crypto::hash::uses_message_key(contents_encryption_version) {
+            return Ok(message_key);
+        }
+        let id = crate::crypto::hash::resolve_attachment_id(
+            attachment_id,
+            message_id,
+            attachment_index as usize,
+        );
+        crate::crypto::hash::derive_attachment_key(&message_key, &id).map_err(SdkError::Crypto)
+    }
 
     /// Encrypt a stream.
     pub fn encrypt_stream(
@@ -2717,6 +2866,14 @@ impl ChatCore {
                 crate::signatures::MIN_SIGNATURE_VERSION
             ));
         }
+        if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+            return Err(format!(
+                "signature_version {} is outside the accepted range {}..={}",
+                sig_version,
+                crate::signatures::MIN_SIGNATURE_VERSION,
+                crate::signatures::MAX_SIGNATURE_VERSION
+            ));
+        }
 
         let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
         let signing_key_b64 = match signing_keys
@@ -2826,6 +2983,9 @@ pub fn build_event_signature_payload(
         .and_then(|s| s.signature_version.as_deref())
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
+    if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+        return None;
+    }
 
     match detail {
         MessageEventDetail::MessageCreateEvent(mce) => {
@@ -2836,13 +2996,23 @@ pub fn build_event_signature_payload(
             }
             let contents = mce.contents.as_ref()?;
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
-            let ckey_ver = mce.conversation_key_version.as_deref().unwrap_or("");
+            // Missing or non-numeric key versions sign as the sentinel, not "".
+            let ckey_ver = mce_key_version_component(mce.conversation_key_version.as_deref());
+            let mut extra = vec![ckey_ver, contents_b64];
+            if sig_version >= 10 {
+                extra.push(match mce.contents_encryption_version {
+                    Some(v) => v.to_string(),
+                    None => "null".to_string(),
+                });
+            }
+            let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
             build_component_payload(
                 "MessageCreateEvent",
                 msg_id,
                 sender_id,
                 conv_id,
-                &[ckey_ver, &contents_b64],
+                &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::ConversationKeyChangeEvent(ckce) => {
@@ -2857,6 +3027,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[ckey_ver, ckey_b64],
+                    sig_version,
                 )
             } else {
                 // pre-v6: sign the per-participant encrypted key triplets.
@@ -2880,6 +3051,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &extra,
+                    sig_version,
                 )
             }
         }
@@ -2895,6 +3067,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::ConversationDeleteEvent(conv_del) => {
@@ -2915,6 +3088,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::MarkConversationReadEvent(read) => {
@@ -2930,6 +3104,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::MarkConversationUnreadEvent(unread) => {
@@ -2943,6 +3118,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra,
+                sig_version,
             )
         }
         MessageEventDetail::GroupChangeEvent(gc_event) => {
@@ -2979,6 +3155,9 @@ pub fn build_event_signature_payload(
                             extra.push(nullable_i64(invite.expires_at_msec));
                         }
                     }
+                    if sig_version > 7 {
+                        extra.push(nullable_str(c.current_description.as_deref()));
+                    }
                     let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupMemberAddChange",
@@ -2986,17 +3165,23 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &extra_refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupMemberRemove(c) => {
                     let ids = c.member_ids.as_ref()?;
-                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    let mut extra: Vec<String> = ids.clone();
+                    if sig_version >= 11 {
+                        extra.push(nullable_str(c.conversation_key_version.as_deref()));
+                    }
+                    let refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupMemberRemoveChange",
                         msg_id,
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupAdminAdd(c) => {
@@ -3008,6 +3193,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupAdminRemove(c) => {
@@ -3019,6 +3205,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupTitleChange(c) => {
@@ -3030,6 +3217,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[ckey_ver, title],
+                        sig_version,
                     )
                 }
                 GenGC::GroupAvatarChange(c) => {
@@ -3041,6 +3229,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[ckey_ver, avatar],
+                        sig_version,
                     )
                 }
                 GenGC::GroupCreate(c) => {
@@ -3054,6 +3243,15 @@ pub fn build_event_signature_payload(
                         extra.push(nullable_str(c.title.as_deref()));
                         extra.push(nullable_str(c.avatar_url.as_deref()));
                     }
+                    if sig_version >= 9 {
+                        extra.push(match c.group_type {
+                            Some(t) => t.0.to_string(),
+                            None => "null".to_string(),
+                        });
+                    }
+                    if sig_version >= 10 {
+                        extra.push(nullable_i64(c.ttl_msec));
+                    }
                     let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupCreate",
@@ -3061,6 +3259,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         None,
                         &extra_refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupInviteEnable(c) => {
@@ -3073,6 +3272,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[url, &expires, &affiliate],
+                        sig_version,
                     )
                 }
                 GenGC::GroupInviteDisable(c) => {
@@ -3083,6 +3283,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[disabled_by],
+                        sig_version,
                     )
                 }
                 GenGC::GroupJoinRequest(c) => {
@@ -3093,6 +3294,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[user_id],
+                        sig_version,
                     )
                 }
                 GenGC::GroupJoinReject(c) => {
@@ -3104,6 +3306,19 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
+                    )
+                }
+                GenGC::GroupDescriptionChange(c) => {
+                    let ckey_ver = c.conversation_key_version.as_deref()?;
+                    let description = c.custom_description.as_deref().unwrap_or("");
+                    build_component_payload(
+                        "GroupChangeEvent.GroupDescriptionChange",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &[ckey_ver, description],
+                        sig_version,
                     )
                 }
                 // Not part of the signed payload.
@@ -3123,6 +3338,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[&ttl_str],
+                        sig_version,
                     )
                 }
                 CMC::MessageDurationRemove(_) => build_component_payload(
@@ -3131,6 +3347,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::MuteConversation(c) => {
                     let ids = c.muted_conversation_ids.as_deref().unwrap_or(&[]);
@@ -3141,6 +3358,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 CMC::UnmuteConversation(c) => {
@@ -3152,6 +3370,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 CMC::EnableScreenCaptureDetection(_) => build_component_payload(
@@ -3160,6 +3379,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::DisableScreenCaptureDetection(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.DisableScreenCaptureDetection",
@@ -3167,6 +3387,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::EnableScreenCaptureBlocking(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking",
@@ -3174,6 +3395,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::DisableScreenCaptureBlocking(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.DisableScreenCaptureBlocking",
@@ -3181,7 +3403,48 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
+                CMC::EnableGrok(_) => build_component_payload(
+                    "ConversationMetadataChangeEvent.EnableGrok",
+                    msg_id,
+                    sender_id,
+                    conv_id,
+                    &[],
+                    sig_version,
+                ),
+                CMC::DisableGrok(_) => build_component_payload(
+                    "ConversationMetadataChangeEvent.DisableGrok",
+                    msg_id,
+                    sender_id,
+                    conv_id,
+                    &[],
+                    sig_version,
+                ),
+                CMC::ArchiveConversation(c) => {
+                    let ids = c.archived_conversation_ids.as_deref().unwrap_or(&[]);
+                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    build_component_payload(
+                        "ConversationMetadataChangeEvent.ArchiveConversation",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &refs,
+                        sig_version,
+                    )
+                }
+                CMC::UnarchiveConversation(c) => {
+                    let ids = c.unarchived_conversation_ids.as_deref().unwrap_or(&[]);
+                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    build_component_payload(
+                        "ConversationMetadataChangeEvent.UnarchiveConversation",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &refs,
+                        sig_version,
+                    )
+                }
             }
         }
         // These event types are not signed
@@ -3210,19 +3473,37 @@ fn nullable_bool(v: Option<bool>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
+/// Key-version component of a message signature.
+///
+/// A missing or non-numeric version is the sentinel `null`. A numeric version
+/// is its decimal form, so a leading-zero string does not survive.
+fn mce_key_version_component(raw: Option<&str>) -> String {
+    match raw.and_then(|s| s.parse::<i64>().ok()) {
+        Some(n) => n.to_string(),
+        None => "null".to_string(),
+    }
+}
+
 /// Build a comma-separated component payload: "eventName,msgId,senderId,convId,extras..."
+///
+/// Versions 9 and above append `signature_version=<n>`.
 fn build_component_payload(
     event_name: &str,
     message_id: &str,
     sender_id: &str,
     conv_id: Option<&str>,
     additional: &[&str],
+    sig_version: i32,
 ) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    let suffix = (sig_version >= 9).then(|| format!("signature_version={sig_version}"));
     let mut parts: Vec<&str> = vec![event_name, message_id, sender_id];
     if let Some(cid) = conv_id {
         parts.push(cid);
     }
     parts.extend_from_slice(additional);
+    if let Some(ref suffix) = suffix {
+        parts.push(suffix);
+    }
     if parts.iter().any(|p| p.contains(',')) {
         return None;
     }
@@ -3299,6 +3580,7 @@ fn collect_attachments(
                     attachment_id: media.attachment_id.clone(),
                     legacy_media_url_https: media.legacy_media_url_https.clone(),
                     legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+                    plaintext_sha256: media.plaintext_sha256.clone(),
                 };
                 parsed.push(AttachmentInfo::Media(info));
             }
@@ -3334,8 +3616,10 @@ fn collect_attachments(
                     fallback_text: money.fallback_text.clone(),
                 }));
             }
-            ThriftMessageAttachment::Jetfuel(_) => {
-                // This attachment variant is not yet supported; skip.
+            ThriftMessageAttachment::Jetfuel(_)
+            | ThriftMessageAttachment::PaymentReceipt(_)
+            | ThriftMessageAttachment::BotMessage(_) => {
+                // These attachment variants are not surfaced.
             }
         }
     }
@@ -3506,6 +3790,13 @@ fn map_message_attachment(
                 payload: None,
             },
         },
+        crate::thrift::product::MessageAttachment::PaymentReceipt(_)
+        | crate::thrift::product::MessageAttachment::BotMessage(_) => MessageAttachment::Money {
+            money: MoneyAttachment {
+                fallback_text: None,
+                payload: None,
+            },
+        },
     }
 }
 
@@ -3523,6 +3814,7 @@ fn map_media_attachment(media: &crate::thrift::product::MediaAttachment) -> Medi
         attachment_id: media.attachment_id.clone(),
         legacy_media_url_https: media.legacy_media_url_https.clone(),
         legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+        plaintext_sha256: media.plaintext_sha256.clone(),
     }
 }
 
@@ -3803,8 +4095,9 @@ pub(crate) fn convert_group_change(gc: Option<&crate::thrift::event::GroupChange
         Some(GenGC::GroupJoinReject(c)) => GroupChange::JoinRejected {
             user_ids: c.rejected_user_ids.clone().unwrap_or_default(),
         },
-        Some(GenGC::GroupAdminSettingsChange(_)) => GroupChange::Unknown,
-        None => GroupChange::Unknown,
+        Some(GenGC::GroupDescriptionChange(_))
+        | Some(GenGC::GroupAdminSettingsChange(_))
+        | None => GroupChange::Unknown,
     }
 }
 
@@ -3833,7 +4126,11 @@ pub(crate) fn convert_settings_change(
         Some(GenCMC::DisableScreenCaptureBlocking(_)) => {
             SettingsChange::ScreenCaptureBlockingDisabled
         }
-        None => SettingsChange::Unknown,
+        Some(GenCMC::EnableGrok(_))
+        | Some(GenCMC::DisableGrok(_))
+        | Some(GenCMC::ArchiveConversation(_))
+        | Some(GenCMC::UnarchiveConversation(_))
+        | None => SettingsChange::Unknown,
     }
 }
 
@@ -3884,6 +4181,8 @@ mod tests {
             None::<Vec<crate::thrift::event::AdditionalAction>>,
             None,
             None,
+            None,
+            None,
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),         // sequence_id
@@ -3897,6 +4196,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>, // previous_sequence_id
             None::<bool>,   // is_trusted
+            None::<String>, // conversation_event_counter
         );
         let bytes = serialize_thrift(&event).expect("serialize MessageEvent");
         base64_encode(&bytes)
@@ -3960,6 +4260,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -4100,6 +4401,7 @@ mod tests {
                 width: None,
                 height: None,
             }),
+            attachment_id: None,
         }]);
         let payload = core.encrypt_message(params).unwrap();
 
@@ -4130,6 +4432,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -4229,7 +4532,7 @@ mod tests {
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
-            Some("msg-forged".to_string()),
+            Some(payload.message_id.clone()),
             Some("victim-id".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
@@ -4239,6 +4542,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
@@ -4272,10 +4576,11 @@ mod tests {
         let err = attacker
             .decrypt_event(&event_b64, &conv_keys, &signing_keys)
             .expect_err("forged sender must not verify");
+        let err_msg = err.to_string();
         assert!(
-            err.to_string().contains("could not be verified"),
+            err_msg.contains("could not be verified") || err_msg.contains("verification failed"),
             "expected unverifiable-signature rejection, got: {}",
-            err
+            err_msg
         );
 
         // Relaxed policy still must not report the forgery as verified.
@@ -4344,6 +4649,7 @@ mod tests {
                 Some(sig_struct),
                 None::<String>,
                 None::<bool>,
+                None::<String>,
             );
             let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -4523,6 +4829,8 @@ mod tests {
             None::<Vec<crate::thrift::event::AdditionalAction>>,
             None,
             None,
+            None,
+            None,
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
@@ -4536,6 +4844,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let bytes = serialize_thrift(&event).unwrap();
         let event_b64 = base64_encode(&bytes);
@@ -4627,6 +4936,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let bytes = serialize_thrift(&event).expect("serialize");
         base64_encode(&bytes)
@@ -4685,6 +4995,10 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
                 ),
             )),
             None,
@@ -4704,6 +5018,7 @@ mod tests {
         let del = ThriftMDE::new(
             Some(vec!["seq-99".to_string()]),
             None::<DeleteMessageAction>,
+            None,
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
@@ -4828,7 +5143,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let typing = ThriftMTE::new(Some("conv-1".to_string()));
+        let typing = ThriftMTE::new(Some("conv-1".to_string()), None, None, None, None);
         let event_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let event = core
@@ -4850,7 +5165,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let read = ThriftMCRE::new(Some("seq-50".to_string()), Some(1700000050000i64));
+        let read = ThriftMCRE::new(Some("seq-50".to_string()), Some(1700000050000i64), None);
         let event_b64 = build_test_event(ThriftDetail::MarkConversationReadEvent(read));
 
         let event = core
@@ -4897,6 +5212,7 @@ mod tests {
         let del = ThriftMDE::new(
             Some(vec!["seq-10".to_string(), "seq-11".to_string()]),
             Some(DeleteMessageAction::DELETE_FOR_SELF),
+            None,
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
@@ -4922,6 +5238,7 @@ mod tests {
         let del = ThriftMDE::new(
             Some(vec!["seq-20".to_string()]),
             Some(DeleteMessageAction::DELETE_FOR_ALL),
+            None,
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
@@ -5201,7 +5518,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let member_del = ThriftMADE::new(Some("deleted-user-42".to_string()));
+        let member_del = ThriftMADE::new(Some("deleted-user-42".to_string()), None);
         let event_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let event = core
@@ -5221,7 +5538,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let member_del = ThriftMADE::new(None::<String>);
+        let member_del = ThriftMADE::new(None::<String>, None);
         let event_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let event = core
@@ -5252,6 +5569,7 @@ mod tests {
                     Some("v1".to_string()),
                     None::<bool>,
                     None::<i64>,
+                    None,
                 ),
             )),
             None,
@@ -5383,6 +5701,10 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
                 ),
             )),
             None,
@@ -5416,7 +5738,7 @@ mod tests {
 
         let gc = ThriftGCE::new(
             Some(crate::thrift::event::GroupChange::GroupMemberRemove(
-                GroupMemberRemoveChange::new(Some(vec!["removed-user".to_string()])),
+                GroupMemberRemoveChange::new(Some(vec!["removed-user".to_string()]), None),
             )),
             None,
         );
@@ -5794,6 +6116,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let bytes = serialize_thrift(&event).expect("serialize");
         let event_b64 = base64_encode(&bytes);
@@ -5944,6 +6267,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -5976,7 +6300,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let failure = ThriftMFE::new(
@@ -5985,7 +6309,7 @@ mod tests {
         );
         let failure_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
-        let member_del = ThriftMADE::new(Some("user-99".to_string()));
+        let member_del = ThriftMADE::new(Some("user-99".to_string()), None);
         let member_del_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let events: Vec<&str> = vec![&typing_b64, &failure_b64, &member_del_b64];
@@ -6004,7 +6328,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let events: Vec<&str> = vec![&typing_b64, "!!!invalid-base64!!!"];
@@ -6019,7 +6343,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let events: Vec<&str> = vec![&typing_b64];
@@ -6050,7 +6374,7 @@ mod tests {
         let core = ChatCore::new();
         // Don't generate keys — no identity key loaded
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
         let result = core.extract_conversation_keys(&[&typing_b64]);
         assert!(result.is_empty());
@@ -6061,7 +6385,7 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let failure = ThriftMFE::new(
@@ -6637,6 +6961,7 @@ mod tests {
             Some(event_sig),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
 
         let reconstructed = build_event_signature_payload(&event, &detail, plaintext_ckey_b64)
@@ -7329,6 +7654,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7376,6 +7702,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7516,6 +7843,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7693,6 +8021,7 @@ mod tests {
                 Some(sig_struct),
                 None::<String>,
                 None::<bool>,
+                None::<String>,
             );
             base64_encode(&serialize_thrift(&event).unwrap())
         };
@@ -7815,6 +8144,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7915,6 +8245,77 @@ mod tests {
     }
 
     #[test]
+    fn message_signature_payloads_match_known_answers() {
+        fn payload(version: &str, key_version: &str, cev: Option<i16>) -> String {
+            let contents = base64::engine::general_purpose::STANDARD_NO_PAD
+                .decode("SGVsbG8")
+                .unwrap();
+            let mce = crate::thrift::event::MessageCreateEvent {
+                contents: Some(contents),
+                conversation_key_version: Some(key_version.to_string()),
+                contents_encryption_version: cev,
+                ..Default::default()
+            };
+            let detail = MessageEventDetail::MessageCreateEvent(mce);
+            let event = MessageEvent {
+                message_id: Some("11111111-2222-3333-4444-555555555555".into()),
+                sender_id: Some("1491585161162473473".into()),
+                conversation_id: Some("2:1491585161162473473".into()),
+                message_event_signature: Some(crate::thrift::event::MessageEventSignature {
+                    signature_version: Some(version.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let bytes = build_event_signature_payload(&event, &detail, None).unwrap();
+            String::from_utf8(bytes.to_vec()).unwrap()
+        }
+
+        let id = "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473";
+        assert_eq!(payload("8", "8", None), format!("{id},8,SGVsbG8"));
+        assert_eq!(
+            payload("9", "5", None),
+            format!("{id},5,SGVsbG8,signature_version=9")
+        );
+        assert_eq!(
+            payload("10", "5", None),
+            format!("{id},5,SGVsbG8,null,signature_version=10")
+        );
+        let v10 = format!("{id},5,SGVsbG8,1,signature_version=10");
+        assert_eq!(payload("10", "5", Some(1)), v10);
+        assert_eq!(
+            payload("11", "5", Some(1)),
+            format!("{id},5,SGVsbG8,1,signature_version=11")
+        );
+
+        let spki = base64::engine::general_purpose::STANDARD
+            .decode("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+t366VDnLsZibo8mWYxvPQDuALQPpSydiQnR6GgvlHWaL2hjFuGhB6bkwqOgQMgpLNmtTd4sPVaXjxIkNLmKDg==")
+            .unwrap();
+        let point = spki[spki.len() - 65..].to_vec();
+        let public = crate::crypto::keys::XChatPublicKey::from_bytes(
+            point,
+            crate::crypto::keys::KeypairPurpose::Signing,
+        )
+        .unwrap();
+        let signature = base64::engine::general_purpose::STANDARD
+            .decode("W5rdZk1q13OBfVCSwyaWF+jTSotcS0Xrae24qOxntrrda81+BneKT8b3s0ZNHORaFd+QnzcQlzYNDSTF5vjn9A==")
+            .unwrap();
+        assert!(crate::crypto::key_factory::KeyFactory::verify(
+            &public,
+            &signature,
+            v10.as_bytes()
+        )
+        .unwrap());
+        let tampered = v10.replace(",1,signature_version=10", ",null,signature_version=10");
+        assert!(!crate::crypto::key_factory::KeyFactory::verify(
+            &public,
+            &signature,
+            tampered.as_bytes()
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn signature_version_below_floor_is_rejected() {
         let core = ChatCore::new(); // default reject_unverified = true
         let reg = core.generate_keypairs().unwrap();
@@ -7956,9 +8357,9 @@ mod tests {
     }
 
     #[test]
-    fn signature_version_at_floor_is_processed() {
-        // At/above the floor the message payload format is identical, so
-        // the signature still verifies.
+    fn signature_version_relabel_down_does_not_verify() {
+        // A message-key send is signed at v10. Relabeling that signature as
+        // the floor version rebuilds a different payload, so it must not verify.
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
         let (event_b64, ckey_b64) = build_message_event_with_sig_version(
@@ -7971,10 +8372,14 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
 
-        match core.decrypt_event(&event_b64, &conv_keys, &signing_keys) {
-            Ok(Event::Message(msg)) => assert!(msg.verified),
-            other => panic!("expected verified Message, got {:?}", other),
-        }
+        let err = core
+            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .expect_err("relabeled signature must be rejected");
+        assert!(
+            err.to_string().contains("verification failed"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     // Default reject_unverified=true rejects unverifiable events
@@ -8011,6 +8416,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -8205,6 +8611,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -8273,12 +8680,15 @@ mod tests {
             filename: "file".into(),
             media_type: mt,
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         };
         let url = || crate::AttachmentDescriptor::Url {
             url: "https://example.com".into(),
             display_title: None,
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         };
         let params_with = |attachments: Vec<crate::AttachmentDescriptor>| {
             let mut p = crate::EncryptMessageParams::new("conv-1", "hi")
@@ -8328,6 +8738,7 @@ mod tests {
             crate::AttachmentDescriptor::Post {
                 rest_id: Some("1".into()),
                 post_url: None,
+                attachment_id: None,
             },
             crate::AttachmentDescriptor::Media {
                 media_hash_key: "hash".into(),
@@ -8337,6 +8748,8 @@ mod tests {
                 filename: "pic.jpg".into(),
                 media_type: Some(1),
                 duration_millis: None,
+                attachment_id: None,
+                plaintext_sha256: None,
             },
         ]);
         let err = core.encrypt_reply(params).unwrap_err();
@@ -8789,11 +9202,13 @@ mod tests {
         original_seq: &str,
         updated_text: &str,
         edit_seq: &str,
+        original_message_id: Option<&str>,
     ) -> String {
         let edit = crate::thrift::product::MessageEdit::new(
             Some(original_seq.to_string()),
             Some(updated_text.to_string()),
             None,
+            original_message_id.map(|id| id.to_string()),
         );
         let holder = crate::thrift::product::MessageEntryHolder::new(Some(Box::new(
             crate::thrift::product::MessageEntryContents::MessageEdit(Box::new(edit)),
@@ -8820,6 +9235,9 @@ mod tests {
     fn reply_to_edited_original_derives_and_validates_the_edited_text() {
         let (core, ckey, signing_keys) = reply_test_setup();
         let orig_b64 = original_event_b64(&core, &ckey, "the first wording");
+        let orig_message_id = parse_message_event(&base64_decode(&orig_b64).unwrap())
+            .unwrap()
+            .message_id;
         let edit_b64 = edit_event_b64(
             &core,
             &ckey,
@@ -8827,6 +9245,7 @@ mod tests {
             "seq-orig",
             "the new wording",
             "seq-edit",
+            orig_message_id.as_deref(),
         );
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
@@ -8863,6 +9282,7 @@ mod tests {
             "seq-orig",
             "the new wording",
             "seq-edit",
+            None,
         );
 
         // A preview that embeds the edit but quotes the pre-edit text is
@@ -8893,6 +9313,7 @@ mod tests {
             "seq-orig",
             "the new wording",
             "seq-edit",
+            None,
         );
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)

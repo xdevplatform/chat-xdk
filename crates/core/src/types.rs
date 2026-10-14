@@ -184,6 +184,9 @@ pub struct MediaAttachment {
     pub attachment_id: Option<String>,
     pub legacy_media_url_https: Option<String>,
     pub legacy_media_preview_url: Option<String>,
+    /// SHA-256 of the decrypted media bytes, when the sender included it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plaintext_sha256: Option<Vec<u8>>,
 }
 
 /// Media dimensions (width/height).
@@ -611,6 +614,7 @@ pub struct MediaAttachmentInfo {
     pub attachment_id: Option<String>,
     pub legacy_media_url_https: Option<String>,
     pub legacy_media_preview_url: Option<String>,
+    pub plaintext_sha256: Option<Vec<u8>>,
 }
 
 /// Media dimensions (width/height).
@@ -1128,6 +1132,14 @@ pub enum AttachmentDescriptor {
         media_type: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_millis: Option<i64>,
+        /// Stored attachment id. An empty string is a real id. `None` is
+        /// filled with the message id, or `<message id>#<index>` after the first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<String>,
+        /// SHA-256 of the media plaintext. Sent on message-key media; a
+        /// missing hash is left unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plaintext_sha256: Option<Vec<u8>>,
     },
     /// A URL card attachment.
     ///
@@ -1148,6 +1160,10 @@ pub enum AttachmentDescriptor {
         /// Small site icon shown when no banner is available.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         favicon_image: Option<UrlAttachmentImageDescriptor>,
+        /// Stored attachment id. Banner and favicon share this id's key.
+        /// An empty string is a real id. `None` is filled from the message id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<String>,
     },
     /// A post / tweet attachment.
     Post {
@@ -1155,6 +1171,10 @@ pub enum AttachmentDescriptor {
         rest_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         post_url: Option<String>,
+        /// Stored attachment id. An empty string is a real id. `None` is
+        /// filled from the message id and the attachment's position.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<String>,
     },
 }
 

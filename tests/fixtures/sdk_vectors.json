@@ -22,5 +22,26 @@
   "private_keys_concat_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg==",
   "signature_b64": "y2eG2ncBrqNtyxmdkCDuMhbNvZEKrQ1d7kyLHbNvHRLtdgZgMLiixNKFdKfLzbcwMLAgB/uDAjFABULfN3NLYg==",
   "signing_private_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI=",
-  "signing_public_b64": "BHzyexiNA09+ilI4AwS1GsPAiWnid/IbNaYLSPxHZpl4B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E="
+  "signing_public_b64": "BHzyexiNA09+ilI4AwS1GsPAiWnid/IbNaYLSPxHZpl4B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E=",
+  "message_keys": {
+    "conversation_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "sender_id": "1876543210987654321",
+    "message_id": "9d8c7b6a-5f4e-4d3c-8b2a-190807060504",
+    "message_key_hex": "4d443b9a862e9584ccd0aee2753162aa7c5c1dbcb5f967610155f65ae41d8084",
+    "attachment_key_hex": "1ef86545f91f8a3078e276949f7555df2ca584e9c6509b261a558a2e618a1b4b",
+    "attachment_key_index_1_hex": "8a7bc01f2ff35c661140da68606b2370cecc13810f245d791aeb8ba6b40d4ea8",
+    "short_sender": {
+      "conversation_key_hex": "c3a1f0e2d4b6987a5c3e1f0d2b4a6987c3a1f0e2d4b6987a5c3e1f0d2b4a6987",
+      "sender_id": "12",
+      "message_id": "00000000-0000-4000-8000-000000000001",
+      "message_key_hex": "685bd4a20c7efb64c99147ab5854560c72eac9a826b04880b64e1951d4ef4cc7"
+    },
+    "mce_payloads": {
+      "v8_key_8": "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473,8,SGVsbG8",
+      "v9": "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473,5,SGVsbG8,signature_version=9",
+      "v10_cev_unset": "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473,5,SGVsbG8,null,signature_version=10",
+      "v10_cev_1": "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473,5,SGVsbG8,1,signature_version=10",
+      "v11_cev_1": "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473,5,SGVsbG8,1,signature_version=11"
+    }
+  }
 }
