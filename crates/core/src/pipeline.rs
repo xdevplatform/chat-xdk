@@ -19,11 +19,18 @@ use crate::thrift::product::{
     MessageAttachment as ThriftMessageAttachment, MessageContents, MessageEdit,
     MessageEntryContents, MessageEntryHolder, MessageReactionAdd, MessageReactionRemove,
     PhoneNumberRichTextContent, PostAttachment as ThriftPostAttachment,
+    QuickReply as ThriftQuickReply, QuickReplyOption as ThriftQuickReplyOption,
+    QuickReplyOptionsRequest as ThriftQuickReplyOptionsRequest,
+    QuickReplyOptionsResponse as ThriftQuickReplyOptionsResponse,
+    QuickReplyRequest as ThriftQuickReplyRequest, QuickReplyResponse as ThriftQuickReplyResponse,
     ReplyingToPreview as ThriftReplyingToPreview, RichTextContent as ThriftRichTextContent,
     RichTextEntity as ThriftRichTextEntity, UrlAttachment as ThriftUrlAttachment,
     UrlAttachmentImage as ThriftUrlAttachmentImage, UrlRichTextContent,
 };
-use crate::types::{AttachmentDescriptor, EntityDescriptor, SendPayload, SignatureInfo};
+use crate::types::{
+    AttachmentDescriptor, EntityDescriptor, QuickReply, QuickReplyRequest, QuickReplyResponse,
+    SendPayload, SignatureInfo,
+};
 
 use std::io::Cursor;
 use thrift::protocol::{TBinaryOutputProtocol, TSerializable};
@@ -237,12 +244,14 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
 
 // Content builders
 
-/// Build text message content, optionally with entities and attachments.
+/// Build text message content, optionally with entities, attachments, and a
+/// quick reply.
 #[allow(clippy::vec_box)]
 pub fn build_message_content(
     text: &str,
     entities: Option<Vec<Box<ThriftRichTextEntity>>>,
     attachments: Option<Vec<Box<ThriftMessageAttachment>>>,
+    quick_reply: Option<Box<ThriftQuickReply>>,
 ) -> Result<Vec<u8>, SdkError> {
     let content = MessageContents::new(
         Some(text.to_string()),
@@ -251,7 +260,7 @@ pub fn build_message_content(
         None,
         None,
         None,
-        None,
+        quick_reply,
         None,
         None,
     );
@@ -268,6 +277,7 @@ pub fn build_message_content_with_preview(
     preview: ThriftReplyingToPreview,
     entities: Option<Vec<Box<ThriftRichTextEntity>>>,
     attachments: Option<Vec<Box<ThriftMessageAttachment>>>,
+    quick_reply: Option<Box<ThriftQuickReply>>,
 ) -> Result<Vec<u8>, SdkError> {
     let content = MessageContents::new(
         Some(text.to_string()),
@@ -276,7 +286,7 @@ pub fn build_message_content_with_preview(
         Some(Box::new(preview)),
         None,
         None,
-        None,
+        quick_reply,
         None,
         None,
     );
@@ -500,6 +510,42 @@ fn build_thrift_url_image(
     ))
 }
 
+/// Convert a [`QuickReply`] into a Thrift `QuickReply`.
+pub fn build_thrift_quick_reply(quick_reply: &QuickReply) -> Box<ThriftQuickReply> {
+    let thrift = match quick_reply {
+        QuickReply::Request {
+            request: QuickReplyRequest::Options { options },
+        } => {
+            let items = options.options.as_ref().map(|items| {
+                items
+                    .iter()
+                    .map(|o| {
+                        ThriftQuickReplyOption::new(
+                            o.id.clone(),
+                            o.label.clone(),
+                            o.metadata.clone(),
+                            o.description.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            ThriftQuickReply::Request(ThriftQuickReplyRequest::Options(
+                ThriftQuickReplyOptionsRequest::new(options.id.clone(), items),
+            ))
+        }
+        QuickReply::Response {
+            response: QuickReplyResponse::Options { options },
+        } => ThriftQuickReply::Response(ThriftQuickReplyResponse::Options(
+            ThriftQuickReplyOptionsResponse::new(
+                options.request_id.clone(),
+                options.metadata.clone(),
+                options.selected_option_id.clone(),
+            ),
+        )),
+    };
+    Box::new(thrift)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,7 +561,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_basic() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Hello!", None, None).unwrap();
+        let content = build_message_content("Hello!", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -539,7 +585,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_with_options() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Hello!", None, None).unwrap();
+        let content = build_message_content("Hello!", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -561,7 +607,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_rejects_comma_in_ids() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Hello!", None, None).unwrap();
+        let content = build_message_content("Hello!", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -579,7 +625,7 @@ mod tests {
 
     #[test]
     fn test_build_message_content_plain_text() {
-        let content = build_message_content("Hello, World!", None, None).unwrap();
+        let content = build_message_content("Hello, World!", None, None, None).unwrap();
         assert!(!content.is_empty());
     }
 
@@ -602,9 +648,13 @@ mod tests {
                 entity_type: "hashtag".to_string(),
             },
         ]);
-        let content =
-            build_message_content("https://example.com @user #topic", Some(entities), None)
-                .unwrap();
+        let content = build_message_content(
+            "https://example.com @user #topic",
+            Some(entities),
+            None,
+            None,
+        )
+        .unwrap();
         assert!(!content.is_empty());
     }
 
@@ -682,6 +732,7 @@ mod tests {
             test_preview("seq-123", Some(12345), Some("Original message"), None, None),
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -736,7 +787,7 @@ mod tests {
     #[test]
     fn test_full_encrypt_sign_produces_valid_base64() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Test message", None, None).unwrap();
+        let content = build_message_content("Test message", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -1124,7 +1175,7 @@ mod tests {
 
     #[test]
     fn test_build_message_content_empty_text() {
-        let content = build_message_content("", None, None).unwrap();
+        let content = build_message_content("", None, None, None).unwrap();
         assert!(
             !content.is_empty(),
             "Even empty text should produce a Thrift payload"
@@ -1137,6 +1188,7 @@ mod tests {
             "Hello 🌍! Ünïcödé & <html> \"quotes\" \n\tnewlines",
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -1145,7 +1197,7 @@ mod tests {
     #[test]
     fn test_build_message_content_very_long_text() {
         let long_text = "A".repeat(10_000);
-        let content = build_message_content(&long_text, None, None).unwrap();
+        let content = build_message_content(&long_text, None, None, None).unwrap();
         assert!(!content.is_empty());
     }
 
@@ -1166,6 +1218,7 @@ mod tests {
             "https://example.com text",
             Some(entities),
             Some(attachments),
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -1182,7 +1235,8 @@ mod tests {
             media_type: Some(1),
             duration_millis: None,
         }]);
-        let content = build_message_content("Check this out", None, Some(attachments)).unwrap();
+        let content =
+            build_message_content("Check this out", None, Some(attachments), None).unwrap();
         assert!(!content.is_empty());
     }
 
@@ -1206,6 +1260,7 @@ mod tests {
             ),
             Some(entities),
             None,
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -1227,6 +1282,7 @@ mod tests {
             test_preview("seq-789", Some(11111), Some("Send me a pic"), None, None),
             None,
             Some(attachments),
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -1248,6 +1304,7 @@ mod tests {
                 Some(reply_entities),
                 None,
             ),
+            None,
             None,
             None,
         )
@@ -1272,6 +1329,7 @@ mod tests {
             ),
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -1282,6 +1340,7 @@ mod tests {
         let content = build_message_content_with_preview(
             "Reply text",
             test_preview("seq-400", None, None, None, None),
+            None,
             None,
             None,
         )
@@ -1327,6 +1386,7 @@ mod tests {
             ),
             Some(entities),
             Some(attachments),
+            None,
         )
         .unwrap();
         assert!(!content.is_empty());
@@ -1337,7 +1397,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_rejects_comma_in_sender_id() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Hi", None, None).unwrap();
+        let content = build_message_content("Hi", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -1358,7 +1418,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_rejects_comma_in_conversation_id() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Hi", None, None).unwrap();
+        let content = build_message_content("Hi", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -1420,7 +1480,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_rejects_comma_in_key_version() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Hi", None, None).unwrap();
+        let content = build_message_content("Hi", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -1438,7 +1498,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_signature_info_fields() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Fields check", None, None).unwrap();
+        let content = build_message_content("Fields check", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -1460,7 +1520,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_empty_content() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("", None, None).unwrap();
+        let content = build_message_content("", None, None, None).unwrap();
 
         let params = EncryptAndSignParams::new(
             &ckey,
@@ -1480,7 +1540,7 @@ mod tests {
     #[test]
     fn test_encrypt_and_sign_two_calls_produce_different_ciphertext() {
         let (ckey, signing_key) = test_keys();
-        let content = build_message_content("Same message", None, None).unwrap();
+        let content = build_message_content("Same message", None, None, None).unwrap();
 
         let params1 = EncryptAndSignParams::new(
             &ckey,

@@ -1740,10 +1740,15 @@ impl ChatCore {
             .attachments
             .take()
             .map(|a| crate::pipeline::build_thrift_attachments(&a));
+        let thrift_quick_reply = params
+            .quick_reply
+            .as_ref()
+            .map(crate::pipeline::build_thrift_quick_reply);
         let content_bytes = crate::pipeline::build_message_content(
             &params.text,
             thrift_entities,
             thrift_attachments,
+            thrift_quick_reply,
         )?;
 
         let message_id = Self::generate_message_id();
@@ -1793,6 +1798,11 @@ impl ChatCore {
             .take()
             .map(|a| crate::pipeline::build_thrift_attachments(&a));
 
+        let thrift_quick_reply = params
+            .quick_reply
+            .as_ref()
+            .map(crate::pipeline::build_thrift_quick_reply);
+
         let preview = self.build_reply_preview(&mut params, &ckey, &conversation_key_version)?;
 
         let content_bytes = crate::pipeline::build_message_content_with_preview(
@@ -1800,6 +1810,7 @@ impl ChatCore {
             preview,
             thrift_entities,
             thrift_attachments,
+            thrift_quick_reply,
         )?;
 
         let message_id = Self::generate_message_id();
@@ -3904,7 +3915,8 @@ mod tests {
 
     /// Build plaintext Thrift content bytes for a simple text message.
     fn build_plaintext_content(text: &str) -> Vec<u8> {
-        crate::pipeline::build_message_content(text, None, None).expect("build_message_content")
+        crate::pipeline::build_message_content(text, None, None, None)
+            .expect("build_message_content")
     }
 
     /// A message signed by encrypt_message must verify against the sender's
@@ -4039,6 +4051,121 @@ mod tests {
             }
             other => panic!("expected Message, got {:?}", other),
         }
+    }
+
+    fn sample_quick_reply_request() -> QuickReply {
+        QuickReply::Request {
+            request: QuickReplyRequest::Options {
+                options: QuickReplyOptionsRequest {
+                    id: Some("qr-1".into()),
+                    options: Some(vec![
+                        QuickReplyOption {
+                            id: Some("yes".into()),
+                            label: Some("Yes".into()),
+                            metadata: Some("m-yes".into()),
+                            description: Some("Confirm".into()),
+                        },
+                        QuickReplyOption {
+                            id: Some("no".into()),
+                            label: Some("No".into()),
+                            metadata: None,
+                            description: None,
+                        },
+                    ]),
+                },
+            },
+        }
+    }
+
+    fn sample_quick_reply_response() -> QuickReply {
+        QuickReply::Response {
+            response: QuickReplyResponse::Options {
+                options: QuickReplyOptionsResponse {
+                    request_id: Some("qr-1".into()),
+                    metadata: Some("m-yes".into()),
+                    selected_option_id: Some("yes".into()),
+                },
+            },
+        }
+    }
+
+    /// Encrypt with the given quick reply (or none), decrypt, and return the
+    /// decrypted text content's quick reply.
+    fn quick_reply_round_trip(quick_reply: Option<QuickReply>, reply: bool) -> Option<QuickReply> {
+        let core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+
+        let payload = if reply {
+            let mut params = crate::EncryptReplyParams::new("conv-1", "Yes", "")
+                .with_identity("sender-1", "1733889755256")
+                .with_conversation_key(ckey.to_bytes(), "9001");
+            params.reply_to_sequence_id = Some("seq-orig".into());
+            params.reply_to_sender_id = Some(42);
+            params.reply_to_text = Some("Continue?".into());
+            params.quick_reply = quick_reply;
+            core.encrypt_reply(params).unwrap()
+        } else {
+            let mut params = crate::EncryptMessageParams::new("conv-1", "Continue?")
+                .with_identity("sender-1", "1733889755256")
+                .with_conversation_key(ckey.to_bytes(), "9001");
+            params.quick_reply = quick_reply;
+            core.encrypt_message(params).unwrap()
+        };
+
+        let event_b64 = wrap_signed_payload_with_seq(&payload, "sender-1", "conv-1", "seq-qr");
+        let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
+        let signing_keys = [SigningKeyEntry {
+            user_id: "sender-1".to_string(),
+            public_key_version: "1733889755256".to_string(),
+            public_key: reg.public_key.signing_public_key.clone(),
+            identity_public_key: reg.public_key.public_key.clone(),
+            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
+        }];
+
+        match core
+            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .unwrap()
+        {
+            Event::Message(msg) => {
+                assert!(msg.verified);
+                match msg.content {
+                    MessageContent::Text { quick_reply, .. } => quick_reply,
+                    other => panic!("expected Text content, got {:?}", other),
+                }
+            }
+            other => panic!("expected Message, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn encrypt_message_quick_reply_request_round_trips_through_decrypt() {
+        let sent = sample_quick_reply_request();
+        assert_eq!(
+            quick_reply_round_trip(Some(sent.clone()), false),
+            Some(sent)
+        );
+    }
+
+    #[test]
+    fn encrypt_message_quick_reply_response_round_trips_through_decrypt() {
+        let sent = sample_quick_reply_response();
+        assert_eq!(
+            quick_reply_round_trip(Some(sent.clone()), false),
+            Some(sent)
+        );
+    }
+
+    #[test]
+    fn encrypt_reply_quick_reply_round_trips_through_decrypt() {
+        let sent = sample_quick_reply_response();
+        assert_eq!(quick_reply_round_trip(Some(sent.clone()), true), Some(sent));
+    }
+
+    #[test]
+    fn encrypt_without_quick_reply_decrypts_without_one() {
+        assert_eq!(quick_reply_round_trip(None, false), None);
+        assert_eq!(quick_reply_round_trip(None, true), None);
     }
 
     /// The SDK mints the message id: `encrypt_message` returns a fresh UUID in

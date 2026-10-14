@@ -22,7 +22,7 @@
 
 use zeroize::Zeroize;
 
-use crate::types::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput};
+use crate::types::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput, QuickReply};
 
 /// Convert an override string into storage form: an empty string means
 /// "not set", so FFI layers that cannot express `Option` can pass `""`.
@@ -58,6 +58,9 @@ pub struct EncryptMessageParams {
     pub entities: Option<Vec<EntityDescriptor>>,
     /// Optional attachments (posts, URLs, media, etc.) to include in the message.
     pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// Optional quick reply: a request offering selectable options, or a
+    /// response selecting one.
+    pub quick_reply: Option<QuickReply>,
     /// Whether to send a push notification. `None` defaults to `true`.
     pub should_notify: Option<bool>,
     /// Optional TTL in milliseconds for disappearing messages.
@@ -76,6 +79,7 @@ impl EncryptMessageParams {
             conversation_key_version: None,
             entities: None,
             attachments: None,
+            quick_reply: None,
             should_notify: None,
             ttl_msec: None,
         }
@@ -128,6 +132,7 @@ impl std::fmt::Debug for EncryptMessageParams {
             .field("conversation_key_version", &self.conversation_key_version)
             .field("entities", &self.entities)
             .field("attachments", &self.attachments)
+            .field("quick_reply", &self.quick_reply)
             .field("should_notify", &self.should_notify)
             .field("ttl_msec", &self.ttl_msec)
             .finish()
@@ -195,6 +200,9 @@ pub struct EncryptReplyParams {
     /// Optional attachments from the original message (for the reply
     /// preview); derived from `reply_to_event` when unset.
     pub reply_to_attachments: Option<Vec<AttachmentDescriptor>>,
+    /// Optional quick reply: a request offering selectable options, or a
+    /// response selecting one.
+    pub quick_reply: Option<QuickReply>,
     /// Whether to send a push notification. `None` defaults to `true`.
     pub should_notify: Option<bool>,
     /// Optional TTL in milliseconds for disappearing messages.
@@ -228,6 +236,7 @@ impl EncryptReplyParams {
             attachments: None,
             reply_to_entities: None,
             reply_to_attachments: None,
+            quick_reply: None,
             should_notify: None,
             ttl_msec: None,
         }
@@ -288,6 +297,7 @@ impl std::fmt::Debug for EncryptReplyParams {
             .field("attachments", &self.attachments)
             .field("reply_to_entities", &self.reply_to_entities)
             .field("reply_to_attachments", &self.reply_to_attachments)
+            .field("quick_reply", &self.quick_reply)
             .field("should_notify", &self.should_notify)
             .field("ttl_msec", &self.ttl_msec)
             .finish()
@@ -778,6 +788,7 @@ mod tests {
         assert_eq!(a.conversation_key_version, b.conversation_key_version);
         assert_eq!(a.entities, b.entities);
         assert_eq!(a.attachments, b.attachments);
+        assert_eq!(a.quick_reply, b.quick_reply);
         assert_eq!(a.should_notify, b.should_notify);
         assert_eq!(a.ttl_msec, b.ttl_msec);
     }
@@ -804,6 +815,7 @@ mod tests {
             conversation_key_version: Some("1".into()),
             entities: None,
             attachments: None,
+            quick_reply: None,
             should_notify: Some(false),
             ttl_msec: Some(30_000),
         };
