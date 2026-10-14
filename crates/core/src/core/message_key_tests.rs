@@ -1,7 +1,10 @@
 //! Per-message and per-attachment keys, and reply previews that carry
 //! message keys.
 
-use super::test_support::{decrypt_message, key, keys, message_event, Party, CONVERSATION};
+use super::test_support::{
+    decrypt_message, frame, key, keys, message_event, sent_event, Party, CONVERSATION,
+    SIGNING_KEY_VERSION,
+};
 use super::*;
 use crate::crypto::encryption::encrypt_stream;
 use crate::pipeline::{build_message_content, serialize_thrift};
@@ -938,4 +941,156 @@ fn a_reply_quoting_an_older_key_version_validates_through_its_embedded_key_chang
         message.reply_preview_validation,
         Some(ReplyPreviewValidation::Valid)
     );
+}
+
+// Sending replies and edits.
+
+fn decrypt_payload_contents(
+    payload: &SendPayload,
+    contents_key: &XChatConversationKey,
+) -> Contents {
+    let event = sent_event(payload, REPLIER, CONVERSATION);
+    let Some(Detail::MessageCreateEvent(mce)) = event.detail else {
+        panic!("expected a MessageCreateEvent");
+    };
+    let plaintext = decrypt_message_bytes(contents_key, mce.contents.as_ref().unwrap()).unwrap();
+    ChatCore::parse_thrift_entry_contents(&plaintext).unwrap()
+}
+
+#[test]
+fn a_reply_to_a_message_key_original_carries_its_key_and_its_edits_key() {
+    let f = ReplyFixture::new();
+    let (edit, edit_key) = edit_event(&f, Some("orig-1"), Some(1), 10);
+    let mut params = crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&f.original))
+        .with_identity(REPLIER, SIGNING_KEY_VERSION)
+        .with_conversation_key(f.ckey.to_bytes(), "7");
+    params.reply_to_edit_event = Some(frame(&edit));
+    let payload = f.replier.core.encrypt_reply(params).unwrap();
+
+    let Contents::Message(message) = decrypt_payload_contents(&payload, &f.ckey) else {
+        panic!("expected a message");
+    };
+    let preview = message.replying_to_preview.unwrap();
+    assert_eq!(preview.message_text.as_deref(), Some("Second draft"));
+    assert_eq!(
+        preview.raw_event_message_key,
+        Some(f.original_key.to_bytes())
+    );
+    assert_eq!(
+        preview.raw_event_edit_message_key,
+        Some(edit_key.to_bytes())
+    );
+}
+
+#[test]
+fn a_reply_to_a_conversation_key_original_carries_no_key() {
+    let author = Party::new(AUTHOR);
+    let replier = Party::new(REPLIER);
+    let ckey = key(7);
+    let original = message_event(
+        &author,
+        "orig-1",
+        "200",
+        "7",
+        None,
+        7,
+        &ckey,
+        &build_message_content("Hello", None, None).unwrap(),
+    );
+    let payload = replier
+        .core
+        .encrypt_reply(
+            crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&original))
+                .with_identity(REPLIER, SIGNING_KEY_VERSION)
+                .with_conversation_key(ckey.to_bytes(), "7"),
+        )
+        .unwrap();
+    let Contents::Message(message) = decrypt_payload_contents(&payload, &ckey) else {
+        panic!("expected a message");
+    };
+    let preview = message.replying_to_preview.unwrap();
+    assert_eq!(preview.message_text.as_deref(), Some("Hello"));
+    assert!(preview.raw_event_message_key.is_none());
+}
+
+#[test]
+fn a_reply_with_every_preview_field_set_needs_no_key_for_a_message_key_original() {
+    let f = ReplyFixture::new();
+    let mut params = crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&f.original))
+        .with_identity(REPLIER, SIGNING_KEY_VERSION)
+        .with_conversation_key(key(8).to_bytes(), "8");
+    params.reply_to_text = Some("Hello there".to_string());
+    params.reply_to_entities = Some(vec![]);
+    params.reply_to_attachments = Some(vec![]);
+    let payload = f.replier.core.encrypt_reply(params).unwrap();
+    let Contents::Message(message) = decrypt_payload_contents(&payload, &key(8)) else {
+        panic!("expected a message");
+    };
+    assert!(message
+        .replying_to_preview
+        .unwrap()
+        .raw_event_message_key
+        .is_none());
+}
+
+#[test]
+fn a_reply_still_embeds_the_key_changes_it_is_given() {
+    let f = ReplyFixture::new();
+    let kce = ThriftEvent {
+        message_id: Some("kc-1".to_string()),
+        sender_id: Some(AUTHOR.to_string()),
+        conversation_id: Some(CONVERSATION.to_string()),
+        detail: Some(Detail::ConversationKeyChangeEvent(
+            ConversationKeyChangeEvent {
+                conversation_key_version: Some("6".to_string()),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let mut params = crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&f.original))
+        .with_identity(REPLIER, SIGNING_KEY_VERSION)
+        .with_conversation_key(f.ckey.to_bytes(), "7");
+    params.reply_to_ckces = Some(vec![frame(&kce)]);
+    let payload = f.replier.core.encrypt_reply(params).unwrap();
+    let Contents::Message(message) = decrypt_payload_contents(&payload, &f.ckey) else {
+        panic!("expected a message");
+    };
+    assert_eq!(
+        message
+            .replying_to_preview
+            .unwrap()
+            .raw_event_ckces
+            .map(|c| c.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn an_edit_names_the_message_it_edits() {
+    let f = ReplyFixture::new();
+    let params = crate::EncryptEditParams::new(frame(&f.original), "Second draft")
+        .with_identity(AUTHOR, SIGNING_KEY_VERSION)
+        .with_conversation_key(f.ckey.to_bytes(), "7");
+    let payload = f.author.core.encrypt_edit(&params).unwrap();
+    let Contents::MessageEdit(edit) = decrypt_payload_contents(&payload, &f.ckey) else {
+        panic!("expected an edit");
+    };
+    assert_eq!(edit.message_id.as_deref(), Some("orig-1"));
+    assert_eq!(edit.message_sequence_id.as_deref(), Some("200"));
+}
+
+#[test]
+fn an_edit_with_explicit_target_fields_ignores_an_unreadable_target_event() {
+    let f = ReplyFixture::new();
+    let mut params = crate::EncryptEditParams::new("!!!not-an-event!!!", "Second draft")
+        .with_identity(AUTHOR, SIGNING_KEY_VERSION)
+        .with_conversation_key(f.ckey.to_bytes(), "7");
+    params.conversation_id = Some(CONVERSATION.to_string());
+    params.target_message_sequence_id = Some("200".to_string());
+    let payload = f.author.core.encrypt_edit(&params).unwrap();
+    let Contents::MessageEdit(edit) = decrypt_payload_contents(&payload, &f.ckey) else {
+        panic!("expected an edit");
+    };
+    assert!(edit.message_id.is_none());
 }

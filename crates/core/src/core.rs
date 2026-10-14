@@ -1945,10 +1945,20 @@ impl ChatCore {
             &sender_id,
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
+        // Read leniently: an unparsable target event already fails above
+        // unless explicit fields made it unnecessary, and then only the
+        // message id is lost.
+        let target_message_id = params
+            .target_event
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .and_then(|b64| Self::parse_event_b64(b64).ok())
+            .and_then(|event| event.message_id);
         let content_bytes = crate::pipeline::build_message_edit_content(
             &target_sequence_id,
             &params.updated_text,
             params.entities.as_deref(),
+            target_message_id.as_deref(),
         )?;
         let message_id = Self::generate_message_id();
         crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
@@ -2399,35 +2409,67 @@ impl ChatCore {
         let need_original = params.reply_to_text.is_none()
             || thrift_reply_entities.is_none()
             || thrift_reply_attachments.is_none();
-        let original = if need_original {
-            let key = self.raw_event_contents_key(
+        // When the original was edited, the preview quotes what the message
+        // says now, so text and entities derive from the edit's contents;
+        // attachments stay with the original (edits do not carry them).
+        let need_edit = edit_event.is_some()
+            && (params.reply_to_text.is_none() || thrift_reply_entities.is_none());
+
+        // A quoted message-key event's key is resolved even when its
+        // contents are not needed, so the reply can carry it; failing to
+        // resolve it then only means the reply carries no key.
+        let original_key = if need_original || Self::uses_message_key(&raw) {
+            match self.raw_event_contents_key(
                 &raw,
                 Some(outer_key),
                 Some(outer_version),
                 &key_changes,
                 &HashMap::new(),
-            )?;
-            let plaintext = Self::open_raw_event(&raw, key.as_ref())?;
-            Some(Self::parse_thrift_message_contents(&plaintext)?)
+            ) {
+                Ok(key) => key,
+                Err(e) if need_original => return Err(e),
+                Err(_) => None,
+            }
         } else {
             None
         };
-
-        // When the original was edited, the preview quotes what the message
-        // says now, so text and entities derive from the edit's contents;
-        // attachments stay with the original (edits do not carry them).
-        let edited = match &edit_event {
-            Some(edit) if params.reply_to_text.is_none() || thrift_reply_entities.is_none() => {
-                let key = self.raw_event_contents_key(
+        let edit_key = match &edit_event {
+            Some(edit) if need_edit || Self::uses_message_key(edit) => {
+                match self.raw_event_contents_key(
                     edit,
                     Some(outer_key),
                     Some(outer_version),
                     &key_changes,
                     &HashMap::new(),
-                )?;
-                let plaintext = Self::open_raw_event(edit, key.as_ref())?;
+                ) {
+                    Ok(key) => key,
+                    Err(e) if need_edit => return Err(e),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+
+        let original = if need_original {
+            let plaintext = Self::open_raw_event(&raw, original_key.as_ref())?;
+            Some(Self::parse_thrift_message_contents(&plaintext)?)
+        } else {
+            None
+        };
+        let edited = match &edit_event {
+            Some(edit) if need_edit => {
+                let plaintext = Self::open_raw_event(edit, edit_key.as_ref())?;
                 Some(Self::parse_thrift_message_edit(&plaintext)?)
             }
+            _ => None,
+        };
+
+        // Only per-message keys are carried; a conversation key never is.
+        let raw_event_message_key = original_key
+            .filter(|_| Self::uses_message_key(&raw))
+            .map(|k| k.to_bytes());
+        let raw_event_edit_message_key = match &edit_event {
+            Some(edit) if Self::uses_message_key(edit) => edit_key.map(|k| k.to_bytes()),
             _ => None,
         };
 
@@ -2476,8 +2518,8 @@ impl ChatCore {
             (!embedded_ckces.is_empty()).then_some(embedded_ckces),
             None,
             None,
-            None,
-            None,
+            raw_event_message_key,
+            raw_event_edit_message_key,
         ))
     }
 
