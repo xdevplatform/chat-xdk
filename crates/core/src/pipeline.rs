@@ -309,6 +309,7 @@ pub fn build_message_edit_content(
     target_message_sequence_id: &str,
     updated_text: &str,
     entities: Option<&[EntityDescriptor]>,
+    message_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     // MessageEdit carries entities unboxed, unlike MessageContents.
     let entities = entities.map(|descs| {
@@ -321,7 +322,7 @@ pub fn build_message_edit_content(
         Some(target_message_sequence_id.to_string()),
         Some(updated_text.to_string()),
         entities,
-        None,
+        message_id.map(|id| id.to_string()),
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::MessageEdit(
         Box::new(content),

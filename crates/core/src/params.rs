@@ -431,6 +431,9 @@ pub struct EncryptEditParams {
     /// The `sequence_id` of the message being edited; derived from
     /// `target_event` when unset.
     pub target_message_sequence_id: Option<String>,
+    /// The original message id copied onto `MessageEdit.message_id`. Derived
+    /// from `target_event` when unset.
+    pub target_message_id: Option<String>,
     /// User ID of the sender; resolves from the session identity when unset.
     pub sender_id: Option<String>,
     /// Version of the signing key used to sign the edit; resolves from the
@@ -457,6 +460,7 @@ impl EncryptEditParams {
             entities: None,
             conversation_id: None,
             target_message_sequence_id: None,
+            target_message_id: None,
             sender_id: None,
             signing_key_version: None,
             conversation_key: None,
@@ -508,6 +512,7 @@ impl std::fmt::Debug for EncryptEditParams {
                 "target_message_sequence_id",
                 &self.target_message_sequence_id,
             )
+            .field("target_message_id", &self.target_message_id)
             .field("sender_id", &self.sender_id)
             .field("signing_key_version", &self.signing_key_version)
             .field(
