@@ -14,6 +14,9 @@ pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 /// Current signature protocol version.
 pub const SIGNATURE_VERSION: &str = "7";
 
+/// Highest signature version this SDK can verify.
+pub const MAX_SIGNATURE_VERSION: i32 = 11;
+
 /// Minimum signature version accepted on verification. v1 payloads omit
 /// the event-type discriminant and conversation-key version, so accepting
 /// them would let a forger downgrade to the weaker payload via the

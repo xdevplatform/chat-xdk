@@ -2727,6 +2727,14 @@ impl ChatCore {
                 crate::signatures::MIN_SIGNATURE_VERSION
             ));
         }
+        if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+            return Err(format!(
+                "signature_version {} is outside the accepted range {}..={}",
+                sig_version,
+                crate::signatures::MIN_SIGNATURE_VERSION,
+                crate::signatures::MAX_SIGNATURE_VERSION
+            ));
+        }
 
         let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
         let signing_key_b64 = match signing_keys
@@ -2836,6 +2844,9 @@ pub fn build_event_signature_payload(
         .and_then(|s| s.signature_version.as_deref())
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
+    if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+        return None;
+    }
 
     match detail {
         MessageEventDetail::MessageCreateEvent(mce) => {
@@ -2847,12 +2858,21 @@ pub fn build_event_signature_payload(
             let contents = mce.contents.as_ref()?;
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
             let ckey_ver = mce.conversation_key_version.as_deref().unwrap_or("");
+            let mut extra = vec![ckey_ver.to_string(), contents_b64];
+            if sig_version >= 10 {
+                extra.push(match mce.contents_encryption_version {
+                    Some(v) => v.to_string(),
+                    None => "null".to_string(),
+                });
+            }
+            let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
             build_component_payload(
                 "MessageCreateEvent",
                 msg_id,
                 sender_id,
                 conv_id,
-                &[ckey_ver, &contents_b64],
+                &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::ConversationKeyChangeEvent(ckce) => {
@@ -2867,6 +2887,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[ckey_ver, ckey_b64],
+                    sig_version,
                 )
             } else {
                 // pre-v6: sign the per-participant encrypted key triplets.
@@ -2890,6 +2911,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &extra,
+                    sig_version,
                 )
             }
         }
@@ -2905,6 +2927,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::ConversationDeleteEvent(conv_del) => {
@@ -2925,6 +2948,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::MarkConversationReadEvent(read) => {
@@ -2940,6 +2964,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra_refs,
+                sig_version,
             )
         }
         MessageEventDetail::MarkConversationUnreadEvent(unread) => {
@@ -2953,6 +2978,7 @@ pub fn build_event_signature_payload(
                 sender_id,
                 conv_id,
                 &extra,
+                sig_version,
             )
         }
         MessageEventDetail::GroupChangeEvent(gc_event) => {
@@ -2989,6 +3015,9 @@ pub fn build_event_signature_payload(
                             extra.push(nullable_i64(invite.expires_at_msec));
                         }
                     }
+                    if sig_version > 7 {
+                        extra.push(nullable_str(c.current_description.as_deref()));
+                    }
                     let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupMemberAddChange",
@@ -2996,17 +3025,23 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &extra_refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupMemberRemove(c) => {
                     let ids = c.member_ids.as_ref()?;
-                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    let mut extra: Vec<String> = ids.clone();
+                    if sig_version >= 11 {
+                        extra.push(nullable_str(c.conversation_key_version.as_deref()));
+                    }
+                    let refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupMemberRemoveChange",
                         msg_id,
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupAdminAdd(c) => {
@@ -3018,6 +3053,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupAdminRemove(c) => {
@@ -3029,6 +3065,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupTitleChange(c) => {
@@ -3040,6 +3077,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[ckey_ver, title],
+                        sig_version,
                     )
                 }
                 GenGC::GroupAvatarChange(c) => {
@@ -3051,6 +3089,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[ckey_ver, avatar],
+                        sig_version,
                     )
                 }
                 GenGC::GroupCreate(c) => {
@@ -3064,6 +3103,15 @@ pub fn build_event_signature_payload(
                         extra.push(nullable_str(c.title.as_deref()));
                         extra.push(nullable_str(c.avatar_url.as_deref()));
                     }
+                    if sig_version >= 9 {
+                        extra.push(match c.group_type {
+                            Some(t) => t.0.to_string(),
+                            None => "null".to_string(),
+                        });
+                    }
+                    if sig_version >= 10 {
+                        extra.push(nullable_i64(c.ttl_msec));
+                    }
                     let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupCreate",
@@ -3071,6 +3119,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         None,
                         &extra_refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupInviteEnable(c) => {
@@ -3083,6 +3132,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[url, &expires, &affiliate],
+                        sig_version,
                     )
                 }
                 GenGC::GroupInviteDisable(c) => {
@@ -3093,6 +3143,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[disabled_by],
+                        sig_version,
                     )
                 }
                 GenGC::GroupJoinRequest(c) => {
@@ -3103,6 +3154,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[user_id],
+                        sig_version,
                     )
                 }
                 GenGC::GroupJoinReject(c) => {
@@ -3114,6 +3166,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 GenGC::GroupDescriptionChange(c) => {
@@ -3125,6 +3178,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[ckey_ver, description],
+                        sig_version,
                     )
                 }
                 // Not part of the signed payload.
@@ -3144,6 +3198,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &[&ttl_str],
+                        sig_version,
                     )
                 }
                 CMC::MessageDurationRemove(_) => build_component_payload(
@@ -3152,6 +3207,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::MuteConversation(c) => {
                     let ids = c.muted_conversation_ids.as_deref().unwrap_or(&[]);
@@ -3162,6 +3218,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 CMC::UnmuteConversation(c) => {
@@ -3173,6 +3230,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 CMC::EnableScreenCaptureDetection(_) => build_component_payload(
@@ -3181,6 +3239,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::DisableScreenCaptureDetection(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.DisableScreenCaptureDetection",
@@ -3188,6 +3247,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::EnableScreenCaptureBlocking(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking",
@@ -3195,6 +3255,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::DisableScreenCaptureBlocking(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.DisableScreenCaptureBlocking",
@@ -3202,6 +3263,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::EnableGrok(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.EnableGrok",
@@ -3209,6 +3271,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::DisableGrok(_) => build_component_payload(
                     "ConversationMetadataChangeEvent.DisableGrok",
@@ -3216,6 +3279,7 @@ pub fn build_event_signature_payload(
                     sender_id,
                     conv_id,
                     &[],
+                    sig_version,
                 ),
                 CMC::ArchiveConversation(c) => {
                     let ids = c.archived_conversation_ids.as_deref().unwrap_or(&[]);
@@ -3226,6 +3290,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
                 CMC::UnarchiveConversation(c) => {
@@ -3237,6 +3302,7 @@ pub fn build_event_signature_payload(
                         sender_id,
                         conv_id,
                         &refs,
+                        sig_version,
                     )
                 }
             }
@@ -3268,18 +3334,25 @@ fn nullable_bool(v: Option<bool>) -> String {
 }
 
 /// Build a comma-separated component payload: "eventName,msgId,senderId,convId,extras..."
+///
+/// Versions 9 and above append `signature_version=<n>`.
 fn build_component_payload(
     event_name: &str,
     message_id: &str,
     sender_id: &str,
     conv_id: Option<&str>,
     additional: &[&str],
+    sig_version: i32,
 ) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    let suffix = (sig_version >= 9).then(|| format!("signature_version={sig_version}"));
     let mut parts: Vec<&str> = vec![event_name, message_id, sender_id];
     if let Some(cid) = conv_id {
         parts.push(cid);
     }
     parts.extend_from_slice(additional);
+    if let Some(ref suffix) = suffix {
+        parts.push(suffix);
+    }
     if parts.iter().any(|p| p.contains(',')) {
         return None;
     }
@@ -8014,6 +8087,77 @@ mod tests {
 
         let ckey_b64 = STANDARD_NO_PAD.encode(ckey.encoded());
         (event_b64, ckey_b64)
+    }
+
+    #[test]
+    fn message_signature_payloads_match_known_answers() {
+        fn payload(version: &str, key_version: &str, cev: Option<i16>) -> String {
+            let contents = base64::engine::general_purpose::STANDARD_NO_PAD
+                .decode("SGVsbG8")
+                .unwrap();
+            let mce = crate::thrift::event::MessageCreateEvent {
+                contents: Some(contents),
+                conversation_key_version: Some(key_version.to_string()),
+                contents_encryption_version: cev,
+                ..Default::default()
+            };
+            let detail = MessageEventDetail::MessageCreateEvent(mce);
+            let event = MessageEvent {
+                message_id: Some("11111111-2222-3333-4444-555555555555".into()),
+                sender_id: Some("1491585161162473473".into()),
+                conversation_id: Some("2:1491585161162473473".into()),
+                message_event_signature: Some(crate::thrift::event::MessageEventSignature {
+                    signature_version: Some(version.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let bytes = build_event_signature_payload(&event, &detail, None).unwrap();
+            String::from_utf8(bytes.to_vec()).unwrap()
+        }
+
+        let id = "MessageCreateEvent,11111111-2222-3333-4444-555555555555,1491585161162473473,2:1491585161162473473";
+        assert_eq!(payload("8", "8", None), format!("{id},8,SGVsbG8"));
+        assert_eq!(
+            payload("9", "5", None),
+            format!("{id},5,SGVsbG8,signature_version=9")
+        );
+        assert_eq!(
+            payload("10", "5", None),
+            format!("{id},5,SGVsbG8,null,signature_version=10")
+        );
+        let v10 = format!("{id},5,SGVsbG8,1,signature_version=10");
+        assert_eq!(payload("10", "5", Some(1)), v10);
+        assert_eq!(
+            payload("11", "5", Some(1)),
+            format!("{id},5,SGVsbG8,1,signature_version=11")
+        );
+
+        let spki = base64::engine::general_purpose::STANDARD
+            .decode("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+t366VDnLsZibo8mWYxvPQDuALQPpSydiQnR6GgvlHWaL2hjFuGhB6bkwqOgQMgpLNmtTd4sPVaXjxIkNLmKDg==")
+            .unwrap();
+        let point = spki[spki.len() - 65..].to_vec();
+        let public = crate::crypto::keys::XChatPublicKey::from_bytes(
+            point,
+            crate::crypto::keys::KeypairPurpose::Signing,
+        )
+        .unwrap();
+        let signature = base64::engine::general_purpose::STANDARD
+            .decode("W5rdZk1q13OBfVCSwyaWF+jTSotcS0Xrae24qOxntrrda81+BneKT8b3s0ZNHORaFd+QnzcQlzYNDSTF5vjn9A==")
+            .unwrap();
+        assert!(crate::crypto::key_factory::KeyFactory::verify(
+            &public,
+            &signature,
+            v10.as_bytes()
+        )
+        .unwrap());
+        let tampered = v10.replace(",1,signature_version=10", ",null,signature_version=10");
+        assert!(!crate::crypto::key_factory::KeyFactory::verify(
+            &public,
+            &signature,
+            tampered.as_bytes()
+        )
+        .unwrap());
     }
 
     #[test]
