@@ -935,6 +935,8 @@ mod tests {
             filename: "photo.jpg".into(),
             media_type: Some(1),
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         }]);
         params.should_notify = Some(false);
         params.ttl_msec = Some(60_000);

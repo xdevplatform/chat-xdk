@@ -1759,17 +1759,16 @@ impl ChatCore {
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
         }
+        let message_id = Self::generate_message_id();
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+            .map(|a| crate::pipeline::build_thrift_attachments_with_ids(&a, &message_id));
         let content_bytes = crate::pipeline::build_message_content(
             &params.text,
             thrift_entities,
             thrift_attachments,
         )?;
-
-        let message_id = Self::generate_message_id();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
             &ckey,
             &signing_kp.private,
@@ -1811,10 +1810,11 @@ impl ChatCore {
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
         }
+        let message_id = Self::generate_message_id();
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+            .map(|a| crate::pipeline::build_thrift_attachments_with_ids(&a, &message_id));
 
         let preview = self.build_reply_preview(&mut params, &ckey, &conversation_key_version)?;
 
@@ -1825,7 +1825,6 @@ impl ChatCore {
             thrift_attachments,
         )?;
 
-        let message_id = Self::generate_message_id();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
             &ckey,
             &signing_kp.private,
@@ -2251,10 +2250,7 @@ impl ChatCore {
         // a reply preview mirrors an already-sent original (which receivers
         // validate against the embedded raw event), so rejecting it would
         // block replying to messages from clients that sent such lists.
-        let thrift_reply_attachments = params
-            .reply_to_attachments
-            .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+        let reply_attachment_descs = params.reply_to_attachments.take();
         let explicit_sequence_id = params.reply_to_sequence_id.take().filter(|v| !v.is_empty());
 
         let Some(raw_b64) = params.reply_to_event.take().filter(|v| !v.is_empty()) else {
@@ -2263,6 +2259,9 @@ impl ChatCore {
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
                 )
             })?;
+            let thrift_reply_attachments = reply_attachment_descs
+                .as_ref()
+                .map(|a| crate::pipeline::build_thrift_attachments_with_ids(a, &sequence_id));
             return Ok(crate::thrift::product::ReplyingToPreview::new(
                 params.reply_to_sender_id,
                 params.reply_to_text.take(),
@@ -2282,6 +2281,10 @@ impl ChatCore {
         };
 
         let raw = Self::parse_event_b64(&raw_b64)?;
+        let preview_message_id = raw.message_id.clone().unwrap_or_default();
+        let thrift_reply_attachments = reply_attachment_descs
+            .as_ref()
+            .map(|a| crate::pipeline::build_thrift_attachments_with_ids(a, &preview_message_id));
         let edit_event = match params.reply_to_edit_event.take().filter(|v| !v.is_empty()) {
             Some(b64) => Some(Self::parse_event_b64(&b64)?),
             None => None,
@@ -3525,6 +3528,7 @@ fn collect_attachments(
                     attachment_id: media.attachment_id.clone(),
                     legacy_media_url_https: media.legacy_media_url_https.clone(),
                     legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+                    plaintext_sha256: media.plaintext_sha256.clone(),
                 };
                 parsed.push(AttachmentInfo::Media(info));
             }
@@ -3758,6 +3762,7 @@ fn map_media_attachment(media: &crate::thrift::product::MediaAttachment) -> Medi
         attachment_id: media.attachment_id.clone(),
         legacy_media_url_https: media.legacy_media_url_https.clone(),
         legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+        plaintext_sha256: media.plaintext_sha256.clone(),
     }
 }
 
@@ -4344,6 +4349,7 @@ mod tests {
                 width: None,
                 height: None,
             }),
+            attachment_id: None,
         }]);
         let payload = core.encrypt_message(params).unwrap();
 
@@ -8622,12 +8628,15 @@ mod tests {
             filename: "file".into(),
             media_type: mt,
             duration_millis: None,
+            attachment_id: None,
+            plaintext_sha256: None,
         };
         let url = || crate::AttachmentDescriptor::Url {
             url: "https://example.com".into(),
             display_title: None,
             banner_image: None,
             favicon_image: None,
+            attachment_id: None,
         };
         let params_with = |attachments: Vec<crate::AttachmentDescriptor>| {
             let mut p = crate::EncryptMessageParams::new("conv-1", "hi")
@@ -8677,6 +8686,7 @@ mod tests {
             crate::AttachmentDescriptor::Post {
                 rest_id: Some("1".into()),
                 post_url: None,
+                attachment_id: None,
             },
             crate::AttachmentDescriptor::Media {
                 media_hash_key: "hash".into(),
@@ -8686,6 +8696,8 @@ mod tests {
                 filename: "pic.jpg".into(),
                 media_type: Some(1),
                 duration_millis: None,
+                attachment_id: None,
+                plaintext_sha256: None,
             },
         ]);
         let err = core.encrypt_reply(params).unwrap_err();
