@@ -2735,6 +2735,13 @@ impl ChatCore {
                 crate::signatures::MIN_SIGNATURE_VERSION
             ));
         }
+        if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+            return Err(format!(
+                "signature_version {} is not supported (maximum: {})",
+                sig_version,
+                crate::signatures::MAX_SIGNATURE_VERSION
+            ));
+        }
 
         let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
         let signing_key_b64 = match signing_keys
@@ -2815,7 +2822,8 @@ pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError>
 
 // Signature payload builders
 
-/// Build the comma-separated signature payload for an event.
+/// Build the comma-separated signature payload for an event, in the layout
+/// of the signature version the event carries.
 ///
 /// Returns `None` for event types that are not signed (typing, failure,
 /// member account delete).
@@ -2845,7 +2853,7 @@ pub fn build_event_signature_payload(
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
 
-    match detail {
+    let mut payload = match detail {
         MessageEventDetail::MessageCreateEvent(mce) => {
             // Versions below MIN_SIGNATURE_VERSION use an unverifiable payload
             // form, so reject them before reaching the verifier.
@@ -2854,13 +2862,30 @@ pub fn build_event_signature_payload(
             }
             let contents = mce.contents.as_ref()?;
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
-            let ckey_ver = mce.conversation_key_version.as_deref().unwrap_or("");
+            // v8+ signs the key version as a canonical integer, "null" when
+            // absent or not an integer. Earlier versions sign it as carried,
+            // empty when absent, which is how this SDK signs at v7.
+            let ckey_ver = if sig_version >= 8 {
+                nullable_i64(
+                    mce.conversation_key_version
+                        .as_deref()
+                        .and_then(|v| v.parse::<i64>().ok()),
+                )
+            } else {
+                mce.conversation_key_version.clone().unwrap_or_default()
+            };
+            let mut extra = vec![ckey_ver, contents_b64];
+            // v10+: contents_encryption_version
+            if sig_version >= 10 {
+                extra.push(nullable_i64(mce.contents_encryption_version.map(i64::from)));
+            }
+            let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
             build_component_payload(
                 "MessageCreateEvent",
                 msg_id,
                 sender_id,
                 conv_id,
-                &[ckey_ver, &contents_b64],
+                &extra_refs,
             )
         }
         MessageEventDetail::ConversationKeyChangeEvent(ckce) => {
@@ -2997,6 +3022,10 @@ pub fn build_event_signature_payload(
                             extra.push(nullable_i64(invite.expires_at_msec));
                         }
                     }
+                    // v8+: current_description
+                    if sig_version > 7 {
+                        extra.push(nullable_str(c.current_description.as_deref()));
+                    }
                     let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupMemberAddChange",
@@ -3008,13 +3037,18 @@ pub fn build_event_signature_payload(
                 }
                 GenGC::GroupMemberRemove(c) => {
                     let ids = c.member_ids.as_ref()?;
-                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    let mut extra: Vec<String> = ids.clone();
+                    // v11+: conversation_key_version
+                    if sig_version >= 11 {
+                        extra.push(nullable_str(c.conversation_key_version.as_deref()));
+                    }
+                    let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
                         "GroupChangeEvent.GroupMemberRemoveChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &refs,
+                        &extra_refs,
                     )
                 }
                 GenGC::GroupAdminAdd(c) => {
@@ -3071,6 +3105,14 @@ pub fn build_event_signature_payload(
                         extra.push(nullable_bool(c.is_legacy_group_upgrade));
                         extra.push(nullable_str(c.title.as_deref()));
                         extra.push(nullable_str(c.avatar_url.as_deref()));
+                    }
+                    // v9+: group_type, as its number
+                    if sig_version >= 9 {
+                        extra.push(nullable_i64(c.group_type.map(|t| i64::from(t.0))));
+                    }
+                    // v10+: ttl_msec
+                    if sig_version >= 10 {
+                        extra.push(nullable_i64(c.ttl_msec));
                     }
                     let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
                     build_component_payload(
@@ -3214,7 +3256,13 @@ pub fn build_event_signature_payload(
         | MessageEventDetail::MessageFailureEvent(_)
         | MessageEventDetail::MemberAccountDeleteEvent(_) => None,
         _ => None,
+    }?;
+
+    // v9+ binds the signature version into every component payload.
+    if sig_version >= 9 {
+        payload.extend_from_slice(format!(",signature_version={}", sig_version).as_bytes());
     }
+    Some(payload)
 }
 
 /// Render a nullable string into the signature payload: the value or `"null"`.
@@ -3899,6 +3947,12 @@ pub(crate) fn convert_settings_change(
 }
 
 // Tests
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+mod signature_version_tests;
 
 #[cfg(test)]
 mod tests {

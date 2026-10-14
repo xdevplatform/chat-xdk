@@ -20,6 +20,10 @@ pub const SIGNATURE_VERSION: &str = "7";
 /// attacker-visible version field.
 pub const MIN_SIGNATURE_VERSION: i32 = 2;
 
+/// Highest signature version accepted on verification. A higher version may
+/// sign fields this SDK does not know how to reproduce.
+pub(crate) const MAX_SIGNATURE_VERSION: i32 = 11;
+
 /// First signature version whose conversation-key-change payload signs the
 /// plaintext conversation key. From this version on a recipient can
 /// reconstruct the signed bytes and verify the change; earlier versions
