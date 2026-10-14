@@ -477,6 +477,15 @@ void chat_xdk_stream_encryptor_free(struct StreamEncryptorHandle *handle);
 struct StreamDecryptorHandle *chat_xdk_stream_decryptor_new(const char *conversation_key_b64);
 
 /**
+ * Create a stream decryptor through a chat instance, which also tries the
+ * attachment keys of messages that instance has decrypted under the given
+ * conversation key. Returns NULL on a null handle or bad key; free the
+ * handle with [`chat_xdk_stream_decryptor_free`].
+ */
+struct StreamDecryptorHandle *chat_xdk_stream_decryptor_new_with_chat(const struct ChatHandle *handle,
+                                                                      const char *conversation_key_b64);
+
+/**
  * Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.
  */
 struct FfiResult chat_xdk_stream_decryptor_push(struct StreamDecryptorHandle *handle,

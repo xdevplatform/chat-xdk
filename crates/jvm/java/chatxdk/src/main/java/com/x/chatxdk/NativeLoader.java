@@ -1,5 +1,6 @@
 package com.x.chatxdk;
 
+import com.sun.jna.Library;
 import com.sun.jna.Native;
 import java.io.IOException;
 import java.io.InputStream;
@@ -7,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * Loads the {@code chat_xdk_dotnet} cdylib for JNA.
@@ -20,18 +22,32 @@ final class NativeLoader {
 
     private static final String LIB_BASENAME = "chat_xdk_dotnet";
 
+    /** The name or path {@link #load} loaded the library from. */
+    private static volatile String loadedLibrary;
+
     private NativeLoader() {}
 
     static ChatNative load() {
         try {
             Path extracted = extractBundledLibrary();
             if (extracted != null) {
-                return Native.load(extracted.toAbsolutePath().toString(), ChatNative.class);
+                String path = extracted.toAbsolutePath().toString();
+                ChatNative library = Native.load(path, ChatNative.class);
+                loadedLibrary = path;
+                return library;
             }
         } catch (IOException | UnsatisfiedLinkError e) {
             // Fall through to system / jna.library.path lookup.
         }
-        return Native.load(LIB_BASENAME, ChatNative.class);
+        ChatNative library = Native.load(LIB_BASENAME, ChatNative.class);
+        loadedLibrary = LIB_BASENAME;
+        return library;
+    }
+
+    /** Map {@code type} onto the same library {@link ChatNative} was loaded from. */
+    static <T extends Library> T loadInternal(Class<T> type) {
+        Objects.requireNonNull(ChatNative.INSTANCE);
+        return Native.load(loadedLibrary, type);
     }
 
     /**

@@ -1824,6 +1824,34 @@ pub extern "C" fn chat_xdk_stream_decryptor_new(
     })
 }
 
+/// Create a stream decryptor through a chat instance, which also tries the
+/// attachment keys of messages that instance has decrypted under the given
+/// conversation key. Returns NULL on a null handle or bad key; free the
+/// handle with [`chat_xdk_stream_decryptor_free`].
+#[no_mangle]
+pub extern "C" fn chat_xdk_stream_decryptor_new_with_chat(
+    handle: *const ChatHandle,
+    conversation_key_b64: *const c_char,
+) -> *mut StreamDecryptorHandle {
+    catch_ffi_or(std::ptr::null_mut(), || {
+        if handle.is_null() {
+            return std::ptr::null_mut();
+        }
+        let h = unsafe { &*handle };
+        let ckey = match parse_ckey(match unsafe { from_c_str(conversation_key_b64) } {
+            Ok(s) => s,
+            Err(_) => return std::ptr::null_mut(),
+        }) {
+            Ok(k) => k,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        match h.inner.stream_decryptor(&ckey) {
+            Ok(dec) => Box::into_raw(Box::new(StreamDecryptorHandle { inner: Some(dec) })),
+            Err(_) => std::ptr::null_mut(),
+        }
+    })
+}
+
 /// Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.
 #[no_mangle]
 pub extern "C" fn chat_xdk_stream_decryptor_push(

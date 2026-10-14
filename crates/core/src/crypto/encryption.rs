@@ -267,11 +267,14 @@ pub fn encrypt_stream<R: Read, W: Write>(
 /// Input may be split across `push` calls at any byte boundary; frames are
 /// reassembled internally.
 pub struct StreamDecryptor {
-    /// Stream key bytes, used to initialize `pull` once the header is
-    /// complete. Held as a wiped-on-drop array because
-    /// `crypto_secretstream::Key` does not zeroize itself.
+    /// Stream key bytes, used to initialize `pull` at the first frame. Held
+    /// as a wiped-on-drop array because `crypto_secretstream::Key` does not
+    /// zeroize itself.
     key: zeroize::Zeroizing<[u8; 32]>,
-    /// Underlying secretstream puller; `None` until the header is consumed.
+    /// Keys tried in order when `key` cannot open the first frame; the
+    /// stream then stays on whichever key opened it.
+    fallback_keys: Vec<zeroize::Zeroizing<[u8; 32]>>,
+    /// Underlying secretstream puller; `None` until the first frame opens.
     pull: Option<crypto_secretstream::PullStream>,
     /// Header bytes accumulated until the 24-byte header is complete.
     header: Vec<u8>,
@@ -286,14 +289,52 @@ pub struct StreamDecryptor {
 impl StreamDecryptor {
     /// Create a decryptor for one stream.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
+        Self::with_fallback_keys(key, &[])
+    }
+
+    /// Create a decryptor that opens the stream with `key`, or with the
+    /// first of `fallback_keys` that authenticates the first frame.
+    pub(crate) fn with_fallback_keys(
+        key: &XChatConversationKey,
+        fallback_keys: &[XChatConversationKey],
+    ) -> Result<Self, CryptoError> {
         Ok(Self {
             key: secretstream_key_bytes(key)?,
+            fallback_keys: fallback_keys
+                .iter()
+                .map(secretstream_key_bytes)
+                .collect::<Result<_, _>>()?,
             pull: None,
             header: Vec::new(),
             buf: Vec::new(),
             saw_chunk: false,
             saw_final: false,
         })
+    }
+
+    /// Decrypt one frame in place. The first frame picks the key: the
+    /// primary key if it authenticates the frame, otherwise the first
+    /// fallback key that does.
+    fn pull_frame(&mut self, frame: &mut Vec<u8>) -> Result<crypto_secretstream::Tag, CryptoError> {
+        let pull_failed = || CryptoError::DecryptionFailed("secretstream pull failed".into());
+        if let Some(pull) = self.pull.as_mut() {
+            return pull.pull(frame, &[]).map_err(|_| pull_failed());
+        }
+        let mut hdr = [0u8; SECRETSTREAM_HEADER_SIZE];
+        hdr.copy_from_slice(&self.header);
+        for key in std::iter::once(&self.key).chain(self.fallback_keys.iter()) {
+            let mut pull = crypto_secretstream::PullStream::init(
+                crypto_secretstream::Header::from(hdr),
+                &crypto_secretstream::Key::from(**key),
+            );
+            let mut attempt = frame.clone();
+            if let Ok(tag) = pull.pull(&mut attempt, &[]) {
+                *frame = attempt;
+                self.pull = Some(pull);
+                return Ok(tag);
+            }
+        }
+        Err(pull_failed())
     }
 
     /// Decrypt a ciphertext chunk, returning the plaintext recoverable so far.
@@ -309,7 +350,7 @@ impl StreamDecryptor {
         let mut input = ciphertext;
 
         // Consume the header before any frame can be pulled.
-        if self.pull.is_none() {
+        if self.header.len() < SECRETSTREAM_HEADER_SIZE {
             let need = SECRETSTREAM_HEADER_SIZE - self.header.len();
             let take = need.min(input.len());
             self.header.extend_from_slice(&input[..take]);
@@ -317,25 +358,16 @@ impl StreamDecryptor {
             if self.header.len() < SECRETSTREAM_HEADER_SIZE {
                 return Ok(Vec::new());
             }
-            let mut hdr = [0u8; SECRETSTREAM_HEADER_SIZE];
-            hdr.copy_from_slice(&self.header);
-            self.pull = Some(crypto_secretstream::PullStream::init(
-                crypto_secretstream::Header::from(hdr),
-                &crypto_secretstream::Key::from(*self.key),
-            ));
         }
 
         self.buf.extend_from_slice(input);
-        let pull = self.pull.as_mut().expect("pull initialized above");
 
         // While more than one full frame is buffered, the leading frame has
         // data after it and so must be a non-final message frame.
         let mut out = Vec::new();
         while self.buf.len() > ENCRYPTED_CHUNK_SIZE {
             let mut frame: Vec<u8> = self.buf.drain(..ENCRYPTED_CHUNK_SIZE).collect();
-            let tag = pull
-                .pull(&mut frame, &[])
-                .map_err(|_| CryptoError::DecryptionFailed("secretstream pull failed".into()))?;
+            let tag = self.pull_frame(&mut frame)?;
             self.saw_chunk = true;
             out.extend_from_slice(&frame);
             if tag == crypto_secretstream::Tag::Final {
@@ -353,16 +385,16 @@ impl StreamDecryptor {
     /// detects truncation. A stream of only the 24-byte header decrypts to
     /// empty output.
     pub fn finish(mut self) -> Result<Vec<u8>, CryptoError> {
-        let pull = self.pull.as_mut().ok_or_else(|| {
-            CryptoError::DecryptionFailed("stream ended before header was complete".into())
-        })?;
+        if self.header.len() < SECRETSTREAM_HEADER_SIZE {
+            return Err(CryptoError::DecryptionFailed(
+                "stream ended before header was complete".into(),
+            ));
+        }
 
         let mut out = Vec::new();
         if !self.buf.is_empty() {
             let mut frame = std::mem::take(&mut self.buf);
-            let tag = pull
-                .pull(&mut frame, &[])
-                .map_err(|_| CryptoError::DecryptionFailed("secretstream pull failed".into()))?;
+            let tag = self.pull_frame(&mut frame)?;
             self.saw_chunk = true;
             out.extend_from_slice(&frame);
             if tag == crypto_secretstream::Tag::Final {
@@ -385,10 +417,22 @@ impl StreamDecryptor {
 /// size. A non-empty stream that ends before its final frame is rejected.
 pub fn decrypt_stream<R: Read, W: Write>(
     key: &XChatConversationKey,
+    reader: R,
+    writer: W,
+) -> Result<(), CryptoError> {
+    decrypt_stream_with_fallback_keys(key, &[], reader, writer)
+}
+
+/// [`decrypt_stream`] that falls back to the first of `fallback_keys` that
+/// opens the stream when `key` does not (see
+/// [`StreamDecryptor::with_fallback_keys`]).
+pub(crate) fn decrypt_stream_with_fallback_keys<R: Read, W: Write>(
+    key: &XChatConversationKey,
+    fallback_keys: &[XChatConversationKey],
     mut reader: R,
     mut writer: W,
 ) -> Result<(), CryptoError> {
-    let mut dec = StreamDecryptor::new(key)?;
+    let mut dec = StreamDecryptor::with_fallback_keys(key, fallback_keys)?;
     let mut chunk = vec![0u8; ENCRYPTED_CHUNK_SIZE];
     loop {
         let n = read_full(&mut reader, &mut chunk).map_err(read_err)?;
@@ -978,5 +1022,87 @@ mod tests {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let dec = StreamDecryptor::new(&key).unwrap();
         assert!(dec.finish().is_err());
+    }
+
+    fn incremental_decrypt_with_fallbacks(
+        key: &XChatConversationKey,
+        fallbacks: &[XChatConversationKey],
+        ciphertext: &[u8],
+        step: usize,
+    ) -> Result<Vec<u8>, CryptoError> {
+        let mut dec = StreamDecryptor::with_fallback_keys(key, fallbacks)?;
+        let mut out = Vec::new();
+        for chunk in ciphertext.chunks(step.max(1)) {
+            out.extend_from_slice(&dec.push(chunk)?);
+        }
+        out.extend_from_slice(&dec.finish()?);
+        Ok(out)
+    }
+
+    #[test]
+    fn test_stream_opens_with_the_fallback_key_that_encrypted_it() {
+        let primary = XChatConversationKey::from_bytes(vec![0x01u8; 32]).unwrap();
+        let other = XChatConversationKey::from_bytes(vec![0x02u8; 32]).unwrap();
+        let actual = XChatConversationKey::from_bytes(vec![0x03u8; 32]).unwrap();
+        let fallbacks = [other.clone(), actual.clone()];
+        for len in [1usize, 1024, 1025, 5000] {
+            let plaintext = vec![0x5Au8; len];
+            let mut ciphertext = Vec::new();
+            encrypt_stream(&actual, Cursor::new(&plaintext), &mut ciphertext).unwrap();
+
+            let mut whole = Vec::new();
+            decrypt_stream_with_fallback_keys(
+                &primary,
+                &fallbacks,
+                Cursor::new(&ciphertext),
+                &mut whole,
+            )
+            .unwrap();
+            assert_eq!(whole, plaintext, "len={len}");
+
+            for step in [1usize, 24, 1041, 4096] {
+                let decrypted =
+                    incremental_decrypt_with_fallbacks(&primary, &fallbacks, &ciphertext, step)
+                        .unwrap();
+                assert_eq!(decrypted, plaintext, "len={len} step={step}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_stream_prefers_the_primary_key() {
+        let primary = XChatConversationKey::from_bytes(vec![0x01u8; 32]).unwrap();
+        let fallback = XChatConversationKey::from_bytes(vec![0x02u8; 32]).unwrap();
+        let plaintext = vec![0x33u8; 3000];
+        let mut ciphertext = Vec::new();
+        encrypt_stream(&primary, Cursor::new(&plaintext), &mut ciphertext).unwrap();
+        let decrypted =
+            incremental_decrypt_with_fallbacks(&primary, &[fallback], &ciphertext, 512).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_stream_fails_when_no_key_opens_it() {
+        let primary = XChatConversationKey::from_bytes(vec![0x01u8; 32]).unwrap();
+        let fallback = XChatConversationKey::from_bytes(vec![0x02u8; 32]).unwrap();
+        let actual = XChatConversationKey::from_bytes(vec![0x03u8; 32]).unwrap();
+        let mut ciphertext = Vec::new();
+        encrypt_stream(&actual, Cursor::new(vec![0u8; 2000]), &mut ciphertext).unwrap();
+
+        let mut out = Vec::new();
+        let err = decrypt_stream_with_fallback_keys(
+            &primary,
+            std::slice::from_ref(&fallback),
+            Cursor::new(&ciphertext),
+            &mut out,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("secretstream pull failed"),
+            "{err}"
+        );
+        assert!(
+            incremental_decrypt_with_fallbacks(&primary, &[fallback], &ciphertext, 100).is_err()
+        );
     }
 }

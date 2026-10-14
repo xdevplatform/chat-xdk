@@ -833,7 +833,9 @@ namespace ChatXdk
         public StreamDecryptor StreamDecryptor(byte[] conversationKey)
         {
             ThrowIfDisposed();
-            return ChatXdk.StreamDecryptor.Create(conversationKey);
+            var decryptor = ChatXdk.StreamDecryptor.Create(_handle, conversationKey);
+            GC.KeepAlive(this);
+            return decryptor;
         }
 
         // Signing / verification

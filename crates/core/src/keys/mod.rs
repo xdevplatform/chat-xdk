@@ -5,6 +5,7 @@
 //! - In-memory keypair management
 //! - Conversation key operations
 
+pub(crate) mod attachment_keys;
 pub mod conversation_keys;
 pub mod juicebox;
 pub mod keypair_manager;

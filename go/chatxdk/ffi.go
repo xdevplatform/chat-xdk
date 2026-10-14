@@ -307,10 +307,10 @@ func ffiStreamEncryptorFree(h streamEncryptorHandle) {
 	C.chat_xdk_stream_encryptor_free(h)
 }
 
-func ffiStreamDecryptorNew(ckeyB64 string) streamDecryptorHandle {
+func ffiStreamDecryptorNew(h handle, ckeyB64 string) streamDecryptorHandle {
 	c := C.CString(ckeyB64)
 	defer C.free(unsafe.Pointer(c))
-	return C.chat_xdk_stream_decryptor_new(c)
+	return C.chat_xdk_stream_decryptor_new_with_chat(h, c)
 }
 
 func ffiStreamDecryptorPush(h streamDecryptorHandle, ciphertextB64 string) (string, error) {

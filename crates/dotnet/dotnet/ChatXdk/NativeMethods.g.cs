@@ -429,6 +429,15 @@ namespace ChatXdk
         internal static extern StreamDecryptorHandle* chat_xdk_stream_decryptor_new(byte* conversation_key_b64);
 
         /// <summary>
+        ///  Create a stream decryptor through a chat instance, which also tries the
+        ///  attachment keys of messages that instance has decrypted under the given
+        ///  conversation key. Returns NULL on a null handle or bad key; free the
+        ///  handle with `chat_xdk_stream_decryptor_free`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_stream_decryptor_new_with_chat", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern StreamDecryptorHandle* chat_xdk_stream_decryptor_new_with_chat(ChatHandle* handle, byte* conversation_key_b64);
+
+        /// <summary>
         ///  Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_stream_decryptor_push", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

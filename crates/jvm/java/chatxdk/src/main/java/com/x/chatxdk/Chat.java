@@ -740,7 +740,11 @@ public final class Chat implements AutoCloseable {
      */
     public StreamDecryptor streamDecryptor(byte[] conversationKey) {
         throwIfDisposed();
-        return StreamDecryptor.create(conversationKey);
+        try {
+            return StreamDecryptor.create(handle, conversationKey);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
     }
 
     /**

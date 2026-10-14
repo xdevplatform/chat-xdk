@@ -1118,9 +1118,9 @@ impl Chat {
             )
         })?;
 
-        let mut reader = Cursor::new(encrypted);
-        let mut output: Vec<u8> = Vec::new();
-        chat_xdk_core::crypto::encryption::decrypt_stream(&ckey, &mut reader, &mut output)
+        let output = self
+            .inner
+            .decrypt_stream(encrypted, &ckey)
             .map_err(to_py_err)?;
 
         Python::attach(|py| Ok(PyBytes::new(py, &output).into()))

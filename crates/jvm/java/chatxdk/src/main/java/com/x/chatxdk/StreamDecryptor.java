@@ -55,9 +55,11 @@ public final class StreamDecryptor implements AutoCloseable {
         this.cleanable = Chat.CLEANER.register(this, new FreeHandle(handle));
     }
 
-    static StreamDecryptor create(byte[] conversationKey) {
+    static StreamDecryptor create(Pointer chatHandle, byte[] conversationKey) {
         try (Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey))) {
-            Pointer h = ChatNative.INSTANCE.chat_xdk_stream_decryptor_new(key);
+            Pointer h =
+                    ChatNativeInternal.INSTANCE.chat_xdk_stream_decryptor_new_with_chat(
+                            chatHandle, key);
             if (h == null) {
                 throw new ChatXdkException("Invalid conversation key (expected 32 bytes)");
             }

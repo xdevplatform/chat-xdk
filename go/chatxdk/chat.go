@@ -656,7 +656,8 @@ type StreamDecryptor struct {
 // StreamDecryptor creates an incremental stream decryptor for the given
 // raw 32-byte conversation key.
 func (c *Chat) StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error) {
-	h := ffiStreamDecryptorNew(base64.StdEncoding.EncodeToString(conversationKey))
+	defer runtime.KeepAlive(c)
+	h := ffiStreamDecryptorNew(c.h, base64.StdEncoding.EncodeToString(conversationKey))
 	if h == nil {
 		return nil, errors.New("invalid conversation key (expected 32 bytes)")
 	}
