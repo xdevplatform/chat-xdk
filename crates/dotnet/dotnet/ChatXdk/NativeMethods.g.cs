@@ -379,6 +379,23 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_decrypt(ChatHandle* handle, byte* ciphertext_b64, byte* conversation_key_b64);
 
         /// <summary>
+        ///  32-byte key for a message's contents. Returns base64.
+        ///
+        ///  `contents_encryption_version` below 0 means the field is unset.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_message_key", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_message_key(ChatHandle* handle, byte* conversation_key_b64, byte* sender_id, byte* message_id, int contents_encryption_version);
+
+        /// <summary>
+        ///  32-byte key for one attachment. Returns base64.
+        ///
+        ///  A null `attachment_id` is missing. An empty string is a real id.
+        ///  `contents_encryption_version` below 0 means the field is unset.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_attachment_key", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_attachment_key(ChatHandle* handle, byte* conversation_key_b64, byte* sender_id, byte* message_id, int contents_encryption_version, byte* attachment_id, int attachment_index);
+
+        /// <summary>
         ///  Decrypt a streaming-encrypted payload (e.g. media files).
         ///
         ///  Both arguments are base64-encoded.

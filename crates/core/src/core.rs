@@ -2549,6 +2549,58 @@ impl ChatCore {
 
     // Stream (Media)
 
+    /// Key that encrypts one message's contents.
+    ///
+    /// `contents_encryption_version` of 1 or greater derives a 32-byte key
+    /// from `conversation_key`. Any other version returns that conversation
+    /// key unchanged.
+    pub fn message_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+    ) -> Result<Vec<u8>, SdkError> {
+        if !crate::crypto::hash::uses_message_key(contents_encryption_version) {
+            return Ok(conversation_key.to_vec());
+        }
+        derive_message_key(conversation_key, sender_id, message_id).map_err(SdkError::Crypto)
+    }
+
+    /// Key that encrypts one attachment.
+    ///
+    /// Without a message key this is the conversation key. With one, it is
+    /// derived from that message key and the attachment id. A stored id is
+    /// used as given, including empty; a missing id is `message_id` at index
+    /// 0 and `<message_id>#<index>` after that. A URL card's banner and
+    /// favicon both use the card's id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attachment_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+        attachment_id: Option<&str>,
+        attachment_index: u32,
+    ) -> Result<Vec<u8>, SdkError> {
+        let message_key = self.message_key(
+            conversation_key,
+            sender_id,
+            message_id,
+            contents_encryption_version,
+        )?;
+        if !crate::crypto::hash::uses_message_key(contents_encryption_version) {
+            return Ok(message_key);
+        }
+        let id = crate::crypto::hash::resolve_attachment_id(
+            attachment_id,
+            message_id,
+            attachment_index as usize,
+        );
+        crate::crypto::hash::derive_attachment_key(&message_key, &id).map_err(SdkError::Crypto)
+    }
+
     /// Encrypt a stream.
     pub fn encrypt_stream(
         &self,

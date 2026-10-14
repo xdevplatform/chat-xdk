@@ -1565,6 +1565,101 @@ pub extern "C" fn chat_xdk_decrypt(
     })
 }
 
+fn contents_version_arg(version: i32) -> Result<Option<i16>, FfiResult> {
+    if version < 0 {
+        Ok(None)
+    } else if version > i16::MAX as i32 {
+        Err(err_result(
+            "contents_encryption_version does not fit in i16",
+        ))
+    } else {
+        Ok(Some(version as i16))
+    }
+}
+
+/// 32-byte key for a message's contents. Returns base64.
+///
+/// `contents_encryption_version` below 0 means the field is unset.
+#[no_mangle]
+pub extern "C" fn chat_xdk_message_key(
+    handle: *const ChatHandle,
+    conversation_key_b64: *const c_char,
+    sender_id: *const c_char,
+    message_id: *const c_char,
+    contents_encryption_version: i32,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let ckey = match BASE64.decode(try_str!(conversation_key_b64)) {
+            Ok(b) => b,
+            Err(e) => return err_result(&format!("Base64 error: {}", e)),
+        };
+        let version = match contents_version_arg(contents_encryption_version) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        match h
+            .inner
+            .message_key(&ckey, try_str!(sender_id), try_str!(message_id), version)
+        {
+            Ok(key) => ok_data(&BASE64.encode(&key)),
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// 32-byte key for one attachment. Returns base64.
+///
+/// A null `attachment_id` is missing. An empty string is a real id.
+/// `contents_encryption_version` below 0 means the field is unset.
+#[no_mangle]
+pub extern "C" fn chat_xdk_attachment_key(
+    handle: *const ChatHandle,
+    conversation_key_b64: *const c_char,
+    sender_id: *const c_char,
+    message_id: *const c_char,
+    contents_encryption_version: i32,
+    attachment_id: *const c_char,
+    attachment_index: i32,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let ckey = match BASE64.decode(try_str!(conversation_key_b64)) {
+            Ok(b) => b,
+            Err(e) => return err_result(&format!("Base64 error: {}", e)),
+        };
+        let version = match contents_version_arg(contents_encryption_version) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let stored_id = if attachment_id.is_null() {
+            None
+        } else {
+            Some(try_str!(attachment_id))
+        };
+        if attachment_index < 0 {
+            return err_result("attachment_index must be >= 0");
+        }
+        match h.inner.attachment_key(
+            &ckey,
+            try_str!(sender_id),
+            try_str!(message_id),
+            version,
+            stored_id,
+            attachment_index as u32,
+        ) {
+            Ok(key) => ok_data(&BASE64.encode(&key)),
+            Err(e) => err_from(e),
+        }
+    })
+}
+
 /// Decrypt a streaming-encrypted payload (e.g. media files).
 ///
 /// Both arguments are base64-encoded.

@@ -779,6 +779,56 @@ namespace ChatXdk
         }
 
         /// <summary>
+        /// Key that encrypts one message's contents.
+        /// </summary>
+        /// <param name="contentsEncryptionVersion">Null when the field is unset.
+        /// 1 or greater derives a 32-byte message key.</param>
+        public byte[] MessageKey(byte[] conversationKey, string senderId, string messageId, short? contentsEncryptionVersion)
+        {
+            ThrowIfDisposed();
+            var keyB64 = Utf8Z(Convert.ToBase64String(conversationKey));
+            var sender = Utf8Z(senderId);
+            var message = Utf8Z(messageId);
+            int version = contentsEncryptionVersion ?? -1;
+            string resultB64;
+            fixed (byte* keyPtr = keyB64)
+            fixed (byte* senderPtr = sender)
+            fixed (byte* messagePtr = message)
+                resultB64 = ConsumeResult(NativeMethods.chat_xdk_message_key(_handle, keyPtr, senderPtr, messagePtr, version));
+            GC.KeepAlive(this);
+            return Convert.FromBase64String(resultB64);
+        }
+
+        /// <summary>
+        /// Key that encrypts one attachment. A null attachment id is missing;
+        /// an empty string is a real id.
+        /// </summary>
+        public byte[] AttachmentKey(
+            byte[] conversationKey,
+            string senderId,
+            string messageId,
+            short? contentsEncryptionVersion,
+            string attachmentId,
+            int attachmentIndex)
+        {
+            ThrowIfDisposed();
+            var keyB64 = Utf8Z(Convert.ToBase64String(conversationKey));
+            var sender = Utf8Z(senderId);
+            var message = Utf8Z(messageId);
+            int version = contentsEncryptionVersion ?? -1;
+            byte[] stored = attachmentId == null ? null : Utf8Z(attachmentId);
+            string resultB64;
+            fixed (byte* keyPtr = keyB64)
+            fixed (byte* senderPtr = sender)
+            fixed (byte* messagePtr = message)
+            fixed (byte* storedPtr = stored)
+                resultB64 = ConsumeResult(NativeMethods.chat_xdk_attachment_key(
+                    _handle, keyPtr, senderPtr, messagePtr, version, attachmentId == null ? null : storedPtr, attachmentIndex));
+            GC.KeepAlive(this);
+            return Convert.FromBase64String(resultB64);
+        }
+
+        /// <summary>
         /// Decrypt a streaming-encrypted media payload (e.g. an image or video).
         /// </summary>
         /// <param name="encrypted">Encrypted bytes.</param>

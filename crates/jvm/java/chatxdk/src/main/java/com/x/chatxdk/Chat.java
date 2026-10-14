@@ -684,6 +684,60 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
+     * Key that encrypts one message's contents.
+     *
+     * @param contentsEncryptionVersion {@code null} when the field is unset.
+     *     1 or greater derives a 32-byte message key; otherwise the conversation
+     *     key is returned.
+     */
+    public byte[] messageKey(
+            byte[] conversationKey, String senderId, String messageId, Short contentsEncryptionVersion) {
+        throwIfDisposed();
+        int version = contentsEncryptionVersion == null ? -1 : contentsEncryptionVersion;
+        try (Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey));
+                Memory sender = FfiStrings.utf8(senderId);
+                Memory message = FfiStrings.utf8(messageId)) {
+            String resultB64 =
+                    FfiStrings.consume(
+                            ChatNative.INSTANCE.chat_xdk_message_key(
+                                    handle, key, sender, message, version));
+            return Base64.getDecoder().decode(resultB64);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Key that encrypts one attachment.
+     *
+     * @param attachmentId {@code null} when the attachment has no stored id.
+     *     An empty string is a real id. A URL card's banner and favicon both
+     *     use the card's id.
+     */
+    public byte[] attachmentKey(
+            byte[] conversationKey,
+            String senderId,
+            String messageId,
+            Short contentsEncryptionVersion,
+            String attachmentId,
+            int attachmentIndex) {
+        throwIfDisposed();
+        int version = contentsEncryptionVersion == null ? -1 : contentsEncryptionVersion;
+        try (Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey));
+                Memory sender = FfiStrings.utf8(senderId);
+                Memory message = FfiStrings.utf8(messageId);
+                Memory stored = attachmentId == null ? null : FfiStrings.utf8(attachmentId)) {
+            String resultB64 =
+                    FfiStrings.consume(
+                            ChatNative.INSTANCE.chat_xdk_attachment_key(
+                                    handle, key, sender, message, version, stored, attachmentIndex));
+            return Base64.getDecoder().decode(resultB64);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
      * Decrypt a streaming-encrypted media payload (e.g. an image or video).
      *
      * @param encrypted Encrypted bytes.

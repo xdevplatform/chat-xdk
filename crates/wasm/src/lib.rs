@@ -582,6 +582,56 @@ impl Chat {
         to_js_value(&js_payload)
     }
 
+    /// Key that encrypts one message's contents.
+    ///
+    /// `contentsEncryptionVersion` of 1 or greater derives 32 bytes from
+    /// `conversationKey`. Omit it, or pass a version below 1, to get that
+    /// conversation key back unchanged.
+    #[wasm_bindgen(js_name = messageKey)]
+    pub fn message_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.inner
+            .message_key(
+                conversation_key,
+                sender_id,
+                message_id,
+                contents_encryption_version,
+            )
+            .map_err(|e| JsError::new(&format!("{}", e)))
+    }
+
+    /// Key that encrypts one attachment.
+    ///
+    /// Pass `attachmentId` as `null` to use `messageId` at index 0 and
+    /// `<messageId>#<index>` after that. An empty string is a real id.
+    /// A URL card's banner and favicon both use the card's id.
+    #[wasm_bindgen(js_name = attachmentKey)]
+    pub fn attachment_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+        attachment_id: Option<String>,
+        attachment_index: u32,
+    ) -> Result<Vec<u8>, JsError> {
+        self.inner
+            .attachment_key(
+                conversation_key,
+                sender_id,
+                message_id,
+                contents_encryption_version,
+                attachment_id.as_deref(),
+                attachment_index,
+            )
+            .map_err(|e| JsError::new(&format!("{}", e)))
+    }
+
     /// Build the signed action for deleting messages from a conversation.
     ///
     /// Takes a single params object with camelCase keys: `conversationId`,

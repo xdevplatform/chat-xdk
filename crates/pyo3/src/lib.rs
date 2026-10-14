@@ -1099,6 +1099,58 @@ impl Chat {
         Python::attach(|py| Ok(PyBytes::new(py, &output).into()))
     }
 
+    /// Key that encrypts one message's contents.
+    ///
+    /// ``contents_encryption_version`` of 1 or greater derives a 32-byte key.
+    /// Any other value, including ``None``, returns ``conversation_key``.
+    fn message_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+    ) -> PyResult<Py<PyAny>> {
+        let key = self
+            .inner
+            .message_key(
+                conversation_key,
+                sender_id,
+                message_id,
+                contents_encryption_version,
+            )
+            .map_err(to_py_err)?;
+        Python::attach(|py| Ok(PyBytes::new(py, &key).into()))
+    }
+
+    /// Key that encrypts one attachment of a message-key message.
+    ///
+    /// ``attachment_id`` ``None`` uses the message id at index 0 and
+    /// ``<message_id>#<index>`` after that. An empty string is a real id.
+    /// Without a message key this returns ``conversation_key``.
+    #[pyo3(signature = (conversation_key, sender_id, message_id, contents_encryption_version=None, attachment_id=None, attachment_index=0))]
+    fn attachment_key(
+        &self,
+        conversation_key: &[u8],
+        sender_id: &str,
+        message_id: &str,
+        contents_encryption_version: Option<i16>,
+        attachment_id: Option<&str>,
+        attachment_index: u32,
+    ) -> PyResult<Py<PyAny>> {
+        let key = self
+            .inner
+            .attachment_key(
+                conversation_key,
+                sender_id,
+                message_id,
+                contents_encryption_version,
+                attachment_id,
+                attachment_index,
+            )
+            .map_err(to_py_err)?;
+        Python::attach(|py| Ok(PyBytes::new(py, &key).into()))
+    }
+
     /// Decrypt a streaming-encrypted payload (e.g. media).
     ///
     /// Args:

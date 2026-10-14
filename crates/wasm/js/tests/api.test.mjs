@@ -297,6 +297,15 @@ async function main() {
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
   assert.equal(payload.signatureInfo.signatureVersion, "10");
+
+  const mk = v.message_keys;
+  const conv = hexToBytes(mk.conversation_key_hex);
+  const derived = chat.messageKey(conv, mk.sender_id, mk.message_id, 1);
+  assert.equal(bytesToHex(derived), mk.message_key_hex);
+  const attachment = chat.attachmentKey(conv, mk.sender_id, mk.message_id, 1, null, 0);
+  assert.equal(bytesToHex(attachment), mk.attachment_key_hex);
+  const second = chat.attachmentKey(conv, mk.sender_id, mk.message_id, 1, null, 1);
+  assert.equal(bytesToHex(second), mk.attachment_key_index_1_hex);
   assert.equal(payload.conversationKeyVersion, "1");
 
   // 4b. encryptReply produces a signed payload like encryptMessage

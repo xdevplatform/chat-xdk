@@ -87,6 +87,22 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_decrypt(Pointer handle, Pointer ciphertextB64, Pointer conversationKeyB64);
 
+    FfiResult.ByValue chat_xdk_message_key(
+            Pointer handle,
+            Pointer conversationKeyB64,
+            Pointer senderId,
+            Pointer messageId,
+            int contentsEncryptionVersion);
+
+    FfiResult.ByValue chat_xdk_attachment_key(
+            Pointer handle,
+            Pointer conversationKeyB64,
+            Pointer senderId,
+            Pointer messageId,
+            int contentsEncryptionVersion,
+            Pointer attachmentId,
+            int attachmentIndex);
+
     FfiResult.ByValue chat_xdk_decrypt_stream(Pointer handle, Pointer encryptedB64, Pointer conversationKeyB64);
 
     FfiResult.ByValue chat_xdk_encrypt_stream(Pointer handle, Pointer plaintextB64, Pointer conversationKeyB64);

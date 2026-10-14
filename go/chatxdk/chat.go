@@ -558,6 +558,44 @@ func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, er
 	return ffiDecrypt(c.h, ciphertextB64, base64.StdEncoding.EncodeToString(conversationKey))
 }
 
+// MessageKey returns the 32-byte key for a message's contents.
+// A nil contentsEncryptionVersion means the field is unset and the
+// conversation key is returned unchanged. Version 1 or greater derives
+// a per-message key.
+func (c *Chat) MessageKey(conversationKey []byte, senderID, messageID string, contentsEncryptionVersion *int16) ([]byte, error) {
+	defer runtime.KeepAlive(c)
+	version := int32(-1)
+	if contentsEncryptionVersion != nil {
+		version = int32(*contentsEncryptionVersion)
+	}
+	outB64, err := ffiMessageKey(c.h,
+		base64.StdEncoding.EncodeToString(conversationKey),
+		senderID, messageID, version)
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(outB64)
+}
+
+// AttachmentKey returns the 32-byte key for one attachment.
+// A nil attachmentID is missing (the message id, or messageID#index after
+// the first). A pointer to "" is a real empty id. Banner and favicon of a
+// URL card both use that card's id.
+func (c *Chat) AttachmentKey(conversationKey []byte, senderID, messageID string, contentsEncryptionVersion *int16, attachmentID *string, attachmentIndex int) ([]byte, error) {
+	defer runtime.KeepAlive(c)
+	version := int32(-1)
+	if contentsEncryptionVersion != nil {
+		version = int32(*contentsEncryptionVersion)
+	}
+	outB64, err := ffiAttachmentKey(c.h,
+		base64.StdEncoding.EncodeToString(conversationKey),
+		senderID, messageID, version, attachmentID, int32(attachmentIndex))
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(outB64)
+}
+
 // DecryptStream decrypts a streaming-encrypted payload (e.g., media) with the
 // raw 32-byte conversation key. Raw bytes in, raw bytes out; the FFI
 // transports base64 internally.
