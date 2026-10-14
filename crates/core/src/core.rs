@@ -713,6 +713,7 @@ impl ChatCore {
             conversation_key_version: Some(conversation_key_version.to_string()),
             is_legacy_group_upgrade,
             ttl_msec,
+            group_type: None,
         };
         let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
@@ -751,6 +752,10 @@ impl ChatCore {
             screen_capture_blocking_enabled: current_screen_capture_blocking_enabled,
             group_invite_enable: None,
             admin_settings: None,
+            current_pmk_bundle: None,
+            group_created_by_user_id: None,
+            rotated_pmk_bundle: None,
+            current_description: None,
         };
         let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
@@ -1992,6 +1997,7 @@ impl ChatCore {
             crate::thrift::event::MessageDeleteEvent {
                 sequence_ids: Some(sequence_ids.to_vec()),
                 delete_message_action: Some(delete_action),
+                pme_sequence_ids: None,
             },
         );
         Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
@@ -2196,6 +2202,8 @@ impl ChatCore {
                 None,
                 None,
                 None,
+                None,
+                None,
             ));
         };
 
@@ -2292,6 +2300,8 @@ impl ChatCore {
             raw,
             edit_event,
             (!embedded_ckces.is_empty()).then_some(embedded_ckces),
+            None,
+            None,
             None,
             None,
         ))
@@ -3106,6 +3116,17 @@ pub fn build_event_signature_payload(
                         &refs,
                     )
                 }
+                GenGC::GroupDescriptionChange(c) => {
+                    let ckey_ver = c.conversation_key_version.as_deref()?;
+                    let description = c.custom_description.as_deref().unwrap_or("");
+                    build_component_payload(
+                        "GroupChangeEvent.GroupDescriptionChange",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &[ckey_ver, description],
+                    )
+                }
                 // Not part of the signed payload.
                 GenGC::GroupAdminSettingsChange(_) => None,
             }
@@ -3182,6 +3203,42 @@ pub fn build_event_signature_payload(
                     conv_id,
                     &[],
                 ),
+                CMC::EnableGrok(_) => build_component_payload(
+                    "ConversationMetadataChangeEvent.EnableGrok",
+                    msg_id,
+                    sender_id,
+                    conv_id,
+                    &[],
+                ),
+                CMC::DisableGrok(_) => build_component_payload(
+                    "ConversationMetadataChangeEvent.DisableGrok",
+                    msg_id,
+                    sender_id,
+                    conv_id,
+                    &[],
+                ),
+                CMC::ArchiveConversation(c) => {
+                    let ids = c.archived_conversation_ids.as_deref().unwrap_or(&[]);
+                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    build_component_payload(
+                        "ConversationMetadataChangeEvent.ArchiveConversation",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &refs,
+                    )
+                }
+                CMC::UnarchiveConversation(c) => {
+                    let ids = c.unarchived_conversation_ids.as_deref().unwrap_or(&[]);
+                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    build_component_payload(
+                        "ConversationMetadataChangeEvent.UnarchiveConversation",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &refs,
+                    )
+                }
             }
         }
         // These event types are not signed
@@ -3334,8 +3391,10 @@ fn collect_attachments(
                     fallback_text: money.fallback_text.clone(),
                 }));
             }
-            ThriftMessageAttachment::Jetfuel(_) => {
-                // This attachment variant is not yet supported; skip.
+            ThriftMessageAttachment::Jetfuel(_)
+            | ThriftMessageAttachment::PaymentReceipt(_)
+            | ThriftMessageAttachment::BotMessage(_) => {
+                // These attachment variants are not surfaced.
             }
         }
     }
@@ -3503,6 +3562,13 @@ fn map_message_attachment(
         crate::thrift::product::MessageAttachment::Jetfuel(_) => MessageAttachment::Money {
             money: MoneyAttachment {
                 fallback_text: Some("Payment attachment".to_string()),
+                payload: None,
+            },
+        },
+        crate::thrift::product::MessageAttachment::PaymentReceipt(_)
+        | crate::thrift::product::MessageAttachment::BotMessage(_) => MessageAttachment::Money {
+            money: MoneyAttachment {
+                fallback_text: None,
                 payload: None,
             },
         },
@@ -3803,8 +3869,9 @@ pub(crate) fn convert_group_change(gc: Option<&crate::thrift::event::GroupChange
         Some(GenGC::GroupJoinReject(c)) => GroupChange::JoinRejected {
             user_ids: c.rejected_user_ids.clone().unwrap_or_default(),
         },
-        Some(GenGC::GroupAdminSettingsChange(_)) => GroupChange::Unknown,
-        None => GroupChange::Unknown,
+        Some(GenGC::GroupDescriptionChange(_))
+        | Some(GenGC::GroupAdminSettingsChange(_))
+        | None => GroupChange::Unknown,
     }
 }
 
@@ -3833,7 +3900,11 @@ pub(crate) fn convert_settings_change(
         Some(GenCMC::DisableScreenCaptureBlocking(_)) => {
             SettingsChange::ScreenCaptureBlockingDisabled
         }
-        None => SettingsChange::Unknown,
+        Some(GenCMC::EnableGrok(_))
+        | Some(GenCMC::DisableGrok(_))
+        | Some(GenCMC::ArchiveConversation(_))
+        | Some(GenCMC::UnarchiveConversation(_))
+        | None => SettingsChange::Unknown,
     }
 }
 
@@ -3884,6 +3955,8 @@ mod tests {
             None::<Vec<crate::thrift::event::AdditionalAction>>,
             None,
             None,
+            None,
+            None,
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),         // sequence_id
@@ -3897,6 +3970,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>, // previous_sequence_id
             None::<bool>,   // is_trusted
+            None::<String>, // conversation_event_counter
         );
         let bytes = serialize_thrift(&event).expect("serialize MessageEvent");
         base64_encode(&bytes)
@@ -3960,6 +4034,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -4130,6 +4205,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -4239,6 +4315,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
@@ -4344,6 +4421,7 @@ mod tests {
                 Some(sig_struct),
                 None::<String>,
                 None::<bool>,
+                None::<String>,
             );
             let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -4523,6 +4601,8 @@ mod tests {
             None::<Vec<crate::thrift::event::AdditionalAction>>,
             None,
             None,
+            None,
+            None,
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
@@ -4536,6 +4616,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let bytes = serialize_thrift(&event).unwrap();
         let event_b64 = base64_encode(&bytes);
@@ -4627,6 +4708,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let bytes = serialize_thrift(&event).expect("serialize");
         base64_encode(&bytes)
@@ -4685,6 +4767,10 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
                 ),
             )),
             None,
@@ -4704,6 +4790,7 @@ mod tests {
         let del = ThriftMDE::new(
             Some(vec!["seq-99".to_string()]),
             None::<DeleteMessageAction>,
+            None,
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
@@ -4828,7 +4915,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let typing = ThriftMTE::new(Some("conv-1".to_string()));
+        let typing = ThriftMTE::new(Some("conv-1".to_string()), None, None, None, None);
         let event_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let event = core
@@ -4850,7 +4937,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let read = ThriftMCRE::new(Some("seq-50".to_string()), Some(1700000050000i64));
+        let read = ThriftMCRE::new(Some("seq-50".to_string()), Some(1700000050000i64), None);
         let event_b64 = build_test_event(ThriftDetail::MarkConversationReadEvent(read));
 
         let event = core
@@ -4897,6 +4984,7 @@ mod tests {
         let del = ThriftMDE::new(
             Some(vec!["seq-10".to_string(), "seq-11".to_string()]),
             Some(DeleteMessageAction::DELETE_FOR_SELF),
+            None,
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
@@ -4922,6 +5010,7 @@ mod tests {
         let del = ThriftMDE::new(
             Some(vec!["seq-20".to_string()]),
             Some(DeleteMessageAction::DELETE_FOR_ALL),
+            None,
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
@@ -5201,7 +5290,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let member_del = ThriftMADE::new(Some("deleted-user-42".to_string()));
+        let member_del = ThriftMADE::new(Some("deleted-user-42".to_string()), None);
         let event_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let event = core
@@ -5221,7 +5310,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let member_del = ThriftMADE::new(None::<String>);
+        let member_del = ThriftMADE::new(None::<String>, None);
         let event_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let event = core
@@ -5252,6 +5341,7 @@ mod tests {
                     Some("v1".to_string()),
                     None::<bool>,
                     None::<i64>,
+                    None,
                 ),
             )),
             None,
@@ -5383,6 +5473,10 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
                 ),
             )),
             None,
@@ -5416,7 +5510,7 @@ mod tests {
 
         let gc = ThriftGCE::new(
             Some(crate::thrift::event::GroupChange::GroupMemberRemove(
-                GroupMemberRemoveChange::new(Some(vec!["removed-user".to_string()])),
+                GroupMemberRemoveChange::new(Some(vec!["removed-user".to_string()]), None),
             )),
             None,
         );
@@ -5794,6 +5888,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let bytes = serialize_thrift(&event).expect("serialize");
         let event_b64 = base64_encode(&bytes);
@@ -5944,6 +6039,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -5976,7 +6072,7 @@ mod tests {
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let failure = ThriftMFE::new(
@@ -5985,7 +6081,7 @@ mod tests {
         );
         let failure_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
-        let member_del = ThriftMADE::new(Some("user-99".to_string()));
+        let member_del = ThriftMADE::new(Some("user-99".to_string()), None);
         let member_del_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let events: Vec<&str> = vec![&typing_b64, &failure_b64, &member_del_b64];
@@ -6004,7 +6100,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let events: Vec<&str> = vec![&typing_b64, "!!!invalid-base64!!!"];
@@ -6019,7 +6115,7 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let events: Vec<&str> = vec![&typing_b64];
@@ -6050,7 +6146,7 @@ mod tests {
         let core = ChatCore::new();
         // Don't generate keys — no identity key loaded
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
         let result = core.extract_conversation_keys(&[&typing_b64]);
         assert!(result.is_empty());
@@ -6061,7 +6157,7 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
 
-        let typing = ThriftMTE::new(None::<String>);
+        let typing = ThriftMTE::new(None::<String>, None, None, None, None);
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let failure = ThriftMFE::new(
@@ -6637,6 +6733,7 @@ mod tests {
             Some(event_sig),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
 
         let reconstructed = build_event_signature_payload(&event, &detail, plaintext_ckey_b64)
@@ -7329,6 +7426,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7376,6 +7474,7 @@ mod tests {
             None::<crate::thrift::event::MessageEventSignature>,
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7516,6 +7615,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -7693,6 +7793,7 @@ mod tests {
                 Some(sig_struct),
                 None::<String>,
                 None::<bool>,
+                None::<String>,
             );
             base64_encode(&serialize_thrift(&event).unwrap())
         };
@@ -7815,6 +7916,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -8011,6 +8113,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
@@ -8205,6 +8308,7 @@ mod tests {
             Some(sig_struct),
             None::<String>,
             None::<bool>,
+            None::<String>,
         );
         base64_encode(&serialize_thrift(&event).unwrap())
     }
@@ -8793,6 +8897,7 @@ mod tests {
         let edit = crate::thrift::product::MessageEdit::new(
             Some(original_seq.to_string()),
             Some(updated_text.to_string()),
+            None,
             None,
         );
         let holder = crate::thrift::product::MessageEntryHolder::new(Some(Box::new(

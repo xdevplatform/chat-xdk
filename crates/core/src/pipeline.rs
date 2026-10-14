@@ -179,6 +179,8 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
         None,
         None,
+        None,
+        None,
     );
     let event_bytes = serialize_thrift(&event)?;
 
@@ -319,6 +321,7 @@ pub fn build_message_edit_content(
         Some(target_message_sequence_id.to_string()),
         Some(updated_text.to_string()),
         entities,
+        None,
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::MessageEdit(
         Box::new(content),
@@ -450,6 +453,7 @@ pub fn build_thrift_attachments(
                     None::<String>,
                     None::<String>,
                     None::<String>,
+                    None,
                 );
                 Box::new(ThriftMessageAttachment::Media(Box::new(media)))
             }
@@ -667,6 +671,8 @@ mod tests {
             None::<String>,
             Some(sequence_id.to_string()),
             None::<String>,
+            None,
+            None,
             None,
             None,
             None,
