@@ -36,6 +36,18 @@ pub fn hmac_sha256(message: &[u8], key: &[u8]) -> Vec<u8> {
 /// * `length` - Desired output length (max 32 * 255 = 8160 bytes)
 ///
 pub fn hkdf(secret: &[u8], salt: &str, length: usize) -> Result<Vec<u8>, CryptoError> {
+    hkdf_with_info(secret, salt, b"", length)
+}
+
+/// HKDF-SHA256 with an explicit `info` parameter.
+///
+/// `hkdf` is this with an empty `info`.
+pub fn hkdf_with_info(
+    secret: &[u8],
+    salt: &str,
+    info: &[u8],
+    length: usize,
+) -> Result<Vec<u8>, CryptoError> {
     // Maximum output length per HKDF spec
     const MAX_LENGTH: usize = 32 * 255;
 
@@ -64,9 +76,9 @@ pub fn hkdf(secret: &[u8], salt: &str, length: usize) -> Result<Vec<u8>, CryptoE
     let mut counter: u8 = 1;
 
     while offset < length {
-        // Each round hashes T || counter. The HKDF "info" parameter is omitted,
-        // so there is no domain separation between derived keys.
+        // Each round hashes T || info || counter.
         let mut input = t.clone();
+        input.extend_from_slice(info);
         input.push(counter);
 
         t = hmac_sha256(&input, &prk);
@@ -79,6 +91,57 @@ pub fn hkdf(secret: &[u8], salt: &str, length: usize) -> Result<Vec<u8>, CryptoE
     }
 
     Ok(output)
+}
+
+/// Salt for a per-message key derived from a conversation key.
+pub const MESSAGE_KEY_SALT: &str = "xchat-message-key";
+
+/// Salt for an attachment key derived from a message key.
+pub const ATTACHMENT_KEY_SALT: &str = "xchat-attachment-key";
+
+/// Contents encryption version that selects a per-message key.
+pub const MESSAGE_KEY_VERSION: i16 = 1;
+
+/// Whether `contents_encryption_version` selects a per-message key.
+pub fn uses_message_key(version: Option<i16>) -> bool {
+    matches!(version, Some(v) if v >= MESSAGE_KEY_VERSION)
+}
+
+/// 32-byte message key: HKDF-SHA256(conversation key, salt `xchat-message-key`,
+/// info `<sender_id>:<message_id>`).
+pub fn derive_message_key(
+    conversation_key: &[u8],
+    sender_id: &str,
+    message_id: &str,
+) -> Result<Vec<u8>, CryptoError> {
+    let info = format!("{sender_id}:{message_id}");
+    hkdf_with_info(conversation_key, MESSAGE_KEY_SALT, info.as_bytes(), 32)
+}
+
+/// 32-byte attachment key: HKDF-SHA256(message key, salt `xchat-attachment-key`,
+/// info the attachment id as UTF-8).
+pub fn derive_attachment_key(
+    message_key: &[u8],
+    attachment_id: &str,
+) -> Result<Vec<u8>, CryptoError> {
+    hkdf_with_info(
+        message_key,
+        ATTACHMENT_KEY_SALT,
+        attachment_id.as_bytes(),
+        32,
+    )
+}
+
+/// Attachment id used for key derivation.
+///
+/// A stored id is kept as given, including the empty string. A missing id is
+/// the message id for the first attachment and `<message_id>#<index>` after.
+pub fn resolve_attachment_id(stored: Option<&str>, message_id: &str, index: usize) -> String {
+    match stored {
+        Some(id) => id.to_string(),
+        None if index == 0 => message_id.to_string(),
+        None => format!("{message_id}#{index}"),
+    }
 }
 
 /// X9.63 Key Derivation Function (KDF2).
@@ -114,6 +177,53 @@ pub fn kdf2_sha256(shared_secret: &[u8], shared_info: &[u8], length: usize) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_and_attachment_keys_match_known_answers() {
+        let conv = hex_decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        let message = derive_message_key(
+            &conv,
+            "1876543210987654321",
+            "9d8c7b6a-5f4e-4d3c-8b2a-190807060504",
+        )
+        .unwrap();
+        assert_eq!(
+            hex_encode(&message),
+            "4d443b9a862e9584ccd0aee2753162aa7c5c1dbcb5f967610155f65ae41d8084"
+        );
+        let first =
+            derive_attachment_key(&message, "9d8c7b6a-5f4e-4d3c-8b2a-190807060504").unwrap();
+        assert_eq!(
+            hex_encode(&first),
+            "1ef86545f91f8a3078e276949f7555df2ca584e9c6509b261a558a2e618a1b4b"
+        );
+        let second =
+            derive_attachment_key(&message, "9d8c7b6a-5f4e-4d3c-8b2a-190807060504#1").unwrap();
+        assert_eq!(
+            hex_encode(&second),
+            "8a7bc01f2ff35c661140da68606b2370cecc13810f245d791aeb8ba6b40d4ea8"
+        );
+
+        let short_conv =
+            hex_decode("c3a1f0e2d4b6987a5c3e1f0d2b4a6987c3a1f0e2d4b6987a5c3e1f0d2b4a6987");
+        let short =
+            derive_message_key(&short_conv, "12", "00000000-0000-4000-8000-000000000001").unwrap();
+        assert_eq!(
+            hex_encode(&short),
+            "685bd4a20c7efb64c99147ab5854560c72eac9a826b04880b64e1951d4ef4cc7"
+        );
+    }
+
+    fn hex_decode(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
 
     #[test]
     fn test_sha256() {
