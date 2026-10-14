@@ -250,7 +250,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertIsInstance(payload.public_key.registration_method, str)
         self.assertIsInstance(payload.generate_version, bool)
 
-    def test_encrypt_message_signature_version_is_7(self):
+    def test_encrypt_message_signature_version_is_10(self):
         chat, v = self._unlocked_chat()
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
@@ -262,7 +262,7 @@ class TestApiShapes(unittest.TestCase):
             conversation_key_version="1",
         )
 
-        self.assertEqual(payload.signature_info.signature_version, "7")
+        self.assertEqual(payload.signature_info.signature_version, "10")
         # The SDK generates and returns the message id.
         self.assertTrue(payload.message_id)
 
@@ -299,7 +299,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.signature)
         self.assertTrue(payload.encoded_event_signature)
         self.assertEqual(payload.conversation_key_version, "1")
-        self.assertEqual(payload.signature_info.signature_version, "7")
+        self.assertEqual(payload.signature_info.signature_version, "10")
 
     def test_encrypt_reply_without_target_rejected(self):
         chat, v = self._unlocked_chat()

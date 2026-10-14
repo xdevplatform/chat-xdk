@@ -1371,7 +1371,7 @@ mod tests {
         assert!(!payload.signature.is_empty());
         assert!(!payload.encoded_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
-        assert_eq!(payload.signature_info.signature_version, "7");
+        assert_eq!(payload.signature_info.signature_version, "10");
         assert!(payload.should_notify);
     }
 

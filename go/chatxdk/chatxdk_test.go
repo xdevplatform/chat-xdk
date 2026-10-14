@@ -2402,7 +2402,7 @@ func TestEventUnknownType(t *testing.T) {
 }
 
 // TestEncryptMessageSignatureVersionAndRoundtrip exercises the encrypt side of
-// an end-to-end flow and pins the wire signature_version to "7".
+// an end-to-end flow and pins the wire signature_version to "10".
 //
 // A full EncryptMessage -> DecryptEvent roundtrip is NOT feasible from the Go
 // API: EncryptMessage returns a SendPayload (encrypted_content, signature,
@@ -2447,8 +2447,8 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 		t.Errorf("expected signature_info.public_key_version '1', got %q", payload.SignatureInfo.PublicKeyVersion)
 	}
 	// signature_version is pinned to the current wire format.
-	if payload.SignatureInfo.SignatureVersion != "7" {
-		t.Errorf("expected signature_version '7', got %q", payload.SignatureInfo.SignatureVersion)
+	if payload.SignatureInfo.SignatureVersion != "10" {
+		t.Errorf("expected signature_version '10', got %q", payload.SignatureInfo.SignatureVersion)
 	}
 }
 

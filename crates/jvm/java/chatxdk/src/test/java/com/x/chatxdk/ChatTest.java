@@ -258,7 +258,7 @@ class ChatTest {
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
             assertEquals("v1", payload.conversationKeyVersion);
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
             assertTrue(payload.shouldNotify);
             // The SDK generates and returns the message id.
             assertFalse(payload.messageId.isEmpty());
@@ -363,7 +363,7 @@ class ChatTest {
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
             assertEquals("v1", payload.conversationKeyVersion);
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -384,7 +384,7 @@ class ChatTest {
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -403,7 +403,7 @@ class ChatTest {
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
         }
     }
 

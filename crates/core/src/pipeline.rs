@@ -7,6 +7,7 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 
 use crate::crypto::encryption::encrypt_message;
+use crate::crypto::hash::derive_message_key;
 use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
 use crate::error::SdkError;
@@ -164,10 +165,21 @@ pub(crate) fn canonical_conversation_id<'a>(
 pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload, SdkError> {
     let should_notify = params.should_notify.unwrap_or(true);
 
-    // 1. Encrypt content
-    let encrypted = encrypt_message(params.conversation_key, params.content_bytes)?;
+    // Message contents are encrypted under a key derived for this message.
+    // The secretbox layout is unchanged; only the key differs from the
+    // conversation key.
+    let message_key_bytes = derive_message_key(
+        params.conversation_key.encoded(),
+        params.sender_id,
+        params.message_id,
+    )?;
+    let message_key = XChatConversationKey::from_bytes(message_key_bytes).ok_or_else(|| {
+        SdkError::Crypto(crate::error::CryptoError::HkdfFailed(
+            "message key was not 32 bytes".into(),
+        ))
+    })?;
+    let encrypted = encrypt_message(&message_key, params.content_bytes)?;
 
-    // 2. Build MessageCreateEvent Thrift
     let event = MessageCreateEvent::new(
         Some(encrypted.clone()),
         Some(params.conversation_key_version.to_string()),
@@ -180,43 +192,49 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
         None,
         None,
-        None,
+        Some(crate::signatures::CONTENTS_ENCRYPTION_VERSION),
     );
     let event_bytes = serialize_thrift(&event)?;
 
-    // 3. Build signature payload.
-    //
     // The conversation id is signed in its canonical, colon-separated form —
     // the form carried inside fanned-out events and reconstructed by verifiers.
     // Callers commonly hold the hyphen-separated form from conversation listing
     // and URL paths, or the bare recipient id the REST paths accept, so
     // normalize here to keep signatures verifiable regardless of input form.
     let conversation_id = canonical_conversation_id(params.conversation_id, params.sender_id);
-    let contents_b64_no_pad = STANDARD_NO_PAD.encode(&encrypted);
-    let components = [
-        "MessageCreateEvent",
-        params.message_id,
-        params.sender_id,
-        conversation_id.as_ref(),
-        params.conversation_key_version,
-        contents_b64_no_pad.as_str(),
-    ];
-    if components.iter().any(|c| c.contains(',')) {
+    if params.message_id.contains(',')
+        || params.sender_id.contains(',')
+        || conversation_id.contains(',')
+    {
         return Err(SdkError::Parse(
             "Signature payload contains comma-separated component".into(),
         ));
     }
-    let payload = components.join(",").into_bytes();
+    let detail = crate::thrift::event::MessageEventDetail::MessageCreateEvent(event);
+    let envelope = crate::thrift::event::MessageEvent {
+        message_id: Some(params.message_id.to_string()),
+        sender_id: Some(params.sender_id.to_string()),
+        conversation_id: Some(conversation_id.into_owned()),
+        detail: Some(detail.clone()),
+        message_event_signature: Some(MessageEventSignature::new(
+            None::<String>,
+            None::<String>,
+            Some(crate::signatures::MESSAGE_SIGNATURE_VERSION.to_string()),
+            None::<String>,
+            None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
+        )),
+        ..Default::default()
+    };
+    let payload = crate::core::build_event_signature_payload(&envelope, &detail, None)
+        .ok_or_else(|| SdkError::Parse("could not build the message signature payload".into()))?;
 
-    // 4. Sign
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
     let signature_b64 = STANDARD_NO_PAD.encode(&signature);
 
-    // 5. Build MessageEventSignature Thrift
     let signature_struct = MessageEventSignature::new(
         Some(signature_b64.clone()),
         Some(params.signing_key_version.to_string()),
-        Some(crate::signatures::SIGNATURE_VERSION.to_string()),
+        Some(crate::signatures::MESSAGE_SIGNATURE_VERSION.to_string()),
         None,
         None,
     );
@@ -230,7 +248,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         encoded_event_signature,
         signature_info: SignatureInfo {
             public_key_version: params.signing_key_version.to_string(),
-            signature_version: crate::signatures::SIGNATURE_VERSION.to_string(),
+            signature_version: crate::signatures::MESSAGE_SIGNATURE_VERSION.to_string(),
         },
         conversation_key_version: params.conversation_key_version.to_string(),
         should_notify,
@@ -1439,7 +1457,9 @@ mod tests {
             "1,2", // comma in key version
             "1",
         );
-        assert!(encrypt_and_sign(params).is_err());
+        // A non-numeric key version is the null sentinel in the payload, so a
+        // comma in that field never reaches the signed bytes.
+        assert!(encrypt_and_sign(params).is_ok());
     }
 
     #[test]
@@ -1459,7 +1479,7 @@ mod tests {
         );
         let payload = encrypt_and_sign(params).unwrap();
         assert_eq!(payload.signature_info.public_key_version, "3");
-        assert_eq!(payload.signature_info.signature_version, "7");
+        assert_eq!(payload.signature_info.signature_version, "10");
         assert_eq!(payload.conversation_key_version, "5");
         assert!(payload.should_notify); // default
     }

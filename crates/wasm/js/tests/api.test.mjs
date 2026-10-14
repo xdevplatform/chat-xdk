@@ -281,7 +281,7 @@ async function main() {
     assert.throws(() => truncated.finish());
   }
 
-  // 4. encryptMessage returns a SendPayload with signatureVersion === "7"
+  // 4. encryptMessage returns a SendPayload with signatureVersion === "10"
   const payload = chat.encryptMessage({
     senderId: "111",
     conversationId: "conv-1",
@@ -296,7 +296,7 @@ async function main() {
   assert.equal(typeof payload.encryptedContent, "string");
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
-  assert.equal(payload.signatureInfo.signatureVersion, "7");
+  assert.equal(payload.signatureInfo.signatureVersion, "10");
   assert.equal(payload.conversationKeyVersion, "1");
 
   // 4b. encryptReply produces a signed payload like encryptMessage
@@ -314,7 +314,7 @@ async function main() {
   assert.ok(replyPayload.encryptedContent.length > 0);
   assert.ok(replyPayload.signature.length > 0);
   assert.ok(replyPayload.encodedEventSignature.length > 0);
-  assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
+  assert.equal(replyPayload.signatureInfo.signatureVersion, "10");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
   // 4b2. replyToSenderId precision: a snowflake-sized id passed as a string

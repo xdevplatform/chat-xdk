@@ -1674,7 +1674,24 @@ impl ChatCore {
                             })?
                         }
                     };
-                    decrypt_message_bytes(ckey, contents)?
+                    let content_key =
+                        if crate::crypto::hash::uses_message_key(mce.contents_encryption_version) {
+                            let sender = parsed.sender_id.as_deref().ok_or_else(|| {
+                                SdkError::Parse("message-key event has no sender_id".into())
+                            })?;
+                            let message_id = parsed.message_id.as_deref().ok_or_else(|| {
+                                SdkError::Parse("message-key event has no message_id".into())
+                            })?;
+                            let bytes = derive_message_key(ckey.encoded(), sender, message_id)?;
+                            XChatConversationKey::from_bytes(bytes).ok_or_else(|| {
+                                SdkError::Crypto(CryptoError::DecryptionFailed(
+                                    "message key must be 32 bytes".into(),
+                                ))
+                            })?
+                        } else {
+                            ckey.clone()
+                        };
+                    decrypt_message_bytes(&content_key, contents)?
                 };
 
                 let parsed_content = parse_message_content(&plaintext)?;
@@ -2924,8 +2941,9 @@ pub fn build_event_signature_payload(
             }
             let contents = mce.contents.as_ref()?;
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
-            let ckey_ver = mce.conversation_key_version.as_deref().unwrap_or("");
-            let mut extra = vec![ckey_ver.to_string(), contents_b64];
+            // Missing or non-numeric key versions sign as the sentinel, not "".
+            let ckey_ver = mce_key_version_component(mce.conversation_key_version.as_deref());
+            let mut extra = vec![ckey_ver, contents_b64];
             if sig_version >= 10 {
                 extra.push(match mce.contents_encryption_version {
                     Some(v) => v.to_string(),
@@ -3398,6 +3416,17 @@ fn nullable_i64(v: Option<i64>) -> String {
 fn nullable_bool(v: Option<bool>) -> String {
     v.map(|b| b.to_string())
         .unwrap_or_else(|| "null".to_string())
+}
+
+/// Key-version component of a message signature.
+///
+/// A missing or non-numeric version is the sentinel `null`. A numeric version
+/// is its decimal form, so a leading-zero string does not survive.
+fn mce_key_version_component(raw: Option<&str>) -> String {
+    match raw.and_then(|s| s.parse::<i64>().ok()) {
+        Some(n) => n.to_string(),
+        None => "null".to_string(),
+    }
 }
 
 /// Build a comma-separated component payload: "eventName,msgId,senderId,convId,extras..."
@@ -4445,7 +4474,7 @@ mod tests {
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
-            Some("msg-forged".to_string()),
+            Some(payload.message_id.clone()),
             Some("victim-id".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
@@ -4489,10 +4518,11 @@ mod tests {
         let err = attacker
             .decrypt_event(&event_b64, &conv_keys, &signing_keys)
             .expect_err("forged sender must not verify");
+        let err_msg = err.to_string();
         assert!(
-            err.to_string().contains("could not be verified"),
+            err_msg.contains("could not be verified") || err_msg.contains("verification failed"),
             "expected unverifiable-signature rejection, got: {}",
-            err
+            err_msg
         );
 
         // Relaxed policy still must not report the forgery as verified.
@@ -8269,9 +8299,9 @@ mod tests {
     }
 
     #[test]
-    fn signature_version_at_floor_is_processed() {
-        // At/above the floor the message payload format is identical, so
-        // the signature still verifies.
+    fn signature_version_relabel_down_does_not_verify() {
+        // A message-key send is signed at v10. Relabeling that signature as
+        // the floor version rebuilds a different payload, so it must not verify.
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
         let (event_b64, ckey_b64) = build_message_event_with_sig_version(
@@ -8284,10 +8314,14 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
 
-        match core.decrypt_event(&event_b64, &conv_keys, &signing_keys) {
-            Ok(Event::Message(msg)) => assert!(msg.verified),
-            other => panic!("expected verified Message, got {:?}", other),
-        }
+        let err = core
+            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .expect_err("relabeled signature must be rejected");
+        assert!(
+            err.to_string().contains("verification failed"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     // Default reject_unverified=true rejects unverifiable events
