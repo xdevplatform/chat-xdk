@@ -51,6 +51,28 @@ namespace ChatXdk.Tests
             [JsonPropertyName("event_signing_key_version")] public string EventSigningKeyVersion { get; init; } = "";
             [JsonPropertyName("event_recipient_key_version")] public string EventRecipientKeyVersion { get; init; } = "";
             [JsonPropertyName("event_message_text")] public string EventMessageText { get; init; } = "";
+
+            [JsonPropertyName("message_key_conversation_key_hex")] public string MessageKeyConversationKeyHex { get; init; } = "";
+            [JsonPropertyName("message_key_conversation_key_version")] public string MessageKeyConversationKeyVersion { get; init; } = "";
+            [JsonPropertyName("message_key_sender_id")] public string MessageKeySenderId { get; init; } = "";
+            [JsonPropertyName("message_key_short_conversation_key_hex")] public string MessageKeyShortConversationKeyHex { get; init; } = "";
+            [JsonPropertyName("message_key_short_conversation_key_version")] public string MessageKeyShortConversationKeyVersion { get; init; } = "";
+            [JsonPropertyName("message_key_short_sender_id")] public string MessageKeyShortSenderId { get; init; } = "";
+            [JsonPropertyName("event_message_key_b64")] public string EventMessageKeyB64 { get; init; } = "";
+            [JsonPropertyName("event_message_key_text")] public string EventMessageKeyText { get; init; } = "";
+            [JsonPropertyName("event_message_key_short_b64")] public string EventMessageKeyShortB64 { get; init; } = "";
+            [JsonPropertyName("event_message_key_short_text")] public string EventMessageKeyShortText { get; init; } = "";
+            [JsonPropertyName("event_key_change_message_key_b64")] public string EventKeyChangeMessageKeyB64 { get; init; } = "";
+            [JsonPropertyName("event_reply_message_key_b64")] public string EventReplyMessageKeyB64 { get; init; } = "";
+            [JsonPropertyName("event_reply_message_key_text")] public string EventReplyMessageKeyText { get; init; } = "";
+            [JsonPropertyName("media_first_encrypted_b64")] public string MediaFirstEncryptedB64 { get; init; } = "";
+            [JsonPropertyName("media_first_plaintext_b64")] public string MediaFirstPlaintextB64 { get; init; } = "";
+            [JsonPropertyName("media_second_encrypted_b64")] public string MediaSecondEncryptedB64 { get; init; } = "";
+            [JsonPropertyName("media_second_plaintext_b64")] public string MediaSecondPlaintextB64 { get; init; } = "";
+            [JsonPropertyName("payload_message_v10_cev1")] public string PayloadMessageV10Cev1 { get; init; } = "";
+            [JsonPropertyName("payload_message_v10")] public string PayloadMessageV10 { get; init; } = "";
+            [JsonPropertyName("signature_v10_cev1_public_key_b64")] public string SignatureV10Cev1PublicKeyB64 { get; init; } = "";
+            [JsonPropertyName("signature_v10_cev1_b64")] public string SignatureV10Cev1B64 { get; init; } = "";
         }
 
         private static SdkVectors LoadVectors()
@@ -95,17 +117,18 @@ namespace ChatXdk.Tests
         }
 
         /// <summary>Signing keys matching the fixture's event vectors.</summary>
-        private static SigningKeyEntry[] EventSigningKeys(SdkVectors v) => new[]
-        {
-            new SigningKeyEntry
+        private static SigningKeyEntry[] EventSigningKeys(SdkVectors v) => SigningKeysFor(v, v.EventSenderId);
+
+        /// <summary>The fixture signing key, registered to each of <paramref name="userIds"/>.</summary>
+        private static SigningKeyEntry[] SigningKeysFor(SdkVectors v, params string[] userIds) =>
+            userIds.Select(userId => new SigningKeyEntry
             {
-                UserId = v.EventSenderId,
+                UserId = userId,
                 PublicKeyVersion = v.EventSigningKeyVersion,
                 PublicKey = v.SigningPublicB64,
                 IdentityPublicKey = v.IdentityPublicB64,
                 IdentityPublicKeySignature = v.IdentityPublicKeySignatureB64,
-            },
-        };
+            }).ToArray();
 
         // Lifecycle
 
@@ -1114,6 +1137,117 @@ namespace ChatXdk.Tests
             });
             Assert.NotEmpty(payload.EncryptedContent);
             Assert.NotEmpty(payload.MessageId);
+        }
+
+        // Message-key vectors: their contents and media are encrypted directly
+        // under the known message and attachment keys, so they open only if the
+        // SDK derives the same keys from the conversation key.
+        [Fact]
+        public void Vectors_MessageKeyEvent_DecryptsAndItsMediaOpenWithTheConversationKey()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            var key = ChatXdkUtilities.HexToBytes(v.MessageKeyConversationKeyHex);
+            var first = Convert.FromBase64String(v.MediaFirstEncryptedB64);
+            var firstPlaintext = Convert.FromBase64String(v.MediaFirstPlaintextB64);
+
+            // The media keys come from the message, so they are unknown before it.
+            Assert.Throws<ChatXdkException>(() => chat.DecryptStream(first, key));
+
+            var e = chat.DecryptEvent(
+                v.EventMessageKeyB64,
+                new Dictionary<string, byte[]> { [v.MessageKeyConversationKeyVersion] = key },
+                SigningKeysFor(v, v.MessageKeySenderId));
+            Assert.Equal("Message", e.GetProperty("type").GetString());
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventMessageKeyText,
+                e.GetProperty("content").GetProperty("text").GetString());
+            Assert.Equal(2, e.GetProperty("attachments").GetArrayLength());
+
+            Assert.Equal(firstPlaintext, chat.DecryptStream(first, key));
+            Assert.Equal(
+                Convert.FromBase64String(v.MediaSecondPlaintextB64),
+                chat.DecryptStream(Convert.FromBase64String(v.MediaSecondEncryptedB64), key));
+
+            using var decryptor = chat.StreamDecryptor(key);
+            var incremental = new List<byte>();
+            for (var i = 0; i < first.Length; i += 700)
+                incremental.AddRange(decryptor.Push(first[i..Math.Min(i + 700, first.Length)]));
+            incremental.AddRange(decryptor.Finish());
+            Assert.Equal(firstPlaintext, incremental.ToArray());
+        }
+
+        [Fact]
+        public void Vectors_MessageKeyEvent_DecryptsInABatchWithItsKeyChange()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+
+            var result = chat.DecryptEvents(
+                new[] { v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64 },
+                SigningKeysFor(v, v.EventSenderId, v.MessageKeySenderId));
+            Assert.Empty(result.Errors);
+
+            var key = result.ConversationKeys.Keys[v.MessageKeyConversationKeyVersion];
+            Assert.Equal(ChatXdkUtilities.HexToBytes(v.MessageKeyConversationKeyHex), key);
+            var texts = result.Messages
+                .Where(m => m.Event.GetProperty("type").GetString() == "Message")
+                .Select(m => m.Event.GetProperty("content").GetProperty("text").GetString())
+                .ToList();
+            Assert.Equal(new[] { v.EventMessageKeyText }, texts);
+            Assert.Equal(
+                Convert.FromBase64String(v.MediaSecondPlaintextB64),
+                chat.DecryptStream(Convert.FromBase64String(v.MediaSecondEncryptedB64), key));
+        }
+
+        [Fact]
+        public void Vectors_ShortSenderMessageKeyEvent_VerifiesAtV11()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            var e = chat.DecryptEvent(
+                v.EventMessageKeyShortB64,
+                new Dictionary<string, byte[]>
+                {
+                    [v.MessageKeyShortConversationKeyVersion] =
+                        ChatXdkUtilities.HexToBytes(v.MessageKeyShortConversationKeyHex),
+                },
+                SigningKeysFor(v, v.MessageKeyShortSenderId));
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventMessageKeyShortText,
+                e.GetProperty("content").GetProperty("text").GetString());
+        }
+
+        [Fact]
+        public void Vectors_ReplyCarryingAMessageKey_ValidatesAndOpensTheQuotedMedia()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+            var e = chat.DecryptEvent(
+                v.EventReplyMessageKeyB64,
+                new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = key },
+                SigningKeysFor(v, v.EventSenderId, v.MessageKeySenderId));
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventReplyMessageKeyText,
+                e.GetProperty("content").GetProperty("text").GetString());
+            Assert.Equal("Valid", e.GetProperty("reply_preview_validation").GetString());
+            Assert.Equal(
+                Convert.FromBase64String(v.MediaFirstPlaintextB64),
+                chat.DecryptStream(Convert.FromBase64String(v.MediaFirstEncryptedB64), key));
+        }
+
+        [Fact]
+        public void Vectors_KnownSignature_CoversTheContentsEncryptionVersion()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            var signature = Convert.FromBase64String(v.SignatureV10Cev1B64);
+            Assert.True(chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature,
+                System.Text.Encoding.UTF8.GetBytes(v.PayloadMessageV10Cev1)));
+            Assert.False(chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature,
+                System.Text.Encoding.UTF8.GetBytes(v.PayloadMessageV10)));
         }
 
         // Absent-value normalization: an empty title/avatar is "not set" and

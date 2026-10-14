@@ -8,16 +8,21 @@
 //! so the supported API surface stays what `ChatCore` / `Chat` define.
 //! Application code must not use it.
 
+use crate::crypto::encryption::encrypt_message;
+use crate::crypto::key_factory::KeyFactory;
+use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
 use crate::error::SdkError;
-use crate::pipeline::serialize_thrift;
+use crate::pipeline::{build_message_content, serialize_thrift};
 use crate::protocol::safe_reader::BoundedProtocol;
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::signatures::ActionSignature;
 use crate::thrift::event::{
-    ConversationKeyChangeEvent, ConversationParticipantKey, FailureType, MessageEvent,
-    MessageEventDetail, MessageEventSignature, MessageFailureEvent, RateLimitTier,
+    ConversationKeyChangeEvent, ConversationParticipantKey, FailureType, MessageCreateEvent,
+    MessageEvent, MessageEventDetail, MessageEventSignature, MessageFailureEvent, RateLimitTier,
 };
+use crate::thrift::product::{MediaAttachment, MessageAttachment};
 use crate::types::SendPayload;
+use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use std::io::Cursor;
 use thrift::protocol::{TBinaryInputProtocol, TSerializable};
 
@@ -78,6 +83,71 @@ pub fn frame_send_payload(
         Some(payload.signature.clone()),
         Some(payload.signature_info.public_key_version.clone()),
         Some(payload.signature_info.signature_version.clone()),
+        None,
+        None,
+    );
+    frame_event(
+        message_id,
+        sender_id,
+        conversation_id,
+        detail,
+        Some(signature),
+    )
+}
+
+/// Build a signed `MessageCreateEvent` in the backend `MessageEvent` envelope
+/// (base64) whose contents use a per-message key: a text message carrying
+/// one media attachment without an id per `media_hash_keys` entry, encrypted
+/// under `message_key` with `contents_encryption_version` 1, and signed at
+/// `signature_version` over the payload verifiers rebuild.
+#[allow(clippy::too_many_arguments)]
+pub fn frame_message_key_event(
+    signing_key: &XChatPrivateKey,
+    signing_key_version: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+    conversation_key_version: &str,
+    message_key: &XChatConversationKey,
+    text: &str,
+    media_hash_keys: &[&str],
+    signature_version: i32,
+) -> Result<String, SdkError> {
+    let attachments = media_hash_keys
+        .iter()
+        .map(|hash| {
+            Box::new(MessageAttachment::Media(Box::new(MediaAttachment {
+                media_hash_key: Some(hash.to_string()),
+                filename: Some(format!("{}.bin", hash)),
+                ..Default::default()
+            })))
+        })
+        .collect();
+    let content = build_message_content(text, None, Some(attachments))?;
+    let detail = MessageEventDetail::MessageCreateEvent(MessageCreateEvent {
+        contents: Some(encrypt_message(message_key, &content)?),
+        conversation_key_version: Some(conversation_key_version.to_string()),
+        should_notify: Some(true),
+        contents_encryption_version: Some(1),
+        ..Default::default()
+    });
+    let unsigned = MessageEvent {
+        message_id: Some(message_id.to_string()),
+        sender_id: Some(sender_id.to_string()),
+        conversation_id: Some(conversation_id.to_string()),
+        message_event_signature: Some(MessageEventSignature {
+            signature_version: Some(signature_version.to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let payload = crate::core::build_event_signature_payload(&unsigned, &detail, None)
+        .ok_or_else(|| SdkError::Parse("no signature payload for the event".into()))?;
+    let signature = KeyFactory::sign(signing_key, &payload)?;
+    let signature = MessageEventSignature::new(
+        Some(STANDARD_NO_PAD.encode(signature)),
+        Some(signing_key_version.to_string()),
+        Some(signature_version.to_string()),
         None,
         None,
     );

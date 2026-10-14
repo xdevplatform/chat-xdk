@@ -11,8 +11,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -46,13 +48,22 @@ class ChatTest {
 
     /** SigningKeyEntry list matching the fixture's event vectors. */
     private static List<SigningKeyEntry> eventSigningKeys(JsonNode v) {
-        SigningKeyEntry entry = new SigningKeyEntry();
-        entry.userId = v.get("event_sender_id").asText();
-        entry.publicKeyVersion = v.get("event_signing_key_version").asText();
-        entry.publicKey = v.get("signing_public_b64").asText();
-        entry.identityPublicKey = v.get("identity_public_b64").asText();
-        entry.identityPublicKeySignature = v.get("identity_public_key_signature_b64").asText();
-        return List.of(entry);
+        return signingKeysFor(v, v.get("event_sender_id").asText());
+    }
+
+    /** The fixture signing key, registered to each of {@code userIds}. */
+    private static List<SigningKeyEntry> signingKeysFor(JsonNode v, String... userIds) {
+        List<SigningKeyEntry> entries = new ArrayList<>();
+        for (String userId : userIds) {
+            SigningKeyEntry entry = new SigningKeyEntry();
+            entry.userId = userId;
+            entry.publicKeyVersion = v.get("event_signing_key_version").asText();
+            entry.publicKey = v.get("signing_public_b64").asText();
+            entry.identityPublicKey = v.get("identity_public_b64").asText();
+            entry.identityPublicKeySignature = v.get("identity_public_key_signature_b64").asText();
+            entries.add(entry);
+        }
+        return entries;
     }
 
     /** Produce a fresh conversation key via a prepared key change (for crypto tests). */
@@ -918,6 +929,118 @@ class ChatTest {
             SendPayload payload = chat.encryptReply(p);
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.messageId.isEmpty());
+        }
+    }
+
+    // Message-key vectors: their contents and media are encrypted directly
+    // under the known message and attachment keys, so they open only if the
+    // SDK derives the same keys from the conversation key.
+    @Test
+    void vectorsMessageKeyEventDecryptsAndItsMediaOpenWithTheConversationKey() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            byte[] key = ChatXdkUtilities.hexToBytes(v.get("message_key_conversation_key_hex").asText());
+            byte[] first = b64(v, "media_first_encrypted_b64");
+            byte[] firstPlaintext = b64(v, "media_first_plaintext_b64");
+
+            // The media keys come from the message, so they are unknown before it.
+            assertThrows(ChatXdkException.class, () -> chat.decryptStream(first, key));
+
+            JsonNode event = chat.decryptEvent(
+                    v.get("event_message_key_b64").asText(),
+                    Map.of(v.get("message_key_conversation_key_version").asText(), key),
+                    signingKeysFor(v, v.get("message_key_sender_id").asText()));
+            assertEquals("Message", event.path("type").asText());
+            assertTrue(event.path("verified").asBoolean());
+            assertEquals(v.get("event_message_key_text").asText(), event.path("content").path("text").asText());
+            assertEquals(2, event.path("attachments").size());
+
+            assertArrayEquals(firstPlaintext, chat.decryptStream(first, key));
+            assertArrayEquals(
+                    b64(v, "media_second_plaintext_b64"),
+                    chat.decryptStream(b64(v, "media_second_encrypted_b64"), key));
+
+            try (StreamDecryptor decryptor = chat.streamDecryptor(key)) {
+                ByteArrayOutputStream incremental = new ByteArrayOutputStream();
+                for (int i = 0; i < first.length; i += 700) {
+                    incremental.write(decryptor.push(Arrays.copyOfRange(first, i, Math.min(i + 700, first.length))));
+                }
+                incremental.write(decryptor.finish());
+                assertArrayEquals(firstPlaintext, incremental.toByteArray());
+            }
+        }
+    }
+
+    @Test
+    void vectorsMessageKeyEventDecryptsInABatchWithItsKeyChange() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            DecryptEventsResult result = chat.decryptEvents(
+                    List.of(
+                            v.get("event_key_change_message_key_b64").asText(),
+                            v.get("event_message_key_b64").asText()),
+                    signingKeysFor(v, v.get("event_sender_id").asText(), v.get("message_key_sender_id").asText()));
+            assertTrue(result.errors.isEmpty(), "errors: " + result.errors);
+
+            byte[] key = result.conversationKeys.keys.get(v.get("message_key_conversation_key_version").asText());
+            assertArrayEquals(ChatXdkUtilities.hexToBytes(v.get("message_key_conversation_key_hex").asText()), key);
+            List<String> texts = new ArrayList<>();
+            for (DecryptedMessage dm : result.messages) {
+                if ("Message".equals(dm.event.path("type").asText())) {
+                    texts.add(dm.event.path("content").path("text").asText());
+                }
+            }
+            assertEquals(List.of(v.get("event_message_key_text").asText()), texts);
+            assertArrayEquals(
+                    b64(v, "media_second_plaintext_b64"),
+                    chat.decryptStream(b64(v, "media_second_encrypted_b64"), key));
+        }
+    }
+
+    @Test
+    void vectorsShortSenderMessageKeyEventVerifiesAtV11() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            JsonNode event = chat.decryptEvent(
+                    v.get("event_message_key_short_b64").asText(),
+                    Map.of(
+                            v.get("message_key_short_conversation_key_version").asText(),
+                            ChatXdkUtilities.hexToBytes(v.get("message_key_short_conversation_key_hex").asText())),
+                    signingKeysFor(v, v.get("message_key_short_sender_id").asText()));
+            assertTrue(event.path("verified").asBoolean());
+            assertEquals(v.get("event_message_key_short_text").asText(), event.path("content").path("text").asText());
+        }
+    }
+
+    @Test
+    void vectorsReplyCarryingAMessageKeyValidatesAndOpensTheQuotedMedia() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            byte[] key = b64(v, "conversation_key_b64");
+            JsonNode event = chat.decryptEvent(
+                    v.get("event_reply_message_key_b64").asText(),
+                    Map.of(v.get("event_conversation_key_version").asText(), key),
+                    signingKeysFor(v, v.get("event_sender_id").asText(), v.get("message_key_sender_id").asText()));
+            assertTrue(event.path("verified").asBoolean());
+            assertEquals(v.get("event_reply_message_key_text").asText(), event.path("content").path("text").asText());
+            assertEquals("Valid", event.path("reply_preview_validation").asText());
+            assertArrayEquals(
+                    b64(v, "media_first_plaintext_b64"),
+                    chat.decryptStream(b64(v, "media_first_encrypted_b64"), key));
+        }
+    }
+
+    @Test
+    void vectorsKnownSignatureCoversTheContentsEncryptionVersion() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            String publicKey = v.get("signature_v10_cev1_public_key_b64").asText();
+            byte[] signature = b64(v, "signature_v10_cev1_b64");
+            assertTrue(chat.verify(
+                    publicKey, signature, v.get("payload_message_v10_cev1").asText().getBytes(StandardCharsets.UTF_8)));
+            assertFalse(chat.verify(
+                    publicKey, signature, v.get("payload_message_v10").asText().getBytes(StandardCharsets.UTF_8)));
         }
     }
 

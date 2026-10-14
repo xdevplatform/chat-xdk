@@ -216,6 +216,99 @@ async function main() {
       /sender_id/,
     );
   }
+
+  // Message-key vectors: their contents and media are encrypted directly
+  // under the known message and attachment keys, so they open only if the
+  // SDK derives the same keys from the conversation key.
+  {
+    const hexToBytes = (hex) => Uint8Array.from(Buffer.from(hex, "hex"));
+    const signingKeysFor = (...userIds) =>
+      userIds.map((userId) => ({ ...signingKeys[0], userId }));
+    const mkVersion = v.message_key_conversation_key_version;
+    const mkKey = hexToBytes(v.message_key_conversation_key_hex);
+    const first = b64ToBytes(v.media_first_encrypted_b64);
+    const firstPlaintext = b64ToBytes(v.media_first_plaintext_b64);
+    const second = b64ToBytes(v.media_second_encrypted_b64);
+    const secondPlaintext = b64ToBytes(v.media_second_plaintext_b64);
+
+    // The media keys come from the message, so they are unknown before it.
+    const receiver = new Chat();
+    assert.throws(() => receiver.decryptStream(first, mkKey));
+    const mkMessage = receiver.decryptEvent(
+      v.event_message_key_b64,
+      { [mkVersion]: mkKey },
+      signingKeysFor(v.message_key_sender_id),
+    );
+    assert.equal(mkMessage.type, "message");
+    assert.equal(mkMessage.verified, true);
+    assert.equal(mkMessage.content.text, v.event_message_key_text);
+    assert.equal(mkMessage.attachments.length, 2);
+    assert.deepEqual(receiver.decryptStream(first, mkKey), firstPlaintext);
+    assert.deepEqual(receiver.decryptStream(second, mkKey), secondPlaintext);
+    const decryptor = receiver.streamDecryptor(mkKey);
+    const parts = [];
+    for (let i = 0; i < first.length; i += 700) {
+      parts.push(decryptor.push(first.subarray(i, i + 700)));
+    }
+    parts.push(decryptor.finish());
+    assert.deepEqual(Uint8Array.from(Buffer.concat(parts)), firstPlaintext);
+
+    // Batch path: the key change in the batch supplies the conversation key.
+    const batchReceiver = new Chat();
+    batchReceiver.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+    const mkBatch = batchReceiver.decryptEvents(
+      [v.event_key_change_message_key_b64, v.event_message_key_b64],
+      signingKeysFor(v.event_sender_id, v.message_key_sender_id),
+    );
+    assert.deepEqual(Object.keys(mkBatch.errors), []);
+    assert.deepEqual(mkBatch.conversationKeys.keys[mkVersion], mkKey);
+    assert.deepEqual(
+      mkBatch.messages.filter((m) => m.event.type === "message").map((m) => m.event.content.text),
+      [v.event_message_key_text],
+    );
+    assert.deepEqual(batchReceiver.decryptStream(second, mkKey), secondPlaintext);
+
+    // A v11 message from a short sender id.
+    const short = new Chat().decryptEvent(
+      v.event_message_key_short_b64,
+      {
+        [v.message_key_short_conversation_key_version]: hexToBytes(
+          v.message_key_short_conversation_key_hex,
+        ),
+      },
+      signingKeysFor(v.message_key_short_sender_id),
+    );
+    assert.equal(short.verified, true);
+    assert.equal(short.content.text, v.event_message_key_short_text);
+
+    // A reply under the fixture key carries the quoted message's key, and the
+    // quoted media opens with the reply's conversation key.
+    const replyReceiver = new Chat();
+    const mkReply = replyReceiver.decryptEvent(
+      v.event_reply_message_key_b64,
+      { [v.event_conversation_key_version]: convKey },
+      signingKeysFor(v.event_sender_id, v.message_key_sender_id),
+    );
+    assert.equal(mkReply.content.text, v.event_reply_message_key_text);
+    assert.equal(mkReply.replyPreviewValidation, "valid");
+    assert.deepEqual(replyReceiver.decryptStream(first, convKey), firstPlaintext);
+
+    // The known signature covers contents_encryption_version.
+    const knownSignature = b64ToBytes(v.signature_v10_cev1_b64);
+    const encode = (s) => new TextEncoder().encode(s);
+    assert.equal(
+      receiver.verify(
+        v.signature_v10_cev1_public_key_b64,
+        knownSignature,
+        encode(v.payload_message_v10_cev1),
+      ),
+      true,
+    );
+    assert.equal(
+      receiver.verify(v.signature_v10_cev1_public_key_b64, knownSignature, encode(v.payload_message_v10)),
+      false,
+    );
+  }
 }
 
 main().catch((e) => {

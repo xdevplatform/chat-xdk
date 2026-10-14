@@ -30,6 +30,28 @@ struct Vectors {
     event_signing_key_version: String,
     event_recipient_key_version: String,
     event_message_text: String,
+    event_conversation_id: String,
+    message_key_conversation_key_hex: String,
+    message_key_conversation_key_version: String,
+    message_key_sender_id: String,
+    message_key_short_conversation_key_hex: String,
+    message_key_short_conversation_key_version: String,
+    message_key_short_sender_id: String,
+    event_message_key_b64: String,
+    event_message_key_text: String,
+    event_message_key_short_b64: String,
+    event_message_key_short_text: String,
+    event_key_change_message_key_b64: String,
+    event_reply_message_key_b64: String,
+    event_reply_message_key_text: String,
+    media_first_encrypted_b64: String,
+    media_first_plaintext_b64: String,
+    media_second_encrypted_b64: String,
+    media_second_plaintext_b64: String,
+    payload_message_v10_cev1: String,
+    payload_message_v10: String,
+    signature_v10_cev1_public_key_b64: String,
+    signature_v10_cev1_b64: String,
 }
 
 fn load_vectors() -> Vectors {
@@ -283,6 +305,206 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
         messages[1].reply_preview_validation,
         Some(chat_xdk_core::ReplyPreviewValidation::Invalid)
     );
+}
+
+/// The fixture signing key, registered to `user_id`.
+fn signing_key_for(v: &Vectors, user_id: &str) -> chat_xdk_core::SigningKeyEntry {
+    chat_xdk_core::SigningKeyEntry {
+        user_id: user_id.to_string(),
+        public_key_version: v.event_signing_key_version.clone(),
+        public_key: v.signing_public_b64.clone(),
+        identity_public_key: v.identity_public_b64.clone(),
+        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
+    }
+}
+
+fn key_map(
+    version: &str,
+    key_hex: &str,
+) -> std::collections::HashMap<String, XChatConversationKey> {
+    [(
+        version.to_string(),
+        XChatConversationKey::from_bytes(hex::decode(key_hex).unwrap()).unwrap(),
+    )]
+    .into_iter()
+    .collect()
+}
+
+fn expect_message(event: chat_xdk_core::Event) -> Box<chat_xdk_core::Message> {
+    match event {
+        chat_xdk_core::Event::Message(message) => message,
+        other => panic!("Expected Event::Message, got {:?}", other),
+    }
+}
+
+#[test]
+fn vectors_message_key_event_decrypts_and_its_media_open_with_the_conversation_key() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new();
+    let keys = key_map(
+        &v.message_key_conversation_key_version,
+        &v.message_key_conversation_key_hex,
+    );
+    let ckey = &keys[&v.message_key_conversation_key_version];
+    let first = B64.decode(&v.media_first_encrypted_b64).unwrap();
+    let second = B64.decode(&v.media_second_encrypted_b64).unwrap();
+    assert!(core.decrypt_stream(&first, ckey).is_err());
+
+    let message = expect_message(
+        core.decrypt_event(
+            &v.event_message_key_b64,
+            &keys,
+            &[signing_key_for(&v, &v.message_key_sender_id)],
+        )
+        .unwrap(),
+    );
+    assert!(message.verified);
+    assert_eq!(message.text(), Some(v.event_message_key_text.as_str()));
+    assert_eq!(message.attachments.len(), 2);
+
+    assert_eq!(
+        core.decrypt_stream(&first, ckey).unwrap(),
+        B64.decode(&v.media_first_plaintext_b64).unwrap()
+    );
+    assert_eq!(
+        core.decrypt_stream(&second, ckey).unwrap(),
+        B64.decode(&v.media_second_plaintext_b64).unwrap()
+    );
+    let mut decryptor = core.stream_decryptor(ckey).unwrap();
+    let mut plaintext = Vec::new();
+    for chunk in first.chunks(700) {
+        plaintext.extend(decryptor.push(chunk).unwrap());
+    }
+    plaintext.extend(decryptor.finish().unwrap());
+    assert_eq!(plaintext, B64.decode(&v.media_first_plaintext_b64).unwrap());
+}
+
+#[test]
+fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new();
+    core.import_keys_with_version(
+        &B64.decode(&v.private_keys_concat_b64).unwrap(),
+        &v.event_recipient_key_version,
+    )
+    .unwrap();
+    let signing_keys = [
+        signing_key_for(&v, &v.event_sender_id),
+        signing_key_for(&v, &v.message_key_sender_id),
+    ];
+    let result = core.decrypt_events(
+        &[
+            &v.event_key_change_message_key_b64,
+            &v.event_message_key_b64,
+        ],
+        &signing_keys,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    let ckey = result
+        .conversation_keys
+        .get(&v.message_key_conversation_key_version)
+        .expect("conversation key adopted from the key change");
+    assert_eq!(
+        hex::encode(ckey.encoded()),
+        v.message_key_conversation_key_hex
+    );
+    let texts: Vec<_> = result
+        .messages
+        .iter()
+        .filter_map(|m| match &m.event {
+            chat_xdk_core::Event::Message(msg) => msg.text().map(str::to_string),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec![v.event_message_key_text.clone()]);
+    assert_eq!(
+        core.decrypt_stream(&B64.decode(&v.media_second_encrypted_b64).unwrap(), ckey)
+            .unwrap(),
+        B64.decode(&v.media_second_plaintext_b64).unwrap()
+    );
+}
+
+#[test]
+fn vectors_short_sender_message_key_event_verifies_at_v11() {
+    let v = load_vectors();
+    let message = expect_message(
+        chat_xdk_core::ChatCore::new()
+            .decrypt_event(
+                &v.event_message_key_short_b64,
+                &key_map(
+                    &v.message_key_short_conversation_key_version,
+                    &v.message_key_short_conversation_key_hex,
+                ),
+                &[signing_key_for(&v, &v.message_key_short_sender_id)],
+            )
+            .unwrap(),
+    );
+    assert!(message.verified);
+    assert_eq!(
+        message.text(),
+        Some(v.event_message_key_short_text.as_str())
+    );
+}
+
+#[test]
+fn vectors_reply_carrying_a_message_key_validates_and_opens_the_quoted_media() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new();
+    let ckey =
+        XChatConversationKey::from_bytes(B64.decode(&v.conversation_key_b64).unwrap()).unwrap();
+    let keys = [(v.event_conversation_key_version.clone(), ckey.clone())]
+        .into_iter()
+        .collect();
+    let message = expect_message(
+        core.decrypt_event(
+            &v.event_reply_message_key_b64,
+            &keys,
+            &[
+                signing_key_for(&v, &v.event_sender_id),
+                signing_key_for(&v, &v.message_key_sender_id),
+            ],
+        )
+        .unwrap(),
+    );
+    assert!(message.verified);
+    assert_eq!(
+        message.text(),
+        Some(v.event_reply_message_key_text.as_str())
+    );
+    assert_eq!(
+        message.meta.conversation_id.as_deref(),
+        Some(v.event_conversation_id.as_str())
+    );
+    assert_eq!(
+        message.reply_preview_validation,
+        Some(chat_xdk_core::ReplyPreviewValidation::Valid)
+    );
+    assert_eq!(
+        core.decrypt_stream(&B64.decode(&v.media_first_encrypted_b64).unwrap(), &ckey)
+            .unwrap(),
+        B64.decode(&v.media_first_plaintext_b64).unwrap()
+    );
+}
+
+#[test]
+fn vectors_known_signature_covers_the_contents_encryption_version() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new();
+    let signature = B64.decode(&v.signature_v10_cev1_b64).unwrap();
+    assert!(core
+        .verify(
+            &v.signature_v10_cev1_public_key_b64,
+            &signature,
+            v.payload_message_v10_cev1.as_bytes()
+        )
+        .unwrap());
+    assert!(!core
+        .verify(
+            &v.signature_v10_cev1_public_key_b64,
+            &signature,
+            v.payload_message_v10.as_bytes()
+        )
+        .unwrap());
 }
 
 #[test]

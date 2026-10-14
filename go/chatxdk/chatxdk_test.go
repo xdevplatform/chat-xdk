@@ -38,18 +38,79 @@ type sdkVectors struct {
 	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
 	EventMessageText              string `json:"event_message_text"`
 	EventReplyText                string `json:"event_reply_text"`
+
+	MessageKeyConversationKeyHex          string `json:"message_key_conversation_key_hex"`
+	MessageKeyConversationKeyVersion      string `json:"message_key_conversation_key_version"`
+	MessageKeySenderID                    string `json:"message_key_sender_id"`
+	MessageKeyShortConversationKeyHex     string `json:"message_key_short_conversation_key_hex"`
+	MessageKeyShortConversationKeyVersion string `json:"message_key_short_conversation_key_version"`
+	MessageKeyShortSenderID               string `json:"message_key_short_sender_id"`
+	EventMessageKeyB64                    string `json:"event_message_key_b64"`
+	EventMessageKeyText                   string `json:"event_message_key_text"`
+	EventMessageKeyShortB64               string `json:"event_message_key_short_b64"`
+	EventMessageKeyShortText              string `json:"event_message_key_short_text"`
+	EventKeyChangeMessageKeyB64           string `json:"event_key_change_message_key_b64"`
+	EventReplyMessageKeyB64               string `json:"event_reply_message_key_b64"`
+	EventReplyMessageKeyText              string `json:"event_reply_message_key_text"`
+	MediaFirstEncryptedB64                string `json:"media_first_encrypted_b64"`
+	MediaFirstPlaintextB64                string `json:"media_first_plaintext_b64"`
+	MediaSecondEncryptedB64               string `json:"media_second_encrypted_b64"`
+	MediaSecondPlaintextB64               string `json:"media_second_plaintext_b64"`
+	PayloadMessageV10Cev1                 string `json:"payload_message_v10_cev1"`
+	PayloadMessageV10                     string `json:"payload_message_v10"`
+	SignatureV10Cev1PublicKeyB64          string `json:"signature_v10_cev1_public_key_b64"`
+	SignatureV10Cev1B64                   string `json:"signature_v10_cev1_b64"`
 }
 
 // eventSigningKeys builds the SigningKeyEntry list matching the fixture's
 // event vectors (sender id, key version, and identity binding).
 func (v sdkVectors) eventSigningKeys() []SigningKeyEntry {
-	return []SigningKeyEntry{{
-		UserID:                     v.EventSenderID,
-		PublicKeyVersion:           v.EventSigningKeyVersion,
-		PublicKey:                  v.SigningPublicB64,
-		IdentityPublicKey:          v.IdentityPublicB64,
-		IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
-	}}
+	return v.signingKeysFor(v.EventSenderID)
+}
+
+// signingKeysFor registers the fixture signing key to each of userIDs.
+func (v sdkVectors) signingKeysFor(userIDs ...string) []SigningKeyEntry {
+	entries := make([]SigningKeyEntry, 0, len(userIDs))
+	for _, userID := range userIDs {
+		entries = append(entries, SigningKeyEntry{
+			UserID:                     userID,
+			PublicKeyVersion:           v.EventSigningKeyVersion,
+			PublicKey:                  v.SigningPublicB64,
+			IdentityPublicKey:          v.IdentityPublicB64,
+			IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
+		})
+	}
+	return entries
+}
+
+func mustDecodeB64(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	return b
+}
+
+func mustDecodeHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := HexToBytes(s)
+	if err != nil {
+		t.Fatalf("hex decode: %v", err)
+	}
+	return b
+}
+
+func mustMessage(t *testing.T, event *Event, err error) *Message {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("DecryptEvent failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil {
+		t.Fatalf("expected a Message event, got %q", event.Type)
+	}
+	return msg
 }
 
 func loadVectors(t *testing.T) sdkVectors {
@@ -2879,5 +2940,154 @@ func TestEncryptReactionByTargetEvent(t *testing.T) {
 	params.TargetEvent = ""
 	if _, err := chat.EncryptAddReaction(params); err == nil {
 		t.Error("expected an error without a reaction target")
+	}
+}
+
+// The message-key vectors' contents and media are encrypted directly under the
+// known message and attachment keys, so they open only if the SDK derives the
+// same keys from the conversation key.
+func TestMessageKeyEventDecryptsAndItsMediaOpenWithTheConversationKey(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	key := mustDecodeHex(t, v.MessageKeyConversationKeyHex)
+	first := mustDecodeB64(t, v.MediaFirstEncryptedB64)
+	firstPlaintext := mustDecodeB64(t, v.MediaFirstPlaintextB64)
+
+	// The media keys come from the message, so they are unknown before it.
+	if _, err := chat.DecryptStream(first, key); err == nil {
+		t.Fatal("expected the media to stay closed before its message is decrypted")
+	}
+
+	event, err := chat.DecryptEvent(
+		v.EventMessageKeyB64,
+		map[string][]byte{v.MessageKeyConversationKeyVersion: key},
+		v.signingKeysFor(v.MessageKeySenderID),
+	)
+	msg := mustMessage(t, event, err)
+	if !msg.Verified || msg.Text() != v.EventMessageKeyText || len(msg.Attachments) != 2 {
+		t.Fatalf("unexpected message: verified=%v text=%q attachments=%d", msg.Verified, msg.Text(), len(msg.Attachments))
+	}
+
+	got, err := chat.DecryptStream(first, key)
+	if err != nil || !bytes.Equal(got, firstPlaintext) {
+		t.Fatalf("first media: err=%v match=%v", err, bytes.Equal(got, firstPlaintext))
+	}
+	got, err = chat.DecryptStream(mustDecodeB64(t, v.MediaSecondEncryptedB64), key)
+	if err != nil || !bytes.Equal(got, mustDecodeB64(t, v.MediaSecondPlaintextB64)) {
+		t.Fatalf("second media: err=%v", err)
+	}
+
+	dec, err := chat.StreamDecryptor(key)
+	if err != nil {
+		t.Fatalf("StreamDecryptor: %v", err)
+	}
+	defer dec.Close()
+	var incremental []byte
+	for i := 0; i < len(first); i += 700 {
+		end := i + 700
+		if end > len(first) {
+			end = len(first)
+		}
+		out, err := dec.Push(first[i:end])
+		if err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		incremental = append(incremental, out...)
+	}
+	out, err := dec.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if !bytes.Equal(append(incremental, out...), firstPlaintext) {
+		t.Fatal("incremental decryption did not reproduce the first media")
+	}
+}
+
+func TestMessageKeyEventDecryptsInABatchWithItsKeyChange(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
+		t.Fatalf("ImportKeysWithVersion: %v", err)
+	}
+	result, err := chat.DecryptEvents(
+		[]string{v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64},
+		v.signingKeysFor(v.EventSenderID, v.MessageKeySenderID),
+	)
+	if err != nil {
+		t.Fatalf("DecryptEvents: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	key := result.ConversationKeys.Keys[v.MessageKeyConversationKeyVersion]
+	if !bytes.Equal(key, mustDecodeHex(t, v.MessageKeyConversationKeyHex)) {
+		t.Fatal("conversation key not adopted from the key change")
+	}
+	var texts []string
+	for _, m := range result.Messages {
+		if msg := m.Event.AsMessage(); msg != nil {
+			texts = append(texts, msg.Text())
+		}
+	}
+	if len(texts) != 1 || texts[0] != v.EventMessageKeyText {
+		t.Fatalf("unexpected messages: %q", texts)
+	}
+	got, err := chat.DecryptStream(mustDecodeB64(t, v.MediaSecondEncryptedB64), key)
+	if err != nil || !bytes.Equal(got, mustDecodeB64(t, v.MediaSecondPlaintextB64)) {
+		t.Fatalf("second media: err=%v", err)
+	}
+}
+
+func TestShortSenderMessageKeyEventVerifiesAtV11(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	event, err := chat.DecryptEvent(
+		v.EventMessageKeyShortB64,
+		map[string][]byte{
+			v.MessageKeyShortConversationKeyVersion: mustDecodeHex(t, v.MessageKeyShortConversationKeyHex),
+		},
+		v.signingKeysFor(v.MessageKeyShortSenderID),
+	)
+	msg := mustMessage(t, event, err)
+	if !msg.Verified || msg.Text() != v.EventMessageKeyShortText {
+		t.Fatalf("unexpected message: verified=%v text=%q", msg.Verified, msg.Text())
+	}
+}
+
+func TestReplyCarryingAMessageKeyValidatesAndOpensTheQuotedMedia(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	key := v.conversationKey(t)
+	event, err := chat.DecryptEvent(
+		v.EventReplyMessageKeyB64,
+		map[string][]byte{v.EventConversationKeyVersion: key},
+		v.signingKeysFor(v.EventSenderID, v.MessageKeySenderID),
+	)
+	msg := mustMessage(t, event, err)
+	if msg.Text() != v.EventReplyMessageKeyText || msg.ReplyPreviewValidation != "Valid" {
+		t.Fatalf("unexpected reply: text=%q validation=%q", msg.Text(), msg.ReplyPreviewValidation)
+	}
+	got, err := chat.DecryptStream(mustDecodeB64(t, v.MediaFirstEncryptedB64), key)
+	if err != nil || !bytes.Equal(got, mustDecodeB64(t, v.MediaFirstPlaintextB64)) {
+		t.Fatalf("quoted media: err=%v", err)
+	}
+}
+
+func TestKnownSignatureCoversTheContentsEncryptionVersion(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	signature := mustDecodeB64(t, v.SignatureV10Cev1B64)
+	signed, err := chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature, []byte(v.PayloadMessageV10Cev1))
+	if err != nil || !signed {
+		t.Fatalf("known signature did not verify: err=%v", err)
+	}
+	stripped, err := chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature, []byte(v.PayloadMessageV10))
+	if err != nil || stripped {
+		t.Fatalf("known signature verified without its contents encryption version: err=%v", err)
 	}
 }
