@@ -22,23 +22,23 @@ enum AdditionalAction {
 
 struct PinConversations {
     1: optional list<string> conversation_ids_to_pin
-} (persisted='true', strato.graphql.typename='XChatPinConversations')
+}
 
 struct SetNicknames {
     1: optional string placeholder
-} (persisted='true', strato.graphql.typename='XChatSetNicknames')
+}
 
 struct SetVerifiedUsers {
     1: optional string placeholder
-} (persisted='true', strato.graphql.typename='XChatSetVerifiedUsers')
+}
 
 // Full snapshot of per-user settings synced across devices via an encrypted MCE in the
-// self conversation (Encrypted Metadata Sync). Serialized + encrypted into MCE `contents`
+// self conversation. Serialized + encrypted into MCE `contents`
 struct UserMetadata {
     1: optional list<string> pinned_conversation_ids
     2: optional map<i64, string> user_id_to_nickname
     3: optional list<i64> safety_number_verified_user_ids
-} (persisted='true', strato.graphql.typename='XChatUserMetadata')
+}
 
 struct MessageRequestInboxSummary {
     1: optional list<string> member_ids
@@ -47,18 +47,18 @@ struct MessageRequestInboxSummary {
     4: optional bool has_unseen
     5: optional i64 latest_seen_seq_id
     6: optional i64 max_priority_seq
-} (persisted='true', strato.graphql.typename='XChatMessageRequestInboxSummary')
+}
 
 struct SenderPrivilege {
     1: optional bool is_admin
     2: optional bool is_restricted_chat
-} (persisted='true', strato.graphql.typename='XChatSenderPrivilege')
+}
 
-// Signed token from XMoney backend ratifying a transaction. Backend validates
+// Signed token from the payments backend ratifying a transaction. Backend validates
 // the JWT (signature, participants, expiry) on send before accepting the MCE.
 struct ValidatePaymentToken {
     1: optional string receipt_token
-} (persisted='true', strato.graphql.typename='XChatValidatePaymentToken')
+}
 
 struct FrankingData {
     1: optional binary franking_tag
@@ -71,7 +71,7 @@ struct FrankingData {
 struct TargetedNotify {
     1: optional list<string> user_ids
     2: optional bool respect_mutes
-} (persisted='true', strato.graphql.typename='XChatTargetedNotify')
+}
 
 struct MessageCreateEvent {
     100: optional binary contents
@@ -101,12 +101,12 @@ union SideEffect {
     5: SetVerifiedUsers set_verified_users
     6: SenderPrivilege sender_privilege
     7: ValidatePaymentToken validate_payment_token
-} (persisted='true', strato.graphql.typename='XChatSideEffect')
+}
 
 enum GroupType {
     NORMAL = 0
     SUBSCRIBER_CHAT = 1
-} (strato.graphql.typename='XChatGroupType', strato.case.format='preserve')
+}
 
 struct GroupCreate {
     1: optional list<string> member_ids
@@ -129,11 +129,11 @@ struct GroupAvatarUrlChange {
     2: optional string conversation_key_version
 } (persisted='true', strato.graphql.typename='XChatGroupAvatarUrlChange')
 
-// Encrypted group description / "rules" change (see GroupMetadata.description in the backend).
+// Encrypted group description / "rules" change.
 struct GroupDescriptionChange {
     1: optional string custom_description
     2: optional string conversation_key_version
-} (persisted='true', strato.graphql.typename='XChatGroupDescriptionChange')
+}
 
 struct GroupAdminAddChange {
     1: optional list<string> admin_ids
@@ -153,13 +153,13 @@ struct GroupMemberAddChange {
    // 10: optional bool invite_enabled
    11: optional GroupInviteEnable group_invite_enable
    12: optional GroupMemberAdminSettings admin_settings
-   // Legacy join handoff. Retained for GraphQL/thrift schema compatibility; unset by server.
-   13: optional map<string, binary> current_pmk_bundle (strato.graphql.typename='XChatCurrentPmkBundleEntry')
+   // Legacy join handoff. Retained for schema compatibility; unset by server.
+   13: optional map<string, binary> current_pmk_bundle
    14: optional string group_created_by_user_id
    // Rich join handoff (same shape as inbox pmk_bundle): message seq id -> PinnedMessageKey.
-   15: optional map<string, PinnedMessageKey> rotated_pmk_bundle (strato.graphql.typename='XChatRotatedPmkBundleEntry')
+   15: optional map<string, PinnedMessageKey> rotated_pmk_bundle
    // Current encrypted group description, so members added later receive it.
-   // 16 to stay in lockstep with the backend dm.thrift.
+   // 16 to stay in lockstep with the backend schema.
    16: optional string current_description
 } (persisted='true', strato.graphql.typename='XChatGroupMemberAddChange')
 
@@ -198,7 +198,7 @@ struct GroupAdminSettingsChange {
     5: optional bool send_message
     6: optional bool start_call
     // 7 was grok_settings but was never supported. Do not reuse.
-} (persisted = 'true', strato.graphql.typename = 'XChatGroupAdminSettingsChange')
+}
 
 struct GroupMemberAdminSettings {
     1: optional bool edit_group_info
@@ -208,7 +208,7 @@ struct GroupMemberAdminSettings {
     5: optional bool send_message
     6: optional bool start_call
     // 7 was grok_settings but was never supported. Do not reuse.
-} (persisted = 'true', strato.graphql.typename = 'XChatGroupMemberAdminSettings')
+}
 
 union GroupChange {
     1: GroupCreate group_create
@@ -248,14 +248,14 @@ struct ConversationKeyChangeEvent {
 enum MessageActivityType {
     TYPING = 1
     RECORDING_VOICE_MESSAGE = 2
-} (persisted='true', strato.graphql.typename='XChatMessageActivityType')
+}
 
 struct GrokBotMetadata {
     1: optional string agent_id
     2: optional string name
     3: optional string avatar_color
     4: optional string avatar_shape
-} (persisted='true', strato.graphql.typename='XChatGrokBotMetadata')
+}
 
 struct MessageTypingEvent {
     1: optional string conversation_id
@@ -277,7 +277,7 @@ enum FailureType {
     ONLY_ENCRYPTED_MESSAGES_ALLOWED = 9
     REQUESTER_NOT_ADMIN = 10
     FLAGGED_AS_SPAM = 11
-    // Sender hit their per-tier daily message-request limit (BotMaker rule RateLimitUntrustedDm).
+    // Sender hit their per-tier daily message-request limit.
     // The client decodes this into the Premium upsell prompt.
     RATE_LIMIT_UPSELL = 12
     // Sender's ECDSA signature failed send-side verification; client should route to keypair recovery.
@@ -296,9 +296,8 @@ enum FailureType {
     INVALID_X_MONEY_TOKEN = 19
 } (persisted='false', strato.graphql.typename='XChatFailureType')
 
-// Which tier's daily message-request cap a RATE_LIMIT_UPSELL refusal was enforced at (the
-// BotMaker RateLimitUntrustedDm rule's RateLimitTier output feature). Lets clients tailor
-// the Premium upsell copy to the limit the sender actually hit.
+// Which tier's daily message-request cap a RATE_LIMIT_UPSELL refusal was enforced at. Lets
+// clients tailor the Premium upsell copy to the limit the sender actually hit.
 enum RateLimitTier {
     FREE = 1
     VERIFIED_PHONE = 2
@@ -322,18 +321,18 @@ struct MessageDeleteEvent {
     1: optional list<string> sequence_ids
     2: optional DeleteMessageAction delete_message_action
     // MCE seq id -> PME seq id for deleted messages that are pinned (unpin runs before delete)
-    3: optional map<string, string> pme_sequence_ids (strato.graphql.typename='XChatPmeSequenceIdEntry')
+    3: optional map<string, string> pme_sequence_ids
 } (persisted='true', strato.graphql.typename='XChatMessageDeleteEvent')
 
 struct MessageKeyPinInfo {
     // Both keys are under the ckey named by the pin's conversation_key_version
     1: optional binary encrypted_message_key
-    2: optional i64 edit_sequence_id (GraphQlEncoding="NumericString")
+    2: optional i64 edit_sequence_id
     3: optional binary encrypted_edit_message_key
     // Server-filled: the stored events, serialized
     4: optional binary message_event
     5: optional binary edit_message_event
-} (persisted='true', strato.graphql.typename='XChatMessageKeyPinInfo')
+}
 
 // Pin Message Event (PME). Only `contents` is E2E encrypted; the rest is server-readable.
 struct PinMessageEvent {
@@ -345,23 +344,23 @@ struct PinMessageEvent {
     2: optional binary encrypted_pmk
     3: optional string conversation_key_version
     // Seq id of the pinned MCE; also the side-table and bundle key
-    4: optional i64 message_sequence_id (GraphQlEncoding="NumericString")
+    4: optional i64 message_sequence_id
     // This PME's own seq id
-    5: optional i64 sequence_id (GraphQlEncoding="NumericString")
+    5: optional i64 sequence_id
     // Inherited from the source MCE so a pinned disappearing message expires with it
-    6: optional i64 ttl_msec (GraphQlEncoding="NumericString")
-    7: optional i64 delivered_at_msec (GraphQlEncoding="NumericString")
+    6: optional i64 ttl_msec
+    7: optional i64 delivered_at_msec
     // Replaces contents and encrypted_pmk for messages with a per-message key
     8: optional MessageKeyPinInfo message_key_pin_info
-} (persisted='true', strato.graphql.typename='XChatPinMessageEvent')
+}
 
 // One pin removed by an UnpinMessageEvent.
 struct UnpinMessageEntry {
-    1: optional i64 pme_sequence_id (GraphQlEncoding="NumericString")
+    1: optional i64 pme_sequence_id
     // Source message of the removed pin, so consumers can un-mark it without the deleted PME.
     // Client-supplied it is only a lookup hint; the server stamps it from the stored PME.
-    2: optional i64 message_sequence_id (GraphQlEncoding="NumericString")
-} (persisted='true', strato.graphql.typename='XChatUnpinMessageEntry')
+    2: optional i64 message_sequence_id
+}
 
 // Unpin tombstone; persisted so offline clients catch the removal via the bottom cursor.
 struct UnpinMessageEvent {
@@ -369,21 +368,21 @@ struct UnpinMessageEvent {
     // MessageDeleteEvent.sequence_ids). Senders may still use these fields (read as a
     // one-entry batch); persisted tombstones always carry `entries`, with these fields
     // mirroring `entries.head`. Never reuse field ids 1-2.
-    1: optional i64 pme_sequence_id (GraphQlEncoding="NumericString")
+    1: optional i64 pme_sequence_id
     // Source message of the removed pin, so consumers can un-mark it without the deleted PME
-    2: optional i64 message_sequence_id (GraphQlEncoding="NumericString")
+    2: optional i64 message_sequence_id
     // Every pin this event removes (the canonical form). When set, fields 1-2 are ignored
     // on the way in. Validation is all-or-nothing: one bad entry rejects the event.
     3: optional list<UnpinMessageEntry> entries
-} (persisted='true', strato.graphql.typename='XChatUnpinMessageEvent')
+}
 
 struct PinnedMessageKey {
-    1: optional i64 pme_sequence_id (GraphQlEncoding="NumericString")
+    1: optional i64 pme_sequence_id
     2: optional string conversation_key_version
     3: optional binary encrypted_pmk
     4: optional binary encrypted_message_key
     5: optional binary encrypted_edit_message_key
-} (persisted='true', strato.graphql.typename='XChatPinnedMessageKey')
+}
 
 // Server-generated after a PMK bundle upload is accepted.
 // Fans the bundle as stored to all members so their clients
@@ -392,8 +391,8 @@ struct PmkBundleUpdateEvent {
     // Full bundle as stored: pinned message seq id -> PinnedMessageKey. Each entry
     // carries the ckey version it is wrapped under; entries on an older version than
     // the latest ckey are the client's signal to schedule a bundle repair.
-    1: optional map<string, PinnedMessageKey> pmk_bundle (strato.graphql.typename='XChatPmkBundleUpdateEntry')
-} (persisted='true', strato.graphql.typename='XChatPmkBundleUpdateEvent')
+    1: optional map<string, PinnedMessageKey> pmk_bundle
+}
 
 struct ClearConversationOptions {
     1: optional bool clear_all_messages
@@ -424,11 +423,11 @@ struct UnmuteConversation {
 
 struct ArchiveConversation {
     1: optional list<string> archived_conversation_ids
-} (persisted='true', strato.graphql.typename='XChatArchiveConversation')
+}
 
 struct UnarchiveConversation {
     1: optional list<string> unarchived_conversation_ids
-} (persisted='true', strato.graphql.typename='XChatUnarchiveConversation')
+}
 
 struct EnableScreenCaptureDetection {
   1: optional string placeholder
@@ -448,11 +447,11 @@ struct DisableScreenCaptureBlocking {
 
 struct EnableGrok {
   1: optional string placeholder
-} (persisted='true', strato.graphql.typename='XChatEnableGrok')
+}
 
 struct DisableGrok {
   1: optional string placeholder
-} (persisted='true', strato.graphql.typename='XChatDisableGrok')
+}
 
 union ConversationMetadataChange {
     1: MessageDurationChange message_duration_change
@@ -486,7 +485,7 @@ struct GrokMessageEvent {
     3: optional binary nonce
     4: optional binary iv
     5: optional string conversation_key_version
-} (persisted='true', strato.graphql.typename='XChatGrokMessageEvent')
+}
 
 struct GrokResponseEvent {
     1: optional binary encrypted_response
@@ -497,16 +496,16 @@ struct GrokResponseEvent {
     6: optional string plaintext_response
     // Thrift-serialized product.GrokAttachments (list of MessageAttachment), decoded client-side.
     7: optional binary encoded_attachments
-    // Disappearing-message TTL for this Grok reply, stamped by CES from the conversation's TTL.
+    // Disappearing-message TTL for this Grok reply, stamped by the server from the conversation's TTL.
     // ttl_msec is the lifetime; delivered_at_msec is when the countdown starts (delivery time).
-    8: optional i64 ttl_msec (GraphQlEncoding="NumericString")
-    9: optional i64 delivered_at_msec (GraphQlEncoding="NumericString")
-    // Keys of the @Grok message that triggered this response, echoed back by grokbackend. Only the
+    8: optional i64 ttl_msec
+    9: optional i64 delivered_at_msec
+    // Keys of the @Grok message that triggered this response, echoed back by the server. Only the
     // ids travel; receivers look the parent up locally to build the reply preview.
     10: optional string replying_to_message_sequence_id
     11: optional string replying_to_message_id
     12: optional GrokBotMetadata grok_bot
-} (persisted='true', strato.graphql.typename='XChatGrokResponseEvent')
+}
 
 struct MarkConversationReadEvent {
     1: optional string seen_until_sequence_id
@@ -652,7 +651,7 @@ struct DeviceEnrollmentInstruction {
     8: optional DeviceDescriptor device_descriptor
 } (persisted='true', strato.graphql.typename='XChatDeviceEnrollmentInstruction')
 
-// Sent by the server on connect when the user-settings side table is empty (and the FS is on):
+// Sent by the server on connect when the user-settings side table is empty (when enabled):
 // the client should consolidate legacy settings events (pins/nicknames/verified) into the first
 // UserMetadata snapshot MCE, then delete the legacy settings events.
 struct MigrateUserMetadataInstruction {
@@ -661,13 +660,13 @@ struct MigrateUserMetadataInstruction {
 
 struct MessageRequestInfoInstruction {
     1: optional MessageRequestInboxSummary message_request_inbox_summary
-} (persisted='true', strato.graphql.typename='XChatMessageRequestInfoInstruction')
+}
 
 // Sent once per user (server-side fatigue) to show the X Number onboarding prompt.
-struct XNumberPromptInstruction {} (persisted='true', strato.graphql.typename='XChatXNumberPromptInstruction')
+struct XNumberPromptInstruction {}
 
 // Sent once per user (server-side fatigue) to prompt a closed-inbox user to open their inbox.
-struct OpenInboxInstruction {} (persisted='true', strato.graphql.typename='XChatOpenInboxInstruction')
+struct OpenInboxInstruction {}
 
 union MessageInstruction {
     1: PullMessagesInstruction pullMessagesInstruction

@@ -188,7 +188,7 @@ struct ForwardedMessage {
 // reply's attachments decode into the same MessageAttachment model as regular messages.
 struct GrokAttachments {
     1: optional list<MessageAttachment> attachments
-} (persisted='true', strato.graphql.typename='XChatGrokAttachments')
+}
 
 union MessageAttachment {
     1: MediaAttachment media
