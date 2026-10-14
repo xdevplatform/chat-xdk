@@ -758,7 +758,9 @@ validate the preview (see
 Two companions cover the edge cases: `reply_to_edit_event` carries the raw
 edit event when the original was edited, and `reply_to_ckces` carries the raw
 key-change events needed to decrypt an original that was encrypted under a
-different key version than this reply. The explicit preview fields —
+different key version than this reply. When the original or its edit is
+encrypted under a per-message key, the reply also carries that key so
+recipients can open it. The explicit preview fields —
 `reply_to_sequence_id`, `reply_to_sender_id`, `reply_to_text`,
 `reply_to_entities`, `reply_to_attachments` — remain as overrides for callers
 that no longer hold the raw event.
@@ -775,9 +777,12 @@ instead.
 as a reaction: `target_event` (the base64 raw event of the message being
 edited) or the explicit `conversation_id` / `target_message_sequence_id`
 pair. Optional `entities` describe rich text in the replacement text;
-omitting them clears any entities the original carried. The edit is
-encrypted and signed like a regular message (the identity/key overrides
-above apply) and returns a `SendPayload` with its own fresh `message_id`.
+omitting them clears any entities the original carried. With
+`target_event`, the edit also names the original's signed message id, which
+receivers need to tie an edit to a message encrypted under a per-message key.
+The edit is encrypted and signed like a regular message (the identity/key
+overrides above apply) and returns a `SendPayload` with its own fresh
+`message_id`.
 
 > **Delivery-race warning.** Receiving clients apply an edit to their stored
 > copy of the original and park it when the original has not arrived yet;
@@ -870,6 +875,8 @@ Methods 34/35 return an incremental object for large payloads: feed chunks with 
 const key = result.conversationKeys.keys[message.keyVersion];
 const plaintext = chat.decryptStream(encryptedMedia, key);
 ```
+
+Messages from newer X Chat clients encrypt each attachment under its own key derived from the conversation key. The stream decrypt methods still take the conversation key and find the attachment's key themselves, from the messages the same `Chat` has decrypted, so decrypt a message before its media with the same instance (see [CRYPTO.md — Attachment Keys](CRYPTO.md#attachment-keys)).
 
 ### Generic Encrypt / Decrypt
 

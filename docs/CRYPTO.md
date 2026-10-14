@@ -228,6 +228,28 @@ Total size = plaintext length + **40 bytes** overhead (24 nonce + 16 tag).
 
 > The 24-byte nonce is large enough to be generated randomly without realistic collision risk (~2^96 messages before birthday bound).
 
+### Message Keys
+
+A message whose `MessageCreateEvent.contents_encryption_version` is 1 or more
+is encrypted under its own **message key** instead of the conversation key,
+with the same algorithm and wire format:
+
+```
+message_key = HKDF-SHA256(ikm  = conversation_key,
+                          salt = "xchat-message-key",
+                          info = "{sender_id}:{message_id}",
+                          length = 32)
+```
+
+`sender_id` is the event's sender in canonical decimal and `message_id` is the
+event's own message id, so every event that carries message contents (texts,
+edits, reactions, …) has its own key. An unset, zero, or negative
+`contents_encryption_version` means the conversation key.
+
+The SDK decrypts both forms. It still sends with the conversation key and
+leaves `contents_encryption_version` unset, so every client that reads
+messages today can read what the SDK sends.
+
 ---
 
 ## 6. Streaming Encryption
@@ -299,6 +321,35 @@ input is split. Because truncation is only proven absent once `finish`
 succeeds, plaintext returned by `push` must not be treated as complete until
 `finish` returns successfully.
 
+### Attachment Keys
+
+Media of a message that uses a [message key](#message-keys) is encrypted under
+a key derived for each attachment:
+
+```
+attachment_key = HKDF-SHA256(ikm  = message_key,
+                             salt = "xchat-attachment-key",
+                             info = attachment_id (UTF-8),
+                             length = 32)
+```
+
+`attachment_id` is the attachment's `attachment_id` when set (an empty string
+counts as set); otherwise it is the message id for the first attachment and
+`{message_id}#{index}` for later ones, by position in the message's attachment
+list. A URL card's banner and favicon images share the card's key. Media of a
+message without a message key stays under the conversation key.
+
+Callers never handle these keys. When a `Chat` decrypts a message that uses a
+message key, it records the message's attachment keys under the message's
+conversation key; `decrypt_stream` and `stream_decryptor` take the
+conversation key, try it first, then try the keys recorded under it (newest
+first), and keep whichever key authenticates the stream's first frame. A valid
+reply preview quoting such a message records the quoted attachments' keys the
+same way, under both the reply's conversation key and the original's own when
+it is known. The records live in memory: `lock` clears them, and only the most
+recent 4,096 are kept, so decrypt a message with the same `Chat` before its
+media.
+
 ---
 
 ## 7. Digital Signatures — ECDSA P-256
@@ -341,6 +392,7 @@ The signature protocol is versioned, and the version travels with each signature
 |----------|-------|---------|
 | `SIGNATURE_VERSION` (current) | `"7"` | Stamped on every signature the SDK produces |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
+| `MAX_SIGNATURE_VERSION` | `11` | Newest version accepted on verification; a signature labeled with a newer version is rejected, since its payload layout is unknown |
 | `CKEY_PLAINTEXT_SIGNATURE_VERSION` | `6` | First version whose conversation-key-change payload signs the plaintext conversation key (so a recipient can reproduce and verify it) |
 
 ### What Gets Signed
@@ -395,6 +447,31 @@ Both `prepare_group_create` and `prepare_group_members_change` emit **two**
 action signatures — a `ConversationKeyChangeEvent` plus the group change — since
 the backend validates the pair together.
 
+#### Verifying newer versions
+
+The layouts above are the ones the SDK signs, at v7. Verification rebuilds
+each payload in the layout of the version its signature carries, 2 through 11:
+
+- **v8**: the message payload's conversation-key-version component is the
+  version parsed as an integer, `null` when missing or not an integer (v7 and
+  below sign the carried string, empty when missing). GroupMemberAdd appends
+  `current_description`.
+- **v9**: every payload — messages, conversation-key changes, and group
+  actions — ends with `,signature_version={n}`. GroupCreate appends the number
+  of its `group_type`.
+- **v10**: the message payload appends `contents_encryption_version` before
+  that suffix, so a message's key choice cannot be changed or stripped without
+  breaking its signature. GroupCreate appends `ttl_msec`.
+- **v11**: GroupMemberRemove appends `conversation_key_version` after the
+  member ids.
+
+Unset optional components render as `null`. For example, a v10 message that
+uses a message key signs:
+
+```
+"MessageCreateEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{contents_b64_no_pad},1,signature_version=10"
+```
+
 These payloads are comma-joined with no escaping, and the verifier rejects any
 component containing a comma. String fields signed inline — group `title` and
 `avatar_url` for GroupCreate/GroupMemberAdd — must therefore not contain a `,`,
@@ -430,7 +507,9 @@ The `Chat::verify()` method automatically handles both 91-byte SPKI and 65-byte 
 
 ### HKDF-SHA256
 
-Used for deriving conversation keys from tree secrets and general key derivation.
+Used for deriving conversation keys from tree secrets, for
+[message keys](#message-keys) and [attachment keys](#attachment-keys), and for
+general key derivation.
 
 ```
 HKDF-Extract (RFC 5869 §2.2):
@@ -438,14 +517,15 @@ HKDF-Extract (RFC 5869 §2.2):
 
 HKDF-Expand:
   T(0) = empty
-  T(i) = HMAC-SHA256(T(i-1) || counter_byte, PRK)
+  T(i) = HMAC-SHA256(T(i-1) || info || counter_byte, PRK)
   Output = T(1) || T(2) || ... truncated to desired length
 ```
 
 The extract step follows standard HKDF (RFC 5869).  The `hmac_sha256(message, key)` helper uses `(message, key)` argument order — so `hmac_sha256(secret, salt)` is `HMAC(key=salt, msg=IKM)`, which is the standard order.
 
 **Notes**:
-- Expand step does not use an `info` parameter — just `T(i-1) || counter`
+- Message and attachment keys pass an `info` string; every other derivation
+  uses an empty `info`, so its expand step is just `T(i-1) || counter`
 - Empty salt string is treated as 32 zero bytes
 
 ### X9.63 KDF (KDF2)
@@ -619,6 +699,11 @@ Complete flow for decrypting a webhook event via `decrypt_event()`:
                       })
 ```
 
+When `contents_encryption_version` is 1 or more, step 5 decrypts with the
+[message key](#message-keys) derived from the step-4 conversation key, and the
+message's [attachment keys](#attachment-keys) are recorded for the stream
+decrypt methods.
+
 ### Reply preview validation
 
 A reply's preview (the quoted sender, text, entities, and attachments of the
@@ -638,14 +723,18 @@ The SDK closes this on both sides:
   (`reply_to_edit_event`): it is embedded as `raw_event_edit_message` and the
   preview's text and entities derive from the edit's contents — the preview
   quotes what the message says now. Attachments always derive from the
-  original (edits do not carry them).
+  original (edits do not carry them). When the original or its edit uses a
+  [message key](#message-keys), that key travels with it
+  (`raw_event_message_key` / `raw_event_edit_message_key`), so recipients can
+  open it without its conversation key; a conversation key is never carried.
 - **Receive** (`decrypt_event` / `decrypt_events`): when a decrypted message
   carries a preview with an embedded raw event, the SDK always validates it:
   1. The raw event must belong to the **same conversation** as the reply.
   2. Its **signature is verified** against the caller-supplied signing keys —
      the same per-sender filtering and version selection as top-level events;
      a key carried inside the event is never used.
-  3. Its contents are **decrypted** (using the supplied conversation keys, the
+  3. Its contents are **decrypted** (a message-key event with the 32-byte key
+     carried for it, otherwise with the supplied conversation keys, the
      embedded key-change events, or the opt-in key cache) and every claim the
      preview makes is compared against the decrypted contents: sender id,
      sequence id, message id, text (truncation-tolerant — the claimed text
@@ -654,7 +743,9 @@ The SDK closes this on both sides:
   4. When an **edit event is embedded**, it must verify the same way and come
      from the original's author, and the text and entity claims are checked
      against the edit's updated contents instead of the original's; the
-     attachment claims still check against the original.
+     attachment claims still check against the original. When the original
+     uses a message key, the edit must also name it by its signed message id
+     (`MessageEdit.message_id`); an edit without one cannot be tied to it.
 
 A `Valid` outcome authenticates the quoted **content and authorship** — the
 signature covers the original's message id, sender, conversation, key version,
