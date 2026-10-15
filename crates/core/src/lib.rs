@@ -206,9 +206,9 @@ pub mod prelude {
     pub use crate::chat::Chat;
 
     pub use crate::params::{
-        ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams,
-        EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, GroupCreateParams,
-        GroupMembersChangeParams, MessageDeleteParams,
+        ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
+        EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
+        MessageDeleteParams,
     };
 
     // Types (always available)
