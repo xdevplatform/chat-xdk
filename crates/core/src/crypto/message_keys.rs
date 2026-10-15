@@ -104,11 +104,16 @@ mod tests {
     #[test]
     fn short_sender_id_is_its_digits() {
         let ckey = key("c3a1f0e2d4b6987a5c3e1f0d2b4a6987c3a1f0e2d4b6987a5c3e1f0d2b4a6987");
-        let message_key =
-            derive_message_key(&ckey, "12", "00000000-0000-4000-8000-000000000001").unwrap();
+        let message_id = "00000000-0000-4000-8000-000000000001";
+        let message_key = derive_message_key(&ckey, "12", message_id).unwrap();
         assert_eq!(
             hex::encode(message_key.encoded()),
             "685bd4a20c7efb64c99147ab5854560c72eac9a826b04880b64e1951d4ef4cc7"
+        );
+        let attachment_key = derive_attachment_key(&message_key, message_id).unwrap();
+        assert_eq!(
+            hex::encode(attachment_key.encoded()),
+            "4f7d8ca1ef7cb1319743204496358333126086d0a23bdae26bbe5186ba8de093"
         );
     }
 
