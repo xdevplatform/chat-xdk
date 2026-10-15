@@ -774,9 +774,9 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
 | 27 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
-| 28 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
+| 28 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, reply_to_attachment_id=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 29 | **encrypt_forward** | `encrypt_forward(EncryptForwardParams) → SendPayload` | `encryptForward(params: EncryptForwardParams) → SendPayload` | `encrypt_forward(conversation_id, forwarded_text, *, forwarded_entities=None, text=None, entities=None, attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptForward(params EncryptForwardParams) (*SendPayload, error)` | `encryptForward(EncryptForwardParams)` | `EncryptForward(EncryptForwardParams)` |
-| 30 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
+| 30 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, target_attachment_id=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 31 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
 | 32 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
 | 33 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(conversation_id, sequence_ids, delete_for_all, *, sender_id=None, signing_key_version=None) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
@@ -860,6 +860,22 @@ being reacted to, and the SDK derives `conversation_id` and
 `target_message_sequence_id` from it; or set those two fields explicitly
 instead.
 
+**Reacting or replying to one attachment.** A message can carry several
+attachments, and the native clients let a reaction or reply point at one of
+them. Set `target_attachment_id` on `EncryptReactionParams` or
+`reply_to_attachment_id` on `EncryptReplyParams` to the `attachment_id` of
+that attachment, as it appears on the decrypted message's attachments; leave
+it unset to target the whole message. Both need the raw event
+(`target_event` / `reply_to_event`): the SDK decrypts it to check the
+attachment belongs to the message, and fails with the ids it does have when
+it does not. A reply then quotes only that attachment in its preview, so
+`reply_to_attachments` must stay unset. Remove a reaction with the same
+`target_attachment_id` it was added with. When explicit
+`conversation_id` / `target_message_sequence_id` are set alongside
+`target_event`, they must name the same message. Attachments the SDK sends
+do not carry an `attachment_id`, so these fields apply to messages from the
+native clients.
+
 **Edits target an event the same way.** `EncryptEditParams` requires
 `updated_text` — the replacement message text — plus the same target choice
 as a reaction: `target_event` (the base64 raw event of the message being
@@ -925,6 +941,11 @@ let reply = chat.encrypt_reply(EncryptReplyParams::new(
 let reaction =
     chat.encrypt_add_reaction(&EncryptReactionParams::new(original_event_b64, "👍"))?;
 
+// React to one attachment of the original
+let mut on_photo = EncryptReactionParams::new(original_event_b64, "🔥");
+on_photo.target_attachment_id = Some(attachment_id.into());
+let photo_reaction = chat.encrypt_add_reaction(&on_photo)?;
+
 // Forward a decrypted message's text into another conversation
 let mut forward = EncryptForwardParams::new(other_conversation_id, original_text);
 forward.text = Some("fyi".into());
@@ -956,6 +977,12 @@ const reply = chat.encryptReply({
   replyToEvent: originalEventB64,
 });
 const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: originalEventB64 });
+const photoReply = chat.encryptReply({
+  conversationId,
+  text: "nice photo",
+  replyToEvent: originalEventB64,
+  replyToAttachmentId: attachmentId,
+});
 
 const forwarded = chat.encryptForward({
   conversationId: otherConversationId,
@@ -980,6 +1007,9 @@ message_id = payload.message_id  # generated by the SDK
 
 reply = chat.encrypt_reply(conversation_id, "pong", original_event_b64)
 reaction = chat.encrypt_add_reaction(original_event_b64, "👍")
+photo_reaction = chat.encrypt_add_reaction(
+    original_event_b64, "🔥", target_attachment_id=attachment_id
+)
 
 forwarded = chat.encrypt_forward(other_conversation_id, original_text, text="fyi")
 
