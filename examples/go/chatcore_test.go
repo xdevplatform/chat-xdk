@@ -310,6 +310,17 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 	}
 }
 
+func TestEncryptAttachmentReactionChecksTheAttachment(t *testing.T) {
+	// The fixture message carries no attachments, so the SDK refuses to
+	// react to one.
+	core, v := loadedCore(t)
+	defer core.Close()
+	_, err := core.EncryptAttachmentReaction(true, v.EventMessageB64, "att-1", "\U0001f525", v.conversationKey(t), v.EventConversationKeyVersion)
+	if err == nil || !strings.Contains(err.Error(), "has no attachments with an attachment_id") {
+		t.Fatalf("want missing-attachment error, got %v", err)
+	}
+}
+
 func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
 	// The chunked stream path the media flow uses: multi-chunk payload in,
 	// identical bytes out, and truncation is detected.

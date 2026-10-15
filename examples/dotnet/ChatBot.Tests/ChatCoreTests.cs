@@ -233,6 +233,25 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void EncryptAttachmentReaction_Checks_The_Attachment_Is_On_The_Event()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("1000");
+        var convKey = Convert.FromBase64String(v.ConversationKeyB64);
+        // The fixture message carries no attachments, so the SDK refuses to
+        // react to one.
+        var ex = Assert.Throws<ChatXdkException>(() => core.EncryptAttachmentReaction(
+            add: true,
+            targetEventB64: v.EventMessageB64,
+            attachmentId: "att-1",
+            emoji: "\U0001F525",
+            conversationKey: convKey,
+            conversationKeyVersion: v.EventConversationKeyVersion));
+        Assert.Contains("has no attachments with an attachment_id", ex.Message);
+    }
+
+    [Fact]
     public void Media_Stream_Encrypt_Decrypt_Roundtrip()
     {
         // The chunked stream path the media flow uses: multi-chunk payload in,

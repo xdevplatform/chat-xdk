@@ -659,6 +659,14 @@ public final class Types {
         public List<AttachmentDescriptor> replyToAttachments;
 
         /**
+         * {@code attachment_id} of the one attachment of the original being
+         * replied to; null replies to the whole message. Requires
+         * {@link #replyToEvent}; the preview then quotes only that attachment,
+         * so leave {@link #replyToAttachments} null.
+         */
+        public String replyToAttachmentId;
+
+        /**
          * Optional quick reply, in the same JSON shape as the {@code quick_reply}
          * of decrypted text content: a request offering options, or a response
          * selecting one.
@@ -723,6 +731,13 @@ public final class Types {
 
         /** Version of the conversation key; resolves from the key cache when null. */
         public String conversationKeyVersion;
+
+        /**
+         * {@code attachment_id} of the attachment in the target message to react
+         * to; null reacts to the whole message. Requires {@link #targetEvent},
+         * which the SDK decrypts to check the attachment belongs to it.
+         */
+        public String targetAttachmentId;
 
         /**
          * Create params with the required fields; all optional fields default to null.

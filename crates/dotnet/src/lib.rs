@@ -298,6 +298,8 @@ struct FfiEncryptReplyParams {
     #[serde(default)]
     reply_to_attachments: Option<serde_json::Value>,
     #[serde(default)]
+    reply_to_attachment_id: Option<String>,
+    #[serde(default)]
     should_notify: Option<bool>,
     #[serde(default)]
     ttl_msec: Option<i64>,
@@ -320,6 +322,8 @@ struct FfiEncryptReactionParams {
     conversation_key: Option<String>,
     #[serde(default)]
     conversation_key_version: Option<String>,
+    #[serde(default)]
+    target_attachment_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1577,6 +1581,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.attachments = attachments;
         params.reply_to_entities = p.reply_to_entities.map(entity_tuples_to_descs);
         params.reply_to_attachments = reply_to_attachments;
+        params.reply_to_attachment_id = p.reply_to_attachment_id;
         params.quick_reply = quick_reply;
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
@@ -1645,6 +1650,7 @@ fn encrypt_reaction_impl(
     params.signing_key_version = p.signing_key_version;
     params.conversation_key = ckey_bytes;
     params.conversation_key_version = p.conversation_key_version;
+    params.target_attachment_id = p.target_attachment_id;
 
     let result = if remove {
         h.inner.encrypt_remove_reaction(&params)

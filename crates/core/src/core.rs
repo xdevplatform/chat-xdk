@@ -1929,6 +1929,8 @@ impl ChatCore {
     ///
     /// When `target_event` is set, the conversation id and target sequence id
     /// are derived from that raw event; explicit fields override them.
+    /// `target_attachment_id` narrows the reaction to one attachment of the
+    /// target and requires `target_event`.
     pub fn encrypt_add_reaction(
         &self,
         params: &EncryptReactionParams,
@@ -1943,9 +1945,19 @@ impl ChatCore {
             &conversation_id,
             &sender_id,
         )?;
+        let attachment_id = self.resolve_reaction_attachment(
+            params,
+            &conversation_id,
+            &target_sequence_id,
+            &ckey,
+            &conversation_key_version,
+        )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        let content_bytes =
-            crate::pipeline::build_reaction_add_content(&target_sequence_id, &params.emoji)?;
+        let content_bytes = crate::pipeline::build_reaction_add_content(
+            &target_sequence_id,
+            &params.emoji,
+            attachment_id.as_deref(),
+        )?;
         let message_id = Self::generate_message_id();
         crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
             &ckey,
@@ -1963,6 +1975,7 @@ impl ChatCore {
     ///
     /// When `target_event` is set, the conversation id and target sequence id
     /// are derived from that raw event; explicit fields override them.
+    /// `target_attachment_id` must match the one the reaction was added with.
     pub fn encrypt_remove_reaction(
         &self,
         params: &EncryptReactionParams,
@@ -1977,9 +1990,19 @@ impl ChatCore {
             &conversation_id,
             &sender_id,
         )?;
+        let attachment_id = self.resolve_reaction_attachment(
+            params,
+            &conversation_id,
+            &target_sequence_id,
+            &ckey,
+            &conversation_key_version,
+        )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        let content_bytes =
-            crate::pipeline::build_reaction_remove_content(&target_sequence_id, &params.emoji)?;
+        let content_bytes = crate::pipeline::build_reaction_remove_content(
+            &target_sequence_id,
+            &params.emoji,
+            attachment_id.as_deref(),
+        )?;
         let message_id = Self::generate_message_id();
         crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
             &ckey,
@@ -2375,6 +2398,118 @@ impl ChatCore {
 
     /// Resolve a reaction's conversation id and target sequence id from the
     /// explicit fields or, when unset, from the parsed `target_event`.
+    /// Check `target_attachment_id` against the decrypted `target_event` and
+    /// return it, or `None` when the reaction targets the whole message.
+    fn resolve_reaction_attachment(
+        &self,
+        params: &EncryptReactionParams,
+        conversation_id: &str,
+        target_sequence_id: &str,
+        ckey: &XChatConversationKey,
+        conversation_key_version: &str,
+    ) -> Result<Option<String>, SdkError> {
+        let Some(attachment_id) = params
+            .target_attachment_id
+            .as_deref()
+            .filter(|v| !v.is_empty())
+        else {
+            return Ok(None);
+        };
+        let raw_b64 = params
+            .target_event
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                SdkError::InvalidState(
+                    "target_attachment_id needs target_event: pass the raw event being \
+                     reacted to so the SDK can check the attachment belongs to it"
+                        .into(),
+                )
+            })?;
+        let raw = Self::parse_event_b64(raw_b64)?;
+        // Explicit ids override target_event, so they must name the same
+        // message or the check below would vouch for a different one.
+        if raw.conversation_id.as_deref() != Some(conversation_id) {
+            return Err(SdkError::InvalidState(
+                "conversation_id does not match target_event: leave conversation_id unset \
+                 or pass the conversation target_event belongs to"
+                    .into(),
+            ));
+        }
+        if raw.sequence_id.as_deref() != Some(target_sequence_id) {
+            return Err(SdkError::InvalidState(
+                "target_message_sequence_id does not match target_event: leave \
+                 target_message_sequence_id unset or pass target_event's sequence id"
+                    .into(),
+            ));
+        }
+        let plaintext = self
+            .decrypt_raw_event_contents(
+                &raw,
+                Some(ckey),
+                Some(conversation_key_version),
+                &[],
+                &HashMap::new(),
+            )
+            .map_err(|e| match e {
+                SdkError::Crypto(CryptoError::DecryptionFailed(_)) => {
+                    SdkError::Crypto(CryptoError::DecryptionFailed(
+                        "cannot decrypt target_event to check target_attachment_id: no \
+                         known conversation key opens it; decrypt the conversation's events \
+                         with set_cache_keys(true) first, or leave target_attachment_id unset \
+                         to react to the whole message"
+                            .into(),
+                    ))
+                }
+                other => other,
+            })?;
+        let MessageEntryContents::Message(original) =
+            Self::parse_thrift_entry_contents(&plaintext)?
+        else {
+            return Err(SdkError::InvalidState(
+                "target_event is not a message, so it has no attachments: leave \
+                 target_attachment_id unset"
+                    .into(),
+            ));
+        };
+        Self::find_attachment(
+            original.attachments.as_deref(),
+            attachment_id,
+            "target_attachment_id",
+            "target_event",
+        )?;
+        Ok(Some(attachment_id.to_string()))
+    }
+
+    /// Find the attachment whose `attachment_id` is `id`, naming the valid
+    /// ids in the error so the caller can pick one.
+    fn find_attachment<'a>(
+        attachments: Option<&'a [Box<ThriftMessageAttachment>]>,
+        id: &str,
+        field: &str,
+        source: &str,
+    ) -> Result<&'a ThriftMessageAttachment, SdkError> {
+        let attachments = attachments.unwrap_or(&[]);
+        if let Some(found) = attachments
+            .iter()
+            .find(|a| thrift_attachment_id(a) == Some(id))
+        {
+            return Ok(found);
+        }
+        let known: Vec<&str> = attachments
+            .iter()
+            .filter_map(|a| thrift_attachment_id(a))
+            .collect();
+        Err(SdkError::InvalidState(if known.is_empty() {
+            format!("{field} \"{id}\" not found: {source} has no attachments with an attachment_id")
+        } else {
+            format!(
+                "{field} \"{id}\" not found in {source}; pass one of: {}",
+                known.join(", ")
+            )
+        }))
+    }
+
     fn resolve_reaction_target(
         params: &EncryptReactionParams,
     ) -> Result<(String, String), SdkError> {
@@ -2538,6 +2673,17 @@ impl ChatCore {
         outer_key: &XChatConversationKey,
         outer_version: &str,
     ) -> Result<crate::thrift::product::ReplyingToPreview, SdkError> {
+        let reply_attachment_id = params
+            .reply_to_attachment_id
+            .take()
+            .filter(|v| !v.is_empty());
+        if reply_attachment_id.is_some() && params.reply_to_attachments.is_some() {
+            return Err(SdkError::InvalidState(
+                "reply_to_attachment_id and reply_to_attachments cannot both be set: the SDK \
+                 quotes the chosen attachment itself, so leave reply_to_attachments unset"
+                    .into(),
+            ));
+        }
         let thrift_reply_entities = params
             .reply_to_entities
             .take()
@@ -2554,6 +2700,13 @@ impl ChatCore {
         let explicit_sequence_id = params.reply_to_sequence_id.take().filter(|v| !v.is_empty());
 
         let Some(raw_b64) = params.reply_to_event.take().filter(|v| !v.is_empty()) else {
+            if reply_attachment_id.is_some() {
+                return Err(SdkError::InvalidState(
+                    "reply_to_attachment_id needs reply_to_event: pass the raw event being \
+                     replied to so the SDK can find the attachment and quote it"
+                        .into(),
+                ));
+            }
             let sequence_id = explicit_sequence_id.ok_or_else(|| {
                 SdkError::InvalidState(
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
@@ -2594,7 +2747,8 @@ impl ChatCore {
         // overrides cover every derived field.
         let need_original = params.reply_to_text.is_none()
             || thrift_reply_entities.is_none()
-            || thrift_reply_attachments.is_none();
+            || thrift_reply_attachments.is_none()
+            || reply_attachment_id.is_some();
         let original = if need_original {
             let plaintext = self.decrypt_raw_event_contents(
                 &raw,
@@ -2642,8 +2796,19 @@ impl ChatCore {
                 .and_then(|m| m.entities.as_ref())
                 .map(|e| e.iter().map(|b| (**b).clone()).collect()),
         });
-        let attachments = thrift_reply_attachments
-            .or_else(|| original.as_ref().and_then(|m| m.attachments.clone()));
+        let attachments = match reply_attachment_id.as_deref() {
+            Some(id) => Some(vec![Box::new(
+                Self::find_attachment(
+                    original.as_ref().and_then(|m| m.attachments.as_deref()),
+                    id,
+                    "reply_to_attachment_id",
+                    "reply_to_event",
+                )?
+                .clone(),
+            )]),
+            None => thrift_reply_attachments
+                .or_else(|| original.as_ref().and_then(|m| m.attachments.clone())),
+        };
 
         // A key-change event is only useful to a recipient when it carries a
         // key version this reply's own version does not already imply.
@@ -2669,7 +2834,7 @@ impl ChatCore {
             edit_event,
             (!embedded_ckces.is_empty()).then_some(embedded_ckces),
             None,
-            None,
+            reply_attachment_id,
         ))
     }
 
@@ -2821,6 +2986,15 @@ impl ChatCore {
                 if !original_attachments.contains(attachment) {
                     return ReplyPreviewValidation::Invalid;
                 }
+            }
+        }
+        if let Some(claimed_id) = preview.replying_to_attachment_id.as_deref() {
+            let original_attachments = original.attachments.as_deref().unwrap_or(&[]);
+            if !original_attachments
+                .iter()
+                .any(|a| thrift_attachment_id(a) == Some(claimed_id))
+            {
+                return ReplyPreviewValidation::Invalid;
             }
         }
         ReplyPreviewValidation::Valid
@@ -3612,6 +3786,18 @@ pub(crate) struct ParsedMessageContent {
     /// The wire-level reply preview, kept alongside the mapped content so the
     /// decrypt path can validate it against its embedded raw source event.
     pub(crate) raw_reply_preview: Option<crate::thrift::product::ReplyingToPreview>,
+}
+
+/// An attachment's `attachment_id`; money attachments carry none.
+fn thrift_attachment_id(attachment: &ThriftMessageAttachment) -> Option<&str> {
+    match attachment {
+        ThriftMessageAttachment::Media(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Post(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Url(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::UnifiedCard(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Jetfuel(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Money(_) => None,
+    }
 }
 
 fn media_type_name(media_type: &ThriftMediaType) -> Option<String> {
@@ -9563,6 +9749,275 @@ mod tests {
             Event::Message(msg) => *msg,
             other => panic!("expected Message, got {:?}", other),
         }
+    }
+
+    /// An original from sender-2 carrying two attachments with ids, the way
+    /// the native clients send them.
+    fn original_with_attachments_b64(core: &ChatCore, ckey: &XChatConversationKey) -> String {
+        let media = crate::thrift::product::MediaAttachment::new(
+            Some("hash-1".to_string()),
+            None,
+            None,
+            None,
+            Some(10),
+            Some("photo.jpg".to_string()),
+            Some("att-media".to_string()),
+            None::<String>,
+            None::<String>,
+            None::<String>,
+        );
+        let post = crate::thrift::product::PostAttachment::new(
+            Some("123".to_string()),
+            None::<String>,
+            Some("att-post".to_string()),
+        );
+        let content = crate::pipeline::build_message_content(
+            "look",
+            None,
+            Some(vec![
+                Box::new(ThriftMessageAttachment::Media(Box::new(media))),
+                Box::new(ThriftMessageAttachment::Post(Box::new(post))),
+            ]),
+            None,
+        )
+        .unwrap();
+        let signing_kp = core.get_signing_keypair_arc().unwrap();
+        let payload =
+            crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
+                ckey,
+                &signing_kp.private,
+                "msg-orig",
+                "sender-2",
+                "conv-1",
+                &content,
+                "9001",
+                "pkv",
+            ))
+            .unwrap();
+        wrap_signed_payload_with_seq(&payload, "sender-2", "conv-1", "seq-orig")
+    }
+
+    /// Decrypt a payload's contents without validation, to inspect the wire.
+    fn wire_contents(
+        core: &ChatCore,
+        ckey: &XChatConversationKey,
+        payload: &SendPayload,
+    ) -> MessageEntryContents {
+        let b64 = wrap_signed_payload_with_seq(payload, "sender-1", "conv-1", "seq-new");
+        let raw = ChatCore::parse_event_b64(&b64).unwrap();
+        let plaintext = core
+            .decrypt_raw_event_contents(&raw, Some(ckey), Some("9001"), &[], &HashMap::new())
+            .unwrap();
+        ChatCore::parse_thrift_entry_contents(&plaintext).unwrap()
+    }
+
+    fn attachment_reaction_params(
+        ckey: &XChatConversationKey,
+        target_event: String,
+        attachment_id: &str,
+    ) -> crate::EncryptReactionParams {
+        let mut params = crate::EncryptReactionParams::new(target_event, "thumbs")
+            .with_identity("sender-1", "pkv")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        params.target_attachment_id = Some(attachment_id.into());
+        params
+    }
+
+    #[test]
+    fn reaction_to_an_attachment_carries_its_id() {
+        let (core, ckey, signing_keys) = reply_test_setup();
+        let orig_b64 = original_with_attachments_b64(&core, &ckey);
+        let params = attachment_reaction_params(&ckey, orig_b64, "att-post");
+
+        let added = core.encrypt_add_reaction(&params).unwrap();
+        match wire_contents(&core, &ckey, &added) {
+            MessageEntryContents::ReactionAdd(r) => {
+                assert_eq!(r.message_sequence_id.as_deref(), Some("seq-orig"));
+                assert_eq!(r.message_attachment_id.as_deref(), Some("att-post"));
+            }
+            other => panic!("expected ReactionAdd, got {:?}", other),
+        }
+        let removed = core.encrypt_remove_reaction(&params).unwrap();
+        match wire_contents(&core, &ckey, &removed) {
+            MessageEntryContents::ReactionRemove(r) => {
+                assert_eq!(r.message_attachment_id.as_deref(), Some("att-post"));
+            }
+            other => panic!("expected ReactionRemove, got {:?}", other),
+        }
+
+        let b64 = wrap_signed_payload_with_seq(&added, "sender-1", "conv-1", "seq-new");
+        let conv_keys = [("9001".to_string(), ckey.clone())].into_iter().collect();
+        match core.decrypt_event(&b64, &conv_keys, &signing_keys).unwrap() {
+            Event::Message(msg) => assert!(msg.verified),
+            other => panic!("expected Message, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reaction_without_attachment_id_leaves_it_unset() {
+        let (core, ckey, _) = reply_test_setup();
+        let orig_b64 = original_with_attachments_b64(&core, &ckey);
+        let params = attachment_reaction_params(&ckey, orig_b64, "");
+        let added = core.encrypt_add_reaction(&params).unwrap();
+        match wire_contents(&core, &ckey, &added) {
+            MessageEntryContents::ReactionAdd(r) => assert_eq!(r.message_attachment_id, None),
+            other => panic!("expected ReactionAdd, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reaction_attachment_id_errors_say_what_to_pass() {
+        let (core, ckey, _) = reply_test_setup();
+        let orig_b64 = original_with_attachments_b64(&core, &ckey);
+
+        let mut no_event = attachment_reaction_params(&ckey, String::new(), "att-post");
+        no_event.conversation_id = Some("conv-1".into());
+        no_event.target_message_sequence_id = Some("seq-orig".into());
+        let err = core
+            .encrypt_add_reaction(&no_event)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("target_attachment_id needs target_event"),
+            "{err}"
+        );
+
+        let unknown = attachment_reaction_params(&ckey, orig_b64.clone(), "att-nope");
+        let err = core.encrypt_add_reaction(&unknown).unwrap_err().to_string();
+        assert!(err.contains("pass one of: att-media, att-post"), "{err}");
+
+        let mut other_seq = attachment_reaction_params(&ckey, orig_b64.clone(), "att-post");
+        other_seq.target_message_sequence_id = Some("seq-other".into());
+        let err = core
+            .encrypt_add_reaction(&other_seq)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("target_message_sequence_id does not match target_event"),
+            "{err}"
+        );
+
+        let mut other_conv = attachment_reaction_params(&ckey, orig_b64.clone(), "att-post");
+        other_conv.conversation_id = Some("conv-2".into());
+        let err = core
+            .encrypt_add_reaction(&other_conv)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("conversation_id does not match target_event"),
+            "{err}"
+        );
+
+        let newer = core.generate_conversation_key().unwrap();
+        let mut no_key = attachment_reaction_params(&newer, orig_b64.clone(), "att-post");
+        no_key.conversation_key_version = Some("9002".into());
+        let err = core.encrypt_add_reaction(&no_key).unwrap_err().to_string();
+        assert!(err.contains("set_cache_keys(true)"), "{err}");
+
+        let text_only = original_event_b64(&core, &ckey, "no attachments");
+        let none = attachment_reaction_params(&ckey, text_only, "att-post");
+        let err = core.encrypt_remove_reaction(&none).unwrap_err().to_string();
+        assert!(
+            err.contains("has no attachments with an attachment_id"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn reply_to_an_attachment_quotes_only_it_and_validates() {
+        let (core, ckey, signing_keys) = reply_test_setup();
+        let orig_b64 = original_with_attachments_b64(&core, &ckey);
+        let mut params = crate::EncryptReplyParams::new("conv-1", "nice photo", orig_b64)
+            .with_identity("sender-1", "pkv")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        params.reply_to_attachment_id = Some("att-media".into());
+        let payload = core.encrypt_reply(params).unwrap();
+
+        match wire_contents(&core, &ckey, &payload) {
+            MessageEntryContents::Message(m) => {
+                let preview = m.replying_to_preview.unwrap();
+                assert_eq!(
+                    preview.replying_to_attachment_id.as_deref(),
+                    Some("att-media")
+                );
+                let attachments = preview.attachments.unwrap();
+                assert_eq!(attachments.len(), 1);
+                assert_eq!(thrift_attachment_id(&attachments[0]), Some("att-media"));
+                assert_eq!(preview.message_text.as_deref(), Some("look"));
+            }
+            other => panic!("expected Message, got {:?}", other),
+        }
+        let msg = decrypt_reply(&core, &ckey, &payload, &signing_keys);
+        assert_eq!(
+            msg.reply_preview_validation,
+            Some(ReplyPreviewValidation::Valid)
+        );
+    }
+
+    #[test]
+    fn reply_attachment_id_errors_say_what_to_pass() {
+        let (core, ckey, _) = reply_test_setup();
+        let orig_b64 = original_with_attachments_b64(&core, &ckey);
+        let base = |event: String| {
+            let mut p = crate::EncryptReplyParams::new("conv-1", "reply", event)
+                .with_identity("sender-1", "pkv")
+                .with_conversation_key(ckey.to_bytes(), "9001");
+            p.reply_to_attachment_id = Some("att-media".into());
+            p
+        };
+
+        let mut no_event = base(String::new());
+        no_event.reply_to_sequence_id = Some("seq-orig".into());
+        let err = core.encrypt_reply(no_event).unwrap_err().to_string();
+        assert!(
+            err.contains("reply_to_attachment_id needs reply_to_event"),
+            "{err}"
+        );
+
+        let mut both = base(orig_b64.clone());
+        both.reply_to_attachments = Some(vec![]);
+        let err = core.encrypt_reply(both).unwrap_err().to_string();
+        assert!(err.contains("leave reply_to_attachments unset"), "{err}");
+
+        let mut unknown = base(orig_b64);
+        unknown.reply_to_attachment_id = Some("att-nope".into());
+        let err = core.encrypt_reply(unknown).unwrap_err().to_string();
+        assert!(err.contains("pass one of: att-media, att-post"), "{err}");
+    }
+
+    #[test]
+    fn forged_preview_attachment_id_is_marked_invalid() {
+        let (core, ckey, signing_keys) = reply_test_setup();
+        let orig_b64 = original_with_attachments_b64(&core, &ckey);
+        let mut params = crate::EncryptReplyParams::new("conv-1", "reply", orig_b64)
+            .with_identity("sender-1", "pkv")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        let mut preview = core
+            .build_reply_preview(&mut params, &ckey, "9001")
+            .unwrap();
+        preview.replying_to_attachment_id = Some("att-nope".into());
+        let content =
+            crate::pipeline::build_message_content_with_preview("reply", preview, None, None, None)
+                .unwrap();
+        let signing_kp = core.get_signing_keypair_arc().unwrap();
+        let payload =
+            crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
+                &ckey,
+                &signing_kp.private,
+                "msg-reply",
+                "sender-1",
+                "conv-1",
+                &content,
+                "9001",
+                "pkv",
+            ))
+            .unwrap();
+
+        let msg = decrypt_reply(&core, &ckey, &payload, &signing_keys);
+        assert_eq!(
+            msg.reply_preview_validation,
+            Some(ReplyPreviewValidation::Invalid)
+        );
     }
 
     #[test]

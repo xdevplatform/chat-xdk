@@ -638,7 +638,9 @@ The SDK closes this on both sides:
   (`reply_to_edit_event`): it is embedded as `raw_event_edit_message` and the
   preview's text and entities derive from the edit's contents — the preview
   quotes what the message says now. Attachments always derive from the
-  original (edits do not carry them).
+  original (edits do not carry them). A reply to one attachment
+  (`reply_to_attachment_id`) quotes only that attachment and records its id
+  in the preview.
 - **Receive** (`decrypt_event` / `decrypt_events`): when a decrypted message
   carries a preview with an embedded raw event, the SDK always validates it:
   1. The raw event must belong to the **same conversation** as the reply.
@@ -650,7 +652,9 @@ The SDK closes this on both sides:
      preview makes is compared against the decrypted contents: sender id,
      sequence id, message id, text (truncation-tolerant — the claimed text
      must match the quoted contents up to the preview's own length on a
-     character boundary), entities, and attachments.
+     character boundary), entities, and attachments. A reply to one
+     attachment (`replying_to_attachment_id`) must name an attachment the
+     original actually carries.
   4. When an **edit event is embedded**, it must verify the same way and come
      from the original's author, and the text and entity claims are checked
      against the edit's updated contents instead of the original's; the

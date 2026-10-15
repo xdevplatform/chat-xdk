@@ -276,10 +276,35 @@ impl ChatCore {
     ) -> Result<SendBody, SdkError> {
         let params = EncryptReactionParams::new(target_event, emoji)
             .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+        self.send_reaction(add, &params)
+    }
+
+    /// Encrypt + sign a reaction add/remove on one attachment of a raw
+    /// event, named by its `attachment_id`.
+    pub fn encrypt_attachment_reaction(
+        &self,
+        add: bool,
+        target_event: &str,
+        attachment_id: &str,
+        emoji: &str,
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
+    ) -> Result<SendBody, SdkError> {
+        let mut params = EncryptReactionParams::new(target_event, emoji)
+            .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+        params.target_attachment_id = Some(attachment_id.to_string());
+        self.send_reaction(add, &params)
+    }
+
+    fn send_reaction(
+        &self,
+        add: bool,
+        params: &EncryptReactionParams,
+    ) -> Result<SendBody, SdkError> {
         let payload = if add {
-            self.inner.encrypt_add_reaction(&params)?
+            self.inner.encrypt_add_reaction(params)?
         } else {
-            self.inner.encrypt_remove_reaction(&params)?
+            self.inner.encrypt_remove_reaction(params)?
         };
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.

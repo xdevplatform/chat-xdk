@@ -288,9 +288,14 @@ type EncryptReplyParams struct {
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
 	ReplyToEntities        []EntityTuple          `json:"reply_to_entities,omitempty"`
 	ReplyToAttachments     []AttachmentDescriptor `json:"reply_to_attachments,omitempty"`
-	QuickReply             json.RawMessage        `json:"quick_reply,omitempty"` // same shape as TextContent.QuickReply
-	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
-	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
+	// ReplyToAttachmentID is the attachment_id of the one attachment of the
+	// original being replied to; empty replies to the whole message. It
+	// requires ReplyToEvent, and the preview then quotes only that
+	// attachment, so leave ReplyToAttachments unset.
+	ReplyToAttachmentID string          `json:"reply_to_attachment_id,omitempty"`
+	QuickReply          json.RawMessage `json:"quick_reply,omitempty"` // same shape as TextContent.QuickReply
+	ShouldNotify        *bool           `json:"should_notify,omitempty"`
+	TTLMsec             *int64          `json:"ttl_msec,omitempty"`
 }
 
 // EncryptReactionParams are the parameters for EncryptAddReaction/EncryptRemoveReaction.
@@ -313,6 +318,11 @@ type EncryptReactionParams struct {
 	SigningKeyVersion       string `json:"signing_key_version,omitempty"`        // empty = session identity
 	ConversationKey         []byte `json:"conversation_key,omitempty"`           // raw 32-byte key; nil = key cache
 	ConversationKeyVersion  string `json:"conversation_key_version,omitempty"`   // empty = key cache
+	// TargetAttachmentID is the attachment_id of the attachment in the
+	// target message to react to; empty reacts to the whole message. It
+	// requires TargetEvent, which the SDK decrypts to check the attachment
+	// belongs to it.
+	TargetAttachmentID string `json:"target_attachment_id,omitempty"`
 }
 
 // EncryptEditParams are the parameters for EncryptEdit.

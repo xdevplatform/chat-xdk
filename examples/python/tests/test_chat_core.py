@@ -250,6 +250,21 @@ class TestPreparedChanges(unittest.TestCase):
             ["encoded_message_create_event", "encoded_message_event_signature", "message_id"],
         )
 
+    def test_attachment_reaction_checks_the_attachment_is_on_the_event(self):
+        core, _ = self._core_and_keys()
+        conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
+        # The fixture message carries no attachments, so the SDK refuses to
+        # react to one.
+        with self.assertRaisesRegex(ValueError, "has no attachments with an attachment_id"):
+            core.encrypt_attachment_reaction(
+                add=True,
+                target_event=self.vectors["event_message_b64"],
+                attachment_id="att-1",
+                emoji="\U0001f525",
+                conversation_key=conv_key,
+                conversation_key_version=self.vectors["event_conversation_key_version"],
+            )
+
     def test_threaded_reply_with_entities_and_ttl(self):
         core, _ = self._core_and_keys()
         conv_key = base64.b64decode(self.vectors["conversation_key_b64"])

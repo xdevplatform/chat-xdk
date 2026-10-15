@@ -337,11 +337,12 @@ pub fn build_forward_content(
 pub fn build_reaction_add_content(
     target_message_sequence_id: &str,
     emoji: &str,
+    attachment_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     let content = MessageReactionAdd::new(
         Some(target_message_sequence_id.to_string()),
         Some(emoji.to_string()),
-        None,
+        attachment_id.map(str::to_string),
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::ReactionAdd(
         Box::new(content),
@@ -377,11 +378,12 @@ pub fn build_message_edit_content(
 pub fn build_reaction_remove_content(
     target_message_sequence_id: &str,
     emoji: &str,
+    attachment_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     let content = MessageReactionRemove::new(
         Some(target_message_sequence_id.to_string()),
         Some(emoji.to_string()),
-        None,
+        attachment_id.map(str::to_string),
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::ReactionRemove(
         Box::new(content),
@@ -777,13 +779,13 @@ mod tests {
 
     #[test]
     fn test_build_reaction_add_content() {
-        let content = build_reaction_add_content("seq-123", "👍").unwrap();
+        let content = build_reaction_add_content("seq-123", "👍", None).unwrap();
         assert!(!content.is_empty());
     }
 
     #[test]
     fn test_build_reaction_remove_content() {
-        let content = build_reaction_remove_content("seq-123", "👍").unwrap();
+        let content = build_reaction_remove_content("seq-123", "👍", None).unwrap();
         assert!(!content.is_empty());
     }
 
@@ -1615,13 +1617,13 @@ mod tests {
     #[test]
     fn test_build_reaction_add_content_with_emoji_sequence() {
         // Multi-codepoint emoji
-        let content = build_reaction_add_content("seq-10", "👨‍👩‍👧‍👦").unwrap();
+        let content = build_reaction_add_content("seq-10", "👨‍👩‍👧‍👦", None).unwrap();
         assert!(!content.is_empty());
     }
 
     #[test]
     fn test_build_reaction_remove_content_with_emoji_sequence() {
-        let content = build_reaction_remove_content("seq-10", "❤️").unwrap();
+        let content = build_reaction_remove_content("seq-10", "❤️", None).unwrap();
         assert!(!content.is_empty());
     }
 }

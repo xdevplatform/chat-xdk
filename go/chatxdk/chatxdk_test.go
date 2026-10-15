@@ -851,6 +851,50 @@ func TestEncryptRemoveReaction(t *testing.T) {
 	}
 }
 
+func TestAttachmentTargetsNeedTheRawEvent(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	reaction := EncryptReactionParams{
+		SenderID:                "me",
+		ConversationID:          "conv-1",
+		ConversationKey:         v.conversationKey(t),
+		TargetMessageSequenceID: "seq-99",
+		TargetAttachmentID:      "att-1",
+		Emoji:                   "\U0001F44D",
+		ConversationKeyVersion:  "1",
+		SigningKeyVersion:       "1",
+	}
+	for name, encrypt := range map[string]func(EncryptReactionParams) (*SendPayload, error){
+		"add":    chat.EncryptAddReaction,
+		"remove": chat.EncryptRemoveReaction,
+	} {
+		_, err := encrypt(reaction)
+		if err == nil || !strings.Contains(err.Error(), "target_attachment_id needs target_event") {
+			t.Errorf("%s reaction: want target_event error, got %v", name, err)
+		}
+	}
+
+	_, err := chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         "conv-1",
+		Text:                   "nice photo",
+		SenderID:               "me",
+		SigningKeyVersion:      "1",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: "1",
+		ReplyToSequenceID:      "seq-99",
+		ReplyToAttachmentID:    "att-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "reply_to_attachment_id needs reply_to_event") {
+		t.Errorf("reply: want reply_to_event error, got %v", err)
+	}
+}
+
 func TestEncryptEdit(t *testing.T) {
 	v := loadVectors(t)
 

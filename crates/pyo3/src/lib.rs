@@ -167,6 +167,7 @@ fn build_reaction_params(
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
+    target_attachment_id: Option<String>,
 ) -> PyResult<EncryptReactionParams> {
     let emoji = emoji.ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("missing required argument: 'emoji'")
@@ -178,6 +179,7 @@ fn build_reaction_params(
     params.signing_key_version = signing_key_version;
     params.conversation_key = conversation_key;
     params.conversation_key_version = conversation_key_version;
+    params.target_attachment_id = target_attachment_id;
     Ok(params)
 }
 
@@ -926,6 +928,10 @@ impl Chat {
     ///     reply_to_attachments: Attachment dicts describing the replied-to
     ///         message's attachments (for preview); derived from
     ///         ``reply_to_event`` when omitted.
+    ///     reply_to_attachment_id: ``attachment_id`` of the one attachment of
+    ///         the original being replied to; omit it to reply to the whole
+    ///         message. Requires ``reply_to_event``; the preview then quotes
+    ///         only that attachment, so leave ``reply_to_attachments`` unset.
     ///     sender_id: Your user ID; defaults to the ``set_identity`` value.
     ///     signing_key_version: Your registered signing public key version;
     ///         defaults to the ``set_identity`` value.
@@ -941,7 +947,7 @@ impl Chat {
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, reply_to_attachment_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn encrypt_reply(
         &self,
         conversation_id: &str,
@@ -954,6 +960,7 @@ impl Chat {
         reply_to_text: Option<String>,
         reply_to_entities: Option<Vec<(i32, i32, String)>>,
         reply_to_attachments: Option<Vec<HashMap<String, Py<PyAny>>>>,
+        reply_to_attachment_id: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
@@ -975,6 +982,7 @@ impl Chat {
         params.reply_to_attachments = reply_to_attachments
             .map(parse_attachment_descs)
             .transpose()?;
+        params.reply_to_attachment_id = reply_to_attachment_id;
         params.sender_id = sender_id;
         params.signing_key_version = signing_key_version;
         params.conversation_key = conversation_key;
@@ -1014,8 +1022,12 @@ impl Chat {
     ///         together with ``conversation_key_version``, or omit both to
     ///         resolve from the opt-in ``set_cache_keys`` cache.
     ///     conversation_key_version: Current conversation key version.
+    ///     target_attachment_id: ``attachment_id`` of the attachment in the
+    ///         target message to react to; omit it to react to the whole
+    ///         message. Requires ``target_event``, which the SDK decrypts to
+    ///         check the attachment belongs to it.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, target_attachment_id=None))]
     fn encrypt_add_reaction(
         &self,
         target_event: Option<String>,
@@ -1026,6 +1038,7 @@ impl Chat {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
+        target_attachment_id: Option<String>,
     ) -> PyResult<SendPayload> {
         let params = build_reaction_params(
             target_event,
@@ -1036,6 +1049,7 @@ impl Chat {
             signing_key_version,
             conversation_key,
             conversation_key_version,
+            target_attachment_id,
         )?;
         let payload = self
             .inner
@@ -1053,7 +1067,7 @@ impl Chat {
     /// The SDK generates the message id and returns it in the payload; read it
     /// back from ``payload.message_id`` (do not pass one in).
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, target_attachment_id=None))]
     fn encrypt_remove_reaction(
         &self,
         target_event: Option<String>,
@@ -1064,6 +1078,7 @@ impl Chat {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
+        target_attachment_id: Option<String>,
     ) -> PyResult<SendPayload> {
         let params = build_reaction_params(
             target_event,
@@ -1074,6 +1089,7 @@ impl Chat {
             signing_key_version,
             conversation_key,
             conversation_key_version,
+            target_attachment_id,
         )?;
         let payload = self
             .inner

@@ -315,6 +315,38 @@ class TestApiShapes(unittest.TestCase):
                 conversation_key_version="1",
             )
 
+    def test_encrypt_reply_to_attachment_needs_reply_to_event(self):
+        chat, v = self._unlocked_chat()
+
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        with self.assertRaisesRegex(ValueError, "reply_to_attachment_id needs reply_to_event"):
+            chat.encrypt_reply(
+                "conv-1", "nice photo",
+                reply_to_sequence_id="seq-99",
+                reply_to_attachment_id="att-1",
+                sender_id="me",
+                signing_key_version="1",
+                conversation_key=conv_key,
+                conversation_key_version="1",
+            )
+
+    def test_encrypt_reaction_to_attachment_needs_target_event(self):
+        chat, v = self._unlocked_chat()
+
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        for method in (chat.encrypt_add_reaction, chat.encrypt_remove_reaction):
+            with self.assertRaisesRegex(ValueError, "target_attachment_id needs target_event"):
+                method(
+                    None, "\U0001F44D",
+                    conversation_id="conv-1",
+                    target_message_sequence_id="seq-99",
+                    target_attachment_id="att-1",
+                    sender_id="me",
+                    signing_key_version="1",
+                    conversation_key=conv_key,
+                    conversation_key_version="1",
+                )
+
     def test_encrypt_add_reaction_shape(self):
         chat, v = self._unlocked_chat()
 

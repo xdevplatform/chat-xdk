@@ -201,6 +201,11 @@ pub struct EncryptReplyParams {
     /// Optional attachments from the original message (for the reply
     /// preview); derived from `reply_to_event` when unset.
     pub reply_to_attachments: Option<Vec<AttachmentDescriptor>>,
+    /// `attachment_id` of the one attachment of the original being replied
+    /// to; unset replies to the whole message. Requires `reply_to_event`,
+    /// which the SDK decrypts to find the attachment and quote only it in
+    /// the preview, so `reply_to_attachments` must stay unset.
+    pub reply_to_attachment_id: Option<String>,
     /// Optional quick reply: a request offering selectable options, or a
     /// response selecting one.
     pub quick_reply: Option<QuickReply>,
@@ -237,6 +242,7 @@ impl EncryptReplyParams {
             attachments: None,
             reply_to_entities: None,
             reply_to_attachments: None,
+            reply_to_attachment_id: None,
             quick_reply: None,
             should_notify: None,
             ttl_msec: None,
@@ -298,6 +304,7 @@ impl std::fmt::Debug for EncryptReplyParams {
             .field("attachments", &self.attachments)
             .field("reply_to_entities", &self.reply_to_entities)
             .field("reply_to_attachments", &self.reply_to_attachments)
+            .field("reply_to_attachment_id", &self.reply_to_attachment_id)
             .field("quick_reply", &self.quick_reply)
             .field("should_notify", &self.should_notify)
             .field("ttl_msec", &self.ttl_msec)
@@ -464,6 +471,10 @@ pub struct EncryptReactionParams {
     /// Version of the conversation key used for encryption; resolves from the
     /// key cache when unset (set together with `conversation_key`).
     pub conversation_key_version: Option<String>,
+    /// `attachment_id` of the attachment in the target message the reaction
+    /// is for; unset reacts to the whole message. Requires `target_event`,
+    /// which the SDK decrypts to check the attachment belongs to it.
+    pub target_attachment_id: Option<String>,
 }
 
 impl EncryptReactionParams {
@@ -481,6 +492,7 @@ impl EncryptReactionParams {
             signing_key_version: None,
             conversation_key: None,
             conversation_key_version: None,
+            target_attachment_id: None,
         }
     }
 
@@ -534,6 +546,7 @@ impl std::fmt::Debug for EncryptReactionParams {
                 &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("conversation_key_version", &self.conversation_key_version)
+            .field("target_attachment_id", &self.target_attachment_id)
             .finish()
     }
 }
