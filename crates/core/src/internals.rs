@@ -43,6 +43,7 @@ fn frame_event(
         signature,
         None::<String>,
         None::<bool>,
+        None::<String>,
     );
     Ok(base64_encode(&serialize_thrift(&event)?))
 }
