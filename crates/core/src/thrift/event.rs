@@ -137,6 +137,108 @@ impl From<&AdditionalAction> for i32 {
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GroupType(pub i32);
+
+impl GroupType {
+  pub const NORMAL: GroupType = GroupType(0);
+  pub const SUBSCRIBER_CHAT: GroupType = GroupType(1);
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::NORMAL,
+    Self::SUBSCRIBER_CHAT,
+  ];
+}
+
+impl TSerializable for GroupType {
+  #[allow(clippy::trivially_copy_pass_by_ref)]
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    o_prot.write_i32(self.0)
+  }
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GroupType> {
+    let enum_value = i_prot.read_i32()?;
+    Ok(GroupType::from(enum_value))
+  }
+}
+
+impl From<i32> for GroupType {
+  fn from(i: i32) -> Self {
+    match i {
+      0 => GroupType::NORMAL,
+      1 => GroupType::SUBSCRIBER_CHAT,
+      _ => GroupType(i)
+    }
+  }
+}
+
+impl From<&i32> for GroupType {
+  fn from(i: &i32) -> Self {
+    GroupType::from(*i)
+  }
+}
+
+impl From<GroupType> for i32 {
+  fn from(e: GroupType) -> i32 {
+    e.0
+  }
+}
+
+impl From<&GroupType> for i32 {
+  fn from(e: &GroupType) -> i32 {
+    e.0
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MessageActivityType(pub i32);
+
+impl MessageActivityType {
+  pub const TYPING: MessageActivityType = MessageActivityType(1);
+  pub const RECORDING_VOICE_MESSAGE: MessageActivityType = MessageActivityType(2);
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::TYPING,
+    Self::RECORDING_VOICE_MESSAGE,
+  ];
+}
+
+impl TSerializable for MessageActivityType {
+  #[allow(clippy::trivially_copy_pass_by_ref)]
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    o_prot.write_i32(self.0)
+  }
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageActivityType> {
+    let enum_value = i_prot.read_i32()?;
+    Ok(MessageActivityType::from(enum_value))
+  }
+}
+
+impl From<i32> for MessageActivityType {
+  fn from(i: i32) -> Self {
+    match i {
+      1 => MessageActivityType::TYPING,
+      2 => MessageActivityType::RECORDING_VOICE_MESSAGE,
+      _ => MessageActivityType(i)
+    }
+  }
+}
+
+impl From<&i32> for MessageActivityType {
+  fn from(i: &i32) -> Self {
+    MessageActivityType::from(*i)
+  }
+}
+
+impl From<MessageActivityType> for i32 {
+  fn from(e: MessageActivityType) -> i32 {
+    e.0
+  }
+}
+
+impl From<&MessageActivityType> for i32 {
+  fn from(e: &MessageActivityType) -> i32 {
+    e.0
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FailureType(pub i32);
 
 impl FailureType {
@@ -158,6 +260,7 @@ impl FailureType {
   pub const INVALID_SIGNATURE_VERSION: FailureType = FailureType(16);
   pub const INVALID_PIN_REQUEST: FailureType = FailureType(17);
   pub const TOO_MANY_PINS: FailureType = FailureType(18);
+  pub const INVALID_X_MONEY_TOKEN: FailureType = FailureType(19);
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::EMPTY_DETAIL,
     Self::INTERNAL_ERROR,
@@ -177,6 +280,7 @@ impl FailureType {
     Self::INVALID_SIGNATURE_VERSION,
     Self::INVALID_PIN_REQUEST,
     Self::TOO_MANY_PINS,
+    Self::INVALID_X_MONEY_TOKEN,
   ];
 }
 
@@ -212,6 +316,7 @@ impl From<i32> for FailureType {
       16 => FailureType::INVALID_SIGNATURE_VERSION,
       17 => FailureType::INVALID_PIN_REQUEST,
       18 => FailureType::TOO_MANY_PINS,
+      19 => FailureType::INVALID_X_MONEY_TOKEN,
       _ => FailureType(i)
     }
   }
@@ -467,6 +572,561 @@ impl From<&DeviceEnrollmentStatus> for i32 {
 }
 
 //
+// PinConversations
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PinConversations {
+  pub conversation_ids_to_pin: Option<Vec<String>>,
+}
+
+impl PinConversations {
+  pub fn new<F1>(conversation_ids_to_pin: F1) -> PinConversations where F1: Into<Option<Vec<String>>> {
+    PinConversations {
+      conversation_ids_to_pin: conversation_ids_to_pin.into(),
+    }
+  }
+}
+
+impl TSerializable for PinConversations {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PinConversations> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<String>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_0 = i_prot.read_string()?;
+            val.push(list_elem_0);
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = PinConversations {
+      conversation_ids_to_pin: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("PinConversations");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.conversation_ids_to_pin {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_ids_to_pin", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_string(e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// SetNicknames
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SetNicknames {
+  pub placeholder: Option<String>,
+}
+
+impl SetNicknames {
+  pub fn new<F1>(placeholder: F1) -> SetNicknames where F1: Into<Option<String>> {
+    SetNicknames {
+      placeholder: placeholder.into(),
+    }
+  }
+}
+
+impl TSerializable for SetNicknames {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SetNicknames> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = SetNicknames {
+      placeholder: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("SetNicknames");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.placeholder {
+      o_prot.write_field_begin(&TFieldIdentifier::new("placeholder", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// SetVerifiedUsers
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SetVerifiedUsers {
+  pub placeholder: Option<String>,
+}
+
+impl SetVerifiedUsers {
+  pub fn new<F1>(placeholder: F1) -> SetVerifiedUsers where F1: Into<Option<String>> {
+    SetVerifiedUsers {
+      placeholder: placeholder.into(),
+    }
+  }
+}
+
+impl TSerializable for SetVerifiedUsers {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SetVerifiedUsers> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = SetVerifiedUsers {
+      placeholder: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("SetVerifiedUsers");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.placeholder {
+      o_prot.write_field_begin(&TFieldIdentifier::new("placeholder", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// UserMetadata
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct UserMetadata {
+  pub pinned_conversation_ids: Option<Vec<String>>,
+  pub user_id_to_nickname: Option<BTreeMap<i64, String>>,
+  pub safety_number_verified_user_ids: Option<Vec<i64>>,
+}
+
+impl UserMetadata {
+  pub fn new<F1, F2, F3>(pinned_conversation_ids: F1, user_id_to_nickname: F2, safety_number_verified_user_ids: F3) -> UserMetadata where F1: Into<Option<Vec<String>>>, F2: Into<Option<BTreeMap<i64, String>>>, F3: Into<Option<Vec<i64>>> {
+    UserMetadata {
+      pinned_conversation_ids: pinned_conversation_ids.into(),
+      user_id_to_nickname: user_id_to_nickname.into(),
+      safety_number_verified_user_ids: safety_number_verified_user_ids.into(),
+    }
+  }
+}
+
+impl TSerializable for UserMetadata {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<UserMetadata> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<String>> = None;
+    let mut f_2: Option<BTreeMap<i64, String>> = None;
+    let mut f_3: Option<Vec<i64>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_1 = i_prot.read_string()?;
+            val.push(list_elem_1);
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let map_ident = i_prot.read_map_begin()?;
+          let mut val: BTreeMap<i64, String> = BTreeMap::new();
+          for _ in 0..map_ident.size {
+            let map_key_2 = i_prot.read_i64()?;
+            let map_val_3 = i_prot.read_string()?;
+            val.insert(map_key_2, map_val_3);
+          }
+          i_prot.read_map_end()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_4 = i_prot.read_i64()?;
+            val.push(list_elem_4);
+          }
+          i_prot.read_list_end()?;
+          f_3 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = UserMetadata {
+      pinned_conversation_ids: f_1,
+      user_id_to_nickname: f_2,
+      safety_number_verified_user_ids: f_3,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("UserMetadata");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.pinned_conversation_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("pinned_conversation_ids", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_string(e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.user_id_to_nickname {
+      o_prot.write_field_begin(&TFieldIdentifier::new("user_id_to_nickname", TType::Map, 2))?;
+      o_prot.write_map_begin(&TMapIdentifier::new(TType::I64, TType::String, fld_var.len() as i32))?;
+      for (k, v) in fld_var {
+        o_prot.write_i64(*k)?;
+        o_prot.write_string(v)?;
+      }
+      o_prot.write_map_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.safety_number_verified_user_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("safety_number_verified_user_ids", TType::List, 3))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// MessageRequestInboxSummary
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MessageRequestInboxSummary {
+  pub member_ids: Option<Vec<String>>,
+  pub unread_count_priority: Option<i32>,
+  pub unread_count_hidden: Option<i32>,
+  pub has_unseen: Option<bool>,
+  pub latest_seen_seq_id: Option<i64>,
+  pub max_priority_seq: Option<i64>,
+}
+
+impl MessageRequestInboxSummary {
+  pub fn new<F1, F2, F3, F4, F5, F6>(member_ids: F1, unread_count_priority: F2, unread_count_hidden: F3, has_unseen: F4, latest_seen_seq_id: F5, max_priority_seq: F6) -> MessageRequestInboxSummary where F1: Into<Option<Vec<String>>>, F2: Into<Option<i32>>, F3: Into<Option<i32>>, F4: Into<Option<bool>>, F5: Into<Option<i64>>, F6: Into<Option<i64>> {
+    MessageRequestInboxSummary {
+      member_ids: member_ids.into(),
+      unread_count_priority: unread_count_priority.into(),
+      unread_count_hidden: unread_count_hidden.into(),
+      has_unseen: has_unseen.into(),
+      latest_seen_seq_id: latest_seen_seq_id.into(),
+      max_priority_seq: max_priority_seq.into(),
+    }
+  }
+}
+
+impl TSerializable for MessageRequestInboxSummary {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageRequestInboxSummary> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<String>> = None;
+    let mut f_2: Option<i32> = None;
+    let mut f_3: Option<i32> = None;
+    let mut f_4: Option<bool> = None;
+    let mut f_5: Option<i64> = None;
+    let mut f_6: Option<i64> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_5 = i_prot.read_string()?;
+            val.push(list_elem_5);
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_i32()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_i32()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_bool()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_i64()?;
+          f_5 = Some(val);
+        },
+        6 => {
+          let val = i_prot.read_i64()?;
+          f_6 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = MessageRequestInboxSummary {
+      member_ids: f_1,
+      unread_count_priority: f_2,
+      unread_count_hidden: f_3,
+      has_unseen: f_4,
+      latest_seen_seq_id: f_5,
+      max_priority_seq: f_6,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("MessageRequestInboxSummary");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.member_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("member_ids", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_string(e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.unread_count_priority {
+      o_prot.write_field_begin(&TFieldIdentifier::new("unread_count_priority", TType::I32, 2))?;
+      o_prot.write_i32(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.unread_count_hidden {
+      o_prot.write_field_begin(&TFieldIdentifier::new("unread_count_hidden", TType::I32, 3))?;
+      o_prot.write_i32(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.has_unseen {
+      o_prot.write_field_begin(&TFieldIdentifier::new("has_unseen", TType::Bool, 4))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.latest_seen_seq_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("latest_seen_seq_id", TType::I64, 5))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.max_priority_seq {
+      o_prot.write_field_begin(&TFieldIdentifier::new("max_priority_seq", TType::I64, 6))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// SenderPrivilege
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SenderPrivilege {
+  pub is_admin: Option<bool>,
+  pub is_restricted_chat: Option<bool>,
+}
+
+impl SenderPrivilege {
+  pub fn new<F1, F2>(is_admin: F1, is_restricted_chat: F2) -> SenderPrivilege where F1: Into<Option<bool>>, F2: Into<Option<bool>> {
+    SenderPrivilege {
+      is_admin: is_admin.into(),
+      is_restricted_chat: is_restricted_chat.into(),
+    }
+  }
+}
+
+impl TSerializable for SenderPrivilege {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SenderPrivilege> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<bool> = None;
+    let mut f_2: Option<bool> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bool()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_bool()?;
+          f_2 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = SenderPrivilege {
+      is_admin: f_1,
+      is_restricted_chat: f_2,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("SenderPrivilege");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.is_admin {
+      o_prot.write_field_begin(&TFieldIdentifier::new("is_admin", TType::Bool, 1))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.is_restricted_chat {
+      o_prot.write_field_begin(&TFieldIdentifier::new("is_restricted_chat", TType::Bool, 2))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// ValidatePaymentToken
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ValidatePaymentToken {
+  pub receipt_token: Option<String>,
+}
+
+impl ValidatePaymentToken {
+  pub fn new<F1>(receipt_token: F1) -> ValidatePaymentToken where F1: Into<Option<String>> {
+    ValidatePaymentToken {
+      receipt_token: receipt_token.into(),
+    }
+  }
+}
+
+impl TSerializable for ValidatePaymentToken {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ValidatePaymentToken> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = ValidatePaymentToken {
+      receipt_token: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("ValidatePaymentToken");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.receipt_token {
+      o_prot.write_field_begin(&TFieldIdentifier::new("receipt_token", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // FrankingData
 //
 
@@ -512,8 +1172,8 @@ impl TSerializable for FrankingData {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<Vec<u8>> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_0 = i_prot.read_bytes()?;
-            val.push(list_elem_0);
+            let list_elem_6 = i_prot.read_bytes()?;
+            val.push(list_elem_6);
           }
           i_prot.read_list_end()?;
           f_4 = Some(val);
@@ -560,6 +1220,86 @@ impl TSerializable for FrankingData {
 }
 
 //
+// TargetedNotify
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TargetedNotify {
+  pub user_ids: Option<Vec<String>>,
+  pub respect_mutes: Option<bool>,
+}
+
+impl TargetedNotify {
+  pub fn new<F1, F2>(user_ids: F1, respect_mutes: F2) -> TargetedNotify where F1: Into<Option<Vec<String>>>, F2: Into<Option<bool>> {
+    TargetedNotify {
+      user_ids: user_ids.into(),
+      respect_mutes: respect_mutes.into(),
+    }
+  }
+}
+
+impl TSerializable for TargetedNotify {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<TargetedNotify> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<String>> = None;
+    let mut f_2: Option<bool> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_7 = i_prot.read_string()?;
+            val.push(list_elem_7);
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_bool()?;
+          f_2 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = TargetedNotify {
+      user_ids: f_1,
+      respect_mutes: f_2,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("TargetedNotify");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.user_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("user_ids", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_string(e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.respect_mutes {
+      o_prot.write_field_begin(&TFieldIdentifier::new("respect_mutes", TType::Bool, 2))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // MessageCreateEvent
 //
 
@@ -575,10 +1315,12 @@ pub struct MessageCreateEvent {
   pub additional_action_list: Option<Vec<AdditionalAction>>,
   pub franking_data: Option<FrankingData>,
   pub is_message_request: Option<bool>,
+  pub side_effects: Option<Vec<Box<SideEffect>>>,
+  pub contents_encryption_version: Option<i16>,
 }
 
 impl MessageCreateEvent {
-  pub fn new<F100, F101, F102, F103, F104, F105, F106, F107, F108, F109>(contents: F100, conversation_key_version: F101, should_notify: F102, ttl_msec: F103, delivered_at_msec: F104, is_pending_public_key: F105, priority: F106, additional_action_list: F107, franking_data: F108, is_message_request: F109) -> MessageCreateEvent where F100: Into<Option<Vec<u8>>>, F101: Into<Option<String>>, F102: Into<Option<bool>>, F103: Into<Option<i64>>, F104: Into<Option<i64>>, F105: Into<Option<bool>>, F106: Into<Option<EventQueuePriority>>, F107: Into<Option<Vec<AdditionalAction>>>, F108: Into<Option<FrankingData>>, F109: Into<Option<bool>> {
+  pub fn new<F100, F101, F102, F103, F104, F105, F106, F107, F108, F109, F111, F112>(contents: F100, conversation_key_version: F101, should_notify: F102, ttl_msec: F103, delivered_at_msec: F104, is_pending_public_key: F105, priority: F106, additional_action_list: F107, franking_data: F108, is_message_request: F109, side_effects: F111, contents_encryption_version: F112) -> MessageCreateEvent where F100: Into<Option<Vec<u8>>>, F101: Into<Option<String>>, F102: Into<Option<bool>>, F103: Into<Option<i64>>, F104: Into<Option<i64>>, F105: Into<Option<bool>>, F106: Into<Option<EventQueuePriority>>, F107: Into<Option<Vec<AdditionalAction>>>, F108: Into<Option<FrankingData>>, F109: Into<Option<bool>>, F111: Into<Option<Vec<Box<SideEffect>>>>, F112: Into<Option<i16>> {
     MessageCreateEvent {
       contents: contents.into(),
       conversation_key_version: conversation_key_version.into(),
@@ -590,6 +1332,8 @@ impl MessageCreateEvent {
       additional_action_list: additional_action_list.into(),
       franking_data: franking_data.into(),
       is_message_request: is_message_request.into(),
+      side_effects: side_effects.into(),
+      contents_encryption_version: contents_encryption_version.into(),
     }
   }
 }
@@ -607,6 +1351,8 @@ impl TSerializable for MessageCreateEvent {
     let mut f_107: Option<Vec<AdditionalAction>> = None;
     let mut f_108: Option<FrankingData> = None;
     let mut f_109: Option<bool> = None;
+    let mut f_111: Option<Vec<Box<SideEffect>>> = None;
+    let mut f_112: Option<i16> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -646,8 +1392,8 @@ impl TSerializable for MessageCreateEvent {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<AdditionalAction> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_1 = AdditionalAction::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_1);
+            let list_elem_8 = AdditionalAction::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_8);
           }
           i_prot.read_list_end()?;
           f_107 = Some(val);
@@ -659,6 +1405,23 @@ impl TSerializable for MessageCreateEvent {
         109 => {
           let val = i_prot.read_bool()?;
           f_109 = Some(val);
+        },
+        111 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<Box<SideEffect>> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            match SideEffect::read_from_in_protocol(i_prot) {
+              Ok(elem) => { val.push(Box::new(elem)); },
+              Err(thrift::Error::Protocol(ref e)) if e.kind == ProtocolErrorKind::UnknownUnionVariant => { continue; },
+              Err(e) => return Err(e),
+            }
+          }
+          i_prot.read_list_end()?;
+          f_111 = Some(val);
+        },
+        112 => {
+          let val = i_prot.read_i16()?;
+          f_112 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -678,6 +1441,8 @@ impl TSerializable for MessageCreateEvent {
       additional_action_list: f_107,
       franking_data: f_108,
       is_message_request: f_109,
+      side_effects: f_111,
+      contents_encryption_version: f_112,
     };
     Ok(ret)
   }
@@ -738,6 +1503,187 @@ impl TSerializable for MessageCreateEvent {
       o_prot.write_bool(fld_var)?;
       o_prot.write_field_end()?
     }
+    if let Some(ref fld_var) = self.side_effects {
+      o_prot.write_field_begin(&TFieldIdentifier::new("side_effects", TType::List, 111))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::Struct, fld_var.len() as i32))?;
+      for e in fld_var {
+        e.write_to_out_protocol(o_prot)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.contents_encryption_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("contents_encryption_version", TType::I16, 112))?;
+      o_prot.write_i16(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// SideEffect
+//
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SideEffect {
+  AdditionalAction(AdditionalAction),
+  TargetedNotify(TargetedNotify),
+  PinConversations(PinConversations),
+  SetNicknames(SetNicknames),
+  SetVerifiedUsers(SetVerifiedUsers),
+  SenderPrivilege(SenderPrivilege),
+  ValidatePaymentToken(ValidatePaymentToken),
+}
+
+impl TSerializable for SideEffect {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SideEffect> {
+    let mut ret: Option<SideEffect> = None;
+    let mut received_field_count = 0;
+    let mut total_field_count = 0;
+    i_prot.read_struct_begin()?;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = AdditionalAction::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::AdditionalAction(val));
+          }
+          received_field_count += 1;
+        },
+        2 => {
+          let val = TargetedNotify::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::TargetedNotify(val));
+          }
+          received_field_count += 1;
+        },
+        3 => {
+          let val = PinConversations::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::PinConversations(val));
+          }
+          received_field_count += 1;
+        },
+        4 => {
+          let val = SetNicknames::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::SetNicknames(val));
+          }
+          received_field_count += 1;
+        },
+        5 => {
+          let val = SetVerifiedUsers::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::SetVerifiedUsers(val));
+          }
+          received_field_count += 1;
+        },
+        6 => {
+          let val = SenderPrivilege::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::SenderPrivilege(val));
+          }
+          received_field_count += 1;
+        },
+        7 => {
+          let val = ValidatePaymentToken::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(SideEffect::ValidatePaymentToken(val));
+          }
+          received_field_count += 1;
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      total_field_count += 1;
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    if total_field_count == 0 {
+      Err(
+        thrift::Error::Protocol(
+          ProtocolError::new(
+            ProtocolErrorKind::EmptyUnion,
+            "received empty union from remote SideEffect"
+          )
+        )
+      )
+    } else if received_field_count > 1 {
+      Err(
+        thrift::Error::Protocol(
+          ProtocolError::new(
+            ProtocolErrorKind::InvalidData,
+            "received multiple fields for union from remote SideEffect"
+          )
+        )
+      )
+    } else if received_field_count == 0 {
+      Err(
+        thrift::Error::Protocol(
+          ProtocolError::new(
+            ProtocolErrorKind::UnknownUnionVariant,
+            "received union with unknown variant from remote SideEffect"
+          )
+        )
+      )
+    } else if let Some(ret) = ret {
+      Ok(ret)
+    } else {
+      Err(
+        thrift::Error::Protocol(
+          ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")
+        )
+      )
+    }
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("SideEffect");
+    o_prot.write_struct_begin(&struct_ident)?;
+    match *self {
+      SideEffect::AdditionalAction(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("additional_action", TType::I32, 1))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      SideEffect::TargetedNotify(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("targeted_notify", TType::Struct, 2))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      SideEffect::PinConversations(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("pin_conversations", TType::Struct, 3))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      SideEffect::SetNicknames(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("set_nicknames", TType::Struct, 4))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      SideEffect::SetVerifiedUsers(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("set_verified_users", TType::Struct, 5))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      SideEffect::SenderPrivilege(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("sender_privilege", TType::Struct, 6))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      SideEffect::ValidatePaymentToken(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("validate_payment_token", TType::Struct, 7))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+    }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
   }
@@ -756,10 +1702,11 @@ pub struct GroupCreate {
   pub conversation_key_version: Option<String>,
   pub is_legacy_group_upgrade: Option<bool>,
   pub ttl_msec: Option<i64>,
+  pub group_type: Option<GroupType>,
 }
 
 impl GroupCreate {
-  pub fn new<F1, F2, F3, F4, F5, F6, F7>(member_ids: F1, admin_ids: F2, title: F3, avatar_url: F4, conversation_key_version: F5, is_legacy_group_upgrade: F6, ttl_msec: F7) -> GroupCreate where F1: Into<Option<Vec<String>>>, F2: Into<Option<Vec<String>>>, F3: Into<Option<String>>, F4: Into<Option<String>>, F5: Into<Option<String>>, F6: Into<Option<bool>>, F7: Into<Option<i64>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8>(member_ids: F1, admin_ids: F2, title: F3, avatar_url: F4, conversation_key_version: F5, is_legacy_group_upgrade: F6, ttl_msec: F7, group_type: F8) -> GroupCreate where F1: Into<Option<Vec<String>>>, F2: Into<Option<Vec<String>>>, F3: Into<Option<String>>, F4: Into<Option<String>>, F5: Into<Option<String>>, F6: Into<Option<bool>>, F7: Into<Option<i64>>, F8: Into<Option<GroupType>> {
     GroupCreate {
       member_ids: member_ids.into(),
       admin_ids: admin_ids.into(),
@@ -768,6 +1715,7 @@ impl GroupCreate {
       conversation_key_version: conversation_key_version.into(),
       is_legacy_group_upgrade: is_legacy_group_upgrade.into(),
       ttl_msec: ttl_msec.into(),
+      group_type: group_type.into(),
     }
   }
 }
@@ -782,6 +1730,7 @@ impl TSerializable for GroupCreate {
     let mut f_5: Option<String> = None;
     let mut f_6: Option<bool> = None;
     let mut f_7: Option<i64> = None;
+    let mut f_8: Option<GroupType> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -793,8 +1742,8 @@ impl TSerializable for GroupCreate {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_2 = i_prot.read_string()?;
-            val.push(list_elem_2);
+            let list_elem_10 = i_prot.read_string()?;
+            val.push(list_elem_10);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -803,8 +1752,8 @@ impl TSerializable for GroupCreate {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_3 = i_prot.read_string()?;
-            val.push(list_elem_3);
+            let list_elem_11 = i_prot.read_string()?;
+            val.push(list_elem_11);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);
@@ -829,6 +1778,10 @@ impl TSerializable for GroupCreate {
           let val = i_prot.read_i64()?;
           f_7 = Some(val);
         },
+        8 => {
+          let val = GroupType::read_from_in_protocol(i_prot)?;
+          f_8 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -844,6 +1797,7 @@ impl TSerializable for GroupCreate {
       conversation_key_version: f_5,
       is_legacy_group_upgrade: f_6,
       ttl_msec: f_7,
+      group_type: f_8,
     };
     Ok(ret)
   }
@@ -891,6 +1845,11 @@ impl TSerializable for GroupCreate {
     if let Some(fld_var) = self.ttl_msec {
       o_prot.write_field_begin(&TFieldIdentifier::new("ttl_msec", TType::I64, 7))?;
       o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.group_type {
+      o_prot.write_field_begin(&TFieldIdentifier::new("group_type", TType::I32, 8))?;
+      fld_var.write_to_out_protocol(o_prot)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -1039,6 +1998,76 @@ impl TSerializable for GroupAvatarUrlChange {
 }
 
 //
+// GroupDescriptionChange
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GroupDescriptionChange {
+  pub custom_description: Option<String>,
+  pub conversation_key_version: Option<String>,
+}
+
+impl GroupDescriptionChange {
+  pub fn new<F1, F2>(custom_description: F1, conversation_key_version: F2) -> GroupDescriptionChange where F1: Into<Option<String>>, F2: Into<Option<String>> {
+    GroupDescriptionChange {
+      custom_description: custom_description.into(),
+      conversation_key_version: conversation_key_version.into(),
+    }
+  }
+}
+
+impl TSerializable for GroupDescriptionChange {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GroupDescriptionChange> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    let mut f_2: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_string()?;
+          f_2 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = GroupDescriptionChange {
+      custom_description: f_1,
+      conversation_key_version: f_2,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("GroupDescriptionChange");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.custom_description {
+      o_prot.write_field_begin(&TFieldIdentifier::new("custom_description", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.conversation_key_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_key_version", TType::String, 2))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // GroupAdminAddChange
 //
 
@@ -1070,8 +2099,8 @@ impl TSerializable for GroupAdminAddChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_4 = i_prot.read_string()?;
-            val.push(list_elem_4);
+            let list_elem_12 = i_prot.read_string()?;
+            val.push(list_elem_12);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -1121,11 +2150,15 @@ pub struct GroupMemberAddChange {
   pub current_pending_member_ids: Option<Vec<String>>,
   pub screen_capture_blocking_enabled: Option<bool>,
   pub group_invite_enable: Option<Box<GroupInviteEnable>>,
-  pub admin_settings: Option<Box<GroupAdminSettings>>,
+  pub admin_settings: Option<Box<GroupMemberAdminSettings>>,
+  pub current_pmk_bundle: Option<BTreeMap<String, Vec<u8>>>,
+  pub group_created_by_user_id: Option<String>,
+  pub rotated_pmk_bundle: Option<BTreeMap<String, Box<PinnedMessageKey>>>,
+  pub current_description: Option<String>,
 }
 
 impl GroupMemberAddChange {
-  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F11, F12>(member_ids: F1, current_member_ids: F2, current_admin_ids: F3, current_title: F4, current_avatar_url: F5, conversation_key_version: F6, current_ttl_msec: F7, current_pending_member_ids: F8, screen_capture_blocking_enabled: F9, group_invite_enable: F11, admin_settings: F12) -> GroupMemberAddChange where F1: Into<Option<Vec<String>>>, F2: Into<Option<Vec<String>>>, F3: Into<Option<Vec<String>>>, F4: Into<Option<String>>, F5: Into<Option<String>>, F6: Into<Option<String>>, F7: Into<Option<i64>>, F8: Into<Option<Vec<String>>>, F9: Into<Option<bool>>, F11: Into<Option<Box<GroupInviteEnable>>>, F12: Into<Option<Box<GroupAdminSettings>>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F11, F12, F13, F14, F15, F16>(member_ids: F1, current_member_ids: F2, current_admin_ids: F3, current_title: F4, current_avatar_url: F5, conversation_key_version: F6, current_ttl_msec: F7, current_pending_member_ids: F8, screen_capture_blocking_enabled: F9, group_invite_enable: F11, admin_settings: F12, current_pmk_bundle: F13, group_created_by_user_id: F14, rotated_pmk_bundle: F15, current_description: F16) -> GroupMemberAddChange where F1: Into<Option<Vec<String>>>, F2: Into<Option<Vec<String>>>, F3: Into<Option<Vec<String>>>, F4: Into<Option<String>>, F5: Into<Option<String>>, F6: Into<Option<String>>, F7: Into<Option<i64>>, F8: Into<Option<Vec<String>>>, F9: Into<Option<bool>>, F11: Into<Option<Box<GroupInviteEnable>>>, F12: Into<Option<Box<GroupMemberAdminSettings>>>, F13: Into<Option<BTreeMap<String, Vec<u8>>>>, F14: Into<Option<String>>, F15: Into<Option<BTreeMap<String, Box<PinnedMessageKey>>>>, F16: Into<Option<String>> {
     GroupMemberAddChange {
       member_ids: member_ids.into(),
       current_member_ids: current_member_ids.into(),
@@ -1138,6 +2171,10 @@ impl GroupMemberAddChange {
       screen_capture_blocking_enabled: screen_capture_blocking_enabled.into(),
       group_invite_enable: group_invite_enable.into(),
       admin_settings: admin_settings.into(),
+      current_pmk_bundle: current_pmk_bundle.into(),
+      group_created_by_user_id: group_created_by_user_id.into(),
+      rotated_pmk_bundle: rotated_pmk_bundle.into(),
+      current_description: current_description.into(),
     }
   }
 }
@@ -1155,7 +2192,11 @@ impl TSerializable for GroupMemberAddChange {
     let mut f_8: Option<Vec<String>> = None;
     let mut f_9: Option<bool> = None;
     let mut f_11: Option<Box<GroupInviteEnable>> = None;
-    let mut f_12: Option<Box<GroupAdminSettings>> = None;
+    let mut f_12: Option<Box<GroupMemberAdminSettings>> = None;
+    let mut f_13: Option<BTreeMap<String, Vec<u8>>> = None;
+    let mut f_14: Option<String> = None;
+    let mut f_15: Option<BTreeMap<String, Box<PinnedMessageKey>>> = None;
+    let mut f_16: Option<String> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -1167,8 +2208,8 @@ impl TSerializable for GroupMemberAddChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_5 = i_prot.read_string()?;
-            val.push(list_elem_5);
+            let list_elem_13 = i_prot.read_string()?;
+            val.push(list_elem_13);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -1177,8 +2218,8 @@ impl TSerializable for GroupMemberAddChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_6 = i_prot.read_string()?;
-            val.push(list_elem_6);
+            let list_elem_14 = i_prot.read_string()?;
+            val.push(list_elem_14);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);
@@ -1187,8 +2228,8 @@ impl TSerializable for GroupMemberAddChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_7 = i_prot.read_string()?;
-            val.push(list_elem_7);
+            let list_elem_15 = i_prot.read_string()?;
+            val.push(list_elem_15);
           }
           i_prot.read_list_end()?;
           f_3 = Some(val);
@@ -1213,8 +2254,8 @@ impl TSerializable for GroupMemberAddChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_8 = i_prot.read_string()?;
-            val.push(list_elem_8);
+            let list_elem_16 = i_prot.read_string()?;
+            val.push(list_elem_16);
           }
           i_prot.read_list_end()?;
           f_8 = Some(val);
@@ -1228,8 +2269,38 @@ impl TSerializable for GroupMemberAddChange {
           f_11 = Some(val);
         },
         12 => {
-          let val = Box::new(GroupAdminSettings::read_from_in_protocol(i_prot)?);
+          let val = Box::new(GroupMemberAdminSettings::read_from_in_protocol(i_prot)?);
           f_12 = Some(val);
+        },
+        13 => {
+          let map_ident = i_prot.read_map_begin()?;
+          let mut val: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+          for _ in 0..map_ident.size {
+            let map_key_17 = i_prot.read_string()?;
+            let map_val_18 = i_prot.read_bytes()?;
+            val.insert(map_key_17, map_val_18);
+          }
+          i_prot.read_map_end()?;
+          f_13 = Some(val);
+        },
+        14 => {
+          let val = i_prot.read_string()?;
+          f_14 = Some(val);
+        },
+        15 => {
+          let map_ident = i_prot.read_map_begin()?;
+          let mut val: BTreeMap<String, Box<PinnedMessageKey>> = BTreeMap::new();
+          for _ in 0..map_ident.size {
+            let map_key_19 = i_prot.read_string()?;
+            let map_val_20 = Box::new(PinnedMessageKey::read_from_in_protocol(i_prot)?);
+            val.insert(map_key_19, map_val_20);
+          }
+          i_prot.read_map_end()?;
+          f_15 = Some(val);
+        },
+        16 => {
+          let val = i_prot.read_string()?;
+          f_16 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -1250,6 +2321,10 @@ impl TSerializable for GroupMemberAddChange {
       screen_capture_blocking_enabled: f_9,
       group_invite_enable: f_11,
       admin_settings: f_12,
+      current_pmk_bundle: f_13,
+      group_created_by_user_id: f_14,
+      rotated_pmk_bundle: f_15,
+      current_description: f_16,
     };
     Ok(ret)
   }
@@ -1327,6 +2402,36 @@ impl TSerializable for GroupMemberAddChange {
       fld_var.write_to_out_protocol(o_prot)?;
       o_prot.write_field_end()?
     }
+    if let Some(ref fld_var) = self.current_pmk_bundle {
+      o_prot.write_field_begin(&TFieldIdentifier::new("current_pmk_bundle", TType::Map, 13))?;
+      o_prot.write_map_begin(&TMapIdentifier::new(TType::String, TType::String, fld_var.len() as i32))?;
+      for (k, v) in fld_var {
+        o_prot.write_string(k)?;
+        o_prot.write_bytes(v)?;
+      }
+      o_prot.write_map_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.group_created_by_user_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("group_created_by_user_id", TType::String, 14))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.rotated_pmk_bundle {
+      o_prot.write_field_begin(&TFieldIdentifier::new("rotated_pmk_bundle", TType::Map, 15))?;
+      o_prot.write_map_begin(&TMapIdentifier::new(TType::String, TType::Struct, fld_var.len() as i32))?;
+      for (k, v) in fld_var {
+        o_prot.write_string(k)?;
+        v.write_to_out_protocol(o_prot)?;
+      }
+      o_prot.write_map_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.current_description {
+      o_prot.write_field_begin(&TFieldIdentifier::new("current_description", TType::String, 16))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
   }
@@ -1364,8 +2469,8 @@ impl TSerializable for GroupAdminRemoveChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_9 = i_prot.read_string()?;
-            val.push(list_elem_9);
+            let list_elem_21 = i_prot.read_string()?;
+            val.push(list_elem_21);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -1406,12 +2511,14 @@ impl TSerializable for GroupAdminRemoveChange {
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GroupMemberRemoveChange {
   pub member_ids: Option<Vec<String>>,
+  pub conversation_key_version: Option<String>,
 }
 
 impl GroupMemberRemoveChange {
-  pub fn new<F1>(member_ids: F1) -> GroupMemberRemoveChange where F1: Into<Option<Vec<String>>> {
+  pub fn new<F1, F2>(member_ids: F1, conversation_key_version: F2) -> GroupMemberRemoveChange where F1: Into<Option<Vec<String>>>, F2: Into<Option<String>> {
     GroupMemberRemoveChange {
       member_ids: member_ids.into(),
+      conversation_key_version: conversation_key_version.into(),
     }
   }
 }
@@ -1420,6 +2527,7 @@ impl TSerializable for GroupMemberRemoveChange {
   fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GroupMemberRemoveChange> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<String>> = None;
+    let mut f_2: Option<String> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -1431,11 +2539,15 @@ impl TSerializable for GroupMemberRemoveChange {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_10 = i_prot.read_string()?;
-            val.push(list_elem_10);
+            let list_elem_22 = i_prot.read_string()?;
+            val.push(list_elem_22);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_string()?;
+          f_2 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -1446,6 +2558,7 @@ impl TSerializable for GroupMemberRemoveChange {
     i_prot.read_struct_end()?;
     let ret = GroupMemberRemoveChange {
       member_ids: f_1,
+      conversation_key_version: f_2,
     };
     Ok(ret)
   }
@@ -1459,6 +2572,11 @@ impl TSerializable for GroupMemberRemoveChange {
         o_prot.write_string(e)?;
       }
       o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.conversation_key_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_key_version", TType::String, 2))?;
+      o_prot.write_string(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -1695,8 +2813,8 @@ impl TSerializable for GroupJoinReject {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_11 = i_prot.read_string()?;
-            val.push(list_elem_11);
+            let list_elem_23 = i_prot.read_string()?;
+            val.push(list_elem_23);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -1723,128 +2841,6 @@ impl TSerializable for GroupJoinReject {
         o_prot.write_string(e)?;
       }
       o_prot.write_list_end()?;
-      o_prot.write_field_end()?
-    }
-    o_prot.write_field_stop()?;
-    o_prot.write_struct_end()
-  }
-}
-
-//
-// GroupAdminSettings
-//
-
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct GroupAdminSettings {
-  pub edit_group_info: Option<bool>,
-  pub edit_message_ttl: Option<bool>,
-  pub block_screen_capture: Option<bool>,
-  pub add_member: Option<bool>,
-  pub send_message: Option<bool>,
-  pub start_call: Option<bool>,
-}
-
-impl GroupAdminSettings {
-  pub fn new<F1, F2, F3, F4, F5, F6>(edit_group_info: F1, edit_message_ttl: F2, block_screen_capture: F3, add_member: F4, send_message: F5, start_call: F6) -> GroupAdminSettings where F1: Into<Option<bool>>, F2: Into<Option<bool>>, F3: Into<Option<bool>>, F4: Into<Option<bool>>, F5: Into<Option<bool>>, F6: Into<Option<bool>> {
-    GroupAdminSettings {
-      edit_group_info: edit_group_info.into(),
-      edit_message_ttl: edit_message_ttl.into(),
-      block_screen_capture: block_screen_capture.into(),
-      add_member: add_member.into(),
-      send_message: send_message.into(),
-      start_call: start_call.into(),
-    }
-  }
-}
-
-impl TSerializable for GroupAdminSettings {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GroupAdminSettings> {
-    i_prot.read_struct_begin()?;
-    let mut f_1: Option<bool> = None;
-    let mut f_2: Option<bool> = None;
-    let mut f_3: Option<bool> = None;
-    let mut f_4: Option<bool> = None;
-    let mut f_5: Option<bool> = None;
-    let mut f_6: Option<bool> = None;
-    loop {
-      let field_ident = i_prot.read_field_begin()?;
-      if field_ident.field_type == TType::Stop {
-        break;
-      }
-      let field_id = field_id(&field_ident)?;
-      match field_id {
-        1 => {
-          let val = i_prot.read_bool()?;
-          f_1 = Some(val);
-        },
-        2 => {
-          let val = i_prot.read_bool()?;
-          f_2 = Some(val);
-        },
-        3 => {
-          let val = i_prot.read_bool()?;
-          f_3 = Some(val);
-        },
-        4 => {
-          let val = i_prot.read_bool()?;
-          f_4 = Some(val);
-        },
-        5 => {
-          let val = i_prot.read_bool()?;
-          f_5 = Some(val);
-        },
-        6 => {
-          let val = i_prot.read_bool()?;
-          f_6 = Some(val);
-        },
-        _ => {
-          i_prot.skip(field_ident.field_type)?;
-        },
-      };
-      i_prot.read_field_end()?;
-    }
-    i_prot.read_struct_end()?;
-    let ret = GroupAdminSettings {
-      edit_group_info: f_1,
-      edit_message_ttl: f_2,
-      block_screen_capture: f_3,
-      add_member: f_4,
-      send_message: f_5,
-      start_call: f_6,
-    };
-    Ok(ret)
-  }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
-    let struct_ident = TStructIdentifier::new("GroupAdminSettings");
-    o_prot.write_struct_begin(&struct_ident)?;
-    if let Some(fld_var) = self.edit_group_info {
-      o_prot.write_field_begin(&TFieldIdentifier::new("edit_group_info", TType::Bool, 1))?;
-      o_prot.write_bool(fld_var)?;
-      o_prot.write_field_end()?
-    }
-    if let Some(fld_var) = self.edit_message_ttl {
-      o_prot.write_field_begin(&TFieldIdentifier::new("edit_message_ttl", TType::Bool, 2))?;
-      o_prot.write_bool(fld_var)?;
-      o_prot.write_field_end()?
-    }
-    if let Some(fld_var) = self.block_screen_capture {
-      o_prot.write_field_begin(&TFieldIdentifier::new("block_screen_capture", TType::Bool, 3))?;
-      o_prot.write_bool(fld_var)?;
-      o_prot.write_field_end()?
-    }
-    if let Some(fld_var) = self.add_member {
-      o_prot.write_field_begin(&TFieldIdentifier::new("add_member", TType::Bool, 4))?;
-      o_prot.write_bool(fld_var)?;
-      o_prot.write_field_end()?
-    }
-    if let Some(fld_var) = self.send_message {
-      o_prot.write_field_begin(&TFieldIdentifier::new("send_message", TType::Bool, 5))?;
-      o_prot.write_bool(fld_var)?;
-      o_prot.write_field_end()?
-    }
-    if let Some(fld_var) = self.start_call {
-      o_prot.write_field_begin(&TFieldIdentifier::new("start_call", TType::Bool, 6))?;
-      o_prot.write_bool(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -1975,6 +2971,128 @@ impl TSerializable for GroupAdminSettingsChange {
 }
 
 //
+// GroupMemberAdminSettings
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GroupMemberAdminSettings {
+  pub edit_group_info: Option<bool>,
+  pub edit_message_ttl: Option<bool>,
+  pub block_screen_capture: Option<bool>,
+  pub add_member: Option<bool>,
+  pub send_message: Option<bool>,
+  pub start_call: Option<bool>,
+}
+
+impl GroupMemberAdminSettings {
+  pub fn new<F1, F2, F3, F4, F5, F6>(edit_group_info: F1, edit_message_ttl: F2, block_screen_capture: F3, add_member: F4, send_message: F5, start_call: F6) -> GroupMemberAdminSettings where F1: Into<Option<bool>>, F2: Into<Option<bool>>, F3: Into<Option<bool>>, F4: Into<Option<bool>>, F5: Into<Option<bool>>, F6: Into<Option<bool>> {
+    GroupMemberAdminSettings {
+      edit_group_info: edit_group_info.into(),
+      edit_message_ttl: edit_message_ttl.into(),
+      block_screen_capture: block_screen_capture.into(),
+      add_member: add_member.into(),
+      send_message: send_message.into(),
+      start_call: start_call.into(),
+    }
+  }
+}
+
+impl TSerializable for GroupMemberAdminSettings {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GroupMemberAdminSettings> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<bool> = None;
+    let mut f_2: Option<bool> = None;
+    let mut f_3: Option<bool> = None;
+    let mut f_4: Option<bool> = None;
+    let mut f_5: Option<bool> = None;
+    let mut f_6: Option<bool> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bool()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_bool()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_bool()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_bool()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_bool()?;
+          f_5 = Some(val);
+        },
+        6 => {
+          let val = i_prot.read_bool()?;
+          f_6 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = GroupMemberAdminSettings {
+      edit_group_info: f_1,
+      edit_message_ttl: f_2,
+      block_screen_capture: f_3,
+      add_member: f_4,
+      send_message: f_5,
+      start_call: f_6,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("GroupMemberAdminSettings");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.edit_group_info {
+      o_prot.write_field_begin(&TFieldIdentifier::new("edit_group_info", TType::Bool, 1))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.edit_message_ttl {
+      o_prot.write_field_begin(&TFieldIdentifier::new("edit_message_ttl", TType::Bool, 2))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.block_screen_capture {
+      o_prot.write_field_begin(&TFieldIdentifier::new("block_screen_capture", TType::Bool, 3))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.add_member {
+      o_prot.write_field_begin(&TFieldIdentifier::new("add_member", TType::Bool, 4))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.send_message {
+      o_prot.write_field_begin(&TFieldIdentifier::new("send_message", TType::Bool, 5))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.start_call {
+      o_prot.write_field_begin(&TFieldIdentifier::new("start_call", TType::Bool, 6))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // GroupChange
 //
 
@@ -1992,6 +3110,7 @@ pub enum GroupChange {
   GroupJoinRequest(GroupJoinRequest),
   GroupJoinReject(GroupJoinReject),
   GroupAdminSettingsChange(GroupAdminSettingsChange),
+  GroupDescriptionChange(GroupDescriptionChange),
 }
 
 impl TSerializable for GroupChange {
@@ -2088,6 +3207,13 @@ impl TSerializable for GroupChange {
           let val = GroupAdminSettingsChange::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(GroupChange::GroupAdminSettingsChange(val));
+          }
+          received_field_count += 1;
+        },
+        14 => {
+          let val = GroupDescriptionChange::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(GroupChange::GroupDescriptionChange(val));
           }
           received_field_count += 1;
         },
@@ -2197,6 +3323,11 @@ impl TSerializable for GroupChange {
       },
       GroupChange::GroupAdminSettingsChange(ref f) => {
         o_prot.write_field_begin(&TFieldIdentifier::new("group_admin_settings_change", TType::Struct, 12))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      GroupChange::GroupDescriptionChange(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("group_description_change", TType::Struct, 14))?;
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
@@ -2408,8 +3539,8 @@ impl TSerializable for ConversationKeyChangeEvent {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<ConversationParticipantKey> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_12 = ConversationParticipantKey::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_12);
+            let list_elem_24 = ConversationParticipantKey::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_24);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);
@@ -2470,26 +3601,35 @@ impl TSerializable for ConversationKeyChangeEvent {
 }
 
 //
-// MessageTypingEvent
+// GrokBotMetadata
 //
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct MessageTypingEvent {
-  pub conversation_id: Option<String>,
+pub struct GrokBotMetadata {
+  pub agent_id: Option<String>,
+  pub name: Option<String>,
+  pub avatar_color: Option<String>,
+  pub avatar_shape: Option<String>,
 }
 
-impl MessageTypingEvent {
-  pub fn new<F1>(conversation_id: F1) -> MessageTypingEvent where F1: Into<Option<String>> {
-    MessageTypingEvent {
-      conversation_id: conversation_id.into(),
+impl GrokBotMetadata {
+  pub fn new<F1, F2, F3, F4>(agent_id: F1, name: F2, avatar_color: F3, avatar_shape: F4) -> GrokBotMetadata where F1: Into<Option<String>>, F2: Into<Option<String>>, F3: Into<Option<String>>, F4: Into<Option<String>> {
+    GrokBotMetadata {
+      agent_id: agent_id.into(),
+      name: name.into(),
+      avatar_color: avatar_color.into(),
+      avatar_shape: avatar_shape.into(),
     }
   }
 }
 
-impl TSerializable for MessageTypingEvent {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageTypingEvent> {
+impl TSerializable for GrokBotMetadata {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GrokBotMetadata> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<String> = None;
+    let mut f_2: Option<String> = None;
+    let mut f_3: Option<String> = None;
+    let mut f_4: Option<String> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -2501,6 +3641,121 @@ impl TSerializable for MessageTypingEvent {
           let val = i_prot.read_string()?;
           f_1 = Some(val);
         },
+        2 => {
+          let val = i_prot.read_string()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_string()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_string()?;
+          f_4 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = GrokBotMetadata {
+      agent_id: f_1,
+      name: f_2,
+      avatar_color: f_3,
+      avatar_shape: f_4,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("GrokBotMetadata");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.agent_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("agent_id", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.name {
+      o_prot.write_field_begin(&TFieldIdentifier::new("name", TType::String, 2))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.avatar_color {
+      o_prot.write_field_begin(&TFieldIdentifier::new("avatar_color", TType::String, 3))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.avatar_shape {
+      o_prot.write_field_begin(&TFieldIdentifier::new("avatar_shape", TType::String, 4))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// MessageTypingEvent
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MessageTypingEvent {
+  pub conversation_id: Option<String>,
+  pub activity_type: Option<MessageActivityType>,
+  pub is_grok: Option<bool>,
+  pub created_at_msec: Option<String>,
+  pub grok_bot: Option<GrokBotMetadata>,
+}
+
+impl MessageTypingEvent {
+  pub fn new<F1, F2, F3, F4, F5>(conversation_id: F1, activity_type: F2, is_grok: F3, created_at_msec: F4, grok_bot: F5) -> MessageTypingEvent where F1: Into<Option<String>>, F2: Into<Option<MessageActivityType>>, F3: Into<Option<bool>>, F4: Into<Option<String>>, F5: Into<Option<GrokBotMetadata>> {
+    MessageTypingEvent {
+      conversation_id: conversation_id.into(),
+      activity_type: activity_type.into(),
+      is_grok: is_grok.into(),
+      created_at_msec: created_at_msec.into(),
+      grok_bot: grok_bot.into(),
+    }
+  }
+}
+
+impl TSerializable for MessageTypingEvent {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageTypingEvent> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    let mut f_2: Option<MessageActivityType> = None;
+    let mut f_3: Option<bool> = None;
+    let mut f_4: Option<String> = None;
+    let mut f_5: Option<GrokBotMetadata> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = MessageActivityType::read_from_in_protocol(i_prot)?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_bool()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_string()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = GrokBotMetadata::read_from_in_protocol(i_prot)?;
+          f_5 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -2510,6 +3765,10 @@ impl TSerializable for MessageTypingEvent {
     i_prot.read_struct_end()?;
     let ret = MessageTypingEvent {
       conversation_id: f_1,
+      activity_type: f_2,
+      is_grok: f_3,
+      created_at_msec: f_4,
+      grok_bot: f_5,
     };
     Ok(ret)
   }
@@ -2519,6 +3778,26 @@ impl TSerializable for MessageTypingEvent {
     if let Some(ref fld_var) = self.conversation_id {
       o_prot.write_field_begin(&TFieldIdentifier::new("conversation_id", TType::String, 1))?;
       o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.activity_type {
+      o_prot.write_field_begin(&TFieldIdentifier::new("activity_type", TType::I32, 2))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.is_grok {
+      o_prot.write_field_begin(&TFieldIdentifier::new("is_grok", TType::Bool, 3))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.created_at_msec {
+      o_prot.write_field_begin(&TFieldIdentifier::new("created_at_msec", TType::String, 4))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.grok_bot {
+      o_prot.write_field_begin(&TFieldIdentifier::new("grok_bot", TType::Struct, 5))?;
+      fld_var.write_to_out_protocol(o_prot)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -2604,13 +3883,15 @@ impl TSerializable for MessageFailureEvent {
 pub struct MessageDeleteEvent {
   pub sequence_ids: Option<Vec<String>>,
   pub delete_message_action: Option<DeleteMessageAction>,
+  pub pme_sequence_ids: Option<BTreeMap<String, String>>,
 }
 
 impl MessageDeleteEvent {
-  pub fn new<F1, F2>(sequence_ids: F1, delete_message_action: F2) -> MessageDeleteEvent where F1: Into<Option<Vec<String>>>, F2: Into<Option<DeleteMessageAction>> {
+  pub fn new<F1, F2, F3>(sequence_ids: F1, delete_message_action: F2, pme_sequence_ids: F3) -> MessageDeleteEvent where F1: Into<Option<Vec<String>>>, F2: Into<Option<DeleteMessageAction>>, F3: Into<Option<BTreeMap<String, String>>> {
     MessageDeleteEvent {
       sequence_ids: sequence_ids.into(),
       delete_message_action: delete_message_action.into(),
+      pme_sequence_ids: pme_sequence_ids.into(),
     }
   }
 }
@@ -2620,6 +3901,7 @@ impl TSerializable for MessageDeleteEvent {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<String>> = None;
     let mut f_2: Option<DeleteMessageAction> = None;
+    let mut f_3: Option<BTreeMap<String, String>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -2631,8 +3913,8 @@ impl TSerializable for MessageDeleteEvent {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_13 = i_prot.read_string()?;
-            val.push(list_elem_13);
+            let list_elem_25 = i_prot.read_string()?;
+            val.push(list_elem_25);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -2640,6 +3922,17 @@ impl TSerializable for MessageDeleteEvent {
         2 => {
           let val = DeleteMessageAction::read_from_in_protocol(i_prot)?;
           f_2 = Some(val);
+        },
+        3 => {
+          let map_ident = i_prot.read_map_begin()?;
+          let mut val: BTreeMap<String, String> = BTreeMap::new();
+          for _ in 0..map_ident.size {
+            let map_key_26 = i_prot.read_string()?;
+            let map_val_27 = i_prot.read_string()?;
+            val.insert(map_key_26, map_val_27);
+          }
+          i_prot.read_map_end()?;
+          f_3 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -2651,6 +3944,7 @@ impl TSerializable for MessageDeleteEvent {
     let ret = MessageDeleteEvent {
       sequence_ids: f_1,
       delete_message_action: f_2,
+      pme_sequence_ids: f_3,
     };
     Ok(ret)
   }
@@ -2669,6 +3963,614 @@ impl TSerializable for MessageDeleteEvent {
     if let Some(ref fld_var) = self.delete_message_action {
       o_prot.write_field_begin(&TFieldIdentifier::new("delete_message_action", TType::I32, 2))?;
       fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.pme_sequence_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("pme_sequence_ids", TType::Map, 3))?;
+      o_prot.write_map_begin(&TMapIdentifier::new(TType::String, TType::String, fld_var.len() as i32))?;
+      for (k, v) in fld_var {
+        o_prot.write_string(k)?;
+        o_prot.write_string(v)?;
+      }
+      o_prot.write_map_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// MessageKeyPinInfo
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MessageKeyPinInfo {
+  pub encrypted_message_key: Option<Vec<u8>>,
+  pub edit_sequence_id: Option<i64>,
+  pub encrypted_edit_message_key: Option<Vec<u8>>,
+  pub message_event: Option<Vec<u8>>,
+  pub edit_message_event: Option<Vec<u8>>,
+}
+
+impl MessageKeyPinInfo {
+  pub fn new<F1, F2, F3, F4, F5>(encrypted_message_key: F1, edit_sequence_id: F2, encrypted_edit_message_key: F3, message_event: F4, edit_message_event: F5) -> MessageKeyPinInfo where F1: Into<Option<Vec<u8>>>, F2: Into<Option<i64>>, F3: Into<Option<Vec<u8>>>, F4: Into<Option<Vec<u8>>>, F5: Into<Option<Vec<u8>>> {
+    MessageKeyPinInfo {
+      encrypted_message_key: encrypted_message_key.into(),
+      edit_sequence_id: edit_sequence_id.into(),
+      encrypted_edit_message_key: encrypted_edit_message_key.into(),
+      message_event: message_event.into(),
+      edit_message_event: edit_message_event.into(),
+    }
+  }
+}
+
+impl TSerializable for MessageKeyPinInfo {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageKeyPinInfo> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<u8>> = None;
+    let mut f_2: Option<i64> = None;
+    let mut f_3: Option<Vec<u8>> = None;
+    let mut f_4: Option<Vec<u8>> = None;
+    let mut f_5: Option<Vec<u8>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bytes()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_i64()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_bytes()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_bytes()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_bytes()?;
+          f_5 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = MessageKeyPinInfo {
+      encrypted_message_key: f_1,
+      edit_sequence_id: f_2,
+      encrypted_edit_message_key: f_3,
+      message_event: f_4,
+      edit_message_event: f_5,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("MessageKeyPinInfo");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.encrypted_message_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_message_key", TType::String, 1))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.edit_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("edit_sequence_id", TType::I64, 2))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.encrypted_edit_message_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_edit_message_key", TType::String, 3))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.message_event {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_event", TType::String, 4))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.edit_message_event {
+      o_prot.write_field_begin(&TFieldIdentifier::new("edit_message_event", TType::String, 5))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// PinMessageEvent
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PinMessageEvent {
+  pub contents: Option<Vec<u8>>,
+  pub encrypted_pmk: Option<Vec<u8>>,
+  pub conversation_key_version: Option<String>,
+  pub message_sequence_id: Option<i64>,
+  pub sequence_id: Option<i64>,
+  pub ttl_msec: Option<i64>,
+  pub delivered_at_msec: Option<i64>,
+  pub message_key_pin_info: Option<MessageKeyPinInfo>,
+}
+
+impl PinMessageEvent {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8>(contents: F1, encrypted_pmk: F2, conversation_key_version: F3, message_sequence_id: F4, sequence_id: F5, ttl_msec: F6, delivered_at_msec: F7, message_key_pin_info: F8) -> PinMessageEvent where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<String>>, F4: Into<Option<i64>>, F5: Into<Option<i64>>, F6: Into<Option<i64>>, F7: Into<Option<i64>>, F8: Into<Option<MessageKeyPinInfo>> {
+    PinMessageEvent {
+      contents: contents.into(),
+      encrypted_pmk: encrypted_pmk.into(),
+      conversation_key_version: conversation_key_version.into(),
+      message_sequence_id: message_sequence_id.into(),
+      sequence_id: sequence_id.into(),
+      ttl_msec: ttl_msec.into(),
+      delivered_at_msec: delivered_at_msec.into(),
+      message_key_pin_info: message_key_pin_info.into(),
+    }
+  }
+}
+
+impl TSerializable for PinMessageEvent {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PinMessageEvent> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<u8>> = None;
+    let mut f_2: Option<Vec<u8>> = None;
+    let mut f_3: Option<String> = None;
+    let mut f_4: Option<i64> = None;
+    let mut f_5: Option<i64> = None;
+    let mut f_6: Option<i64> = None;
+    let mut f_7: Option<i64> = None;
+    let mut f_8: Option<MessageKeyPinInfo> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bytes()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_bytes()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_string()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_i64()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_i64()?;
+          f_5 = Some(val);
+        },
+        6 => {
+          let val = i_prot.read_i64()?;
+          f_6 = Some(val);
+        },
+        7 => {
+          let val = i_prot.read_i64()?;
+          f_7 = Some(val);
+        },
+        8 => {
+          let val = MessageKeyPinInfo::read_from_in_protocol(i_prot)?;
+          f_8 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = PinMessageEvent {
+      contents: f_1,
+      encrypted_pmk: f_2,
+      conversation_key_version: f_3,
+      message_sequence_id: f_4,
+      sequence_id: f_5,
+      ttl_msec: f_6,
+      delivered_at_msec: f_7,
+      message_key_pin_info: f_8,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("PinMessageEvent");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.contents {
+      o_prot.write_field_begin(&TFieldIdentifier::new("contents", TType::String, 1))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.encrypted_pmk {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_pmk", TType::String, 2))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.conversation_key_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_key_version", TType::String, 3))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.message_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_sequence_id", TType::I64, 4))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("sequence_id", TType::I64, 5))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.ttl_msec {
+      o_prot.write_field_begin(&TFieldIdentifier::new("ttl_msec", TType::I64, 6))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.delivered_at_msec {
+      o_prot.write_field_begin(&TFieldIdentifier::new("delivered_at_msec", TType::I64, 7))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.message_key_pin_info {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_key_pin_info", TType::Struct, 8))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// UnpinMessageEntry
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct UnpinMessageEntry {
+  pub pme_sequence_id: Option<i64>,
+  pub message_sequence_id: Option<i64>,
+}
+
+impl UnpinMessageEntry {
+  pub fn new<F1, F2>(pme_sequence_id: F1, message_sequence_id: F2) -> UnpinMessageEntry where F1: Into<Option<i64>>, F2: Into<Option<i64>> {
+    UnpinMessageEntry {
+      pme_sequence_id: pme_sequence_id.into(),
+      message_sequence_id: message_sequence_id.into(),
+    }
+  }
+}
+
+impl TSerializable for UnpinMessageEntry {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<UnpinMessageEntry> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<i64> = None;
+    let mut f_2: Option<i64> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_i64()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_i64()?;
+          f_2 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = UnpinMessageEntry {
+      pme_sequence_id: f_1,
+      message_sequence_id: f_2,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("UnpinMessageEntry");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.pme_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("pme_sequence_id", TType::I64, 1))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.message_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_sequence_id", TType::I64, 2))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// UnpinMessageEvent
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct UnpinMessageEvent {
+  pub pme_sequence_id: Option<i64>,
+  pub message_sequence_id: Option<i64>,
+  pub entries: Option<Vec<UnpinMessageEntry>>,
+}
+
+impl UnpinMessageEvent {
+  pub fn new<F1, F2, F3>(pme_sequence_id: F1, message_sequence_id: F2, entries: F3) -> UnpinMessageEvent where F1: Into<Option<i64>>, F2: Into<Option<i64>>, F3: Into<Option<Vec<UnpinMessageEntry>>> {
+    UnpinMessageEvent {
+      pme_sequence_id: pme_sequence_id.into(),
+      message_sequence_id: message_sequence_id.into(),
+      entries: entries.into(),
+    }
+  }
+}
+
+impl TSerializable for UnpinMessageEvent {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<UnpinMessageEvent> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<i64> = None;
+    let mut f_2: Option<i64> = None;
+    let mut f_3: Option<Vec<UnpinMessageEntry>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_i64()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_i64()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<UnpinMessageEntry> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_28 = UnpinMessageEntry::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_28);
+          }
+          i_prot.read_list_end()?;
+          f_3 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = UnpinMessageEvent {
+      pme_sequence_id: f_1,
+      message_sequence_id: f_2,
+      entries: f_3,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("UnpinMessageEvent");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.pme_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("pme_sequence_id", TType::I64, 1))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.message_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_sequence_id", TType::I64, 2))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.entries {
+      o_prot.write_field_begin(&TFieldIdentifier::new("entries", TType::List, 3))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::Struct, fld_var.len() as i32))?;
+      for e in fld_var {
+        e.write_to_out_protocol(o_prot)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// PinnedMessageKey
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PinnedMessageKey {
+  pub pme_sequence_id: Option<i64>,
+  pub conversation_key_version: Option<String>,
+  pub encrypted_pmk: Option<Vec<u8>>,
+  pub encrypted_message_key: Option<Vec<u8>>,
+  pub encrypted_edit_message_key: Option<Vec<u8>>,
+}
+
+impl PinnedMessageKey {
+  pub fn new<F1, F2, F3, F4, F5>(pme_sequence_id: F1, conversation_key_version: F2, encrypted_pmk: F3, encrypted_message_key: F4, encrypted_edit_message_key: F5) -> PinnedMessageKey where F1: Into<Option<i64>>, F2: Into<Option<String>>, F3: Into<Option<Vec<u8>>>, F4: Into<Option<Vec<u8>>>, F5: Into<Option<Vec<u8>>> {
+    PinnedMessageKey {
+      pme_sequence_id: pme_sequence_id.into(),
+      conversation_key_version: conversation_key_version.into(),
+      encrypted_pmk: encrypted_pmk.into(),
+      encrypted_message_key: encrypted_message_key.into(),
+      encrypted_edit_message_key: encrypted_edit_message_key.into(),
+    }
+  }
+}
+
+impl TSerializable for PinnedMessageKey {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PinnedMessageKey> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<i64> = None;
+    let mut f_2: Option<String> = None;
+    let mut f_3: Option<Vec<u8>> = None;
+    let mut f_4: Option<Vec<u8>> = None;
+    let mut f_5: Option<Vec<u8>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_i64()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_string()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_bytes()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_bytes()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_bytes()?;
+          f_5 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = PinnedMessageKey {
+      pme_sequence_id: f_1,
+      conversation_key_version: f_2,
+      encrypted_pmk: f_3,
+      encrypted_message_key: f_4,
+      encrypted_edit_message_key: f_5,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("PinnedMessageKey");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.pme_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("pme_sequence_id", TType::I64, 1))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.conversation_key_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_key_version", TType::String, 2))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.encrypted_pmk {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_pmk", TType::String, 3))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.encrypted_message_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_message_key", TType::String, 4))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.encrypted_edit_message_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_edit_message_key", TType::String, 5))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// PmkBundleUpdateEvent
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PmkBundleUpdateEvent {
+  pub pmk_bundle: Option<BTreeMap<String, PinnedMessageKey>>,
+}
+
+impl PmkBundleUpdateEvent {
+  pub fn new<F1>(pmk_bundle: F1) -> PmkBundleUpdateEvent where F1: Into<Option<BTreeMap<String, PinnedMessageKey>>> {
+    PmkBundleUpdateEvent {
+      pmk_bundle: pmk_bundle.into(),
+    }
+  }
+}
+
+impl TSerializable for PmkBundleUpdateEvent {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PmkBundleUpdateEvent> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<BTreeMap<String, PinnedMessageKey>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let map_ident = i_prot.read_map_begin()?;
+          let mut val: BTreeMap<String, PinnedMessageKey> = BTreeMap::new();
+          for _ in 0..map_ident.size {
+            let map_key_29 = i_prot.read_string()?;
+            let map_val_30 = PinnedMessageKey::read_from_in_protocol(i_prot)?;
+            val.insert(map_key_29, map_val_30);
+          }
+          i_prot.read_map_end()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = PmkBundleUpdateEvent {
+      pmk_bundle: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("PmkBundleUpdateEvent");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.pmk_bundle {
+      o_prot.write_field_begin(&TFieldIdentifier::new("pmk_bundle", TType::Map, 1))?;
+      o_prot.write_map_begin(&TMapIdentifier::new(TType::String, TType::Struct, fld_var.len() as i32))?;
+      for (k, v) in fld_var {
+        o_prot.write_string(k)?;
+        v.write_to_out_protocol(o_prot)?;
+      }
+      o_prot.write_map_end()?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -2975,8 +4877,8 @@ impl TSerializable for MuteConversation {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_14 = i_prot.read_string()?;
-            val.push(list_elem_14);
+            let list_elem_31 = i_prot.read_string()?;
+            val.push(list_elem_31);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -3042,8 +4944,8 @@ impl TSerializable for UnmuteConversation {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_15 = i_prot.read_string()?;
-            val.push(list_elem_15);
+            let list_elem_32 = i_prot.read_string()?;
+            val.push(list_elem_32);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
@@ -3065,6 +4967,140 @@ impl TSerializable for UnmuteConversation {
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.unmuted_conversation_ids {
       o_prot.write_field_begin(&TFieldIdentifier::new("unmuted_conversation_ids", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_string(e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// ArchiveConversation
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ArchiveConversation {
+  pub archived_conversation_ids: Option<Vec<String>>,
+}
+
+impl ArchiveConversation {
+  pub fn new<F1>(archived_conversation_ids: F1) -> ArchiveConversation where F1: Into<Option<Vec<String>>> {
+    ArchiveConversation {
+      archived_conversation_ids: archived_conversation_ids.into(),
+    }
+  }
+}
+
+impl TSerializable for ArchiveConversation {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ArchiveConversation> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<String>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_33 = i_prot.read_string()?;
+            val.push(list_elem_33);
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = ArchiveConversation {
+      archived_conversation_ids: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("ArchiveConversation");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.archived_conversation_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("archived_conversation_ids", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_string(e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// UnarchiveConversation
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct UnarchiveConversation {
+  pub unarchived_conversation_ids: Option<Vec<String>>,
+}
+
+impl UnarchiveConversation {
+  pub fn new<F1>(unarchived_conversation_ids: F1) -> UnarchiveConversation where F1: Into<Option<Vec<String>>> {
+    UnarchiveConversation {
+      unarchived_conversation_ids: unarchived_conversation_ids.into(),
+    }
+  }
+}
+
+impl TSerializable for UnarchiveConversation {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<UnarchiveConversation> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<String>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<String> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_34 = i_prot.read_string()?;
+            val.push(list_elem_34);
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = UnarchiveConversation {
+      unarchived_conversation_ids: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("UnarchiveConversation");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.unarchived_conversation_ids {
+      o_prot.write_field_begin(&TFieldIdentifier::new("unarchived_conversation_ids", TType::List, 1))?;
       o_prot.write_list_begin(&TListIdentifier::new(TType::String, fld_var.len() as i32))?;
       for e in fld_var {
         o_prot.write_string(e)?;
@@ -3306,6 +5342,120 @@ impl TSerializable for DisableScreenCaptureBlocking {
 }
 
 //
+// EnableGrok
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EnableGrok {
+  pub placeholder: Option<String>,
+}
+
+impl EnableGrok {
+  pub fn new<F1>(placeholder: F1) -> EnableGrok where F1: Into<Option<String>> {
+    EnableGrok {
+      placeholder: placeholder.into(),
+    }
+  }
+}
+
+impl TSerializable for EnableGrok {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<EnableGrok> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = EnableGrok {
+      placeholder: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("EnableGrok");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.placeholder {
+      o_prot.write_field_begin(&TFieldIdentifier::new("placeholder", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// DisableGrok
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DisableGrok {
+  pub placeholder: Option<String>,
+}
+
+impl DisableGrok {
+  pub fn new<F1>(placeholder: F1) -> DisableGrok where F1: Into<Option<String>> {
+    DisableGrok {
+      placeholder: placeholder.into(),
+    }
+  }
+}
+
+impl TSerializable for DisableGrok {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<DisableGrok> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = DisableGrok {
+      placeholder: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("DisableGrok");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.placeholder {
+      o_prot.write_field_begin(&TFieldIdentifier::new("placeholder", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // ConversationMetadataChange
 //
 
@@ -3319,6 +5469,10 @@ pub enum ConversationMetadataChange {
   DisableScreenCaptureDetection(DisableScreenCaptureDetection),
   EnableScreenCaptureBlocking(EnableScreenCaptureBlocking),
   DisableScreenCaptureBlocking(DisableScreenCaptureBlocking),
+  EnableGrok(EnableGrok),
+  DisableGrok(DisableGrok),
+  ArchiveConversation(ArchiveConversation),
+  UnarchiveConversation(UnarchiveConversation),
 }
 
 impl TSerializable for ConversationMetadataChange {
@@ -3387,6 +5541,34 @@ impl TSerializable for ConversationMetadataChange {
           let val = DisableScreenCaptureBlocking::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(ConversationMetadataChange::DisableScreenCaptureBlocking(val));
+          }
+          received_field_count += 1;
+        },
+        9 => {
+          let val = EnableGrok::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(ConversationMetadataChange::EnableGrok(val));
+          }
+          received_field_count += 1;
+        },
+        10 => {
+          let val = DisableGrok::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(ConversationMetadataChange::DisableGrok(val));
+          }
+          received_field_count += 1;
+        },
+        11 => {
+          let val = ArchiveConversation::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(ConversationMetadataChange::ArchiveConversation(val));
+          }
+          received_field_count += 1;
+        },
+        12 => {
+          let val = UnarchiveConversation::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(ConversationMetadataChange::UnarchiveConversation(val));
           }
           received_field_count += 1;
         },
@@ -3476,6 +5658,26 @@ impl TSerializable for ConversationMetadataChange {
       },
       ConversationMetadataChange::DisableScreenCaptureBlocking(ref f) => {
         o_prot.write_field_begin(&TFieldIdentifier::new("disable_screen_capture_blocking", TType::Struct, 8))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      ConversationMetadataChange::EnableGrok(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("enable_grok", TType::Struct, 9))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      ConversationMetadataChange::DisableGrok(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("disable_grok", TType::Struct, 10))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      ConversationMetadataChange::ArchiveConversation(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("archive_conversation", TType::Struct, 11))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      ConversationMetadataChange::UnarchiveConversation(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("unarchive_conversation", TType::Struct, 12))?;
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
@@ -3604,6 +5806,315 @@ impl TSerializable for GrokSearchResponseEvent {
 }
 
 //
+// GrokMessageEvent
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GrokMessageEvent {
+  pub encrypted_message: Option<Vec<u8>>,
+  pub ephemeral_public_key: Option<Vec<u8>>,
+  pub nonce: Option<Vec<u8>>,
+  pub iv: Option<Vec<u8>>,
+  pub conversation_key_version: Option<String>,
+}
+
+impl GrokMessageEvent {
+  pub fn new<F1, F2, F3, F4, F5>(encrypted_message: F1, ephemeral_public_key: F2, nonce: F3, iv: F4, conversation_key_version: F5) -> GrokMessageEvent where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<Vec<u8>>>, F4: Into<Option<Vec<u8>>>, F5: Into<Option<String>> {
+    GrokMessageEvent {
+      encrypted_message: encrypted_message.into(),
+      ephemeral_public_key: ephemeral_public_key.into(),
+      nonce: nonce.into(),
+      iv: iv.into(),
+      conversation_key_version: conversation_key_version.into(),
+    }
+  }
+}
+
+impl TSerializable for GrokMessageEvent {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GrokMessageEvent> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<u8>> = None;
+    let mut f_2: Option<Vec<u8>> = None;
+    let mut f_3: Option<Vec<u8>> = None;
+    let mut f_4: Option<Vec<u8>> = None;
+    let mut f_5: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bytes()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_bytes()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_bytes()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_bytes()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_string()?;
+          f_5 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = GrokMessageEvent {
+      encrypted_message: f_1,
+      ephemeral_public_key: f_2,
+      nonce: f_3,
+      iv: f_4,
+      conversation_key_version: f_5,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("GrokMessageEvent");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.encrypted_message {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_message", TType::String, 1))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.ephemeral_public_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("ephemeral_public_key", TType::String, 2))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.nonce {
+      o_prot.write_field_begin(&TFieldIdentifier::new("nonce", TType::String, 3))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.iv {
+      o_prot.write_field_begin(&TFieldIdentifier::new("iv", TType::String, 4))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.conversation_key_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_key_version", TType::String, 5))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// GrokResponseEvent
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GrokResponseEvent {
+  pub encrypted_response: Option<Vec<u8>>,
+  pub nonce: Option<Vec<u8>>,
+  pub signature: Option<Vec<u8>>,
+  pub response_iv: Option<Vec<u8>>,
+  pub ciphertext_hash: Option<Vec<u8>>,
+  pub plaintext_response: Option<String>,
+  pub encoded_attachments: Option<Vec<u8>>,
+  pub ttl_msec: Option<i64>,
+  pub delivered_at_msec: Option<i64>,
+  pub replying_to_message_sequence_id: Option<String>,
+  pub replying_to_message_id: Option<String>,
+  pub grok_bot: Option<GrokBotMetadata>,
+}
+
+impl GrokResponseEvent {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12>(encrypted_response: F1, nonce: F2, signature: F3, response_iv: F4, ciphertext_hash: F5, plaintext_response: F6, encoded_attachments: F7, ttl_msec: F8, delivered_at_msec: F9, replying_to_message_sequence_id: F10, replying_to_message_id: F11, grok_bot: F12) -> GrokResponseEvent where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<Vec<u8>>>, F4: Into<Option<Vec<u8>>>, F5: Into<Option<Vec<u8>>>, F6: Into<Option<String>>, F7: Into<Option<Vec<u8>>>, F8: Into<Option<i64>>, F9: Into<Option<i64>>, F10: Into<Option<String>>, F11: Into<Option<String>>, F12: Into<Option<GrokBotMetadata>> {
+    GrokResponseEvent {
+      encrypted_response: encrypted_response.into(),
+      nonce: nonce.into(),
+      signature: signature.into(),
+      response_iv: response_iv.into(),
+      ciphertext_hash: ciphertext_hash.into(),
+      plaintext_response: plaintext_response.into(),
+      encoded_attachments: encoded_attachments.into(),
+      ttl_msec: ttl_msec.into(),
+      delivered_at_msec: delivered_at_msec.into(),
+      replying_to_message_sequence_id: replying_to_message_sequence_id.into(),
+      replying_to_message_id: replying_to_message_id.into(),
+      grok_bot: grok_bot.into(),
+    }
+  }
+}
+
+impl TSerializable for GrokResponseEvent {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GrokResponseEvent> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<u8>> = None;
+    let mut f_2: Option<Vec<u8>> = None;
+    let mut f_3: Option<Vec<u8>> = None;
+    let mut f_4: Option<Vec<u8>> = None;
+    let mut f_5: Option<Vec<u8>> = None;
+    let mut f_6: Option<String> = None;
+    let mut f_7: Option<Vec<u8>> = None;
+    let mut f_8: Option<i64> = None;
+    let mut f_9: Option<i64> = None;
+    let mut f_10: Option<String> = None;
+    let mut f_11: Option<String> = None;
+    let mut f_12: Option<GrokBotMetadata> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bytes()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = i_prot.read_bytes()?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_bytes()?;
+          f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_bytes()?;
+          f_4 = Some(val);
+        },
+        5 => {
+          let val = i_prot.read_bytes()?;
+          f_5 = Some(val);
+        },
+        6 => {
+          let val = i_prot.read_string()?;
+          f_6 = Some(val);
+        },
+        7 => {
+          let val = i_prot.read_bytes()?;
+          f_7 = Some(val);
+        },
+        8 => {
+          let val = i_prot.read_i64()?;
+          f_8 = Some(val);
+        },
+        9 => {
+          let val = i_prot.read_i64()?;
+          f_9 = Some(val);
+        },
+        10 => {
+          let val = i_prot.read_string()?;
+          f_10 = Some(val);
+        },
+        11 => {
+          let val = i_prot.read_string()?;
+          f_11 = Some(val);
+        },
+        12 => {
+          let val = GrokBotMetadata::read_from_in_protocol(i_prot)?;
+          f_12 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = GrokResponseEvent {
+      encrypted_response: f_1,
+      nonce: f_2,
+      signature: f_3,
+      response_iv: f_4,
+      ciphertext_hash: f_5,
+      plaintext_response: f_6,
+      encoded_attachments: f_7,
+      ttl_msec: f_8,
+      delivered_at_msec: f_9,
+      replying_to_message_sequence_id: f_10,
+      replying_to_message_id: f_11,
+      grok_bot: f_12,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("GrokResponseEvent");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.encrypted_response {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encrypted_response", TType::String, 1))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.nonce {
+      o_prot.write_field_begin(&TFieldIdentifier::new("nonce", TType::String, 2))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.signature {
+      o_prot.write_field_begin(&TFieldIdentifier::new("signature", TType::String, 3))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.response_iv {
+      o_prot.write_field_begin(&TFieldIdentifier::new("response_iv", TType::String, 4))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.ciphertext_hash {
+      o_prot.write_field_begin(&TFieldIdentifier::new("ciphertext_hash", TType::String, 5))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.plaintext_response {
+      o_prot.write_field_begin(&TFieldIdentifier::new("plaintext_response", TType::String, 6))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.encoded_attachments {
+      o_prot.write_field_begin(&TFieldIdentifier::new("encoded_attachments", TType::String, 7))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.ttl_msec {
+      o_prot.write_field_begin(&TFieldIdentifier::new("ttl_msec", TType::I64, 8))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.delivered_at_msec {
+      o_prot.write_field_begin(&TFieldIdentifier::new("delivered_at_msec", TType::I64, 9))?;
+      o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.replying_to_message_sequence_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("replying_to_message_sequence_id", TType::String, 10))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.replying_to_message_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("replying_to_message_id", TType::String, 11))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.grok_bot {
+      o_prot.write_field_begin(&TFieldIdentifier::new("grok_bot", TType::Struct, 12))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // MarkConversationReadEvent
 //
 
@@ -3611,13 +6122,15 @@ impl TSerializable for GrokSearchResponseEvent {
 pub struct MarkConversationReadEvent {
   pub seen_until_sequence_id: Option<String>,
   pub seen_at_millis: Option<i64>,
+  pub is_grok: Option<bool>,
 }
 
 impl MarkConversationReadEvent {
-  pub fn new<F1, F2>(seen_until_sequence_id: F1, seen_at_millis: F2) -> MarkConversationReadEvent where F1: Into<Option<String>>, F2: Into<Option<i64>> {
+  pub fn new<F1, F2, F3>(seen_until_sequence_id: F1, seen_at_millis: F2, is_grok: F3) -> MarkConversationReadEvent where F1: Into<Option<String>>, F2: Into<Option<i64>>, F3: Into<Option<bool>> {
     MarkConversationReadEvent {
       seen_until_sequence_id: seen_until_sequence_id.into(),
       seen_at_millis: seen_at_millis.into(),
+      is_grok: is_grok.into(),
     }
   }
 }
@@ -3627,6 +6140,7 @@ impl TSerializable for MarkConversationReadEvent {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<String> = None;
     let mut f_2: Option<i64> = None;
+    let mut f_3: Option<bool> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -3642,6 +6156,10 @@ impl TSerializable for MarkConversationReadEvent {
           let val = i_prot.read_i64()?;
           f_2 = Some(val);
         },
+        3 => {
+          let val = i_prot.read_bool()?;
+          f_3 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -3652,6 +6170,7 @@ impl TSerializable for MarkConversationReadEvent {
     let ret = MarkConversationReadEvent {
       seen_until_sequence_id: f_1,
       seen_at_millis: f_2,
+      is_grok: f_3,
     };
     Ok(ret)
   }
@@ -3666,6 +6185,11 @@ impl TSerializable for MarkConversationReadEvent {
     if let Some(fld_var) = self.seen_at_millis {
       o_prot.write_field_begin(&TFieldIdentifier::new("seen_at_millis", TType::I64, 2))?;
       o_prot.write_i64(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.is_grok {
+      o_prot.write_field_begin(&TFieldIdentifier::new("is_grok", TType::Bool, 3))?;
+      o_prot.write_bool(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -3737,12 +6261,14 @@ impl TSerializable for MarkConversationUnreadEvent {
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MemberAccountDeleteEvent {
   pub member_id: Option<String>,
+  pub promoted_admin_id: Option<String>,
 }
 
 impl MemberAccountDeleteEvent {
-  pub fn new<F1>(member_id: F1) -> MemberAccountDeleteEvent where F1: Into<Option<String>> {
+  pub fn new<F1, F2>(member_id: F1, promoted_admin_id: F2) -> MemberAccountDeleteEvent where F1: Into<Option<String>>, F2: Into<Option<String>> {
     MemberAccountDeleteEvent {
       member_id: member_id.into(),
+      promoted_admin_id: promoted_admin_id.into(),
     }
   }
 }
@@ -3751,6 +6277,7 @@ impl TSerializable for MemberAccountDeleteEvent {
   fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MemberAccountDeleteEvent> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<String> = None;
+    let mut f_2: Option<String> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -3762,6 +6289,10 @@ impl TSerializable for MemberAccountDeleteEvent {
           let val = i_prot.read_string()?;
           f_1 = Some(val);
         },
+        2 => {
+          let val = i_prot.read_string()?;
+          f_2 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -3771,6 +6302,7 @@ impl TSerializable for MemberAccountDeleteEvent {
     i_prot.read_struct_end()?;
     let ret = MemberAccountDeleteEvent {
       member_id: f_1,
+      promoted_admin_id: f_2,
     };
     Ok(ret)
   }
@@ -3779,6 +6311,11 @@ impl TSerializable for MemberAccountDeleteEvent {
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.member_id {
       o_prot.write_field_begin(&TFieldIdentifier::new("member_id", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.promoted_admin_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("promoted_admin_id", TType::String, 2))?;
       o_prot.write_string(fld_var)?;
       o_prot.write_field_end()?
     }
@@ -3805,6 +6342,11 @@ pub enum MessageEventDetail {
   MarkConversationReadEvent(MarkConversationReadEvent),
   MarkConversationUnreadEvent(MarkConversationUnreadEvent),
   MemberAccountDeleteEvent(MemberAccountDeleteEvent),
+  GrokMessageEvent(GrokMessageEvent),
+  GrokResponseEvent(GrokResponseEvent),
+  PinMessageEvent(PinMessageEvent),
+  UnpinMessageEvent(UnpinMessageEvent),
+  PmkBundleUpdateEvent(PmkBundleUpdateEvent),
 }
 
 impl TSerializable for MessageEventDetail {
@@ -3901,6 +6443,41 @@ impl TSerializable for MessageEventDetail {
           let val = MemberAccountDeleteEvent::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(MessageEventDetail::MemberAccountDeleteEvent(val));
+          }
+          received_field_count += 1;
+        },
+        15 => {
+          let val = GrokMessageEvent::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageEventDetail::GrokMessageEvent(val));
+          }
+          received_field_count += 1;
+        },
+        16 => {
+          let val = GrokResponseEvent::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageEventDetail::GrokResponseEvent(val));
+          }
+          received_field_count += 1;
+        },
+        17 => {
+          let val = PinMessageEvent::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageEventDetail::PinMessageEvent(val));
+          }
+          received_field_count += 1;
+        },
+        18 => {
+          let val = UnpinMessageEvent::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageEventDetail::UnpinMessageEvent(val));
+          }
+          received_field_count += 1;
+        },
+        19 => {
+          let val = PmkBundleUpdateEvent::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageEventDetail::PmkBundleUpdateEvent(val));
           }
           received_field_count += 1;
         },
@@ -4010,6 +6587,31 @@ impl TSerializable for MessageEventDetail {
       },
       MessageEventDetail::MemberAccountDeleteEvent(ref f) => {
         o_prot.write_field_begin(&TFieldIdentifier::new("memberAccountDeleteEvent", TType::Struct, 14))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageEventDetail::GrokMessageEvent(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("grokMessageEvent", TType::Struct, 15))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageEventDetail::GrokResponseEvent(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("grokResponseEvent", TType::Struct, 16))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageEventDetail::PinMessageEvent(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("pinMessageEvent", TType::Struct, 17))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageEventDetail::UnpinMessageEvent(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("unpinMessageEvent", TType::Struct, 18))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageEventDetail::PmkBundleUpdateEvent(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("pmkBundleUpdateEvent", TType::Struct, 19))?;
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
@@ -4162,8 +6764,8 @@ impl TSerializable for MessageEventSignature {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<MessageSigningKeyInfo> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_16 = MessageSigningKeyInfo::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_16);
+            let list_elem_35 = MessageSigningKeyInfo::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_35);
           }
           i_prot.read_list_end()?;
           f_5 = Some(val);
@@ -4238,10 +6840,11 @@ pub struct MessageEvent {
   pub message_event_signature: Option<MessageEventSignature>,
   pub previous_sequence_id: Option<String>,
   pub is_trusted: Option<bool>,
+  pub conversation_event_counter: Option<String>,
 }
 
 impl MessageEvent {
-  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11>(sequence_id: F1, message_id: F2, sender_id: F3, conversation_id: F4, conversation_token: F5, created_at_msec: F6, detail: F7, relay_source: F8, message_event_signature: F9, previous_sequence_id: F10, is_trusted: F11) -> MessageEvent where F1: Into<Option<String>>, F2: Into<Option<String>>, F3: Into<Option<String>>, F4: Into<Option<String>>, F5: Into<Option<String>>, F6: Into<Option<String>>, F7: Into<Option<MessageEventDetail>>, F8: Into<Option<MessageEventRelaySource>>, F9: Into<Option<MessageEventSignature>>, F10: Into<Option<String>>, F11: Into<Option<bool>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F13>(sequence_id: F1, message_id: F2, sender_id: F3, conversation_id: F4, conversation_token: F5, created_at_msec: F6, detail: F7, relay_source: F8, message_event_signature: F9, previous_sequence_id: F10, is_trusted: F11, conversation_event_counter: F13) -> MessageEvent where F1: Into<Option<String>>, F2: Into<Option<String>>, F3: Into<Option<String>>, F4: Into<Option<String>>, F5: Into<Option<String>>, F6: Into<Option<String>>, F7: Into<Option<MessageEventDetail>>, F8: Into<Option<MessageEventRelaySource>>, F9: Into<Option<MessageEventSignature>>, F10: Into<Option<String>>, F11: Into<Option<bool>>, F13: Into<Option<String>> {
     MessageEvent {
       sequence_id: sequence_id.into(),
       message_id: message_id.into(),
@@ -4254,6 +6857,7 @@ impl MessageEvent {
       message_event_signature: message_event_signature.into(),
       previous_sequence_id: previous_sequence_id.into(),
       is_trusted: is_trusted.into(),
+      conversation_event_counter: conversation_event_counter.into(),
     }
   }
 }
@@ -4272,6 +6876,7 @@ impl TSerializable for MessageEvent {
     let mut f_9: Option<MessageEventSignature> = None;
     let mut f_10: Option<String> = None;
     let mut f_11: Option<bool> = None;
+    let mut f_13: Option<String> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -4327,6 +6932,10 @@ impl TSerializable for MessageEvent {
           let val = i_prot.read_bool()?;
           f_11 = Some(val);
         },
+        13 => {
+          let val = i_prot.read_string()?;
+          f_13 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -4346,6 +6955,7 @@ impl TSerializable for MessageEvent {
       message_event_signature: f_9,
       previous_sequence_id: f_10,
       is_trusted: f_11,
+      conversation_event_counter: f_13,
     };
     Ok(ret)
   }
@@ -4405,6 +7015,11 @@ impl TSerializable for MessageEvent {
     if let Some(fld_var) = self.is_trusted {
       o_prot.write_field_begin(&TFieldIdentifier::new("is_trusted", TType::Bool, 11))?;
       o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.conversation_event_counter {
+      o_prot.write_field_begin(&TFieldIdentifier::new("conversation_event_counter", TType::String, 13))?;
+      o_prot.write_string(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -5158,6 +7773,194 @@ impl TSerializable for DeviceEnrollmentInstruction {
 }
 
 //
+// MigrateUserMetadataInstruction
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MigrateUserMetadataInstruction {
+  pub should_migrate: Option<bool>,
+}
+
+impl MigrateUserMetadataInstruction {
+  pub fn new<F1>(should_migrate: F1) -> MigrateUserMetadataInstruction where F1: Into<Option<bool>> {
+    MigrateUserMetadataInstruction {
+      should_migrate: should_migrate.into(),
+    }
+  }
+}
+
+impl TSerializable for MigrateUserMetadataInstruction {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MigrateUserMetadataInstruction> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<bool> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_bool()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = MigrateUserMetadataInstruction {
+      should_migrate: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("MigrateUserMetadataInstruction");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.should_migrate {
+      o_prot.write_field_begin(&TFieldIdentifier::new("should_migrate", TType::Bool, 1))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// MessageRequestInfoInstruction
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MessageRequestInfoInstruction {
+  pub message_request_inbox_summary: Option<MessageRequestInboxSummary>,
+}
+
+impl MessageRequestInfoInstruction {
+  pub fn new<F1>(message_request_inbox_summary: F1) -> MessageRequestInfoInstruction where F1: Into<Option<MessageRequestInboxSummary>> {
+    MessageRequestInfoInstruction {
+      message_request_inbox_summary: message_request_inbox_summary.into(),
+    }
+  }
+}
+
+impl TSerializable for MessageRequestInfoInstruction {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MessageRequestInfoInstruction> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<MessageRequestInboxSummary> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = MessageRequestInboxSummary::read_from_in_protocol(i_prot)?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = MessageRequestInfoInstruction {
+      message_request_inbox_summary: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("MessageRequestInfoInstruction");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.message_request_inbox_summary {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_request_inbox_summary", TType::Struct, 1))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// XNumberPromptInstruction
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct XNumberPromptInstruction {
+}
+
+impl XNumberPromptInstruction {
+  pub fn new() -> XNumberPromptInstruction {
+    XNumberPromptInstruction {}
+  }
+}
+
+impl TSerializable for XNumberPromptInstruction {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<XNumberPromptInstruction> {
+    i_prot.read_struct_begin()?;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      i_prot.skip(field_ident.field_type)?;
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = XNumberPromptInstruction {};
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("XNumberPromptInstruction");
+    o_prot.write_struct_begin(&struct_ident)?;
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// OpenInboxInstruction
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OpenInboxInstruction {
+}
+
+impl OpenInboxInstruction {
+  pub fn new() -> OpenInboxInstruction {
+    OpenInboxInstruction {}
+  }
+}
+
+impl TSerializable for OpenInboxInstruction {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<OpenInboxInstruction> {
+    i_prot.read_struct_begin()?;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      i_prot.skip(field_ident.field_type)?;
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = OpenInboxInstruction {};
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("OpenInboxInstruction");
+    o_prot.write_struct_begin(&struct_ident)?;
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // MessageInstruction
 //
 
@@ -5170,6 +7973,10 @@ pub enum MessageInstruction {
   SwitchToHybridPullInstruction(SwitchToHybridPullInstruction),
   DisplayTemporaryPasscodeInstruction(DisplayTemporaryPasscodeInstruction),
   DeviceEnrollmentInstruction(DeviceEnrollmentInstruction),
+  MigrateUserMetadataInstruction(MigrateUserMetadataInstruction),
+  MessageRequestInfoInstruction(MessageRequestInfoInstruction),
+  XNumberPromptInstruction(XNumberPromptInstruction),
+  OpenInboxInstruction(OpenInboxInstruction),
 }
 
 impl TSerializable for MessageInstruction {
@@ -5231,6 +8038,34 @@ impl TSerializable for MessageInstruction {
           let val = DeviceEnrollmentInstruction::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(MessageInstruction::DeviceEnrollmentInstruction(val));
+          }
+          received_field_count += 1;
+        },
+        8 => {
+          let val = MigrateUserMetadataInstruction::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageInstruction::MigrateUserMetadataInstruction(val));
+          }
+          received_field_count += 1;
+        },
+        9 => {
+          let val = MessageRequestInfoInstruction::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageInstruction::MessageRequestInfoInstruction(val));
+          }
+          received_field_count += 1;
+        },
+        10 => {
+          let val = XNumberPromptInstruction::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageInstruction::XNumberPromptInstruction(val));
+          }
+          received_field_count += 1;
+        },
+        11 => {
+          let val = OpenInboxInstruction::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(MessageInstruction::OpenInboxInstruction(val));
           }
           received_field_count += 1;
         },
@@ -5318,6 +8153,26 @@ impl TSerializable for MessageInstruction {
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
+      MessageInstruction::MigrateUserMetadataInstruction(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("migrateUserMetadataInstruction", TType::Struct, 8))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageInstruction::MessageRequestInfoInstruction(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("messageRequestInfoInstruction", TType::Struct, 9))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageInstruction::XNumberPromptInstruction(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("xNumberPromptInstruction", TType::Struct, 10))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageInstruction::OpenInboxInstruction(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("openInboxInstruction", TType::Struct, 11))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
     }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
@@ -5356,8 +8211,8 @@ impl TSerializable for BatchedMessageEvents {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<MessageEvent> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_17 = MessageEvent::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_17);
+            let list_elem_36 = MessageEvent::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_36);
           }
           i_prot.read_list_end()?;
           f_1 = Some(val);
