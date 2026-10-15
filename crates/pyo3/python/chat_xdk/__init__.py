@@ -24,6 +24,7 @@ Quick Start:
 __version__ = "0.1.0"
 
 import re as _re
+from typing import Optional, TypedDict
 
 from chat_xdk._native import (
     Chat,
@@ -42,6 +43,54 @@ from chat_xdk._native import (
     encrypted_stream_size,
     hex_to_bytes,
 )
+
+
+class QuickReplyOption(TypedDict, total=False):
+    """A single selectable quick-reply option."""
+
+    id: Optional[str]
+    label: Optional[str]
+    metadata: Optional[str]
+    description: Optional[str]
+
+
+class QuickReplyOptionsRequest(TypedDict, total=False):
+    """The options offered by a quick-reply request."""
+
+    id: Optional[str]
+    options: Optional[list[QuickReplyOption]]
+
+
+class QuickReplyOptionsResponse(TypedDict, total=False):
+    """The option selected in a quick-reply response."""
+
+    request_id: Optional[str]
+    metadata: Optional[str]
+    selected_option_id: Optional[str]
+
+
+class QuickReplyRequest(TypedDict):
+    """A quick-reply request offering a set of selectable options."""
+
+    options: QuickReplyOptionsRequest
+
+
+class QuickReplyResponse(TypedDict):
+    """A quick-reply response selecting a previously offered option."""
+
+    options: QuickReplyOptionsResponse
+
+
+class QuickReply(TypedDict, total=False):
+    """A quick reply carried by a text message.
+
+    Set exactly one of ``request`` (offering selectable options) or
+    ``response`` (selecting one). The ``quick_reply`` of decrypted text
+    content has this shape, so a received value can be sent back unchanged.
+    """
+
+    request: QuickReplyRequest
+    response: QuickReplyResponse
 
 # Stable invalid-PIN message form the core emits
 # ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a count
@@ -65,6 +114,12 @@ __all__ = [
     "PublicKeyRegistration",
     "PublicKeyRegistrationPayload",
     "PublicKeys",
+    "QuickReply",
+    "QuickReplyOption",
+    "QuickReplyOptionsRequest",
+    "QuickReplyOptionsResponse",
+    "QuickReplyRequest",
+    "QuickReplyResponse",
     "SendPayload",
     "SignatureInfo",
     "StreamDecryptor",

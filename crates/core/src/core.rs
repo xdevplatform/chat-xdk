@@ -4168,6 +4168,39 @@ mod tests {
         assert_eq!(quick_reply_round_trip(None, true), None);
     }
 
+    #[test]
+    fn quick_reply_json_round_trips_in_the_shape_bindings_send() {
+        for sent in [sample_quick_reply_request(), sample_quick_reply_response()] {
+            let json = serde_json::to_value(&sent).unwrap();
+            let parsed: QuickReply = serde_json::from_value(json).unwrap();
+            assert_eq!(parsed, sent);
+        }
+        let parsed: QuickReply = serde_json::from_str(
+            r#"{"response":{"options":{"request_id":"qr-1","selected_option_id":"yes"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            QuickReply::Response {
+                response: QuickReplyResponse::Options {
+                    options: QuickReplyOptionsResponse {
+                        request_id: Some("qr-1".into()),
+                        metadata: None,
+                        selected_option_id: Some("yes".into()),
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn quick_reply_json_rejects_both_request_and_response() {
+        let both =
+            r#"{"request":{"options":{"id":"qr-1"}},"response":{"options":{"request_id":"qr-1"}}}"#;
+        assert!(serde_json::from_str::<QuickReply>(both).is_err());
+        assert!(serde_json::from_str::<QuickReply>("{}").is_err());
+    }
+
     /// The SDK mints the message id: `encrypt_message` returns a fresh UUID in
     /// `SendPayload.message_id` on every call, and callers can no longer supply
     /// one. (That the returned id is the one actually signed is proven by the

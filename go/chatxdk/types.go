@@ -175,7 +175,7 @@ type EncryptMessageParams struct {
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
 	Entities               []EntityTuple          `json:"entities,omitempty"`
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
-	QuickReply             json.RawMessage        `json:"quick_reply,omitempty"` // same shape as TextContent.QuickReply
+	QuickReply             *QuickReply            `json:"quick_reply,omitempty"`
 	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }
@@ -228,6 +228,46 @@ type URLAttachmentImageDescriptor struct {
 	Height        *int64 `json:"height,omitempty"`
 }
 
+// QuickReply is a quick reply carried by a text message: set exactly one of
+// Request (offering selectable options) or Response (selecting one). The same
+// type is decoded into TextContent.QuickReply, so a received value can be sent
+// back unchanged.
+type QuickReply struct {
+	Request  *QuickReplyRequest  `json:"request,omitempty"`
+	Response *QuickReplyResponse `json:"response,omitempty"`
+}
+
+// QuickReplyRequest offers a set of selectable options.
+type QuickReplyRequest struct {
+	Options QuickReplyOptionsRequest `json:"options"`
+}
+
+// QuickReplyResponse selects a previously offered option.
+type QuickReplyResponse struct {
+	Options QuickReplyOptionsResponse `json:"options"`
+}
+
+// QuickReplyOptionsRequest lists the options offered by a quick-reply request.
+type QuickReplyOptionsRequest struct {
+	ID      *string            `json:"id,omitempty"`
+	Options []QuickReplyOption `json:"options,omitempty"`
+}
+
+// QuickReplyOptionsResponse identifies the option selected in a quick-reply response.
+type QuickReplyOptionsResponse struct {
+	RequestID        *string `json:"request_id,omitempty"`
+	Metadata         *string `json:"metadata,omitempty"`
+	SelectedOptionID *string `json:"selected_option_id,omitempty"`
+}
+
+// QuickReplyOption is a single selectable quick-reply option.
+type QuickReplyOption struct {
+	ID          *string `json:"id,omitempty"`
+	Label       *string `json:"label,omitempty"`
+	Metadata    *string `json:"metadata,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
 // EncryptReplyParams are the parameters for EncryptReply.
 //
 // The preferred reply target is ReplyToEvent — the base64 raw signed event
@@ -261,7 +301,7 @@ type EncryptReplyParams struct {
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
 	ReplyToEntities        []EntityTuple          `json:"reply_to_entities,omitempty"`
 	ReplyToAttachments     []AttachmentDescriptor `json:"reply_to_attachments,omitempty"`
-	QuickReply             json.RawMessage        `json:"quick_reply,omitempty"` // same shape as TextContent.QuickReply
+	QuickReply             *QuickReply            `json:"quick_reply,omitempty"`
 	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }
@@ -492,7 +532,7 @@ type TextContent struct {
 	ReplyingToPreview json.RawMessage `json:"replying_to_preview,omitempty"`
 	ForwardedMessage  json.RawMessage `json:"forwarded_message,omitempty"`
 	SentFrom          json.RawMessage `json:"sent_from,omitempty"`
-	QuickReply        json.RawMessage `json:"quick_reply,omitempty"`
+	QuickReply        *QuickReply     `json:"quick_reply,omitempty"`
 	CTAs              json.RawMessage `json:"ctas,omitempty"`
 }
 

@@ -466,6 +466,103 @@ public final class Types {
     }
 
     /**
+     * A quick reply carried by a text message: set exactly one of
+     * {@link #request} (offering selectable options) or {@link #response}
+     * (selecting one). The JSON shape matches the {@code quick_reply} of
+     * decrypted text content, so a received value converts with
+     * {@code new ObjectMapper().treeToValue(node, QuickReply.class)} and can be
+     * sent back unchanged.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class QuickReply {
+        /** A request offering selectable options. */
+        @JsonProperty("request")
+        public QuickReplyRequest request;
+
+        /** A response selecting one of the offered options. */
+        @JsonProperty("response")
+        public QuickReplyResponse response;
+
+        /** Create a quick reply that offers {@code options}. */
+        public static QuickReply request(QuickReplyOptionsRequest options) {
+            QuickReply q = new QuickReply();
+            q.request = new QuickReplyRequest();
+            q.request.options = options;
+            return q;
+        }
+
+        /** Create a quick reply that answers a request with {@code options}. */
+        public static QuickReply response(QuickReplyOptionsResponse options) {
+            QuickReply q = new QuickReply();
+            q.response = new QuickReplyResponse();
+            q.response.options = options;
+            return q;
+        }
+    }
+
+    /** A quick-reply request offering a set of selectable options. */
+    public static final class QuickReplyRequest {
+        /** The offered options. */
+        @JsonProperty("options")
+        public QuickReplyOptionsRequest options = new QuickReplyOptionsRequest();
+    }
+
+    /** A quick-reply response selecting a previously offered option. */
+    public static final class QuickReplyResponse {
+        /** The selected option. */
+        @JsonProperty("options")
+        public QuickReplyOptionsResponse options = new QuickReplyOptionsResponse();
+    }
+
+    /** The options offered by a quick-reply request. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class QuickReplyOptionsRequest {
+        /** ID of this request. */
+        @JsonProperty("id")
+        public String id;
+
+        /** The selectable options. */
+        @JsonProperty("options")
+        public List<QuickReplyOption> options;
+    }
+
+    /** The option selected in a quick-reply response. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class QuickReplyOptionsResponse {
+        /** ID of the request being answered. */
+        @JsonProperty("request_id")
+        public String requestId;
+
+        /** Opaque metadata for the selection. */
+        @JsonProperty("metadata")
+        public String metadata;
+
+        /** ID of the selected option. */
+        @JsonProperty("selected_option_id")
+        public String selectedOptionId;
+    }
+
+    /** A single selectable quick-reply option. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class QuickReplyOption {
+        /** ID of this option. */
+        @JsonProperty("id")
+        public String id;
+
+        /** Text shown for the option. */
+        @JsonProperty("label")
+        public String label;
+
+        /** Opaque metadata for this option. */
+        @JsonProperty("metadata")
+        public String metadata;
+
+        /** Description shown with the option. */
+        @JsonProperty("description")
+        public String description;
+    }
+
+    /**
      * Parameters for {@link Chat#encryptMessage}.
      *
      * <p>The constructor takes the required fields; identity and key overrides
@@ -502,12 +599,8 @@ public final class Types {
         /** Optional attachments. */
         public List<AttachmentDescriptor> attachments;
 
-        /**
-         * Optional quick reply, in the same JSON shape as the {@code quick_reply}
-         * of decrypted text content: a request offering options, or a response
-         * selecting one.
-         */
-        public JsonNode quickReply;
+        /** Optional quick reply: a request offering options, or a response selecting one. */
+        public QuickReply quickReply;
 
         /** Whether to send a push notification. Defaults to true. */
         public Boolean shouldNotify;
@@ -595,12 +688,8 @@ public final class Types {
         /** Attachments of the quoted message (for the preview); derived from {@link #replyToEvent} when null. */
         public List<AttachmentDescriptor> replyToAttachments;
 
-        /**
-         * Optional quick reply, in the same JSON shape as the {@code quick_reply}
-         * of decrypted text content: a request offering options, or a response
-         * selecting one.
-         */
-        public JsonNode quickReply;
+        /** Optional quick reply: a request offering options, or a response selecting one. */
+        public QuickReply quickReply;
 
         /** Whether to send a push notification. Defaults to true. */
         public Boolean shouldNotify;

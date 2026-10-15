@@ -1445,13 +1445,34 @@ namespace ChatXdk.Tests
 
         // Quick replies
 
-        private const string QuickReplyRequestJson =
-            "{\"request\":{\"options\":{\"id\":\"qr-1\",\"options\":[" +
-            "{\"id\":\"yes\",\"label\":\"Yes\",\"metadata\":\"m-yes\",\"description\":\"Confirm\"}," +
-            "{\"id\":\"no\",\"label\":\"No\",\"metadata\":\"m-no\",\"description\":\"Decline\"}]}}}";
-
-        private const string QuickReplyResponseJson =
-            "{\"response\":{\"options\":{\"request_id\":\"qr-1\",\"metadata\":\"m-yes\",\"selected_option_id\":\"yes\"}}}";
+        private static QuickReply SampleQuickReply(string kind) => kind == "request"
+            ? new QuickReply
+            {
+                Request = new QuickReplyRequest
+                {
+                    Options = new QuickReplyOptionsRequest
+                    {
+                        Id = "qr-1",
+                        Options = new[]
+                        {
+                            new QuickReplyOption { Id = "yes", Label = "Yes", Metadata = "m-yes", Description = "Confirm" },
+                            new QuickReplyOption { Id = "no", Label = "No", Metadata = "m-no", Description = "Decline" },
+                        },
+                    },
+                },
+            }
+            : new QuickReply
+            {
+                Response = new QuickReplyResponse
+                {
+                    Options = new QuickReplyOptionsResponse
+                    {
+                        RequestId = "qr-1",
+                        Metadata = "m-yes",
+                        SelectedOptionId = "yes",
+                    },
+                },
+            };
 
         /// <summary>
         /// Frame a SendPayload as the base64 MessageEvent envelope DecryptEvent
@@ -1512,33 +1533,37 @@ namespace ChatXdk.Tests
                 $"expected {expected}, got {actual.GetRawText()}");
 
         [Theory]
-        [InlineData(QuickReplyRequestJson)]
-        [InlineData(QuickReplyResponseJson)]
-        public void EncryptMessage_QuickReply_RoundTripsThroughDecrypt(string quickReplyJson)
+        [InlineData("request")]
+        [InlineData("response")]
+        public void EncryptMessage_QuickReply_RoundTripsThroughDecrypt(string kind)
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
             var key = Convert.FromBase64String(v.ConversationKeyB64);
+            var sent = SampleQuickReply(kind);
+            var sentJson = JsonSerializer.Serialize(sent);
 
             var content = DecryptOwnContent(chat, v, chat.EncryptMessage(
                 new EncryptMessageParams(v.EventConversationId, "Continue?")
                 {
                     ConversationKey = key,
                     ConversationKeyVersion = v.EventConversationKeyVersion,
-                    QuickReply = JsonDocument.Parse(quickReplyJson).RootElement,
+                    QuickReply = sent,
                 }));
             Assert.Equal("Continue?", content.GetProperty("text").GetString());
-            AssertJsonEqual(quickReplyJson, content.GetProperty("quick_reply"));
+            AssertJsonEqual(sentJson, content.GetProperty("quick_reply"));
 
             // A received quick reply can be sent back unchanged.
+            var received = content.GetProperty("quick_reply").Deserialize<QuickReply>();
+            Assert.NotNull(received);
             var resent = DecryptOwnContent(chat, v, chat.EncryptMessage(
                 new EncryptMessageParams(v.EventConversationId, "again")
                 {
                     ConversationKey = key,
                     ConversationKeyVersion = v.EventConversationKeyVersion,
-                    QuickReply = content.GetProperty("quick_reply"),
+                    QuickReply = received,
                 }));
-            AssertJsonEqual(quickReplyJson, resent.GetProperty("quick_reply"));
+            AssertJsonEqual(sentJson, resent.GetProperty("quick_reply"));
         }
 
         [Fact]
@@ -1561,6 +1586,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
+            var sent = SampleQuickReply("response");
 
             var content = DecryptOwnContent(chat, v, chat.EncryptReply(
                 new EncryptReplyParams(v.EventConversationId, "Yes", null)
@@ -1570,23 +1596,32 @@ namespace ChatXdk.Tests
                     ReplyToSequenceId = "seq-orig",
                     ReplyToSenderId = long.Parse(v.EventSenderId),
                     ReplyToText = "Continue?",
-                    QuickReply = JsonDocument.Parse(QuickReplyResponseJson).RootElement,
+                    QuickReply = sent,
                 }));
-            AssertJsonEqual(QuickReplyResponseJson, content.GetProperty("quick_reply"));
+            AssertJsonEqual(JsonSerializer.Serialize(sent), content.GetProperty("quick_reply"));
         }
 
-        [Fact]
-        public void EncryptMessage_InvalidQuickReply_Throws()
+        [Theory]
+        [InlineData("neither")]
+        [InlineData("both")]
+        public void EncryptMessage_InvalidQuickReply_Throws(string kind)
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
+            var quickReply = kind == "both"
+                ? new QuickReply
+                {
+                    Request = SampleQuickReply("request").Request,
+                    Response = SampleQuickReply("response").Response,
+                }
+                : new QuickReply();
 
             var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
                 new EncryptMessageParams(v.EventConversationId, "bad")
                 {
                     ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                     ConversationKeyVersion = v.EventConversationKeyVersion,
-                    QuickReply = JsonDocument.Parse("{\"neither\":{}}").RootElement,
+                    QuickReply = quickReply,
                 }));
             Assert.Contains("Invalid quick reply", ex.Message);
         }

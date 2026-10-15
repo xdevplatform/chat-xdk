@@ -354,6 +354,16 @@ class TestPythonSdkVectors(unittest.TestCase):
             self.assertEqual(content["text"], "Continue?")
             self.assertEqual(content["quick_reply"], quick_reply)
 
+            # A received quick reply can be sent back unchanged.
+            resent = chat.encrypt_message(
+                v["event_conversation_id"],
+                "again",
+                conversation_key=key,
+                conversation_key_version=key_version,
+                quick_reply=content["quick_reply"],
+            )
+            self.assertEqual(self._decrypt_own(chat, v, resent)["quick_reply"], quick_reply)
+
         plain = chat.encrypt_message(
             v["event_conversation_id"],
             "no quick reply",
@@ -383,11 +393,50 @@ class TestPythonSdkVectors(unittest.TestCase):
         v = _load_vectors()
         chat = self._identity_chat(v)
 
-        with self.assertRaisesRegex(ValueError, "Invalid quick reply"):
-            chat.encrypt_message(
-                v["event_conversation_id"],
-                "bad",
-                conversation_key=base64.b64decode(v["conversation_key_b64"]),
-                conversation_key_version=v["event_conversation_key_version"],
-                quick_reply={"neither": {}},
+        both = {**QUICK_REPLY_REQUEST, **QUICK_REPLY_RESPONSE}
+        for invalid in ({}, both):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "Invalid quick reply"
+            ):
+                chat.encrypt_message(
+                    v["event_conversation_id"],
+                    "bad",
+                    conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                    conversation_key_version=v["event_conversation_key_version"],
+                    quick_reply=invalid,
+                )
+
+    def test_quick_reply_typed_dicts_build_the_sent_shape(self):
+        from chat_xdk import (
+            QuickReply,
+            QuickReplyOption,
+            QuickReplyOptionsRequest,
+            QuickReplyOptionsResponse,
+            QuickReplyRequest,
+            QuickReplyResponse,
+        )
+
+        request = QuickReply(
+            request=QuickReplyRequest(
+                options=QuickReplyOptionsRequest(
+                    id="qr-1",
+                    options=[
+                        QuickReplyOption(
+                            id="yes", label="Yes", metadata="m-yes", description="Confirm"
+                        ),
+                        QuickReplyOption(
+                            id="no", label="No", metadata="m-no", description="Decline"
+                        ),
+                    ],
+                )
             )
+        )
+        response = QuickReply(
+            response=QuickReplyResponse(
+                options=QuickReplyOptionsResponse(
+                    request_id="qr-1", metadata="m-yes", selected_option_id="yes"
+                )
+            )
+        )
+        self.assertEqual(request, QUICK_REPLY_REQUEST)
+        self.assertEqual(response, QUICK_REPLY_RESPONSE)

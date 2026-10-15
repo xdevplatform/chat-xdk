@@ -19,7 +19,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from chat_xdk import Chat
+from chat_xdk import Chat, QuickReply
 
 
 def _b64decode(data: str) -> bytes:
@@ -210,7 +210,7 @@ class ChatCore:
         reply_to_sequence_id: str | None = None,
         entities: list[tuple[int, int, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
-        quick_reply: dict[str, Any] | None = None,
+        quick_reply: QuickReply | None = None,
         ttl_msec: int | None = None,
     ) -> dict[str, str]:
         """Encrypt + sign a message, returning fields ready for the X API send.

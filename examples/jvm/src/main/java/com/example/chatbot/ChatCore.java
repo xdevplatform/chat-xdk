@@ -140,8 +140,7 @@ public final class ChatCore implements AutoCloseable {
 
     /**
      * Like the overload above, plus {@code quickReply}: a quick reply offering
-     * selectable options or answering them, in the shape of the
-     * {@code quick_reply} of decrypted text content.
+     * selectable options or answering them.
      */
     public SendBody encryptReply(
             String conversationId,
@@ -153,7 +152,7 @@ public final class ChatCore implements AutoCloseable {
             List<AttachmentDescriptor> attachments,
             Long ttlMsec,
             List<String> replyToCkces,
-            JsonNode quickReply)
+            QuickReply quickReply)
             throws Exception {
         SendPayload payload;
         if (replyToEvent == null) {
