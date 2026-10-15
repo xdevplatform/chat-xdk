@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
-use chat_xdk_core::{EntityDescriptor, PublicKeyInput};
+use chat_xdk_core::{ConversationSetting, EntityDescriptor, PublicKeyInput};
 use chatbot_rs::chat_core::{prep_to_request, ChatCore, ReplyOptions};
 use serde_json::Value;
 
@@ -122,6 +122,26 @@ fn encrypt_forward_produces_sendable_payload() {
     assert!(!body.encoded_message_create_event.is_empty());
     assert!(!body.encoded_message_event_signature.is_empty());
     assert!(!body.message_id.is_empty());
+}
+
+#[test]
+fn prepare_settings_change_signs_the_setting() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let sig = core
+        .prepare_settings_change(
+            "6789:12345",
+            ConversationSetting::MessageDuration {
+                ttl_msec: 86_400_000,
+            },
+        )
+        .expect("prepare_settings_change");
+    assert!(!sig.encoded_message_event_detail.is_empty());
+    assert!(!sig.signature.is_empty());
+    assert!(sig
+        .signature_payload
+        .starts_with("ConversationMetadataChangeEvent.MessageDurationChange,"));
+    assert!(sig.signature_payload.ends_with(",86400000"));
 }
 
 #[test]

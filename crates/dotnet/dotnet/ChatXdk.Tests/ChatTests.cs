@@ -616,6 +616,72 @@ namespace ChatXdk.Tests
                 sig.SignaturePayload);
         }
 
+        // PrepareConversationSettingsChange
+
+        [Fact]
+        public void PrepareConversationSettingsChange_SignsMessageDuration()
+        {
+            using var chat = CreateUnlocked();
+
+            var sig = chat.PrepareConversationSettingsChange(new ConversationSettingsParams(
+                "222-111", ConversationSetting.MessageDuration)
+            {
+                TtlMsec = 86400000,
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.NotEmpty(sig.EncodedMessageEventDetail);
+            Assert.NotEmpty(sig.Signature);
+            Assert.Equal(
+                $"ConversationMetadataChangeEvent.MessageDurationChange,{sig.MessageId},111,111:222,86400000",
+                sig.SignaturePayload);
+        }
+
+        [Fact]
+        public void PrepareConversationSettingsChange_MuteSignsForSelfConversation()
+        {
+            using var chat = CreateUnlocked();
+
+            var sig = chat.PrepareConversationSettingsChange(new ConversationSettingsParams(
+                "222-111", ConversationSetting.Mute)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.Equal(
+                $"ConversationMetadataChangeEvent.MuteConversation,{sig.MessageId},111,111:111,111:222",
+                sig.SignaturePayload);
+        }
+
+        [Theory]
+        [InlineData(ConversationSetting.MessageDuration, null, "ttl_msec is required")]
+        [InlineData(ConversationSetting.MessageDuration, 0L, "ttl_msec must be positive")]
+        [InlineData(ConversationSetting.Mute, 1000L, "ttl_msec only applies")]
+        public void PrepareConversationSettingsChange_RejectsBadTtl(
+            ConversationSetting setting, long? ttl, string expected)
+        {
+            using var chat = CreateUnlocked();
+            var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareConversationSettingsChange(
+                new ConversationSettingsParams("g1", setting)
+                {
+                    TtlMsec = ttl,
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                }));
+            Assert.Contains(expected, ex.Message);
+        }
+
+        [Fact]
+        public void PrepareConversationSettingsChange_RejectsUndefinedSetting()
+        {
+            using var chat = CreateUnlocked();
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(() => chat.PrepareConversationSettingsChange(
+                new ConversationSettingsParams("g1", (ConversationSetting)99)));
+            Assert.Contains("pass one of the named ConversationSetting values", ex.Message);
+        }
+
         // Conversation key encrypt / decrypt
 
         [Fact]

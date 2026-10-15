@@ -204,6 +204,19 @@ public final class ChatCore implements AutoCloseable {
         return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
     }
 
+    /**
+     * Sign a conversation setting change under the session identity.
+     * {@code ttlMsec} (nullable) is only for
+     * {@link ConversationSetting#MESSAGE_DURATION}. Returns the action
+     * signature to submit alongside the settings request.
+     */
+    public ActionSignature prepareSettingsChange(String conversationId, ConversationSetting setting, Long ttlMsec)
+            throws Exception {
+        ConversationSettingsParams params = new ConversationSettingsParams(conversationId, setting);
+        params.ttlMsec = ttlMsec;
+        return chat.prepareConversationSettingsChange(params);
+    }
+
     /** Encrypt + sign a reaction add/remove targeting a raw event
      * (the conversation id and target sequence id are derived from it). */
     public SendBody encryptReaction(

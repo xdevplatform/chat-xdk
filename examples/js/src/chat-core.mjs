@@ -261,6 +261,15 @@ export class ChatCore {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
   }
 
+  /**
+   * Sign a conversation setting change, e.g. `setting: "message_duration"`
+   * with `ttlMsec`, `"mute"`, or `"enable_screen_capture_blocking"`. Returns
+   * the action signature to submit alongside the settings request.
+   */
+  prepareSettingsChange({ conversationId, setting, ttlMsec }) {
+    return this.#chat.prepareConversationSettingsChange({ conversationId, setting, ttlMsec });
+  }
+
   // -- Group management ------------------------------------------------------
 
   /** Prepare a group creation: fresh key + the two required signatures. */

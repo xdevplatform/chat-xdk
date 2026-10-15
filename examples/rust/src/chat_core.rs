@@ -15,12 +15,13 @@ use std::collections::HashMap;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::SdkError;
+use chat_xdk_core::signatures::ActionSignature;
 use chat_xdk_core::{
-    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventsResult,
-    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    EntityDescriptor, Event, GroupCreateParams, GroupMembersChangeParams,
-    PreparedConversationChange, PublicKeyInput, PublicKeyRegistrationPayload, PublicKeys,
-    QuickReply, SigningKeyEntry,
+    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, ConversationSetting,
+    ConversationSettingsParams, DecryptEventsResult, EncryptForwardParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event, GroupCreateParams,
+    GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
+    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
 use serde_json::{json, Value};
 
@@ -233,6 +234,21 @@ impl ChatCore {
             encoded_message_event_signature: payload.encoded_event_signature,
             conversation_token: None,
         })
+    }
+
+    /// Sign a conversation setting change (disappearing-message duration,
+    /// mute, or screen-capture blocking) under the session identity. Returns
+    /// the action signature to submit alongside the settings request.
+    pub fn prepare_settings_change(
+        &self,
+        conversation_id: &str,
+        setting: ConversationSetting,
+    ) -> Result<ActionSignature, SdkError> {
+        self.inner
+            .prepare_conversation_settings_change(&ConversationSettingsParams::new(
+                conversation_id,
+                setting,
+            ))
     }
 
     /// Encrypt + sign a reaction add/remove targeting a raw event: the SDK

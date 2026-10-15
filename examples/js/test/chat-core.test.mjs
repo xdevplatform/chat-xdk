@@ -98,6 +98,19 @@ test("encryptForward produces a sendable payload", async () => {
   assert.ok(body.message_id);
 });
 
+test("prepareSettingsChange signs the setting", async () => {
+  const core = await loadedCore();
+  const sig = core.prepareSettingsChange({
+    conversationId: "6789:12345",
+    setting: "message_duration",
+    ttlMsec: 86_400_000,
+  });
+  assert.ok(sig.encodedMessageEventDetail);
+  assert.ok(sig.signature);
+  assert.ok(sig.signaturePayload.startsWith("ConversationMetadataChangeEvent.MessageDurationChange,"));
+  assert.ok(sig.signaturePayload.endsWith(",86400000"));
+});
+
 test("session cache: decryptBatch feeds the key cache, encryptReply omits the key", async () => {
   const core = await loadedCore();
   core.setCacheKeys(true);

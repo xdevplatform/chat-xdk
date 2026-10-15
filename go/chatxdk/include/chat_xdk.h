@@ -317,6 +317,23 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
                                                  const char *params_json);
 
 /**
+ * Build the signed action for changing a conversation setting.
+ *
+ * `params_json` — single JSON document: `conversation_id`, `setting` (one of
+ * `message_duration`, `remove_message_duration`, `mute`, `unmute`,
+ * `enable_screen_capture_blocking`, `disable_screen_capture_blocking`),
+ * `ttl_msec` (required for `message_duration` and rejected otherwise), plus
+ * optional `sender_id` / `signing_key_version` (unset resolves from the
+ * session identity). Mute and unmute are signed for the sender's own
+ * `{sender_id}:{sender_id}` conversation.
+ *
+ * Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+ * on it.
+ */
+struct FfiResult chat_xdk_prepare_conversation_settings_change(const struct ChatHandle *handle,
+                                                               const char *params_json);
+
+/**
  * Decrypt a webhook event.
  *
  * `event_b64`: Base64-encoded event from webhook.

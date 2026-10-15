@@ -393,6 +393,31 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 	return &out, nil
 }
 
+// PrepareConversationSettingsChange builds the signed action for changing a
+// conversation setting: the disappearing-message duration, mute, or
+// screen-capture blocking.
+//
+// Mute and unmute are personal: they are signed for the sender's own
+// "{sender}:{sender}" conversation, with ConversationID as the muted
+// conversation. The SDK generates the action's message id; read it back from
+// the result.
+func (c *Chat) PrepareConversationSettingsChange(params ConversationSettingsParams) (*ActionSignature, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiPrepareConversationSettingsChange(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out ActionSignature
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DecryptEvent decrypts a single webhook event and errors on failure.
 //
 // conversationKeys is a map of version -> raw 32-byte conversation key,

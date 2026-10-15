@@ -575,6 +575,27 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    /**
+     * Build the signed action for changing a conversation setting: the
+     * disappearing-message duration, mute, or screen-capture blocking.
+     *
+     * <p>Mute and unmute are personal: they are signed for the sender's own
+     * {@code "{sender}:{sender}"} conversation, with {@code conversationId} as
+     * the muted conversation. The SDK generates the action's message id; read
+     * it back from the result.
+     */
+    public ActionSignature prepareConversationSettingsChange(ConversationSettingsParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        try (Memory j = FfiStrings.utf8(buildPrepareConversationSettingsChangeJson(parameters))) {
+            String resultJson = FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_prepare_conversation_settings_change(handle, j));
+            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
     private PreparedConversationChange callPrepare(String paramsJson, ParamsJsonFn fn) throws Exception {
         try (Memory j = FfiStrings.utf8(paramsJson)) {
             String resultJson = FfiStrings.consume(fn.apply(handle, j));
@@ -1049,6 +1070,19 @@ public final class Chat implements AutoCloseable {
         n.set("sequence_ids", ChatJson.MAPPER.valueToTree(
                 p.sequenceIds == null ? List.of() : p.sequenceIds));
         n.put("delete_for_all", p.deleteForAll);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareConversationSettingsChangeJson(ConversationSettingsParams p)
+            throws Exception {
+        if (p.setting == null) {
+            throw new IllegalArgumentException("setting is null: pass a ConversationSetting value");
+        }
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("setting", p.setting.wireName);
+        n.put("ttl_msec", p.ttlMsec);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

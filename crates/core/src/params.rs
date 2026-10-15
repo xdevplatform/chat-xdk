@@ -22,6 +22,7 @@
 
 use zeroize::Zeroize;
 
+use crate::error::SdkError;
 use crate::types::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput, QuickReply};
 
 /// Convert an override string into storage form: an empty string means
@@ -701,6 +702,124 @@ impl MessageDeleteParams {
     }
 }
 
+/// A conversation setting to change with
+/// [`crate::ChatCore::prepare_conversation_settings_change`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationSetting {
+    /// Make new messages disappear `ttl_msec` milliseconds after they are
+    /// sent. Must be positive.
+    MessageDuration {
+        /// Lifetime of each new message, in milliseconds.
+        ttl_msec: i64,
+    },
+    /// Turn disappearing messages off.
+    RemoveMessageDuration,
+    /// Mute the conversation for the caller only.
+    Mute,
+    /// Unmute the conversation for the caller only.
+    Unmute,
+    /// Ask participants' clients to block screenshots and screen recording.
+    EnableScreenCaptureBlocking,
+    /// Stop asking participants' clients to block screen capture.
+    DisableScreenCaptureBlocking,
+}
+
+impl ConversationSetting {
+    /// Every name accepted by [`ConversationSetting::from_name`].
+    pub const NAMES: [&'static str; 6] = [
+        "message_duration",
+        "remove_message_duration",
+        "mute",
+        "unmute",
+        "enable_screen_capture_blocking",
+        "disable_screen_capture_blocking",
+    ];
+
+    /// Parse the string form the language bindings take: one of
+    /// [`ConversationSetting::NAMES`], with `ttl_msec` set for
+    /// `"message_duration"` and only for it.
+    pub fn from_name(setting: &str, ttl_msec: Option<i64>) -> Result<Self, SdkError> {
+        let parsed = match setting {
+            "message_duration" => {
+                let Some(ttl_msec) = ttl_msec else {
+                    return Err(SdkError::InvalidState(
+                        "ttl_msec is required for setting \"message_duration\": pass the message \
+                         lifetime in milliseconds"
+                            .into(),
+                    ));
+                };
+                return Ok(Self::MessageDuration { ttl_msec });
+            }
+            "remove_message_duration" => Self::RemoveMessageDuration,
+            "mute" => Self::Mute,
+            "unmute" => Self::Unmute,
+            "enable_screen_capture_blocking" => Self::EnableScreenCaptureBlocking,
+            "disable_screen_capture_blocking" => Self::DisableScreenCaptureBlocking,
+            "" => {
+                return Err(SdkError::InvalidState(format!(
+                    "setting is empty: pass one of {}",
+                    Self::NAMES.join(", ")
+                )))
+            }
+            other => {
+                return Err(SdkError::InvalidState(format!(
+                    "unknown setting \"{other}\": pass one of {}",
+                    Self::NAMES.join(", ")
+                )))
+            }
+        };
+        if ttl_msec.is_some() {
+            return Err(SdkError::InvalidState(format!(
+                "ttl_msec only applies to setting \"message_duration\": leave it unset for \
+                 \"{setting}\""
+            )));
+        }
+        Ok(parsed)
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_conversation_settings_change`].
+///
+/// A settings change is a signed plaintext event, not an encrypted message,
+/// so no conversation key is involved: the result is an action signature the
+/// caller submits alongside the settings request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConversationSettingsParams {
+    /// ID of the conversation whose setting changes.
+    pub conversation_id: String,
+    /// The setting to change.
+    pub setting: ConversationSetting,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl ConversationSettingsParams {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, setting: ConversationSetting) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            setting,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
 /// Parameters for [`crate::ChatCore::prepare_conversation_key_change`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConversationKeyChangeParams {
@@ -1110,6 +1229,51 @@ mod tests {
             a.action_signatures[1].encoded_message_event_detail,
             b.action_signatures[1].encoded_message_event_detail,
         );
+    }
+
+    #[test]
+    fn conversation_setting_from_name_parses_every_name() {
+        use ConversationSetting as S;
+        assert_eq!(
+            S::from_name("message_duration", Some(1000)).unwrap(),
+            S::MessageDuration { ttl_msec: 1000 }
+        );
+        let rest = [
+            S::RemoveMessageDuration,
+            S::Mute,
+            S::Unmute,
+            S::EnableScreenCaptureBlocking,
+            S::DisableScreenCaptureBlocking,
+        ];
+        for (name, expected) in S::NAMES[1..].iter().zip(rest) {
+            assert_eq!(S::from_name(name, None).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn conversation_setting_from_name_rejects_bad_input() {
+        let err = |s: &str, ttl: Option<i64>| {
+            ConversationSetting::from_name(s, ttl)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("message_duration", None).contains("ttl_msec is required"));
+        assert!(err("mute", Some(1)).contains("ttl_msec only applies"));
+        assert!(err("", None).contains("setting is empty: pass one of message_duration"));
+        assert!(err("Mute", None).contains("unknown setting \"Mute\": pass one of"));
+    }
+
+    #[test]
+    fn conversation_settings_params_new_plus_identity_equals_full_construction() {
+        let via_new = ConversationSettingsParams::new("g1", ConversationSetting::Mute)
+            .with_identity("me", "2");
+        let full = ConversationSettingsParams {
+            conversation_id: "g1".into(),
+            setting: ConversationSetting::Mute,
+            sender_id: Some("me".into()),
+            signing_key_version: Some("2".into()),
+        };
+        assert_eq!(via_new, full);
     }
 
     #[test]

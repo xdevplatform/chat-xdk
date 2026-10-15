@@ -965,4 +965,64 @@ public final class Types {
             this.deleteForAll = deleteForAll;
         }
     }
+
+    /** A setting {@link Chat#prepareConversationSettingsChange} can change. */
+    public enum ConversationSetting {
+        /** Make new messages disappear {@code ttlMsec} milliseconds after they are sent. */
+        MESSAGE_DURATION("message_duration"),
+        /** Turn disappearing messages off. */
+        REMOVE_MESSAGE_DURATION("remove_message_duration"),
+        /** Mute the conversation for the sender only. */
+        MUTE("mute"),
+        /** Unmute the conversation for the sender only. */
+        UNMUTE("unmute"),
+        /** Ask participants' clients to block screenshots and screen recordings. */
+        ENABLE_SCREEN_CAPTURE_BLOCKING("enable_screen_capture_blocking"),
+        /** Lift screen-capture blocking. */
+        DISABLE_SCREEN_CAPTURE_BLOCKING("disable_screen_capture_blocking");
+
+        final String wireName;
+
+        ConversationSetting(String wireName) {
+            this.wireName = wireName;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#prepareConversationSettingsChange}.
+     *
+     * <p>Like a delete, a settings change is a signed plaintext event, so no
+     * conversation key is involved.
+     */
+    public static final class ConversationSettingsParams {
+        /** ID of the conversation whose setting changes. */
+        public final String conversationId;
+
+        /** The setting to change. */
+        public final ConversationSetting setting;
+
+        /**
+         * How long new messages last before they disappear, in milliseconds.
+         * Required for {@link ConversationSetting#MESSAGE_DURATION} and
+         * rejected for every other setting.
+         */
+        public Long ttlMsec;
+
+        /** User ID of the sender signing the change; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param conversationId ID of the conversation whose setting changes.
+         * @param setting The setting to change.
+         */
+        public ConversationSettingsParams(String conversationId, ConversationSetting setting) {
+            this.conversationId = conversationId;
+            this.setting = setting;
+        }
+    }
 }

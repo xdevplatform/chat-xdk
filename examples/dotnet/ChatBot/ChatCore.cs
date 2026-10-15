@@ -150,6 +150,19 @@ public sealed class ChatCore : IDisposable
         return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
     }
 
+    /// <summary>
+    /// Sign a conversation setting change under the session identity.
+    /// <paramref name="ttlMsec"/> is only for
+    /// <see cref="ConversationSetting.MessageDuration"/>. Returns the action
+    /// signature to submit alongside the settings request.
+    /// </summary>
+    public ActionSignature PrepareSettingsChange(
+        string conversationId, ConversationSetting setting, long? ttlMsec = null) =>
+        _chat.PrepareConversationSettingsChange(new ConversationSettingsParams(conversationId, setting)
+        {
+            TtlMsec = ttlMsec,
+        });
+
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
     /// (the conversation id and target sequence id are derived from it).</summary>
     public SendBody EncryptReaction(
