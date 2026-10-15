@@ -41,7 +41,7 @@ When you add or change SDK behavior:
    `camelCase` (JS/Java), `PascalCase` methods (.NET/Go).
 4. Update the per-binding tables in [`docs/API.md`](docs/API.md) in lockstep.
 5. Extend the parallel per-binding test suites so the new surface is covered
-   everywhere (see §5).
+   everywhere (see §6).
 
 ## 3. Clean API
 
@@ -58,7 +58,80 @@ and two decrypt paths whose contracts are **identical across bindings**:
 
 Don't add speculative configurability or one-off helpers.
 
-## 4. Security invariants — never weaken to make something pass
+## 4. Symmetric public API
+
+The public API is **symmetric across bindings** (the same concept has the same
+type, shape and names in every language) and **within each binding** (a value
+the caller sends and the same value the SDK returns use one type). Asymmetry is
+a bug even when every binding "works".
+
+**Rules**
+
+- **One type per concept, named the same everywhere.** A quick reply is
+  `QuickReply` / `QuickReplyRequest` / `QuickReplyResponse` /
+  `QuickReplyOptionsRequest` / `QuickReplyOptionsResponse` / `QuickReplyOption`
+  in Rust, JS, Python, Go, .NET and JVM. Only the casing follows the language
+  (§2); the structure and the type names do not change.
+- **Input and output share the type.** When a binding types its decrypt output,
+  the output field uses the same type as the input (Go `TextContent.QuickReply`
+  and `EncryptMessageParams.QuickReply` are both `*QuickReply`; JS
+  `MessageContent.quickReply` and `EncryptMessageParams.quickReply` are both
+  `QuickReply`). Where a binding returns decrypt output as JSON (.NET
+  `JsonElement`, JVM `JsonNode`, Python `dict`), the input type must
+  deserialize from that JSON unchanged, and a test must prove it by sending a
+  decrypted value back.
+- **Nested inputs are typed when their siblings are.** If entities and
+  attachments are typed on a params type, a new nested field is typed too:
+  never `JsonElement`, `JsonNode`, `json.RawMessage`, `unknown`, or a bare
+  `dict` next to typed siblings.
+- **Wire keys stay snake_case, except JS.** Every binding serializes to the
+  core's snake_case JSON; JS/WASM is camelCase throughout (field names *and*
+  enum tag values, via `JsCamelCase`). The one documented exception is
+  `AttachmentDescriptor`, whose snake_case keys mirror the wire protocol in
+  every binding, JS included.
+- **Optional fields follow one style per binding:** Rust `Option<T>`; JS
+  `field?: T | null`; Python `Optional[T]` keyword arguments and
+  `TypedDict(total=False)` keys; Go pointer + `omitempty`; .NET nullable +
+  `JsonIgnore(WhenWritingNull)`; JVM boxed/reference field + `@JsonInclude(NON_NULL)`.
+  Unset optionals are **omitted**, not sent as `null`: core enums such as
+  `QuickReply` are untagged with `deny_unknown_fields`, so a stray
+  `"response": null` next to `"request"` is rejected.
+- **Errors follow one style per binding.** Invalid input fails in the core with
+  a message naming the value (`Invalid quick reply: …`), surfaced as the
+  binding's error type: Python `ValueError`, JS a thrown `Error`, Go a returned
+  `error`, .NET and JVM `ChatXdkException`. Never return a partial result or
+  silently drop the bad value.
+
+**Known exceptions** (do not copy these patterns into new surface; fix them
+when touching the area): Go `TextContent` nested fields other than quick reply,
+`Message.Attachments` and `GroupChangeEvent.Change` are `json.RawMessage`;
+.NET and JVM decrypt output is untyped JSON; several JS `MessageContent`
+nested fields are `unknown`; Python attachments are `list[dict]`; entities are
+a struct in Rust/.NET/JVM but a tuple in Go/JS/Python; JS attachment inputs are
+snake_case while decrypted `AttachmentInfo` is camelCase; JS wraps invalid
+params as `Invalid encryptMessage params: …` instead of the core message.
+
+**Checklist — adding a field or a type**
+
+1. Define it once in `crates/core` (with `JsCamelCase` for JS and a
+   camelCase test in `crates/core/src/types.rs` if it holds enum tags or
+   struct-variant fields).
+2. Add the typed equivalent to every binding, under the same type and field
+   names: Rust, JS `index.d.ts` + the wasm params mirror, Python `__init__.py`
+   + `__init__.pyi`, Go `go/chatxdk/types.go`, .NET `Types.cs`, JVM
+   `Types.java`.
+3. Use it on **both** sides: every params type that accepts it, and every typed
+   output that returns it.
+4. Apply the binding's optional-field style so unset values are omitted.
+5. Test every binding: encrypt → decrypt round trip, resend the decrypted
+   value unchanged, and the invalid-input error.
+6. Update `docs/API.md` (per-binding table and examples) and any example that
+   passes the value.
+7. Grep the bindings for raw-JSON types on the touched params
+   (`JsonElement`, `JsonNode`, `RawMessage`, `unknown`, `dict`) before opening
+   the PR.
+
+## 5. Security invariants — never weaken to make something pass
 
 - **Verification is not optional.** `decryptEvent` rejects unverified events by
   default; a below-floor key version must never verify; an invalid signature must
@@ -97,7 +170,7 @@ Don't add speculative configurability or one-off helpers.
   XSalsa20-Poly1305 for messages; `crypto_secretstream_xchacha20poly1305` for
   media; ECDSA P-256 signatures; HKDF-SHA256. See [`docs/CRYPTO.md`](docs/CRYPTO.md).
 
-## 5. Testing
+## 6. Testing
 
 - **Drive the real binding — never mock the SDK.** A passing test must fail if
   the shipped code breaks: no hardcoded expected values, no re-implementing the
@@ -110,7 +183,7 @@ Don't add speculative configurability or one-off helpers.
   suites (Python, JS/WASM, Go, JVM, .NET); run `make test-sdks`,
   `make jvm-test`, and `make dotnet-test` to match it locally.
 
-## 6. Platform invariants
+## 7. Platform invariants
 
 - **Determinism comes from inputs, not ambient state.** Any core function whose
   result derives from the clock (e.g. timestamp-string key versions) exposes a
@@ -121,7 +194,7 @@ Don't add speculative configurability or one-off helpers.
   normalizes before signing; only I/O code may rehyphenate to `A-B` for URL
   paths. Never sign or verify the hyphen form.
 
-## 7. Generated & prebuilt artifacts
+## 8. Generated & prebuilt artifacts
 
 - `crates/core/src/thrift/*.rs` are generated by `make codegen` from
   `thrift/*.thrift`. **Do not hand-edit** — change the schema and regenerate.
@@ -129,7 +202,7 @@ Don't add speculative configurability or one-off helpers.
   `crates/core` change; regenerate (`make prebuilt-all`) or call it out in the PR.
   CI rebuilds Python `_native*.so` and WASM `pkg/` fresh; those are gitignored.
 
-## 8. Style & dependencies
+## 9. Style & dependencies
 
 - Comments explain **this** code's intent and gotchas — not lineage, tickets,
   ports, or "mirrors X" (see the code-comments skill). No commented-out code.
@@ -146,7 +219,7 @@ Don't add speculative configurability or one-off helpers.
   (PyPI, npm, NuGet, crates.io); no long-lived publish tokens. Maven Central is
   the exception (Central Portal user token) until Sonatype ships OIDC.
 
-## 9. Repo layout
+## 10. Repo layout
 
 ```
 crates/core/     chat-xdk-core: engine, crypto/, keys/, thrift/ (generated)
