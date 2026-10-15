@@ -546,6 +546,40 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(payload.EncryptedContent);
         }
 
+        [Fact]
+        public void AttachmentTargets_NeedTheRawEvent()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+
+            var reaction = new EncryptReactionParams(targetEvent: null, "👍")
+            {
+                ConversationId = "conv-1",
+                TargetMessageSequenceId = "seq-99",
+                TargetAttachmentId = "att-1",
+                SenderId = "user-1",
+                SigningKeyVersion = "s1",
+                ConversationKey = ckey,
+                ConversationKeyVersion = "v1",
+            };
+            var add = Assert.Throws<ChatXdkException>(() => chat.EncryptAddReaction(reaction));
+            Assert.Contains("target_attachment_id needs target_event", add.Message);
+            var remove = Assert.Throws<ChatXdkException>(() => chat.EncryptRemoveReaction(reaction));
+            Assert.Contains("target_attachment_id needs target_event", remove.Message);
+
+            var reply = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
+                new EncryptReplyParams("conv-1", "nice photo", replyToEvent: null)
+                {
+                    SenderId = "user-1",
+                    SigningKeyVersion = "s1",
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "v1",
+                    ReplyToSequenceId = "seq-42",
+                    ReplyToAttachmentId = "att-1",
+                }));
+            Assert.Contains("reply_to_attachment_id needs reply_to_event", reply.Message);
+        }
+
         // EncryptEdit
 
         [Fact]
