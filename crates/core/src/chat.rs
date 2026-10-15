@@ -64,8 +64,9 @@ use crate::error::{JuiceboxError, KeyError, SdkError};
 use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, RegisterResult};
 #[cfg(feature = "juicebox")]
 use crate::params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
+    MessageDeleteParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -322,6 +323,10 @@ impl Chat {
     /// Encrypt a text message.
     pub fn encrypt_message(&self, params: EncryptMessageParams) -> Result<SendPayload, SdkError> {
         self.inner.encrypt_message(params)
+    }
+    /// Encrypt a forward of an existing message.
+    pub fn encrypt_forward(&self, params: EncryptForwardParams) -> Result<SendPayload, SdkError> {
+        self.inner.encrypt_forward(params)
     }
     /// Encrypt a reply.
     pub fn encrypt_reply(&self, params: EncryptReplyParams) -> Result<SendPayload, SdkError> {
