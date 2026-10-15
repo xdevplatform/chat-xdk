@@ -135,9 +135,9 @@ pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{StreamDecryptor, StreamEncryptor};
 pub use params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-    MessageDeleteParams,
+    ConversationKeyChangeParams, ConversationSetting, ConversationSettingsParams,
+    EncryptEditParams, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
 };
 pub use types::*;
 
@@ -206,9 +206,9 @@ pub mod prelude {
     pub use crate::chat::Chat;
 
     pub use crate::params::{
-        ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
-        EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-        MessageDeleteParams,
+        ConversationKeyChangeParams, ConversationSetting, ConversationSettingsParams,
+        EncryptEditParams, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
+        EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
     };
 
     // Types (always available)

@@ -12,9 +12,9 @@ use crate::error::{CryptoError, SdkError};
 use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-    MessageDeleteParams,
+    ConversationKeyChangeParams, ConversationSettingsParams, EncryptEditParams,
+    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -2102,6 +2102,109 @@ impl ChatCore {
             },
         );
         Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+    }
+
+    /// Sign a conversation settings change: the disappearing-message
+    /// duration, mute state, or screen-capture blocking.
+    ///
+    /// Returns an [`crate::signatures::ActionSignature`] whose
+    /// `encoded_message_event_detail` carries the
+    /// `ConversationMetadataChangeEvent`. Mute and unmute are personal: the
+    /// muted conversation is named in the event, and the event itself is
+    /// signed for the caller's own self-conversation
+    /// (`{sender_id}:{sender_id}`), as the native clients do.
+    pub fn prepare_conversation_settings_change(
+        &self,
+        params: &ConversationSettingsParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        use crate::params::ConversationSetting as S;
+        use crate::thrift::event::{self as ev, ConversationMetadataChange as CMC};
+
+        if params.conversation_id.is_empty() {
+            return Err(SdkError::InvalidState(
+                "conversation_id is empty: pass the conversation whose setting changes".into(),
+            ));
+        }
+        if let S::MessageDuration { ttl_msec } = params.setting {
+            if ttl_msec <= 0 {
+                return Err(SdkError::InvalidState(format!(
+                    "ttl_msec must be positive, got {ttl_msec}: pass the message lifetime in \
+                     milliseconds, or use the remove-message-duration setting to turn \
+                     disappearing messages off"
+                )));
+            }
+        }
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let conversation_id =
+            crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id)
+                .into_owned();
+        let signing_key = self.get_signing_private_key()?;
+
+        let self_conversation_id = crate::pipeline::join_sorted_pair(&sender_id, &sender_id);
+        let ttl_str;
+        let (name, change, signed_conversation_id, extra): (&str, CMC, &str, Vec<&str>) =
+            match params.setting {
+                S::MessageDuration { ttl_msec } => {
+                    ttl_str = ttl_msec.to_string();
+                    (
+                        "MessageDurationChange",
+                        CMC::MessageDurationChange(ev::MessageDurationChange::new(ttl_msec, None)),
+                        &conversation_id,
+                        vec![&ttl_str],
+                    )
+                }
+                S::RemoveMessageDuration => (
+                    "MessageDurationRemove",
+                    CMC::MessageDurationRemove(ev::MessageDurationRemove::new(None)),
+                    &conversation_id,
+                    vec![],
+                ),
+                S::Mute => (
+                    "MuteConversation",
+                    CMC::MuteConversation(ev::MuteConversation::new(vec![conversation_id.clone()])),
+                    &self_conversation_id,
+                    vec![&conversation_id],
+                ),
+                S::Unmute => (
+                    "UnmuteConversation",
+                    CMC::UnmuteConversation(ev::UnmuteConversation::new(vec![
+                        conversation_id.clone()
+                    ])),
+                    &self_conversation_id,
+                    vec![&conversation_id],
+                ),
+                S::EnableScreenCaptureBlocking => (
+                    "EnableScreenCaptureBlocking",
+                    CMC::EnableScreenCaptureBlocking(ev::EnableScreenCaptureBlocking::new(None)),
+                    &conversation_id,
+                    vec![],
+                ),
+                S::DisableScreenCaptureBlocking => (
+                    "DisableScreenCaptureBlocking",
+                    CMC::DisableScreenCaptureBlocking(ev::DisableScreenCaptureBlocking::new(None)),
+                    &conversation_id,
+                    vec![],
+                ),
+            };
+
+        let message_id = Self::generate_message_id();
+        let mut signature = crate::signatures::build_action_signature(
+            &signing_key,
+            &signing_key_version,
+            &format!("ConversationMetadataChangeEvent.{name}"),
+            &message_id,
+            &sender_id,
+            signed_conversation_id,
+            &extra,
+        )?;
+        let detail = crate::thrift::event::MessageEventDetail::ConversationMetadataChangeEvent(
+            ev::ConversationMetadataChangeEvent::new(change),
+        );
+        signature.encoded_message_event_detail =
+            base64_encode(&crate::pipeline::serialize_thrift(&detail)?);
+        Ok(signature)
     }
 
     /// Resolve a reaction's conversation id and target sequence id from the
@@ -7213,6 +7316,153 @@ mod tests {
             format!("MessageDeleteEvent,{},111,g999,1,seq-1", sig.message_id)
         );
         assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+    }
+
+    fn settings_change(
+        core: &ChatCore,
+        conversation_id: &str,
+        setting: crate::ConversationSetting,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        let params = crate::ConversationSettingsParams::new(conversation_id, setting)
+            .with_identity("111", "1");
+        core.prepare_conversation_settings_change(&params)
+    }
+
+    fn decode_metadata_change(
+        sig: &crate::signatures::ActionSignature,
+    ) -> crate::thrift::event::ConversationMetadataChange {
+        match decode_detail(&sig.encoded_message_event_detail) {
+            MessageEventDetail::ConversationMetadataChangeEvent(e) => {
+                e.conversation_metadata_change.expect("change is set")
+            }
+            other => panic!("expected ConversationMetadataChangeEvent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn settings_change_message_duration_signs_and_verifies() {
+        use crate::thrift::event::ConversationMetadataChange as CMC;
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let sig = settings_change(
+            &core,
+            "222-111",
+            crate::ConversationSetting::MessageDuration {
+                ttl_msec: 86_400_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sig.signature_payload,
+            format!(
+                "ConversationMetadataChangeEvent.MessageDurationChange,{},111,111:222,86400000",
+                sig.message_id
+            )
+        );
+        match decode_metadata_change(&sig) {
+            CMC::MessageDurationChange(c) => {
+                assert_eq!(c.ttl_msec, Some(86_400_000));
+                assert_eq!(c.apply_to_all_messages, None);
+            }
+            other => panic!("expected MessageDurationChange, got {:?}", other),
+        }
+        assert_action_signature_round_trips(&core, &sig, "111", "111:222", None);
+    }
+
+    #[test]
+    fn settings_change_without_payload_extras_signs_and_verifies() {
+        use crate::thrift::event::ConversationMetadataChange as CMC;
+        use crate::ConversationSetting as S;
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        for (setting, name) in [
+            (S::RemoveMessageDuration, "MessageDurationRemove"),
+            (
+                S::EnableScreenCaptureBlocking,
+                "EnableScreenCaptureBlocking",
+            ),
+            (
+                S::DisableScreenCaptureBlocking,
+                "DisableScreenCaptureBlocking",
+            ),
+        ] {
+            let sig = settings_change(&core, "g999", setting).unwrap();
+            assert_eq!(
+                sig.signature_payload,
+                format!(
+                    "ConversationMetadataChangeEvent.{name},{},111,g999",
+                    sig.message_id
+                )
+            );
+            let change = decode_metadata_change(&sig);
+            match (setting, change) {
+                (S::RemoveMessageDuration, CMC::MessageDurationRemove(c)) => {
+                    assert_eq!(c.current_ttl_msec, None)
+                }
+                (S::EnableScreenCaptureBlocking, CMC::EnableScreenCaptureBlocking(_))
+                | (S::DisableScreenCaptureBlocking, CMC::DisableScreenCaptureBlocking(_)) => {}
+                (s, c) => panic!("{s:?} produced {c:?}"),
+            }
+            assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+        }
+    }
+
+    /// Mute state is personal: the muted conversation is named in the event,
+    /// and the event is signed for the sender's own self-conversation.
+    #[test]
+    fn settings_change_mute_and_unmute_sign_for_the_self_conversation() {
+        use crate::thrift::event::ConversationMetadataChange as CMC;
+        use crate::ConversationSetting as S;
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        for (setting, name) in [
+            (S::Mute, "MuteConversation"),
+            (S::Unmute, "UnmuteConversation"),
+        ] {
+            let sig = settings_change(&core, "222-111", setting).unwrap();
+            assert_eq!(
+                sig.signature_payload,
+                format!(
+                    "ConversationMetadataChangeEvent.{name},{},111,111:111,111:222",
+                    sig.message_id
+                )
+            );
+            let ids = match decode_metadata_change(&sig) {
+                CMC::MuteConversation(c) => c.muted_conversation_ids,
+                CMC::UnmuteConversation(c) => c.unmuted_conversation_ids,
+                other => panic!("expected mute/unmute, got {:?}", other),
+            };
+            assert_eq!(ids, Some(vec!["111:222".to_string()]));
+            assert_action_signature_round_trips(&core, &sig, "111", "111:111", None);
+        }
+    }
+
+    #[test]
+    fn settings_change_rejects_invalid_input() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let err = settings_change(&core, "", crate::ConversationSetting::Mute).unwrap_err();
+        assert!(
+            err.to_string().contains("conversation_id is empty"),
+            "{err}"
+        );
+
+        for ttl_msec in [0, -5] {
+            let err = settings_change(
+                &core,
+                "g999",
+                crate::ConversationSetting::MessageDuration { ttl_msec },
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("ttl_msec must be positive"),
+                "{err}"
+            );
+        }
     }
 
     #[test]

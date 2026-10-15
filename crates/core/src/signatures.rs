@@ -269,6 +269,30 @@ pub fn build_message_delete_signature(
     sign_payload(signing_key, public_key_version, message_id, &components)
 }
 
+/// Build and sign an action signature whose payload is the event name, the
+/// common header, and event-specific trailing components.
+///
+/// Payload format:
+/// ```text
+/// {event_name},{msg_id},{sender_id},{conv_id},{extra...}
+/// ```
+///
+/// The payload is comma-joined with no escaping, so signing fails with a
+/// parse error if any component contains a comma.
+pub fn build_action_signature(
+    signing_key: &XChatPrivateKey,
+    public_key_version: &str,
+    event_name: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    extra: &[&str],
+) -> Result<ActionSignature, SdkError> {
+    let mut components: Vec<&str> = vec![event_name, message_id, sender_id, conversation_id];
+    components.extend_from_slice(extra);
+    sign_payload(signing_key, public_key_version, message_id, &components)
+}
+
 /// Sign a comma-joined payload and return an [`ActionSignature`].
 ///
 /// Rejects any component containing `,`: the payload has no escaping, so an

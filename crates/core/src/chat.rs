@@ -64,9 +64,9 @@ use crate::error::{JuiceboxError, KeyError, SdkError};
 use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, RegisterResult};
 #[cfg(feature = "juicebox")]
 use crate::params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-    MessageDeleteParams,
+    ConversationKeyChangeParams, ConversationSettingsParams, EncryptEditParams,
+    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -356,6 +356,13 @@ impl Chat {
         params: &MessageDeleteParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         self.inner.prepare_message_delete(params)
+    }
+    /// Build the signed action for changing a conversation setting.
+    pub fn prepare_conversation_settings_change(
+        &self,
+        params: &ConversationSettingsParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        self.inner.prepare_conversation_settings_change(params)
     }
     /// Decrypt an encrypted conversation key (ECIES).
     pub fn decrypt_conversation_key(
