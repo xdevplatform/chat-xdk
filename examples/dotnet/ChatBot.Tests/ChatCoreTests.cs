@@ -104,6 +104,19 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void EncryptForward_Produces_Sendable_Payload()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("12345");
+        var key = Convert.FromBase64String(v.ConversationKeyB64);
+        var body = core.EncryptForward("6789:12345", "original message", key, "1710000000000", comment: "fyi");
+        Assert.False(string.IsNullOrEmpty(body.EncodedMessageCreateEvent));
+        Assert.False(string.IsNullOrEmpty(body.EncodedMessageEventSignature));
+        Assert.False(string.IsNullOrEmpty(body.MessageId));
+    }
+
+    [Fact]
     public void DecryptBatch_Empty_Is_Safe()
     {
         var v = LoadVectors();

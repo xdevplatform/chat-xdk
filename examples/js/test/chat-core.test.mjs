@@ -84,6 +84,20 @@ test("encryptReply produces a sendable payload", async () => {
   assert.ok(body.message_id);
 });
 
+test("encryptForward produces a sendable payload", async () => {
+  const core = await loadedCore();
+  const body = core.encryptForward({
+    conversationId: "6789:12345",
+    forwardedText: "original message",
+    text: "fyi",
+    conversationKey: convKey(),
+    conversationKeyVersion: "1710000000000",
+  });
+  assert.ok(body.encoded_message_create_event);
+  assert.ok(body.encoded_message_event_signature);
+  assert.ok(body.message_id);
+});
+
 test("session cache: decryptBatch feeds the key cache, encryptReply omits the key", async () => {
   const core = await loadedCore();
   core.setCacheKeys(true);

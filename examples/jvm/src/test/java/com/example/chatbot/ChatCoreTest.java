@@ -100,6 +100,20 @@ class ChatCoreTest {
     }
 
     @Test
+    void encryptForwardProducesSendablePayload() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("12345");
+            byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
+            ChatCore.SendBody body =
+                    core.encryptForward("6789:12345", "original message", null, "fyi", key, "1710000000000");
+            assertFalse(body.encodedMessageCreateEvent().isEmpty());
+            assertFalse(body.encodedMessageEventSignature().isEmpty());
+            assertFalse(body.messageId().isEmpty());
+        }
+    }
+
+    @Test
     void decryptBatchEmptyIsSafe() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

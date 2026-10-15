@@ -17,9 +17,10 @@ use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventsResult,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event,
-    GroupCreateParams, GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
+    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    EntityDescriptor, Event, GroupCreateParams, GroupMembersChangeParams,
+    PreparedConversationChange, PublicKeyInput, PublicKeyRegistrationPayload, PublicKeys,
+    QuickReply, SigningKeyEntry,
 };
 use serde_json::{json, Value};
 
@@ -198,6 +199,33 @@ impl ChatCore {
                 self.inner.encrypt_reply(params)?
             }
         };
+        Ok(SendBody {
+            // The SDK generates the message id and returns it in the payload.
+            message_id: payload.message_id,
+            encoded_message_create_event: payload.encrypted_content,
+            encoded_message_event_signature: payload.encoded_event_signature,
+            conversation_token: None,
+        })
+    }
+
+    /// Encrypt + sign a forward of a decrypted message into
+    /// `conversation_id`: `forwarded_text` and `forwarded_entities` are the
+    /// original's text and entities, `comment` an optional note sent with it.
+    /// The sender identity comes from [`ChatCore::set_identity`].
+    pub fn encrypt_forward(
+        &self,
+        conversation_id: &str,
+        forwarded_text: &str,
+        forwarded_entities: Option<Vec<EntityDescriptor>>,
+        comment: Option<&str>,
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
+    ) -> Result<SendBody, SdkError> {
+        let mut params = EncryptForwardParams::new(conversation_id, forwarded_text)
+            .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+        params.forwarded_entities = forwarded_entities;
+        params.text = comment.map(str::to_string);
+        let payload = self.inner.encrypt_forward(params)?;
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,

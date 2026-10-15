@@ -105,6 +105,26 @@ fn encrypt_reply_produces_sendable_payload() {
 }
 
 #[test]
+fn encrypt_forward_produces_sendable_payload() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let key = conversation_key(&v);
+    let body = core
+        .encrypt_forward(
+            "6789:12345",
+            "original message",
+            None,
+            Some("fyi"),
+            &key,
+            "1710000000000",
+        )
+        .expect("encrypt_forward");
+    assert!(!body.encoded_message_create_event.is_empty());
+    assert!(!body.encoded_message_event_signature.is_empty());
+    assert!(!body.message_id.is_empty());
+}
+
+#[test]
 fn decrypt_batch_empty_is_safe() {
     let v = load_vectors();
     let core = loaded_core(&v);
