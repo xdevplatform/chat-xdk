@@ -132,6 +132,21 @@ class TestChatCore(unittest.TestCase):
         self.assertTrue(body["encoded_message_event_signature"])
         self.assertTrue(body["message_id"])
 
+    def test_prepare_settings_change_signs_the_setting(self):
+        core = self._loaded_core()
+        core.set_identity("12345")
+        sig = core.prepare_settings_change(
+            conversation_id="6789:12345", setting="mute"
+        )
+        self.assertTrue(sig["encoded_message_event_detail"])
+        self.assertTrue(sig["signature"])
+        # Mute is signed for the sender's own conversation.
+        self.assertEqual(
+            sig["signature_payload"],
+            "ConversationMetadataChangeEvent.MuteConversation,"
+            f"{sig['message_id']},12345,12345:12345,6789:12345",
+        )
+
     def test_decrypt_batch_empty_is_safe(self):
         # Drives the real decrypt_events entry point (batch path) — an empty
         # batch yields no messages and no errors.

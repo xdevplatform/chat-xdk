@@ -230,6 +230,18 @@ func (c *ChatCore) EncryptForward(conversationID, forwardedText string, forwarde
 	}, nil
 }
 
+// PrepareSettingsChange signs a conversation setting change under the session
+// identity. ttlMsec is only for chatxdk.SettingMessageDuration; pass nil
+// otherwise. Returns the action signature to submit alongside the settings
+// request.
+func (c *ChatCore) PrepareSettingsChange(conversationID string, setting chatxdk.ConversationSetting, ttlMsec *int64) (*chatxdk.ActionSignature, error) {
+	return c.chat.PrepareConversationSettingsChange(chatxdk.ConversationSettingsParams{
+		ConversationID: conversationID,
+		Setting:        setting,
+		TTLMsec:        ttlMsec,
+	})
+}
+
 // EncryptAddReaction encrypts + signs a reaction add targeting a raw event.
 // conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptAddReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {

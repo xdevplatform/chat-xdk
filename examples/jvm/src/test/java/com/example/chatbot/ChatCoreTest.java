@@ -3,6 +3,8 @@ package com.example.chatbot;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.x.chatxdk.Types.ActionSignature;
+import com.x.chatxdk.Types.ConversationSetting;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PublicKeyInput;
@@ -110,6 +112,21 @@ class ChatCoreTest {
             assertFalse(body.encodedMessageCreateEvent().isEmpty());
             assertFalse(body.encodedMessageEventSignature().isEmpty());
             assertFalse(body.messageId().isEmpty());
+        }
+    }
+
+    @Test
+    void prepareSettingsChangeSignsTheSetting() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("12345");
+            ActionSignature sig = core.prepareSettingsChange("6789:12345", ConversationSetting.UNMUTE, null);
+            assertFalse(sig.encodedMessageEventDetail.isEmpty());
+            assertFalse(sig.signature.isEmpty());
+            assertEquals(
+                    "ConversationMetadataChangeEvent.UnmuteConversation," + sig.messageId
+                            + ",12345,12345:12345,6789:12345",
+                    sig.signaturePayload);
         }
     }
 

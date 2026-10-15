@@ -117,6 +117,20 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void PrepareSettingsChange_Signs_The_Setting()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("12345");
+        var sig = core.PrepareSettingsChange("6789:12345", ConversationSetting.MessageDuration, 86400000);
+        Assert.False(string.IsNullOrEmpty(sig.EncodedMessageEventDetail));
+        Assert.False(string.IsNullOrEmpty(sig.Signature));
+        Assert.Equal(
+            $"ConversationMetadataChangeEvent.MessageDurationChange,{sig.MessageId},12345,6789:12345,86400000",
+            sig.SignaturePayload);
+    }
+
+    [Fact]
     public void DecryptBatch_Empty_Is_Safe()
     {
         var v = LoadVectors();

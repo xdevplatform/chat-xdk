@@ -291,6 +291,23 @@ class ChatCore:
             "encoded_message_event_signature": payload.encoded_event_signature,
         }
 
+    def prepare_settings_change(
+        self,
+        *,
+        conversation_id: str,
+        setting: str,
+        ttl_msec: int | None = None,
+    ) -> dict[str, str]:
+        """Sign a conversation setting change under the ``set_identity`` identity.
+
+        ``setting`` is a name such as ``"message_duration"`` (pass ``ttl_msec``),
+        ``"mute"`` or ``"enable_screen_capture_blocking"``. Returns the action
+        signature to submit alongside the settings request.
+        """
+        return self.chat.prepare_conversation_settings_change(
+            conversation_id, setting, ttl_msec=ttl_msec
+        )
+
     def encrypt_reaction(
         self,
         *,

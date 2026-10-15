@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
@@ -155,6 +156,21 @@ func TestEncryptForwardProducesPayload(t *testing.T) {
 	}
 	if body.EncodedMessageCreateEvent == "" || body.EncodedMessageEventSignature == "" || body.MessageID == "" {
 		t.Errorf("incomplete send body: %+v", body)
+	}
+}
+
+func TestPrepareSettingsChangeSignsTheSetting(t *testing.T) {
+	core, _ := loadedCore(t)
+	defer core.Close()
+	sig, err := core.PrepareSettingsChange("6789:12345", chatxdk.SettingEnableScreenCaptureBlocking, nil)
+	if err != nil {
+		t.Fatalf("PrepareSettingsChange: %v", err)
+	}
+	if sig.EncodedMessageEventDetail == "" || sig.Signature == "" {
+		t.Errorf("incomplete action signature: %+v", sig)
+	}
+	if !strings.HasPrefix(sig.SignaturePayload, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,") {
+		t.Errorf("unexpected signature payload %q", sig.SignaturePayload)
 	}
 }
 
