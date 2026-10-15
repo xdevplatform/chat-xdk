@@ -296,7 +296,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     ttlMsec: 24 * 60 * 60 * 1000,
   });
   await api.sendMessage(canonicalConv, mediaMsg);
-  const { event: mediaOne } = await awaitDecrypted(
+  const { event: mediaOne, b64: mediaEventB64 } = await awaitDecrypted(
     api,
     core,
     conv,
@@ -310,7 +310,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
   assert(gotKey === mediaHashKey, `attachment did not round-trip: ${JSON.stringify(atts)}`);
 
   const downloaded = await api.downloadMedia(canonicalConv, mediaHashKey);
-  const decrypted = core.decryptMedia(downloaded, key);
+  const decrypted = core.decryptMedia(downloaded, mediaEventB64, convKeys, mediaHashKey);
   assert(
     decrypted.length === plaintext.length && decrypted.every((b, i) => b === plaintext[i]),
     "downloaded media did not decrypt to the original bytes",

@@ -397,7 +397,8 @@ class E2ELiveTest {
                 24L * 60 * 60 * 1000,
                 null);
         api.sendMessage(canonicalConv, mediaMsg);
-        ObjectNode one = awaitDecrypted(api, core, conv, convKeys, signing, mediaMsg.messageId()).event();
+        Decrypted media = awaitDecrypted(api, core, conv, convKeys, signing, mediaMsg.messageId());
+        ObjectNode one = media.event();
         assertTrue(one.path("verified").asBoolean(false),
                 "media message failed signature verification");
         String gotKey = null;
@@ -411,7 +412,7 @@ class E2ELiveTest {
                 "attachment did not round-trip: " + one.path("content").path("attachments"));
 
         byte[] downloaded = api.downloadMedia(canonicalConv, mediaHashKey);
-        assertArrayEquals(plaintext, core.decryptMedia(downloaded, key),
+        assertArrayEquals(plaintext, core.decryptMedia(downloaded, media.rawB64(), convKeys, mediaHashKey),
                 "downloaded media did not decrypt to the original bytes");
         System.out.println("media downloaded + stream-decrypted to the original bytes");
     }

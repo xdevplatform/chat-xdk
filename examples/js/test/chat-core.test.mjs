@@ -206,15 +206,23 @@ test("threaded reply by raw event with entities and TTL encrypts", async () => {
 
 test("media stream encrypt -> decrypt round-trip and truncation", async () => {
   // The chunked stream path the media flow uses: multi-chunk payload in,
-  // identical bytes out, and truncation is detected.
+  // identical bytes out, and truncation is detected. The fixture
+  // conversation-key message names one media file under the conversation
+  // key, so the upload decrypts through that message.
   const core = await loadedCore();
   const key = convKey();
+  const keys = { [vectors.event_conversation_key_version]: key };
+  const event = vectors.event_conversation_key_media_b64;
+  const mediaHashKey = vectors.media_conversation_key_hash_key;
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
 
   const ciphertext = core.encryptMedia(plaintext, key);
-  const decrypted = core.decryptMedia(ciphertext, key);
+  const decrypted = core.decryptMedia(ciphertext, event, keys, mediaHashKey);
   assert.equal(decrypted.length, plaintext.length);
   assert.ok(decrypted.every((b, i) => b === plaintext[i]));
 
-  assert.throws(() => core.decryptMedia(ciphertext.subarray(0, ciphertext.length - 4), key));
+  assert.throws(
+    () => core.decryptMedia(ciphertext.subarray(0, ciphertext.length - 4), event, keys, mediaHashKey),
+    /truncated/,
+  );
 });

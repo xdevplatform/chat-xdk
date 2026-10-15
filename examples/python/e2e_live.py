@@ -86,6 +86,8 @@ def _await_decrypted(
                 if not one.get("sequence_id"):
                     # The REST item's id IS the event's sequence id.
                     one["sequence_id"] = e.get("id")
+                # Media decrypts with the raw event that carries it.
+                one["encoded_event"] = e["encoded_event"]
                 return one
         time.sleep(1)
     raise AssertionError(
@@ -274,9 +276,8 @@ def main() -> None:
         assert got_key == media_hash_key, f"attachment did not round-trip: {atts}"
 
         downloaded = api.download_media(canonical_conv, media_hash_key)
-        assert core.decrypt_media(downloaded, key) == plaintext, (
-            "downloaded media did not decrypt to the original bytes"
-        )
+        decrypted = core.decrypt_media(downloaded, one["encoded_event"], conv_keys, media_hash_key)
+        assert decrypted == plaintext, "downloaded media did not decrypt to the original bytes"
         print("media downloaded + stream-decrypted to the original bytes")
 
     # -- 6. Optional: group create + message + member add --------------------
