@@ -134,6 +134,27 @@ public final class ChatCore implements AutoCloseable {
             Long ttlMsec,
             List<String> replyToCkces)
             throws Exception {
+        return encryptReply(conversationId, text, conversationKey, conversationKeyVersion,
+                replyToEvent, entities, attachments, ttlMsec, replyToCkces, null);
+    }
+
+    /**
+     * Like the overload above, plus {@code quickReply}: a quick reply offering
+     * selectable options or answering them, in the shape of the
+     * {@code quick_reply} of decrypted text content.
+     */
+    public SendBody encryptReply(
+            String conversationId,
+            String text,
+            byte[] conversationKey,
+            String conversationKeyVersion,
+            String replyToEvent,
+            List<EntityDescriptor> entities,
+            List<AttachmentDescriptor> attachments,
+            Long ttlMsec,
+            List<String> replyToCkces,
+            JsonNode quickReply)
+            throws Exception {
         SendPayload payload;
         if (replyToEvent == null) {
             EncryptMessageParams params = new EncryptMessageParams(conversationId, text);
@@ -141,6 +162,7 @@ public final class ChatCore implements AutoCloseable {
             params.conversationKeyVersion = conversationKeyVersion;
             params.entities = entities;
             params.attachments = attachments;
+            params.quickReply = quickReply;
             params.ttlMsec = ttlMsec;
             payload = chat.encryptMessage(params);
         } else {
@@ -150,6 +172,7 @@ public final class ChatCore implements AutoCloseable {
             params.replyToCkces = replyToCkces;
             params.entities = entities;
             params.attachments = attachments;
+            params.quickReply = quickReply;
             params.ttlMsec = ttlMsec;
             payload = chat.encryptReply(params);
         }

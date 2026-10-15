@@ -150,8 +150,8 @@ export class ChatCore {
    * a *threaded* reply and derives the preview from the signed original;
    * without it this sends a fresh message. The conversation key pair is
    * optional once the cache is enabled. `entities` are `[start, end, type]`
-   * byte ranges; `ttlMsec` makes the message disappear after the given
-   * lifetime.
+   * byte ranges; `quickReply` offers selectable options or answers them;
+   * `ttlMsec` makes the message disappear after the given lifetime.
    */
   encryptReply({
     conversationId,
@@ -161,6 +161,7 @@ export class ChatCore {
     replyToEvent,
     entities,
     attachments,
+    quickReply,
     ttlMsec,
   }) {
     const params = {
@@ -170,6 +171,7 @@ export class ChatCore {
       conversationKeyVersion,
       entities,
       attachments,
+      quickReply,
       ttlMsec,
     };
     const payload = replyToEvent

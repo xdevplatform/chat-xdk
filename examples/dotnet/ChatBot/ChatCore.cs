@@ -82,8 +82,9 @@ public sealed class ChatCore : IDisposable
     /// *threaded* reply whose preview is derived from that raw signed event.
     /// <paramref name="entities"/> are (start, end, type) byte ranges;
     /// <paramref name="attachments"/> are attachment descriptors (e.g. a media
-    /// reference); <paramref name="ttlMsec"/> makes the message disappear
-    /// after the given lifetime.
+    /// reference); <paramref name="quickReply"/> offers selectable options
+    /// or answers them; <paramref name="ttlMsec"/> makes the message
+    /// disappear after the given lifetime.
     /// </summary>
     public SendBody EncryptReply(
         string conversationId,
@@ -94,7 +95,8 @@ public sealed class ChatCore : IDisposable
         IReadOnlyList<EntityDescriptor>? entities = null,
         IReadOnlyList<AttachmentDescriptor>? attachments = null,
         long? ttlMsec = null,
-        IReadOnlyList<string>? replyToCkces = null)
+        IReadOnlyList<string>? replyToCkces = null,
+        JsonElement? quickReply = null)
     {
         var payload = replyToEvent is null
             ? _chat.EncryptMessage(new EncryptMessageParams(conversationId, text)
@@ -103,6 +105,7 @@ public sealed class ChatCore : IDisposable
                 ConversationKeyVersion = conversationKeyVersion,
                 Entities = entities,
                 Attachments = attachments,
+                QuickReply = quickReply,
                 TtlMsec = ttlMsec,
             })
             : _chat.EncryptReply(new EncryptReplyParams(conversationId, text, replyToEvent)
@@ -114,6 +117,7 @@ public sealed class ChatCore : IDisposable
                 ReplyToCkces = replyToCkces,
                 Entities = entities,
                 Attachments = attachments,
+                QuickReply = quickReply,
                 TtlMsec = ttlMsec,
             });
         // The SDK generates the message id and returns it in the payload.

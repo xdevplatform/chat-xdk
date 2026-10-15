@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
 )
@@ -142,6 +143,9 @@ type ReplyOptions struct {
 	Entities []chatxdk.EntityTuple
 	// Attachments are attachment descriptors (e.g. a media reference).
 	Attachments []chatxdk.AttachmentDescriptor
+	// QuickReply offers selectable options or answers them, in the shape of
+	// TextContent.QuickReply.
+	QuickReply json.RawMessage
 	// TTLMsec makes the message disappear after the given lifetime (0 = none).
 	TTLMsec int64
 	// ConversationKey/ConversationKeyVersion override the SDK's cached key —
@@ -174,6 +178,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			ConversationKeyVersion: opts.ConversationKeyVersion,
 			Entities:               opts.Entities,
 			Attachments:            opts.Attachments,
+			QuickReply:             opts.QuickReply,
 			TTLMsec:                ttl,
 		})
 	} else {
@@ -186,6 +191,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			ConversationKeyVersion: opts.ConversationKeyVersion,
 			Entities:               opts.Entities,
 			Attachments:            opts.Attachments,
+			QuickReply:             opts.QuickReply,
 			TTLMsec:                ttl,
 		})
 	}

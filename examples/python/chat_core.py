@@ -210,6 +210,7 @@ class ChatCore:
         reply_to_sequence_id: str | None = None,
         entities: list[tuple[int, int, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        quick_reply: dict[str, Any] | None = None,
         ttl_msec: int | None = None,
     ) -> dict[str, str]:
         """Encrypt + sign a message, returning fields ready for the X API send.
@@ -221,8 +222,8 @@ class ChatCore:
         builds a *threaded* reply. Omit the conversation key pair to resolve
         it from the SDK's verified-key cache (``set_cache_keys``).
         ``entities`` are ``(start, end, type)`` byte ranges; ``attachments``
-        are attachment descriptors (e.g. a media reference); ``ttl_msec``
-        makes the message disappear after the given lifetime. Signed with the
+        are attachment descriptors (e.g. a media reference); ``quick_reply``
+        offers selectable options or answers them; ``ttl_msec`` makes the message disappear after the given lifetime. Signed with the
         ``set_identity`` session identity.
         """
         if reply_to_event is None and reply_to_sequence_id is None:
@@ -233,6 +234,7 @@ class ChatCore:
                 conversation_key_version=conversation_key_version,
                 entities=entities,
                 attachments=attachments,
+                quick_reply=quick_reply,
                 ttl_msec=ttl_msec,
             )
         else:
@@ -245,6 +247,7 @@ class ChatCore:
                 conversation_key_version=conversation_key_version,
                 entities=entities,
                 attachments=attachments,
+                quick_reply=quick_reply,
                 ttl_msec=ttl_msec,
             )
         return {
