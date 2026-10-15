@@ -461,6 +461,87 @@ namespace ChatXdk
     }
 
     /// <summary>
+    /// A quick reply carried by a text message: set exactly one of
+    /// <see cref="Request"/> (offering selectable options) or
+    /// <see cref="Response"/> (selecting one). The JSON shape matches the
+    /// <c>quick_reply</c> of decrypted text content, so a received value
+    /// deserializes with <c>JsonSerializer.Deserialize&lt;QuickReply&gt;</c>
+    /// and can be sent back unchanged.
+    /// </summary>
+    public sealed class QuickReply
+    {
+        [JsonPropertyName("request")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public QuickReplyRequest? Request { get; init; }
+
+        [JsonPropertyName("response")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public QuickReplyResponse? Response { get; init; }
+    }
+
+    /// <summary>A quick-reply request offering a set of selectable options.</summary>
+    public sealed class QuickReplyRequest
+    {
+        [JsonPropertyName("options")]
+        public QuickReplyOptionsRequest Options { get; init; } = new();
+    }
+
+    /// <summary>A quick-reply response selecting a previously offered option.</summary>
+    public sealed class QuickReplyResponse
+    {
+        [JsonPropertyName("options")]
+        public QuickReplyOptionsResponse Options { get; init; } = new();
+    }
+
+    /// <summary>The options offered by a quick-reply request.</summary>
+    public sealed class QuickReplyOptionsRequest
+    {
+        [JsonPropertyName("id")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Id { get; init; }
+
+        [JsonPropertyName("options")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<QuickReplyOption>? Options { get; init; }
+    }
+
+    /// <summary>The option selected in a quick-reply response.</summary>
+    public sealed class QuickReplyOptionsResponse
+    {
+        [JsonPropertyName("request_id")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? RequestId { get; init; }
+
+        [JsonPropertyName("metadata")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Metadata { get; init; }
+
+        [JsonPropertyName("selected_option_id")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SelectedOptionId { get; init; }
+    }
+
+    /// <summary>A single selectable quick-reply option.</summary>
+    public sealed class QuickReplyOption
+    {
+        [JsonPropertyName("id")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Id { get; init; }
+
+        [JsonPropertyName("label")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Label { get; init; }
+
+        [JsonPropertyName("metadata")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Metadata { get; init; }
+
+        [JsonPropertyName("description")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Description { get; init; }
+    }
+
+    /// <summary>
     /// Parameters for <see cref="Chat.EncryptMessage"/>.
     /// The constructor takes the required fields; identity and key overrides
     /// (<see cref="SenderId"/>/<see cref="SigningKeyVersion"/> and
@@ -499,12 +580,8 @@ namespace ChatXdk
         public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
         /// <summary>Optional media, URL, or post attachments.</summary>
         public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
-        /// <summary>
-        /// Optional quick reply, in the same JSON shape as the <c>quick_reply</c>
-        /// of decrypted text content: a request offering options, or a response
-        /// selecting one.
-        /// </summary>
-        public JsonElement? QuickReply { get; init; }
+        /// <summary>Optional quick reply: a request offering options, or a response selecting one.</summary>
+        public QuickReply? QuickReply { get; init; }
         /// <summary>Whether to send a push notification. Defaults to true.</summary>
         public bool? ShouldNotify { get; init; }
         /// <summary>Time-to-live for disappearing messages in milliseconds.</summary>
@@ -577,12 +654,8 @@ namespace ChatXdk
         public IReadOnlyList<EntityDescriptor>? ReplyToEntities { get; init; }
         /// <summary>Attachments of the quoted message (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public IReadOnlyList<AttachmentDescriptor>? ReplyToAttachments { get; init; }
-        /// <summary>
-        /// Optional quick reply, in the same JSON shape as the <c>quick_reply</c>
-        /// of decrypted text content: a request offering options, or a response
-        /// selecting one.
-        /// </summary>
-        public JsonElement? QuickReply { get; init; }
+        /// <summary>Optional quick reply: a request offering options, or a response selecting one.</summary>
+        public QuickReply? QuickReply { get; init; }
         /// <summary>Whether to send a push notification. Defaults to true.</summary>
         public bool? ShouldNotify { get; init; }
         /// <summary>Time-to-live for disappearing messages in milliseconds.</summary>
