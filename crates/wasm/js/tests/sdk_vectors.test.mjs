@@ -332,6 +332,27 @@ async function main() {
         }),
       /Invalid encryptMessage params/,
     );
+
+    // Forwards carry the original's text in forwarded_message and the
+    // comment as the message text.
+    const forward = decryptOwn(
+      qr.encryptForward({
+        conversationId: v.event_conversation_id,
+        forwardedText: "see @alice",
+        forwardedEntities: [[4, 10, "mention"]],
+        text: "fyi",
+        ...key,
+      }),
+    );
+    assert.equal(forward.text, "fyi");
+    assert.equal(forward.forwarded_message.messageText, "see @alice");
+    assert.equal(forward.forwarded_message.entities.length, 1);
+
+    assert.throws(
+      () =>
+        qr.encryptForward({ conversationId: v.event_conversation_id, forwardedText: "", ...key }),
+      /nothing to forward/,
+    );
   }
 }
 

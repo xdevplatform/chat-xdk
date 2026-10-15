@@ -492,6 +492,7 @@ export class ChatWithJuicebox {
   }
   matchesRegisteredKey(publicKeyB64) { return this.#inner.matchesRegisteredKey(publicKeyB64); }
   encryptMessage(params) { return this.#inner.encryptMessage(params); }
+  encryptForward(params) { return this.#inner.encryptForward(params); }
   encryptReply(params) { return this.#inner.encryptReply(params); }
   encryptAddReaction(params) { return this.#inner.encryptAddReaction(params); }
   encryptRemoveReaction(params) { return this.#inner.encryptRemoveReaction(params); }
