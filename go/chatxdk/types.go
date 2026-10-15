@@ -165,7 +165,9 @@ type GroupCreateParams struct {
 // are optional overrides: left at their zero value they resolve from the
 // session identity (SetIdentity) and the opt-in key cache (SetCacheKeys).
 // ConversationKey and ConversationKeyVersion travel together — set both or
-// neither.
+// neither. MessageID is the id from NewMessageID that the message's media
+// was encrypted with; it is required when Attachments include media, and
+// the SDK generates one otherwise.
 type EncryptMessageParams struct {
 	ConversationID         string                 `json:"conversation_id"`
 	Text                   string                 `json:"text"`
@@ -173,6 +175,7 @@ type EncryptMessageParams struct {
 	SigningKeyVersion      string                 `json:"signing_key_version,omitempty"`      // empty = session identity
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
+	MessageID              string                 `json:"message_id,omitempty"`               // empty = generated
 	Entities               []EntityTuple          `json:"entities,omitempty"`
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
 	QuickReply             *QuickReply            `json:"quick_reply,omitempty"`
@@ -205,9 +208,9 @@ type AttachmentDescriptor struct {
 	DisplayTitle   *string `json:"display_title,omitempty"`
 	// Optional encrypted preview images for "url" attachments. Supplying a
 	// display title plus a banner image makes receiving clients render a
-	// full clickable preview card: encrypt the image with EncryptStream,
-	// upload it to the conversation's media store, and reference the
-	// returned media hash key here.
+	// full clickable preview card: encrypt the image with EncryptStream at
+	// the card's position, upload it to the conversation's media store, and
+	// reference the returned media hash key here.
 	BannerImage  *URLAttachmentImageDescriptor `json:"banner_image,omitempty"`
 	FaviconImage *URLAttachmentImageDescriptor `json:"favicon_image,omitempty"`
 	RestID       *string                       `json:"rest_id,omitempty"`
@@ -294,6 +297,7 @@ type EncryptReplyParams struct {
 	SigningKeyVersion      string                 `json:"signing_key_version,omitempty"`      // empty = session identity
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
+	MessageID              string                 `json:"message_id,omitempty"`               // empty = generated
 	ReplyToSequenceID      string                 `json:"reply_to_sequence_id,omitempty"`     // empty = derived from ReplyToEvent
 	ReplyToSenderID        *int64                 `json:"reply_to_sender_id,omitempty"`
 	ReplyToText            *string                `json:"reply_to_text,omitempty"`

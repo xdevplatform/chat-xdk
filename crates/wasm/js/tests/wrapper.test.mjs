@@ -14,6 +14,7 @@ import {
   encryptedStreamSize,
   guessesRemaining,
 } from "../index.js";
+import { frameSendPayload } from "./frame.mjs";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
@@ -271,7 +272,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.equal(sendPayload.signatureInfo.signatureVersion, "7");
+  assert.equal(sendPayload.signatureInfo.signatureVersion, "10");
   assert.ok(sendPayload.messageId.length > 0);
   const replyPayload = chat.encryptReply({
     senderId: "111",
@@ -304,20 +305,42 @@ async function delegationTests() {
   });
   assert.ok(removeReaction.encryptedContent.length > 0);
 
-  // Generic + stream crypto delegations (roundtrips prove both arguments).
+  // Generic + stream crypto delegations (roundtrips prove every argument):
+  // two files encrypted for one message id at positions 0 and 1 open from
+  // the message sent under that id.
   const ct = chat.encrypt("wrapper text", convKey);
   assert.equal(chat.decrypt(ct, convKey), "wrapper text");
   const mediaKeys = { [v.event_conversation_key_version]: convKey };
-  const streamCt = chat.encryptStream(b64ToBytes(v.plaintext_b64), convKey);
-  assert.deepEqual(
-    chat.decryptStream(streamCt, v.event_conversation_key_media_b64, mediaKeys, v.media_conversation_key_hash_key),
-    b64ToBytes(v.plaintext_b64),
-  );
-  const enc = chat.streamEncryptor(convKey);
+  const messageId = chat.newMessageId();
+  const streamCt = chat.encryptStream(b64ToBytes(v.plaintext_b64), convKey, messageId, 0);
+  const enc = chat.streamEncryptor(convKey, messageId, 1);
   const piece = enc.push(b64ToBytes(v.plaintext_b64));
   const finalPiece = enc.finish();
   const streamed = new Uint8Array([...piece, ...finalPiece]);
-  const dec = chat.streamDecryptor(v.event_conversation_key_media_b64, mediaKeys, v.media_conversation_key_hash_key);
+  const photo = (mediaHashKey) => ({
+    attachment_type: "media",
+    media_hash_key: mediaHashKey,
+    width: 4,
+    height: 3,
+    filesize_bytes: 64,
+    filename: `${mediaHashKey}.jpg`,
+    media_type: 1,
+  });
+  const mediaPayload = chat.encryptMessage({
+    conversationId: v.event_conversation_id,
+    text: "wrapper photos",
+    conversationKey: convKey,
+    conversationKeyVersion: v.event_conversation_key_version,
+    messageId,
+    attachments: [photo("first"), photo("second")],
+  });
+  assert.equal(mediaPayload.messageId, messageId);
+  const mediaEvent = frameSendPayload(mediaPayload, v.event_sender_id, v.event_conversation_id);
+  assert.deepEqual(
+    chat.decryptStream(streamCt, mediaEvent, mediaKeys, "first"),
+    b64ToBytes(v.plaintext_b64),
+  );
+  const dec = chat.streamDecryptor(mediaEvent, mediaKeys, "second");
   const out = new Uint8Array([...dec.push(streamed), ...dec.finish()]);
   assert.deepEqual(out, b64ToBytes(v.plaintext_b64));
 

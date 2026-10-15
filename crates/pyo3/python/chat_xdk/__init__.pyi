@@ -195,6 +195,7 @@ class Chat:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+        message_id: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
         quick_reply: Optional[QuickReply] = None,
@@ -218,6 +219,7 @@ class Chat:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+        message_id: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
         quick_reply: Optional[QuickReply] = None,
@@ -278,7 +280,14 @@ class Chat:
     ) -> SendPayload: ...
 
     # Streams
-    def encrypt_stream(self, plaintext: bytes, conversation_key: bytes) -> bytes: ...
+    def new_message_id(self) -> str: ...
+    def encrypt_stream(
+        self,
+        plaintext: bytes,
+        conversation_key: bytes,
+        message_id: str,
+        attachment_index: int,
+    ) -> bytes: ...
     def decrypt_stream(
         self,
         encrypted: bytes,
@@ -286,7 +295,12 @@ class Chat:
         conversation_keys: dict[str, bytes],
         media_hash_key: str,
     ) -> bytes: ...
-    def stream_encryptor(self, conversation_key: bytes) -> StreamEncryptor: ...
+    def stream_encryptor(
+        self,
+        conversation_key: bytes,
+        message_id: str,
+        attachment_index: int,
+    ) -> StreamEncryptor: ...
     def stream_decryptor(
         self,
         event_b64: str,

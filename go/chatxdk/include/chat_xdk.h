@@ -345,11 +345,13 @@ struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle,
  * optional `sender_id` / `signing_key_version` (unset resolves from the
  * session identity), `conversation_key` (base64 raw 32-byte key) /
  * `conversation_key_version` (unset resolves from the opt-in key cache),
- * `entities` (`[[start,end,"type"],...]`), `attachments`
- * (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
- * of decrypted text content), `should_notify`, and `ttl_msec`.
+ * `message_id` (from `chat_xdk_new_message_id`; required when the
+ * attachments include media), `entities` (`[[start,end,"type"],...]`),
+ * `attachments` (`[{"attachment_type",...},...]`), `quick_reply` (the
+ * `quick_reply` shape of decrypted text content), `should_notify`, and
+ * `ttl_msec`.
  *
- * Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+ * Returns JSON `SendPayload`, whose `message_id` is the message's id.
  */
 struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const char *params_json);
 
@@ -365,7 +367,7 @@ struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const
  * `reply_to_entities`, and `reply_to_attachments` overrides remain for
  * callers that no longer hold the raw event.
  *
- * Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+ * Returns JSON `SendPayload`, whose `message_id` is the reply's id.
  */
 struct FfiResult chat_xdk_encrypt_reply(const struct ChatHandle *handle, const char *params_json);
 
@@ -450,17 +452,35 @@ struct FfiResult chat_xdk_decrypt_stream(const struct ChatHandle *handle,
                                          const char *media_hash_key);
 
 /**
- * Encrypt a stream (e.g., media) with a conversation key. Returns base64.
+ * A fresh message id for a message with media.
+ */
+struct FfiResult chat_xdk_new_message_id(const struct ChatHandle *handle);
+
+/**
+ * Encrypt a media file for an outgoing message: base64 plaintext under the
+ * key of the attachment at `attachment_index` of message `message_id`,
+ * derived from the base64 conversation key and the session identity.
+ * Returns base64.
  */
 struct FfiResult chat_xdk_encrypt_stream(const struct ChatHandle *handle,
                                          const char *plaintext_b64,
-                                         const char *conversation_key_b64);
+                                         const char *conversation_key_b64,
+                                         const char *message_id,
+                                         int64_t attachment_index);
 
 /**
- * Create a stream encryptor for a base64 conversation key. Returns NULL on a
- * bad key; free the handle with [`chat_xdk_stream_encryptor_free`].
+ * Create an incremental encryptor for a media file, taking the arguments of
+ * [`chat_xdk_encrypt_stream`] apart from the bytes.
+ *
+ * On success writes the new handle to `out_encryptor` and returns an empty
+ * result; free the handle with [`chat_xdk_stream_encryptor_free`]. On
+ * failure writes NULL and returns the error.
  */
-struct StreamEncryptorHandle *chat_xdk_stream_encryptor_new(const char *conversation_key_b64);
+struct FfiResult chat_xdk_stream_encryptor_new(const struct ChatHandle *handle,
+                                               const char *conversation_key_b64,
+                                               const char *message_id,
+                                               int64_t attachment_index,
+                                               struct StreamEncryptorHandle **out_encryptor);
 
 /**
  * Encrypt a base64 plaintext chunk; returns base64 ciphertext available so far.

@@ -576,6 +576,11 @@ namespace ChatXdk
         public byte[]? ConversationKey { get; init; }
         /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
         public string? ConversationKeyVersion { get; init; }
+        /// <summary>
+        /// Id of the message, from <see cref="Chat.NewMessageId"/>; generated when null.
+        /// Required when <see cref="Attachments"/> include media, whose keys derive from this id.
+        /// </summary>
+        public string? MessageId { get; init; }
         /// <summary>Optional rich-text entities (URLs, mentions, hashtags) in the text.</summary>
         public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
         /// <summary>Optional media, URL, or post attachments.</summary>
@@ -640,6 +645,11 @@ namespace ChatXdk
         public byte[]? ConversationKey { get; init; }
         /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
         public string? ConversationKeyVersion { get; init; }
+        /// <summary>
+        /// Id of the reply, from <see cref="Chat.NewMessageId"/>; generated when null.
+        /// Required when <see cref="Attachments"/> include media, whose keys derive from this id.
+        /// </summary>
+        public string? MessageId { get; init; }
         /// <summary>Sequence ID of the message being replied to; derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToSequenceId { get; init; }
         /// <summary>Sender ID of the message being replied to (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>

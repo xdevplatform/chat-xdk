@@ -497,11 +497,16 @@ export class ChatWithJuicebox {
   encryptRemoveReaction(params) { return this.#inner.encryptRemoveReaction(params); }
   encryptEdit(params) { return this.#inner.encryptEdit(params); }
   prepareMessageDelete(params) { return this.#inner.prepareMessageDelete(params); }
-  encryptStream(plaintext, key) { return this.#inner.encryptStream(plaintext, key); }
+  newMessageId() { return this.#inner.newMessageId(); }
+  encryptStream(plaintext, key, messageId, attachmentIndex) {
+    return this.#inner.encryptStream(plaintext, key, messageId, attachmentIndex);
+  }
   decryptStream(encrypted, eventB64, conversationKeys, mediaHashKey) {
     return this.#inner.decryptStream(encrypted, eventB64, conversationKeys, mediaHashKey);
   }
-  streamEncryptor(key) { return this.#inner.streamEncryptor(key); }
+  streamEncryptor(key, messageId, attachmentIndex) {
+    return this.#inner.streamEncryptor(key, messageId, attachmentIndex);
+  }
   streamDecryptor(eventB64, conversationKeys, mediaHashKey) {
     return this.#inner.streamDecryptor(eventB64, conversationKeys, mediaHashKey);
   }

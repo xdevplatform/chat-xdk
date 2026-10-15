@@ -28,7 +28,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes};
 use pyo3::Py;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::Arc;
 
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
@@ -793,8 +792,10 @@ impl Chat {
 
     /// Encrypt a message for the X API.
     ///
-    /// The SDK generates the message id and returns it in the payload; read it
-    /// back from ``payload.message_id`` (do not pass one in).
+    /// The message id comes back in ``payload.message_id``. A message with
+    /// media takes its id from ``new_message_id()`` first, since its media is
+    /// encrypted with that id, and passes it as ``message_id``; otherwise the
+    /// SDK generates one.
     ///
     /// Args:
     ///     conversation_id: The conversation ID.
@@ -808,6 +809,8 @@ impl Chat {
     ///         together with ``conversation_key_version``, or omit both to
     ///         resolve from the opt-in ``set_cache_keys`` cache.
     ///     conversation_key_version: The current conversation key version (from KeyChange event).
+    ///     message_id: The id from ``new_message_id()`` the message's media was
+    ///         encrypted with; required when ``attachments`` include media.
     ///     entities: Optional list of (start, end, entity_type) tuples for rich-text.
     ///     attachments: Optional list of attachment dicts (each with "attachment_type" key).
     ///     quick_reply: Optional ``QuickReply`` dict: a request offering
@@ -815,7 +818,7 @@ impl Chat {
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, message_id=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn encrypt_message(
         &self,
         conversation_id: &str,
@@ -824,6 +827,7 @@ impl Chat {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
+        message_id: Option<String>,
         entities: Option<Vec<(i32, i32, String)>>,
         attachments: Option<Vec<HashMap<String, Py<PyAny>>>>,
         quick_reply: Option<Py<PyAny>>,
@@ -835,6 +839,7 @@ impl Chat {
         params.signing_key_version = signing_key_version;
         params.conversation_key = conversation_key;
         params.conversation_key_version = conversation_key_version;
+        params.message_id = message_id;
         params.entities = entities.map(parse_entity_descs);
         params.attachments = attachments.map(parse_attachment_descs).transpose()?;
         params.quick_reply = quick_reply.map(parse_quick_reply).transpose()?;
@@ -855,8 +860,9 @@ impl Chat {
     /// embedded for recipients to validate. The ``reply_to_*`` overrides
     /// remain for callers that no longer hold the raw event.
     ///
-    /// The SDK generates the message id and returns it in the payload; read it
-    /// back from ``payload.message_id`` (do not pass one in).
+    /// The reply's id comes back in ``payload.message_id``; as with
+    /// ``encrypt_message``, a reply with media passes the id its media was
+    /// encrypted with as ``message_id``.
     ///
     /// Args:
     ///     conversation_id: The conversation ID.
@@ -887,6 +893,8 @@ impl Chat {
     ///         together with ``conversation_key_version``, or omit both to
     ///         resolve from the opt-in ``set_cache_keys`` cache.
     ///     conversation_key_version: The current conversation key version.
+    ///     message_id: The id from ``new_message_id()`` the reply's media was
+    ///         encrypted with; required when ``attachments`` include media.
     ///     entities: Optional list of (start, end, entity_type) tuples for
     ///         rich-text in the reply text.
     ///     attachments: Optional list of attachment dicts (each with "attachment_type" key).
@@ -895,7 +903,7 @@ impl Chat {
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, message_id=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn encrypt_reply(
         &self,
         conversation_id: &str,
@@ -912,6 +920,7 @@ impl Chat {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
+        message_id: Option<String>,
         entities: Option<Vec<(i32, i32, String)>>,
         attachments: Option<Vec<HashMap<String, Py<PyAny>>>>,
         quick_reply: Option<Py<PyAny>>,
@@ -933,6 +942,7 @@ impl Chat {
         params.signing_key_version = signing_key_version;
         params.conversation_key = conversation_key;
         params.conversation_key_version = conversation_key_version;
+        params.message_id = message_id;
         params.entities = entities.map(parse_entity_descs);
         params.attachments = attachments.map(parse_attachment_descs).transpose()?;
         params.quick_reply = quick_reply.map(parse_quick_reply).transpose()?;
@@ -1123,16 +1133,39 @@ impl Chat {
         Ok(PyBytes::new(py, ckey.encoded()))
     }
 
-    /// Encrypt a stream (e.g. media) with a conversation key.
+    /// A fresh message id for a message with media.
+    ///
+    /// Media keys derive from the message id, so take the id first, pass it
+    /// to ``encrypt_stream`` or ``stream_encryptor`` for every file, then as
+    /// ``message_id`` to ``encrypt_message`` or ``encrypt_reply``.
+    fn new_message_id(&self) -> String {
+        self.inner.new_message_id()
+    }
+
+    /// Encrypt a media file for an outgoing message.
     ///
     /// Args:
     ///     plaintext: Raw bytes to encrypt.
-    ///     conversation_key: Raw 32-byte conversation key (``bytes``),
-    ///         from ``decrypt_conversation_key()`` or a prepared key change.
+    ///     conversation_key: Raw 32-byte conversation key (``bytes``) the
+    ///         message is encrypted with.
+    ///     message_id: The message's id, from ``new_message_id()``.
+    ///     attachment_index: The file's position in the message's
+    ///         ``attachments``; a link card's banner and favicon both take the
+    ///         card's position.
     ///
     /// Returns:
     ///     Encrypted bytes.
-    fn encrypt_stream(&self, plaintext: &[u8], conversation_key: &[u8]) -> PyResult<Py<PyAny>> {
+    ///
+    /// Raises:
+    ///     ValueError: No ``set_identity``, or a bad key, message id, or
+    ///         position. The message names the value.
+    fn encrypt_stream(
+        &self,
+        plaintext: &[u8],
+        conversation_key: &[u8],
+        message_id: &str,
+        attachment_index: i64,
+    ) -> PyResult<Py<PyAny>> {
         let ckey = chat_xdk_core::crypto::keys::XChatConversationKey::from_bytes(
             conversation_key.to_vec(),
         )
@@ -1141,10 +1174,9 @@ impl Chat {
                 "Invalid conversation key (expected 32 bytes)",
             )
         })?;
-
-        let mut reader = Cursor::new(plaintext);
-        let mut output: Vec<u8> = Vec::new();
-        chat_xdk_core::crypto::encryption::encrypt_stream(&ckey, &mut reader, &mut output)
+        let output = self
+            .inner
+            .encrypt_stream(plaintext, &ckey, message_id, attachment_index)
             .map_err(to_py_err)?;
 
         Python::attach(|py| Ok(PyBytes::new(py, &output).into()))
@@ -1186,8 +1218,15 @@ impl Chat {
         Python::attach(|py| Ok(PyBytes::new(py, &output).into()))
     }
 
-    /// Create an incremental stream encryptor for large payloads.
-    fn stream_encryptor(&self, conversation_key: &[u8]) -> PyResult<StreamEncryptor> {
+    /// Create an incremental encryptor for a media file too large to hold in
+    /// memory. Takes the arguments of ``encrypt_stream`` apart from the bytes,
+    /// which are fed to the encryptor.
+    fn stream_encryptor(
+        &self,
+        conversation_key: &[u8],
+        message_id: &str,
+        attachment_index: i64,
+    ) -> PyResult<StreamEncryptor> {
         let ckey = chat_xdk_core::crypto::keys::XChatConversationKey::from_bytes(
             conversation_key.to_vec(),
         )
@@ -1196,7 +1235,10 @@ impl Chat {
                 "Invalid conversation key (expected 32 bytes)",
             )
         })?;
-        let inner = self.inner.stream_encryptor(&ckey).map_err(to_py_err)?;
+        let inner = self
+            .inner
+            .stream_encryptor(&ckey, message_id, attachment_index)
+            .map_err(to_py_err)?;
         Ok(StreamEncryptor { inner: Some(inner) })
     }
 

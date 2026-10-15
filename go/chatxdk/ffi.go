@@ -278,12 +278,18 @@ func ffiEncryptEdit(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_encrypt_edit(h, c))
 }
 
-func ffiEncryptStream(h handle, plaintextB64, ckeyB64 string) (string, error) {
+func ffiNewMessageID(h handle) (string, error) {
+	return ffiResult(C.chat_xdk_new_message_id(h))
+}
+
+func ffiEncryptStream(h handle, plaintextB64, ckeyB64, messageID string, attachmentIndex int) (string, error) {
 	cPT := C.CString(plaintextB64)
 	defer C.free(unsafe.Pointer(cPT))
 	cKey := C.CString(ckeyB64)
 	defer C.free(unsafe.Pointer(cKey))
-	return ffiResult(C.chat_xdk_encrypt_stream(h, cPT, cKey))
+	cID := C.CString(messageID)
+	defer C.free(unsafe.Pointer(cID))
+	return ffiResult(C.chat_xdk_encrypt_stream(h, cPT, cKey, cID, C.int64_t(attachmentIndex)))
 }
 
 // incremental streaming
@@ -291,10 +297,16 @@ func ffiEncryptStream(h handle, plaintextB64, ckeyB64 string) (string, error) {
 type streamEncryptorHandle = *C.struct_StreamEncryptorHandle
 type streamDecryptorHandle = *C.struct_StreamDecryptorHandle
 
-func ffiStreamEncryptorNew(ckeyB64 string) streamEncryptorHandle {
-	c := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(c))
-	return C.chat_xdk_stream_encryptor_new(c)
+func ffiStreamEncryptorNew(h handle, ckeyB64, messageID string, attachmentIndex int) (streamEncryptorHandle, error) {
+	cKey := C.CString(ckeyB64)
+	defer C.free(unsafe.Pointer(cKey))
+	cID := C.CString(messageID)
+	defer C.free(unsafe.Pointer(cID))
+	var out streamEncryptorHandle
+	if _, err := ffiResult(C.chat_xdk_stream_encryptor_new(h, cKey, cID, C.int64_t(attachmentIndex), &out)); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func ffiStreamEncryptorPush(h streamEncryptorHandle, plaintextB64 string) (string, error) {

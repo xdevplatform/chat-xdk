@@ -290,12 +290,13 @@ namespace ChatXdk
         ///  optional overrides `sender_id` / `signing_key_version` (absent resolves
         ///  from the session identity) and `conversation_key` (base64 raw 32-byte
         ///  key) / `conversation_key_version` (absent resolves from the opt-in key
-        ///  cache), plus optional `entities` (`[[start,end,"type"],...]`),
-        ///  `attachments` (`[{"attachment_type",...},...]`), `quick_reply` (the
-        ///  `quick_reply` shape of decrypted text content), `should_notify`, and
-        ///  `ttl_msec`.
+        ///  cache), plus optional `message_id` (from `chat_xdk_new_message_id`;
+        ///  required when the attachments include media), `entities`
+        ///  (`[[start,end,"type"],...]`), `attachments`
+        ///  (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
+        ///  of decrypted text content), `should_notify`, and `ttl_msec`.
         ///
-        ///  Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+        ///  Returns JSON `SendPayload`, whose `message_id` is the message's id.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_message", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_encrypt_message(ChatHandle* handle, byte* params_json);
@@ -312,7 +313,7 @@ namespace ChatXdk
         ///  `reply_to_entities`, and `reply_to_attachments` remain for callers that no
         ///  longer hold the raw event.
         ///
-        ///  Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+        ///  Returns JSON `SendPayload`, whose `message_id` is the reply's id.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_reply", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_encrypt_reply(ChatHandle* handle, byte* params_json);
@@ -394,20 +395,30 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_decrypt_stream(ChatHandle* handle, byte* encrypted_b64, byte* event_b64, byte* conversation_keys_json, byte* media_hash_key);
 
         /// <summary>
-        ///  Encrypt a stream (e.g. media files) with a conversation key.
-        ///
-        ///  Both arguments are base64-encoded.
+        ///  A fresh message id for a message with media.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_new_message_id", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_new_message_id(ChatHandle* handle);
+
+        /// <summary>
+        ///  Encrypt a media file for an outgoing message: base64 plaintext under the
+        ///  key of the attachment at `attachment_index` of message `message_id`,
+        ///  derived from the base64 conversation key and the session identity.
         ///  Returns base64-encoded encrypted bytes.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_stream", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_encrypt_stream(ChatHandle* handle, byte* plaintext_b64, byte* conversation_key_b64);
+        internal static extern FfiResult chat_xdk_encrypt_stream(ChatHandle* handle, byte* plaintext_b64, byte* conversation_key_b64, byte* message_id, long attachment_index);
 
         /// <summary>
-        ///  Create a stream encryptor for a base64 conversation key. Returns NULL on a
-        ///  bad key; free the handle with `chat_xdk_stream_encryptor_free`.
+        ///  Create an incremental encryptor for a media file, taking the arguments of
+        ///  `chat_xdk_encrypt_stream` apart from the bytes.
+        ///
+        ///  On success writes the new handle to `out_encryptor` and returns an empty
+        ///  result; free the handle with `chat_xdk_stream_encryptor_free`. On failure
+        ///  writes NULL and returns the error.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_stream_encryptor_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern StreamEncryptorHandle* chat_xdk_stream_encryptor_new(byte* conversation_key_b64);
+        internal static extern FfiResult chat_xdk_stream_encryptor_new(ChatHandle* handle, byte* conversation_key_b64, byte* message_id, long attachment_index, StreamEncryptorHandle** out_encryptor);
 
         /// <summary>
         ///  Encrypt a base64 plaintext chunk; returns base64 ciphertext available so far.

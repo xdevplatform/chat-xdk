@@ -29,14 +29,16 @@ namespace ChatXdk
         /// </summary>
         ~StreamEncryptor() => Dispose(disposing: false);
 
-        internal static StreamEncryptor Create(byte[] conversationKey)
+        internal static StreamEncryptor Create(
+            ChatHandle* chat, byte[] conversationKey, string messageId, int attachmentIndex)
         {
             var keyB64 = Chat.Utf8Z(Convert.ToBase64String(conversationKey));
-            StreamEncryptorHandle* handle;
+            var idBytes = Chat.Utf8Z(messageId);
+            StreamEncryptorHandle* handle = null;
             fixed (byte* keyPtr = keyB64)
-                handle = NativeMethods.chat_xdk_stream_encryptor_new(keyPtr);
-            if (handle == null)
-                throw new ChatXdkException("Invalid conversation key (expected 32 bytes)");
+            fixed (byte* idPtr = idBytes)
+                Chat.ConsumeResult(NativeMethods.chat_xdk_stream_encryptor_new(
+                    chat, keyPtr, idPtr, attachmentIndex, &handle));
             return new StreamEncryptor(handle);
         }
 

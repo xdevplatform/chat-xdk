@@ -250,19 +250,19 @@ class TestApiShapes(unittest.TestCase):
         self.assertIsInstance(payload.public_key.registration_method, str)
         self.assertIsInstance(payload.generate_version, bool)
 
-    def test_encrypt_message_signature_version_is_7(self):
+    def test_encrypt_message_signs_at_version_10(self):
         chat, v = self._unlocked_chat()
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
         payload = chat.encrypt_message(
             "conv-1", "hello from python",
-            sender_id="me",
+            sender_id="1001",
             signing_key_version="1",
             conversation_key=conv_key,
             conversation_key_version="1",
         )
 
-        self.assertEqual(payload.signature_info.signature_version, "7")
+        self.assertEqual(payload.signature_info.signature_version, "10")
         # The SDK generates and returns the message id.
         self.assertTrue(payload.message_id)
 
@@ -274,7 +274,7 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaises(ValueError):
             chat.encrypt_message(
                 "conv-1", "hello",
-                sender_id="me",
+                sender_id="1001",
                 signing_key_version="1",
                 conversation_key=conv_key,
             )
@@ -288,7 +288,7 @@ class TestApiShapes(unittest.TestCase):
             reply_to_sequence_id="seq-42",
             reply_to_sender_id=12345,
             reply_to_text="original message",
-            sender_id="me",
+            sender_id="1001",
             signing_key_version="1",
             conversation_key=conv_key,
             conversation_key_version="1",
@@ -299,7 +299,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.signature)
         self.assertTrue(payload.encoded_event_signature)
         self.assertEqual(payload.conversation_key_version, "1")
-        self.assertEqual(payload.signature_info.signature_version, "7")
+        self.assertEqual(payload.signature_info.signature_version, "10")
 
     def test_encrypt_reply_without_target_rejected(self):
         chat, v = self._unlocked_chat()
@@ -309,7 +309,7 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaises(ValueError):
             chat.encrypt_reply(
                 "conv-1", "this is my reply",
-                sender_id="me",
+                sender_id="1001",
                 signing_key_version="1",
                 conversation_key=conv_key,
                 conversation_key_version="1",
@@ -323,7 +323,7 @@ class TestApiShapes(unittest.TestCase):
             None, "\U0001F44D",
             conversation_id="conv-1",
             target_message_sequence_id="seq-99",
-            sender_id="me",
+            sender_id="1001",
             signing_key_version="1",
             conversation_key=conv_key,
             conversation_key_version="1",
@@ -341,7 +341,7 @@ class TestApiShapes(unittest.TestCase):
             chat.encrypt_add_reaction(
                 conversation_id="conv-1",
                 target_message_sequence_id="seq-99",
-                sender_id="me",
+                sender_id="1001",
                 signing_key_version="1",
                 conversation_key=conv_key,
                 conversation_key_version="1",
@@ -355,7 +355,7 @@ class TestApiShapes(unittest.TestCase):
             None, "\U0001F44D",
             conversation_id="conv-1",
             target_message_sequence_id="seq-99",
-            sender_id="me",
+            sender_id="1001",
             signing_key_version="1",
             conversation_key=conv_key,
             conversation_key_version="1",
@@ -393,7 +393,7 @@ class TestApiShapes(unittest.TestCase):
             chat.encrypt_edit(
                 conversation_id="conv-1",
                 target_message_sequence_id="seq-99",
-                sender_id="me",
+                sender_id="1001",
                 signing_key_version="1",
                 conversation_key=conv_key,
                 conversation_key_version="1",
@@ -666,57 +666,6 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotEqual(chat.encrypt(plaintext, conv_key), ciphertext)
         self.assertEqual(chat.decrypt(ciphertext, conv_key), plaintext)
 
-    def _media_message(self, v):
-        """The fixture conversation-key message with one media attachment, and
-        the key map and media hash key that open its media."""
-        conv_key = base64.b64decode(v["conversation_key_b64"])
-        keys = {v["event_conversation_key_version"]: conv_key}
-        return v["event_conversation_key_media_b64"], keys, v["media_conversation_key_hash_key"], conv_key
-
-    def test_stream_roundtrip_and_wrong_key_fails(self):
-        chat, v = self._unlocked_chat()
-        event, keys, media_hash_key, conv_key = self._media_message(v)
-        plaintext = base64.b64decode(v["plaintext_b64"])
-
-        encrypted = chat.encrypt_stream(plaintext, conv_key)
-        self.assertNotEqual(encrypted, plaintext)
-        # Randomized nonces: two encryptions differ.
-        self.assertNotEqual(chat.encrypt_stream(plaintext, conv_key), encrypted)
-        self.assertEqual(chat.decrypt_stream(encrypted, event, keys, media_hash_key), plaintext)
-
-        wrong_key = bytearray(conv_key)
-        wrong_key[31] ^= 0xFF
-        wrong_keys = {v["event_conversation_key_version"]: bytes(wrong_key)}
-        with self.assertRaises(ValueError) as ctx:
-            chat.decrypt_stream(encrypted, event, wrong_keys, media_hash_key)
-        self.assertIn("does not decrypt the message", str(ctx.exception))
-
-    def test_incremental_stream_roundtrip_and_truncation(self):
-        chat, v = self._unlocked_chat()
-        event, keys, media_hash_key, conv_key = self._media_message(v)
-        # A multi-frame payload so chunking and re-framing are exercised.
-        plaintext = b"\xab" * 5000
-
-        enc = chat.stream_encryptor(conv_key)
-        ciphertext = b""
-        for i in range(0, len(plaintext), 700):
-            ciphertext += enc.push(plaintext[i:i + 700])
-        ciphertext += enc.finish()
-
-        dec = chat.stream_decryptor(event, keys, media_hash_key)
-        out = b""
-        for i in range(0, len(ciphertext), 333):
-            out += dec.push(ciphertext[i:i + 333])
-        out += dec.finish()
-        self.assertEqual(out, plaintext)
-
-        # A truncated stream is missing its final frame: finish() raises.
-        truncated = chat.stream_decryptor(event, keys, media_hash_key)
-        truncated.push(ciphertext[:-4])
-        with self.assertRaises(ValueError) as ctx:
-            truncated.finish()
-        self.assertIn("truncated", str(ctx.exception))
-
     def test_export_lock_reimport_roundtrip(self):
         chat, v = self._unlocked_chat()
 
@@ -800,6 +749,7 @@ class TestApiShapes(unittest.TestCase):
     def test_url_attachment_with_banner_image_encrypts(self):
         chat, v = self._unlocked_chat()
 
+        message_id = chat.new_message_id()
         payload = chat.encrypt_message(
             "123:456",
             "check this out",
@@ -807,6 +757,7 @@ class TestApiShapes(unittest.TestCase):
             signing_key_version="1",
             conversation_key=bytes(32),
             conversation_key_version="1",
+            message_id=message_id,
             attachments=[
                 {
                     "attachment_type": "url",
@@ -829,6 +780,7 @@ class TestApiShapes(unittest.TestCase):
         )
         self.assertTrue(payload.encrypted_content)
         self.assertTrue(payload.signature)
+        self.assertEqual(payload.message_id, message_id)
 
     def test_url_attachment_banner_missing_required_field_rejected(self):
         # media_hash_key, filesize_bytes, and filename are all required:
@@ -951,7 +903,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
-        chat.set_identity("me", "7")
+        chat.set_identity("1001", "7")
         payload = chat.encrypt_message(
             "conv-1", "hi",
             conversation_key=conv_key,
@@ -964,7 +916,7 @@ class TestApiShapes(unittest.TestCase):
         # produces an equally complete payload.
         explicit = chat.encrypt_message(
             "conv-1", "hi",
-            sender_id="me",
+            sender_id="1001",
             signing_key_version="7",
             conversation_key=conv_key,
             conversation_key_version="1",

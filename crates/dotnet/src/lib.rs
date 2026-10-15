@@ -224,6 +224,8 @@ struct FfiEncryptMessageParams {
     #[serde(default)]
     conversation_key_version: Option<String>,
     #[serde(default)]
+    message_id: Option<String>,
+    #[serde(default)]
     entities: Option<Vec<(i32, i32, String)>>,
     #[serde(default)]
     attachments: Option<serde_json::Value>,
@@ -253,6 +255,8 @@ struct FfiEncryptReplyParams {
     conversation_key: Option<String>,
     #[serde(default)]
     conversation_key_version: Option<String>,
+    #[serde(default)]
+    message_id: Option<String>,
     #[serde(default)]
     reply_to_sequence_id: Option<String>,
     #[serde(default)]
@@ -1245,12 +1249,13 @@ pub extern "C" fn chat_xdk_decrypt_event(
 /// optional overrides `sender_id` / `signing_key_version` (absent resolves
 /// from the session identity) and `conversation_key` (base64 raw 32-byte
 /// key) / `conversation_key_version` (absent resolves from the opt-in key
-/// cache), plus optional `entities` (`[[start,end,"type"],...]`),
-/// `attachments` (`[{"attachment_type",...},...]`), `quick_reply` (the
-/// `quick_reply` shape of decrypted text content), `should_notify`, and
-/// `ttl_msec`.
+/// cache), plus optional `message_id` (from `chat_xdk_new_message_id`;
+/// required when the attachments include media), `entities`
+/// (`[[start,end,"type"],...]`), `attachments`
+/// (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
+/// of decrypted text content), `should_notify`, and `ttl_msec`.
 ///
-/// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+/// Returns JSON `SendPayload`, whose `message_id` is the message's id.
 #[no_mangle]
 pub extern "C" fn chat_xdk_encrypt_message(
     handle: *const ChatHandle,
@@ -1283,6 +1288,7 @@ pub extern "C" fn chat_xdk_encrypt_message(
         params.signing_key_version = p.signing_key_version;
         params.conversation_key = ckey_bytes;
         params.conversation_key_version = p.conversation_key_version;
+        params.message_id = p.message_id;
         params.entities = p.entities.map(entity_tuples_to_descs);
         params.attachments = attachments;
         params.quick_reply = quick_reply;
@@ -1310,7 +1316,7 @@ pub extern "C" fn chat_xdk_encrypt_message(
 /// `reply_to_entities`, and `reply_to_attachments` remain for callers that no
 /// longer hold the raw event.
 ///
-/// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+/// Returns JSON `SendPayload`, whose `message_id` is the reply's id.
 #[no_mangle]
 pub extern "C" fn chat_xdk_encrypt_reply(
     handle: *const ChatHandle,
@@ -1358,6 +1364,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.signing_key_version = p.signing_key_version;
         params.conversation_key = ckey_bytes;
         params.conversation_key_version = p.conversation_key_version;
+        params.message_id = p.message_id;
         params.reply_to_sequence_id = p.reply_to_sequence_id;
         params.reply_to_sender_id = p.reply_to_sender_id;
         params.reply_to_text = p.reply_to_text;
@@ -1658,15 +1665,29 @@ pub extern "C" fn chat_xdk_decrypt_stream(
     })
 }
 
-/// Encrypt a stream (e.g. media files) with a conversation key.
-///
-/// Both arguments are base64-encoded.
+/// A fresh message id for a message with media.
+#[no_mangle]
+pub extern "C" fn chat_xdk_new_message_id(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        ok_data(&h.inner.new_message_id())
+    })
+}
+
+/// Encrypt a media file for an outgoing message: base64 plaintext under the
+/// key of the attachment at `attachment_index` of message `message_id`,
+/// derived from the base64 conversation key and the session identity.
 /// Returns base64-encoded encrypted bytes.
 #[no_mangle]
 pub extern "C" fn chat_xdk_encrypt_stream(
     handle: *const ChatHandle,
     plaintext_b64: *const c_char,
     conversation_key_b64: *const c_char,
+    message_id: *const c_char,
+    attachment_index: i64,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
@@ -1675,6 +1696,7 @@ pub extern "C" fn chat_xdk_encrypt_stream(
         let h = unsafe { &*handle };
         let plaintext_b64 = try_str!(plaintext_b64);
         let ckey_b64 = try_str!(conversation_key_b64);
+        let message_id = try_str!(message_id);
 
         let plaintext = match BASE64.decode(plaintext_b64) {
             Ok(b) => b,
@@ -1684,7 +1706,10 @@ pub extern "C" fn chat_xdk_encrypt_stream(
             Ok(k) => k,
             Err(e) => return e,
         };
-        match h.inner.encrypt_stream(&plaintext, &ckey) {
+        match h
+            .inner
+            .encrypt_stream(&plaintext, &ckey, message_id, attachment_index)
+        {
             Ok(encrypted) => ok_data(&BASE64.encode(&encrypted)),
             Err(e) => err_from(e),
         }
@@ -1707,23 +1732,44 @@ pub struct StreamDecryptorHandle {
     inner: Option<chat_xdk_core::StreamDecryptor>,
 }
 
-/// Create a stream encryptor for a base64 conversation key. Returns NULL on a
-/// bad key; free the handle with `chat_xdk_stream_encryptor_free`.
+/// Create an incremental encryptor for a media file, taking the arguments of
+/// `chat_xdk_encrypt_stream` apart from the bytes.
+///
+/// On success writes the new handle to `out_encryptor` and returns an empty
+/// result; free the handle with `chat_xdk_stream_encryptor_free`. On failure
+/// writes NULL and returns the error.
 #[no_mangle]
 pub extern "C" fn chat_xdk_stream_encryptor_new(
+    handle: *const ChatHandle,
     conversation_key_b64: *const c_char,
-) -> *mut StreamEncryptorHandle {
-    catch_ffi_or(std::ptr::null_mut(), || {
-        let ckey = match parse_ckey(match unsafe { from_c_str(conversation_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }) {
+    message_id: *const c_char,
+    attachment_index: i64,
+    out_encryptor: *mut *mut StreamEncryptorHandle,
+) -> FfiResult {
+    catch_ffi(|| {
+        if out_encryptor.is_null() {
+            return err_result("Null out_encryptor");
+        }
+        unsafe { *out_encryptor = std::ptr::null_mut() };
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let ckey = match parse_ckey(try_str!(conversation_key_b64)) {
             Ok(k) => k,
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => return e,
         };
-        match chat_xdk_core::StreamEncryptor::new(&ckey) {
-            Ok(enc) => Box::into_raw(Box::new(StreamEncryptorHandle { inner: Some(enc) })),
-            Err(_) => std::ptr::null_mut(),
+        let message_id = try_str!(message_id);
+        match h
+            .inner
+            .stream_encryptor(&ckey, message_id, attachment_index)
+        {
+            Ok(enc) => {
+                let boxed = Box::new(StreamEncryptorHandle { inner: Some(enc) });
+                unsafe { *out_encryptor = Box::into_raw(boxed) };
+                ok_void()
+            }
+            Err(e) => err_from(e),
         }
     })
 }

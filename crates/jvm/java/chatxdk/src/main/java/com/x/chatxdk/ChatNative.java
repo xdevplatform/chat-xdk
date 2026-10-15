@@ -95,9 +95,21 @@ public interface ChatNative extends Library {
             Pointer conversationKeysJson,
             Pointer mediaHashKey);
 
-    FfiResult.ByValue chat_xdk_encrypt_stream(Pointer handle, Pointer plaintextB64, Pointer conversationKeyB64);
+    FfiResult.ByValue chat_xdk_new_message_id(Pointer handle);
 
-    Pointer chat_xdk_stream_encryptor_new(Pointer conversationKeyB64);
+    FfiResult.ByValue chat_xdk_encrypt_stream(
+            Pointer handle,
+            Pointer plaintextB64,
+            Pointer conversationKeyB64,
+            Pointer messageId,
+            long attachmentIndex);
+
+    FfiResult.ByValue chat_xdk_stream_encryptor_new(
+            Pointer handle,
+            Pointer conversationKeyB64,
+            Pointer messageId,
+            long attachmentIndex,
+            PointerByReference outEncryptor);
 
     FfiResult.ByValue chat_xdk_stream_encryptor_push(Pointer handle, Pointer plaintextB64);
 

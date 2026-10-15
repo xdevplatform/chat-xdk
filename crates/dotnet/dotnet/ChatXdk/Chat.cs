@@ -829,32 +829,57 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Encrypt a media payload (e.g. an image or video) with a conversation key.
+        /// A fresh message id for a message with media. Media keys derive from the message
+        /// id, so take the id first, pass it to <see cref="EncryptStream"/> or
+        /// <see cref="StreamEncryptor"/> for every file, then as
+        /// <see cref="EncryptMessageParams.MessageId"/> or <see cref="EncryptReplyParams.MessageId"/>.
+        /// </summary>
+        public string NewMessageId()
+        {
+            ThrowIfDisposed();
+            var id = ConsumeResult(NativeMethods.chat_xdk_new_message_id(_handle));
+            GC.KeepAlive(this);
+            return id;
+        }
+
+        /// <summary>
+        /// Encrypt a media file for an outgoing message. Requires <see cref="SetIdentity"/>.
         /// </summary>
         /// <param name="plaintext">Raw bytes to encrypt.</param>
-        /// <param name="conversationKey">Raw 32-byte conversation key.</param>
+        /// <param name="conversationKey">Raw 32-byte conversation key the message is encrypted with.</param>
+        /// <param name="messageId">The message's id, from <see cref="NewMessageId"/>.</param>
+        /// <param name="attachmentIndex">
+        /// The file's position in the message's attachments; a link card's banner and favicon
+        /// both take the card's position.
+        /// </param>
         /// <returns>Encrypted bytes.</returns>
-        public byte[] EncryptStream(byte[] plaintext, byte[] conversationKey)
+        public byte[] EncryptStream(byte[] plaintext, byte[] conversationKey, string messageId, int attachmentIndex)
         {
             ThrowIfDisposed();
             var ptB64 = Utf8Z(Convert.ToBase64String(plaintext));
             var keyB64 = Utf8Z(Convert.ToBase64String(conversationKey));
+            var idBytes = Utf8Z(messageId);
             string resultB64;
             fixed (byte* ptPtr = ptB64)
             fixed (byte* keyPtr = keyB64)
-                resultB64 = ConsumeResult(NativeMethods.chat_xdk_encrypt_stream(_handle, ptPtr, keyPtr));
+            fixed (byte* idPtr = idBytes)
+                resultB64 = ConsumeResult(
+                    NativeMethods.chat_xdk_encrypt_stream(_handle, ptPtr, keyPtr, idPtr, attachmentIndex));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
 
         /// <summary>
-        /// Create an incremental stream encryptor for large payloads.
+        /// Create an incremental encryptor for a media file too large to hold in memory.
+        /// Takes the arguments of <see cref="EncryptStream"/> apart from the bytes, which are
+        /// fed to the encryptor.
         /// </summary>
-        /// <param name="conversationKey">Raw 32-byte conversation key.</param>
-        public StreamEncryptor StreamEncryptor(byte[] conversationKey)
+        public StreamEncryptor StreamEncryptor(byte[] conversationKey, string messageId, int attachmentIndex)
         {
             ThrowIfDisposed();
-            return ChatXdk.StreamEncryptor.Create(conversationKey);
+            var encryptor = ChatXdk.StreamEncryptor.Create(_handle, conversationKey, messageId, attachmentIndex);
+            GC.KeepAlive(this);
+            return encryptor;
         }
 
         /// <summary>
@@ -1018,6 +1043,7 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["message_id"] = p.MessageId,
                 ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
                 ["attachments"] = p.Attachments,
                 ["quick_reply"] = p.QuickReply,
@@ -1040,6 +1066,7 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["message_id"] = p.MessageId,
                 ["reply_to_sequence_id"] = p.ReplyToSequenceId,
                 ["reply_to_sender_id"] = p.ReplyToSenderId,
                 ["reply_to_text"] = p.ReplyToText,

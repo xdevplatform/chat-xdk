@@ -593,6 +593,12 @@ public final class Types {
         /** Version of the conversation key; resolves from the key cache when null. */
         public String conversationKeyVersion;
 
+        /**
+         * Id of the message, from {@link Chat#newMessageId}; generated when null. Required when
+         * {@link #attachments} include media, whose keys derive from this id.
+         */
+        public String messageId;
+
         /** Optional rich-text entities (URLs, mentions, hashtags, etc.). */
         public List<EntityDescriptor> entities;
 
@@ -666,6 +672,12 @@ public final class Types {
 
         /** Version of the conversation key; resolves from the key cache when null. */
         public String conversationKeyVersion;
+
+        /**
+         * Id of the reply, from {@link Chat#newMessageId}; generated when null. Required when
+         * {@link #attachments} include media, whose keys derive from this id.
+         */
+        public String messageId;
 
         /** Sequence ID of the message being replied to; derived from {@link #replyToEvent} when null. */
         public String replyToSequenceId;

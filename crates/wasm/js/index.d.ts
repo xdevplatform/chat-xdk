@@ -258,6 +258,11 @@ export interface EncryptMessageParams {
   conversationKey?: Uint8Array | null;
   /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
   conversationKeyVersion?: string | null;
+  /**
+   * Id of the message, from newMessageId(); generated when omitted. Required
+   * when the attachments include media, whose keys derive from this id.
+   */
+  messageId?: string | null;
   /** Optional rich-text entities (URLs, mentions, etc.) to embed. */
   entities?: EntityTuple[] | null;
   /** Optional attachments (posts, URLs, media, etc.) to include in the message. */
@@ -308,6 +313,11 @@ export interface EncryptReplyParams {
   conversationKey?: Uint8Array | null;
   /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
   conversationKeyVersion?: string | null;
+  /**
+   * Id of the reply, from newMessageId(); generated when omitted. Required
+   * when the attachments include media, whose keys derive from this id.
+   */
+  messageId?: string | null;
   /** The sequenceId of the message being replied to; derived from replyToEvent when omitted. */
   replyToSequenceId?: string | null;
   /**
@@ -513,8 +523,9 @@ export type AttachmentDescriptor =
  *
  * Supplying `display_title` plus a `banner_image` on a `url` attachment makes
  * receiving clients render a full clickable preview card. Encrypt the image
- * with `encryptStream`/`streamEncryptor`, upload it to the conversation's
- * media store, and reference the returned media hash key here.
+ * with `encryptStream`/`streamEncryptor` at the card's position, upload it
+ * to the conversation's media store, and reference the returned media hash
+ * key here.
  */
 export interface UrlAttachmentImageDescriptor {
   media_hash_key: string;
@@ -916,8 +927,29 @@ interface ChatCrypto {
   /** Build the signed action for deleting messages from a conversation. */
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
 
-  /** Encrypt a stream (e.g. media). */
-  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
+  /**
+   * A fresh message id for a message with media. Media keys derive from the
+   * message id, so take the id first, pass it to `encryptStream` or
+   * `streamEncryptor` for every file, then as `messageId` to `encryptMessage`
+   * or `encryptReply`.
+   */
+  newMessageId(): string;
+
+  /**
+   * Encrypt a media file for an outgoing message.
+   *
+   * `conversationKey` is the key the message is encrypted with, `messageId`
+   * the message's id from `newMessageId()`, and `attachmentIndex` the file's
+   * position in the message's `attachments`; a link card's banner and favicon
+   * both take the card's position. Requires `setIdentity`. Throws when the
+   * identity is missing or the key, message id, or position is invalid.
+   */
+  encryptStream(
+    plaintext: Uint8Array,
+    conversationKey: Uint8Array,
+    messageId: string,
+    attachmentIndex: number,
+  ): Uint8Array;
 
   /**
    * Decrypt an encrypted media file, as downloaded.
@@ -938,8 +970,12 @@ interface ChatCrypto {
     mediaHashKey: string,
   ): Uint8Array;
 
-  /** Create an incremental stream encryptor for large payloads. */
-  streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
+  /**
+   * Create an incremental encryptor for a media file too large to hold in
+   * memory. Takes the arguments of `encryptStream` apart from the bytes,
+   * which are fed to the encryptor.
+   */
+  streamEncryptor(conversationKey: Uint8Array, messageId: string, attachmentIndex: number): StreamEncryptor;
 
   /**
    * Create an incremental decryptor for an encrypted media file too large to
@@ -1033,9 +1069,10 @@ declare class Chat implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
+  newMessageId(): string;
+  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array, messageId: string, attachmentIndex: number): Uint8Array;
   decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): Uint8Array;
-  streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
+  streamEncryptor(conversationKey: Uint8Array, messageId: string, attachmentIndex: number): StreamEncryptor;
   streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
@@ -1101,9 +1138,10 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
+  newMessageId(): string;
+  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array, messageId: string, attachmentIndex: number): Uint8Array;
   decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): Uint8Array;
-  streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
+  streamEncryptor(conversationKey: Uint8Array, messageId: string, attachmentIndex: number): StreamEncryptor;
   streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;

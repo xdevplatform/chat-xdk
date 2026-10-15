@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
 import init, { Chat } from "../../pkg/chat_xdk_wasm.js";
+import { frameSendPayload } from "./frame.mjs";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
@@ -23,32 +24,6 @@ function b64ToBytes(b64) {
 
 function bytesToB64(bytes) {
   return Buffer.from(bytes).toString("base64");
-}
-
-// Frame a SendPayload as the base64 MessageEvent envelope decryptEvent
-// consumes: string header fields, the payload's MessageCreateEvent in the
-// detail union, and its encoded signature.
-function frameSendPayload(payload, senderId, conversationId) {
-  const str = (id, value) => {
-    const data = Buffer.from(value, "utf-8");
-    const header = Buffer.alloc(7);
-    header.writeUInt8(11, 0);
-    header.writeUInt16BE(id, 1);
-    header.writeUInt32BE(data.length, 3);
-    return Buffer.concat([header, data]);
-  };
-  return Buffer.concat([
-    str(1, "1"),
-    str(2, payload.messageId),
-    str(3, senderId),
-    str(4, conversationId),
-    str(6, "1700000000000"),
-    Buffer.from([12, 0, 7, 12, 0, 1]),
-    Buffer.from(payload.encryptedContent, "base64"),
-    Buffer.from([0, 12, 0, 9]),
-    Buffer.from(payload.encodedEventSignature, "base64"),
-    Buffer.from([0]),
-  ]).toString("base64");
 }
 
 const QUICK_REPLY_REQUEST = {
@@ -108,15 +83,52 @@ async function main() {
   // stream fixture uses the deterministic conversation key
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // stream encrypt/decrypt roundtrip (ciphertext randomized), decrypted
-  // through the conversation-key message whose media hash key names it
+  // Media is encrypted for its message and position: the sender takes the
+  // message id first, encrypts each file with it, then sends the message
+  // carrying that id. The media then opens from the sent message's event.
   const fixtureKeys = { [v.event_conversation_key_version]: convKey };
+  const sender = new Chat();
+  sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+  sender.setIdentity(v.event_sender_id, v.event_signing_key_version);
+  const media = (mediaHashKey) => ({
+    attachment_type: "media",
+    media_hash_key: mediaHashKey,
+    width: 4,
+    height: 3,
+    filesize_bytes: 64,
+    filename: `${mediaHashKey}.jpg`,
+    media_type: 1,
+  });
+  const messageId = sender.newMessageId();
+  assert.match(messageId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.notEqual(sender.newMessageId(), messageId);
   const plaintext = b64ToBytes(v.plaintext_b64);
-  const ct1 = chat.encryptStream(plaintext, convKey);
-  const ct2 = chat.encryptStream(plaintext, convKey);
+  const ct1 = sender.encryptStream(plaintext, convKey, messageId, 0);
+  const ct2 = sender.encryptStream(plaintext, convKey, messageId, 0);
   assert.notDeepEqual(ct1, ct2); // randomized nonces
-  const pt1 = chat.decryptStream(ct1, v.event_conversation_key_media_b64, fixtureKeys, v.media_conversation_key_hash_key);
-  assert.deepEqual(pt1, plaintext);
+  const second = new Uint8Array(5000).fill(0xab);
+  const secondEncryptor = sender.streamEncryptor(convKey, messageId, 1);
+  const secondPieces = [];
+  for (let i = 0; i < second.length; i += 700) {
+    secondPieces.push(...secondEncryptor.push(second.subarray(i, i + 700)));
+  }
+  secondPieces.push(...secondEncryptor.finish());
+  const secondCt = new Uint8Array(secondPieces);
+  const mediaPayload = sender.encryptMessage({
+    conversationId: v.event_conversation_id,
+    text: "two photos",
+    conversationKey: convKey,
+    conversationKeyVersion: v.event_conversation_key_version,
+    messageId,
+    attachments: [media("photo-0"), media("photo-1")],
+  });
+  assert.equal(mediaPayload.messageId, messageId);
+  assert.equal(mediaPayload.signatureInfo.signatureVersion, "10");
+  const mediaEvent = frameSendPayload(mediaPayload, v.event_sender_id, v.event_conversation_id);
+  assert.deepEqual(chat.decryptStream(ct1, mediaEvent, fixtureKeys, "photo-0"), plaintext);
+  assert.deepEqual(chat.decryptStream(secondCt, mediaEvent, fixtureKeys, "photo-1"), second);
+  // Media encrypted for another position does not open.
+  assert.throws(() => chat.decryptStream(secondCt, mediaEvent, fixtureKeys, "photo-0"));
 
   // a wrong key for the message's version fails
   const wrongKey = new Uint8Array(convKey);
@@ -125,12 +137,87 @@ async function main() {
     () =>
       chat.decryptStream(
         ct1,
-        v.event_conversation_key_media_b64,
+        mediaEvent,
         { [v.event_conversation_key_version]: wrongKey },
-        v.media_conversation_key_hash_key,
+        "photo-0",
       ),
     /does not decrypt the message/,
   );
+
+  // A link card's banner and favicon both take the card's position.
+  {
+    const cardId = sender.newMessageId();
+    const banner = sender.encryptStream(new TextEncoder().encode("banner bytes"), convKey, cardId, 0);
+    const favicon = sender.encryptStream(new TextEncoder().encode("favicon bytes"), convKey, cardId, 0);
+    const cardPayload = sender.encryptMessage({
+      conversationId: v.event_conversation_id,
+      text: "a link",
+      conversationKey: convKey,
+      conversationKeyVersion: v.event_conversation_key_version,
+      messageId: cardId,
+      attachments: [
+        {
+          attachment_type: "url",
+          url: "https://example.com",
+          banner_image: { media_hash_key: "banner", filesize_bytes: 12, filename: "banner.png" },
+          favicon_image: { media_hash_key: "favicon", filesize_bytes: 13, filename: "favicon.png" },
+        },
+      ],
+    });
+    const cardEvent = frameSendPayload(cardPayload, v.event_sender_id, v.event_conversation_id);
+    assert.equal(
+      new TextDecoder().decode(chat.decryptStream(banner, cardEvent, fixtureKeys, "banner")),
+      "banner bytes",
+    );
+    assert.equal(
+      new TextDecoder().decode(chat.decryptStream(favicon, cardEvent, fixtureKeys, "favicon")),
+      "favicon bytes",
+    );
+  }
+
+  // A message with media must carry the id its media was encrypted with,
+  // and message ids and positions are checked.
+  assert.throws(
+    () =>
+      sender.encryptMessage({
+        conversationId: v.event_conversation_id,
+        text: "a photo",
+        conversationKey: convKey,
+        conversationKeyVersion: v.event_conversation_key_version,
+        attachments: [media("photo")],
+      }),
+    /message_id is not set/,
+  );
+  for (const bad of [messageId.toUpperCase(), "msg-1", `${messageId} `]) {
+    assert.throws(() => sender.encryptStream(plaintext, convKey, bad, 0), /Invalid message_id/);
+    assert.throws(() => sender.streamEncryptor(convKey, bad, 0), /Invalid message_id/);
+    assert.throws(
+      () =>
+        sender.encryptMessage({
+          conversationId: v.event_conversation_id,
+          text: "text",
+          conversationKey: convKey,
+          conversationKeyVersion: v.event_conversation_key_version,
+          messageId: bad,
+        }),
+      /Invalid message_id/,
+    );
+  }
+  for (const index of [-1, 10]) {
+    assert.throws(() => sender.encryptStream(plaintext, convKey, messageId, index), /Invalid attachment_index/);
+    assert.throws(() => sender.streamEncryptor(convKey, messageId, index), /Invalid attachment_index/);
+  }
+  for (const index of [1.5, Number.NaN]) {
+    assert.throws(() => sender.encryptStream(plaintext, convKey, messageId, index), /Invalid attachmentIndex/);
+  }
+  {
+    const noIdentity = new Chat();
+    noIdentity.importKeys(b64ToBytes(v.private_keys_concat_b64));
+    assert.throws(
+      () => noIdentity.encryptStream(plaintext, convKey, messageId, 0),
+      /set_identity/,
+    );
+  }
 
   // decryptEvents over the fixture event vectors: [signed KeyChange, signed
   // message, garbage]. The batch never throws; the garbage event lands in

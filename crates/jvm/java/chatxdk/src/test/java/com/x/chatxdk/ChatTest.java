@@ -303,16 +303,16 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Hello from JVM!");
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptMessage(p);
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("v1", payload.conversationKeyVersion);
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("1", payload.conversationKeyVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
             assertTrue(payload.shouldNotify);
             // The SDK generates and returns the message id.
             assertFalse(payload.messageId.isEmpty());
@@ -324,10 +324,10 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "bad attachment");
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             // Core requires the media fields; an attachment missing one is
             // rejected rather than silently defaulted.
             Types.AttachmentDescriptor bad = new Types.AttachmentDescriptor();
@@ -343,10 +343,10 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "mixed attachments");
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             // Only image/gif/video media may appear in multiples; any other
             // attachment type must be the message's only attachment.
             p.attachments = java.util.List.of(
@@ -363,10 +363,11 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
+            p.messageId = chat.newMessageId();
             Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor();
             banner.mediaHashKey = "banner-hash";
             banner.filesizeBytes = 24_000L;
@@ -395,6 +396,7 @@ class ChatTest {
             SendPayload payload = chat.encryptMessage(p);
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
+            assertEquals(p.messageId, payload.messageId);
         }
     }
 
@@ -405,10 +407,10 @@ class ChatTest {
             // Explicit-field form: no raw event in hand, so the preview fields
             // are supplied directly (null reply target).
             EncryptReplyParams p = new EncryptReplyParams("conv-1", "This is a reply", null);
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             p.replyToSequenceId = "seq-42";
             p.replyToSenderId = 12345L;
             p.replyToText = "Original message";
@@ -416,8 +418,8 @@ class ChatTest {
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("v1", payload.conversationKeyVersion);
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("1", payload.conversationKeyVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -430,15 +432,15 @@ class ChatTest {
             EncryptReactionParams p = new EncryptReactionParams(null, "👍");
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptAddReaction(p);
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -449,15 +451,15 @@ class ChatTest {
             EncryptReactionParams p = new EncryptReactionParams(null, "👍");
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
-            p.senderId = "user-1";
+            p.senderId = "1001";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptRemoveReaction(p);
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("7", payload.signatureInfo.signatureVersion);
+            assertEquals("10", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -478,7 +480,7 @@ class ChatTest {
             p.senderId = "111";
             p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
-            p.conversationKeyVersion = "v1";
+            p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptEdit(p);
             assertFalse(payload.messageId.isEmpty());
             assertFalse(payload.encryptedContent.isEmpty());
@@ -1154,57 +1156,72 @@ class ChatTest {
         }
     }
 
-    // The fixture conversation-key message names one media file under the
-    // conversation key, so anything encrypted under that key decrypts through it.
+    // Media is encrypted for the message that carries it: the sender takes the message id
+    // first, encrypts each file with it, then sends the message under that id.
+
+    private static Types.AttachmentDescriptor photo(String mediaHashKey) {
+        return Types.AttachmentDescriptor.media(mediaHashKey, 4, 3, 64, mediaHashKey + ".jpg", 1, null);
+    }
+
+    /** Send a message carrying {@code attachments} under {@code messageId}, check it verifies, and return its event. */
+    private static String sendMedia(Chat chat, JsonNode v, String messageId, Types.AttachmentDescriptor... attachments)
+            throws Exception {
+        EncryptMessageParams p = new EncryptMessageParams(v.get("event_conversation_id").asText(), "media");
+        p.conversationKey = b64(v, "conversation_key_b64");
+        p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+        p.messageId = messageId;
+        p.attachments = java.util.List.of(attachments);
+        SendPayload payload = chat.encryptMessage(p);
+        assertEquals(messageId, payload.messageId);
+        assertEquals("10", payload.signatureInfo.signatureVersion);
+        assertEquals("media", decryptOwnContent(chat, v, payload).get("text").asText());
+        return frameSendPayload(payload, v.get("event_sender_id").asText(), v.get("event_conversation_id").asText());
+    }
 
     @Test
     void encryptDecryptStreamRoundTrip() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = createUnlocked()) {
+        try (Chat chat = quickReplyChat(v)) {
             byte[] ckey = b64(v, "conversation_key_b64");
             byte[] plaintext = new byte[1024];
             new java.util.Random(42).nextBytes(plaintext);
+            String messageId = chat.newMessageId();
 
-            byte[] encrypted = chat.encryptStream(plaintext, ckey);
+            byte[] encrypted = chat.encryptStream(plaintext, ckey, messageId, 0);
             assertFalse(java.util.Arrays.equals(plaintext, encrypted));
-            assertArrayEquals(
-                    plaintext,
-                    chat.decryptStream(
-                            encrypted,
-                            v.get("event_conversation_key_media_b64").asText(),
-                            conversationKeys(v),
-                            v.get("media_conversation_key_hash_key").asText()));
+            String event = sendMedia(chat, v, messageId, photo("photo"));
+            assertArrayEquals(plaintext, chat.decryptStream(encrypted, event, conversationKeys(v), "photo"));
         }
     }
 
     @Test
     void decryptStreamWrongKeyThrows() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = createUnlocked()) {
+        try (Chat chat = quickReplyChat(v)) {
             byte[] otherKey = newConvKey(chat);
-            byte[] encrypted = chat.encryptStream("secret content".getBytes(StandardCharsets.UTF_8), otherKey);
-            String mediaHashKey = v.get("media_conversation_key_hash_key").asText();
+            String messageId = chat.newMessageId();
+            byte[] encrypted =
+                    chat.encryptStream("secret content".getBytes(StandardCharsets.UTF_8), otherKey, messageId, 0);
+            String event = sendMedia(chat, v, messageId, photo("photo"));
             ChatXdkException e = assertThrows(
-                    ChatXdkException.class,
-                    () -> chat.decryptStream(
-                            encrypted, v.get("event_conversation_key_media_b64").asText(), conversationKeys(v), mediaHashKey));
-            assertTrue(e.getMessage().contains("encrypted file of media_hash_key '" + mediaHashKey + "'"), e.getMessage());
+                    ChatXdkException.class, () -> chat.decryptStream(encrypted, event, conversationKeys(v), "photo"));
+            assertTrue(e.getMessage().contains("encrypted file of media_hash_key 'photo'"), e.getMessage());
         }
     }
 
     @Test
     void incrementalStreamRoundTripAndTruncationThrows() throws Exception {
         JsonNode v = loadVectors();
-        String mediaEvent = v.get("event_conversation_key_media_b64").asText();
-        String mediaHashKey = v.get("media_conversation_key_hash_key").asText();
-        try (Chat chat = createUnlocked()) {
+        try (Chat chat = quickReplyChat(v)) {
             byte[] ckey = b64(v, "conversation_key_b64");
-            // A multi-frame payload so chunking and re-framing are exercised.
+            // A multi-frame payload so chunking and re-framing are exercised, sent as the
+            // second of two photos.
             byte[] plaintext = new byte[5000];
             java.util.Arrays.fill(plaintext, (byte) 0xAB);
+            String messageId = chat.newMessageId();
 
             ByteArrayOutputStream ciphertext = new ByteArrayOutputStream();
-            try (StreamEncryptor enc = chat.streamEncryptor(ckey)) {
+            try (StreamEncryptor enc = chat.streamEncryptor(ckey, messageId, 1)) {
                 for (int i = 0; i < plaintext.length; i += 700) {
                     int end = Math.min(i + 700, plaintext.length);
                     ciphertext.write(enc.push(java.util.Arrays.copyOfRange(plaintext, i, end)));
@@ -1213,8 +1230,10 @@ class ChatTest {
             }
             byte[] ct = ciphertext.toByteArray();
 
+            String mediaEvent = sendMedia(chat, v, messageId, photo("first"), photo("second"));
+            assertThrows(ChatXdkException.class, () -> chat.decryptStream(ct, mediaEvent, conversationKeys(v), "first"));
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            try (StreamDecryptor dec = chat.streamDecryptor(mediaEvent, conversationKeys(v), mediaHashKey)) {
+            try (StreamDecryptor dec = chat.streamDecryptor(mediaEvent, conversationKeys(v), "second")) {
                 for (int i = 0; i < ct.length; i += 333) {
                     int end = Math.min(i + 333, ct.length);
                     out.write(dec.push(java.util.Arrays.copyOfRange(ct, i, end)));
@@ -1224,10 +1243,82 @@ class ChatTest {
             assertArrayEquals(plaintext, out.toByteArray());
 
             // A truncated stream is missing its final frame: finish() throws.
-            try (StreamDecryptor truncated = chat.streamDecryptor(mediaEvent, conversationKeys(v), mediaHashKey)) {
+            try (StreamDecryptor truncated = chat.streamDecryptor(mediaEvent, conversationKeys(v), "second")) {
                 truncated.push(java.util.Arrays.copyOfRange(ct, 0, ct.length - 4));
                 ChatXdkException e = assertThrows(ChatXdkException.class, truncated::finish);
                 assertTrue(e.getMessage().contains("truncated"), e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void linkCardImagesTakeTheCardsPosition() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            byte[] ckey = b64(v, "conversation_key_b64");
+            String messageId = chat.newMessageId();
+            byte[] banner = chat.encryptStream("banner bytes".getBytes(StandardCharsets.UTF_8), ckey, messageId, 0);
+            byte[] favicon = chat.encryptStream("favicon bytes".getBytes(StandardCharsets.UTF_8), ckey, messageId, 0);
+            String event = sendMedia(chat, v, messageId, Types.AttachmentDescriptor.urlCard(
+                    "https://example.com",
+                    null,
+                    Types.UrlAttachmentImageDescriptor.of("banner", 12L, "banner.png"),
+                    Types.UrlAttachmentImageDescriptor.of("favicon", 13L, "favicon.png")));
+            assertEquals("banner bytes", new String(
+                    chat.decryptStream(banner, event, conversationKeys(v), "banner"), StandardCharsets.UTF_8));
+            assertEquals("favicon bytes", new String(
+                    chat.decryptStream(favicon, event, conversationKeys(v), "favicon"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void mediaSendInputIsChecked() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            byte[] ckey = b64(v, "conversation_key_b64");
+            String conversationId = v.get("event_conversation_id").asText();
+            String keyVersion = v.get("event_conversation_key_version").asText();
+            String messageId = chat.newMessageId();
+            assertTrue(messageId.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"), messageId);
+            assertNotEquals(messageId, chat.newMessageId());
+
+            EncryptMessageParams withoutId = new EncryptMessageParams(conversationId, "a photo");
+            withoutId.conversationKey = ckey;
+            withoutId.conversationKeyVersion = keyVersion;
+            withoutId.attachments = java.util.List.of(photo("photo"));
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(withoutId));
+            assertTrue(e.getMessage().contains("message_id is not set"), e.getMessage());
+            EncryptReplyParams replyWithoutId = new EncryptReplyParams(conversationId, "a photo", null);
+            replyWithoutId.replyToSequenceId = "seq-orig";
+            replyWithoutId.conversationKey = ckey;
+            replyWithoutId.conversationKeyVersion = keyVersion;
+            replyWithoutId.attachments = java.util.List.of(photo("photo"));
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptReply(replyWithoutId));
+            assertTrue(e.getMessage().contains("message_id is not set"), e.getMessage());
+
+            for (String bad : new String[] {messageId.toUpperCase(java.util.Locale.ROOT), "msg-1", messageId + " "}) {
+                e = assertThrows(ChatXdkException.class, () -> chat.encryptStream(new byte[] {1}, ckey, bad, 0));
+                assertTrue(e.getMessage().contains("Invalid message_id"), e.getMessage());
+                e = assertThrows(ChatXdkException.class, () -> chat.streamEncryptor(ckey, bad, 0));
+                assertTrue(e.getMessage().contains("Invalid message_id"), e.getMessage());
+                EncryptMessageParams badId = new EncryptMessageParams(conversationId, "text");
+                badId.conversationKey = ckey;
+                badId.conversationKeyVersion = keyVersion;
+                badId.messageId = bad;
+                e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(badId));
+                assertTrue(e.getMessage().contains("Invalid message_id"), e.getMessage());
+            }
+            for (int index : new int[] {-1, 10}) {
+                e = assertThrows(ChatXdkException.class, () -> chat.encryptStream(new byte[] {1}, ckey, messageId, index));
+                assertTrue(e.getMessage().contains("Invalid attachment_index"), e.getMessage());
+                e = assertThrows(ChatXdkException.class, () -> chat.streamEncryptor(ckey, messageId, index));
+                assertTrue(e.getMessage().contains("Invalid attachment_index"), e.getMessage());
+            }
+
+            try (Chat noIdentity = new Chat()) {
+                noIdentity.importKeys(b64(v, "private_keys_concat_b64"));
+                e = assertThrows(ChatXdkException.class, () -> noIdentity.encryptStream(new byte[] {1}, ckey, messageId, 0));
+                assertTrue(e.getMessage().contains("set_identity"), e.getMessage());
             }
         }
     }

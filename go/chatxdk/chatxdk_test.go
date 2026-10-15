@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -332,7 +333,7 @@ func TestEncryptMessageSmokeAndInvalidImport(t *testing.T) {
 	// The fixture key is the pre-decrypted 32-byte key — pass it straight
 	// to EncryptMessage without going through ECIES.
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "hello from Go",
@@ -770,22 +771,80 @@ func TestEncryptDecryptEmptyString(t *testing.T) {
 	}
 }
 
-func TestEncryptStreamDecryptStreamRoundtrip(t *testing.T) {
-	v := loadVectors(t)
-
+// mediaSender returns a chat signing as the fixture sender, with that
+// sender as its session identity.
+func mediaSender(t *testing.T, v sdkVectors) *Chat {
+	t.Helper()
 	chat := New()
-	defer chat.Close()
 	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		chat.Close()
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
+	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+		chat.Close()
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	return chat
+}
+
+func mediaAttachment(mediaHashKey string) AttachmentDescriptor {
+	mediaType := int32(1)
+	return AttachmentDescriptor{
+		AttachmentType: "media",
+		MediaHashKey:   mediaHashKey,
+		Width:          4,
+		Height:         3,
+		FilesizeBytes:  64,
+		Filename:       mediaHashKey + ".jpg",
+		MediaType:      &mediaType,
+	}
+}
+
+// sendMedia sends a message carrying attachments under messageID, checks it
+// verifies, and returns its framed event.
+func sendMedia(t *testing.T, chat *Chat, v sdkVectors, messageID string, attachments []AttachmentDescriptor) string {
+	t.Helper()
+	payload, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "media",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MessageID:              messageID,
+		Attachments:            attachments,
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage failed: %v", err)
+	}
+	if payload.MessageID != messageID {
+		t.Errorf("message id %q, want %q", payload.MessageID, messageID)
+	}
+	if payload.SignatureInfo.SignatureVersion != "10" {
+		t.Errorf("signature version %q, want 10", payload.SignatureInfo.SignatureVersion)
+	}
+	event := frameSendPayload(t, payload, v.EventSenderID, v.EventConversationID)
+	decrypted, err := chat.DecryptEvent(event, v.conversationKeys(t), v.eventSigningKeys())
+	msg := mustMessage(t, decrypted, err)
+	if !msg.Verified {
+		t.Error("expected the sent message to verify")
+	}
+	return event
+}
+
+func TestEncryptStreamDecryptStreamRoundtrip(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
 
 	// The fixture stores the payload base64-encoded; the API takes raw bytes.
 	plaintext, err := base64.StdEncoding.DecodeString(v.PlaintextB64)
 	if err != nil {
 		t.Fatalf("failed to decode plaintext_b64: %v", err)
 	}
-
-	encrypted, err := chat.EncryptStream(plaintext, v.conversationKey(t))
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
+	encrypted, err := chat.EncryptStream(plaintext, v.conversationKey(t), messageID, 0)
 	if err != nil {
 		t.Fatalf("EncryptStream failed: %v", err)
 	}
@@ -793,9 +852,9 @@ func TestEncryptStreamDecryptStreamRoundtrip(t *testing.T) {
 		t.Fatal("expected non-empty encrypted stream")
 	}
 
-	// Decrypt back through the conversation-key message whose media hash key
-	// names it; that message's media is under the conversation key.
-	decrypted, err := chat.DecryptStream(encrypted, v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
+	// The media decrypts through the message sent under its message id.
+	event := sendMedia(t, chat, v, messageID, []AttachmentDescriptor{mediaAttachment("photo")})
+	decrypted, err := chat.DecryptStream(encrypted, event, v.conversationKeys(t), "photo")
 	if err != nil {
 		t.Fatalf("DecryptStream failed: %v", err)
 	}
@@ -806,17 +865,17 @@ func TestEncryptStreamDecryptStreamRoundtrip(t *testing.T) {
 
 func TestStreamEncryptorDecryptorRoundtrip(t *testing.T) {
 	v := loadVectors(t)
-
-	chat := New()
+	chat := mediaSender(t, v)
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
-		t.Fatalf("ImportKeys failed: %v", err)
-	}
 
-	// A multi-frame payload so chunking and re-framing are exercised.
+	// A multi-frame payload so chunking and re-framing are exercised, sent
+	// as the second of two photos.
 	plaintext := bytes.Repeat([]byte{0xAB}, 5000)
-
-	enc, err := chat.StreamEncryptor(v.conversationKey(t))
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
+	enc, err := chat.StreamEncryptor(v.conversationKey(t), messageID, 1)
 	if err != nil {
 		t.Fatalf("StreamEncryptor failed: %v", err)
 	}
@@ -841,7 +900,11 @@ func TestStreamEncryptorDecryptorRoundtrip(t *testing.T) {
 	ciphertext = append(ciphertext, final...)
 	enc.Close()
 
-	dec, err := chat.StreamDecryptor(v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
+	event := sendMedia(t, chat, v, messageID, []AttachmentDescriptor{mediaAttachment("first"), mediaAttachment("second")})
+	if _, err := chat.DecryptStream(ciphertext, event, v.conversationKeys(t), "first"); err == nil {
+		t.Error("expected media encrypted for the second position not to open as the first")
+	}
+	dec, err := chat.StreamDecryptor(event, v.conversationKeys(t), "second")
 	if err != nil {
 		t.Fatalf("StreamDecryptor failed: %v", err)
 	}
@@ -858,31 +921,120 @@ func TestStreamEncryptorDecryptorRoundtrip(t *testing.T) {
 		}
 		got = append(got, out...)
 	}
-	final, err = dec.Finish()
+	tail, err := dec.Finish()
+	dec.Close()
 	if err != nil {
-		dec.Close()
 		t.Fatalf("decryptor Finish failed: %v", err)
 	}
-	got = append(got, final...)
-	dec.Close()
-
+	got = append(got, tail...)
 	if !bytes.Equal(got, plaintext) {
-		t.Errorf("incremental stream roundtrip mismatch: got %d bytes, want %d", len(got), len(plaintext))
+		t.Error("incremental stream roundtrip mismatch")
+	}
+}
+
+func TestLinkCardImagesTakeTheCardsPosition(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
+
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
+	banner, err := chat.EncryptStream([]byte("banner bytes"), v.conversationKey(t), messageID, 0)
+	if err != nil {
+		t.Fatalf("EncryptStream (banner) failed: %v", err)
+	}
+	favicon, err := chat.EncryptStream([]byte("favicon bytes"), v.conversationKey(t), messageID, 0)
+	if err != nil {
+		t.Fatalf("EncryptStream (favicon) failed: %v", err)
+	}
+	event := sendMedia(t, chat, v, messageID, []AttachmentDescriptor{{
+		AttachmentType: "url",
+		URL:            "https://example.com",
+		BannerImage:    &URLAttachmentImageDescriptor{MediaHashKey: "banner", FilesizeBytes: 12, Filename: "banner.png"},
+		FaviconImage:   &URLAttachmentImageDescriptor{MediaHashKey: "favicon", FilesizeBytes: 13, Filename: "favicon.png"},
+	}})
+	for name, encrypted := range map[string][]byte{"banner": banner, "favicon": favicon} {
+		got, err := chat.DecryptStream(encrypted, event, v.conversationKeys(t), name)
+		if err != nil {
+			t.Fatalf("DecryptStream (%s) failed: %v", name, err)
+		}
+		if string(got) != name+" bytes" {
+			t.Errorf("%s: got %q", name, got)
+		}
+	}
+}
+
+func TestMediaSendInputIsChecked(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
+	key := v.conversationKey(t)
+
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(messageID) {
+		t.Errorf("message id %q is not a lowercase UUID", messageID)
+	}
+	if other, _ := chat.NewMessageID(); other == messageID {
+		t.Error("expected a fresh message id on each call")
 	}
 
-	// Truncating the ciphertext must surface an error at Finish.
-	dec2, err := chat.StreamDecryptor(v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
-	if err != nil {
-		t.Fatalf("StreamDecryptor failed: %v", err)
+	expectError := func(what string, err error, want string) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: expected an error containing %q, got %v", what, want, err)
+		}
 	}
-	defer dec2.Close()
-	truncated := ciphertext[:len(ciphertext)-1]
-	if _, err := dec2.Push(truncated); err != nil {
-		return // an early error is also acceptable
+	_, err = chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "a photo",
+		ConversationKey:        key,
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		Attachments:            []AttachmentDescriptor{mediaAttachment("photo")},
+	})
+	expectError("media without a message id", err, "message_id is not set")
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "a photo",
+		ReplyToSequenceID:      "seq-orig",
+		ConversationKey:        key,
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		Attachments:            []AttachmentDescriptor{mediaAttachment("photo")},
+	})
+	expectError("reply media without a message id", err, "message_id is not set")
+
+	for _, bad := range []string{strings.ToUpper(messageID), "msg-1", messageID + " "} {
+		_, err := chat.EncryptStream([]byte("photo"), key, bad, 0)
+		expectError("EncryptStream "+bad, err, "Invalid message_id")
+		_, err = chat.StreamEncryptor(key, bad, 0)
+		expectError("StreamEncryptor "+bad, err, "Invalid message_id")
+		_, err = chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         v.EventConversationID,
+			Text:                   "text",
+			ConversationKey:        key,
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			MessageID:              bad,
+		})
+		expectError("EncryptMessage "+bad, err, "Invalid message_id")
 	}
-	if _, err := dec2.Finish(); err == nil {
-		t.Error("expected truncation error on Finish, got nil")
+	for _, index := range []int{-1, 10} {
+		_, err := chat.EncryptStream([]byte("photo"), key, messageID, index)
+		expectError(fmt.Sprintf("EncryptStream index %d", index), err, "Invalid attachment_index")
+		_, err = chat.StreamEncryptor(key, messageID, index)
+		expectError(fmt.Sprintf("StreamEncryptor index %d", index), err, "Invalid attachment_index")
 	}
+
+	noIdentity := New()
+	defer noIdentity.Close()
+	if err := noIdentity.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	_, err = noIdentity.EncryptStream([]byte("photo"), key, messageID, 0)
+	expectError("EncryptStream without an identity", err, "set_identity")
 }
 
 func TestEncryptReply(t *testing.T) {
@@ -896,7 +1048,7 @@ func TestEncryptReply(t *testing.T) {
 
 	replyText := "quoted reply text"
 	payload, err := chat.EncryptReply(EncryptReplyParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "this is my reply",
@@ -932,7 +1084,7 @@ func TestEncryptAddReaction(t *testing.T) {
 	}
 
 	payload, err := chat.EncryptAddReaction(EncryptReactionParams{
-		SenderID:                "me",
+		SenderID:                "1001",
 		ConversationID:          "conv-1",
 		ConversationKey:         v.conversationKey(t),
 		TargetMessageSequenceID: "seq-99",
@@ -961,7 +1113,7 @@ func TestEncryptRemoveReaction(t *testing.T) {
 	}
 
 	payload, err := chat.EncryptRemoveReaction(EncryptReactionParams{
-		SenderID:                "me",
+		SenderID:                "1001",
 		ConversationID:          "conv-1",
 		ConversationKey:         v.conversationKey(t),
 		TargetMessageSequenceID: "seq-99",
@@ -1738,7 +1890,7 @@ func TestEncryptMessageWithEntitiesAndAttachments(t *testing.T) {
 	}
 
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "hello @user check this link",
@@ -1851,12 +2003,17 @@ func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 		}
 	}
 
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "check this out",
 		ConversationKeyVersion: "1",
+		MessageID:              messageID,
 		SigningKeyVersion:      "1",
 		Attachments:            []AttachmentDescriptor{attachment},
 	})
@@ -1937,12 +2094,17 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 
 	replyText := "original message"
 	senderID := int64(12345)
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
 	payload, err := chat.EncryptReply(EncryptReplyParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "replying with media",
 		ConversationKeyVersion: "1",
+		MessageID:              messageID,
 		SigningKeyVersion:      "1",
 		ReplyToSequenceID:      "seq-100",
 		ReplyToSenderID:        &senderID,
@@ -1978,12 +2140,17 @@ func TestEncryptMessageMediaAttachmentZeroDimensions(t *testing.T) {
 	// Zero-valued media dimensions are valid (e.g. audio or file media) and
 	// must be transmitted rather than dropped by omitempty: core requires
 	// the fields and would reject an attachment missing them.
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "attachment with zero dimensions",
 		ConversationKeyVersion: "1",
+		MessageID:              messageID,
 		SigningKeyVersion:      "1",
 		Attachments: []AttachmentDescriptor{
 			{
@@ -2114,12 +2281,20 @@ func TestStreamEncryptDecryptLargerPayload(t *testing.T) {
 		payload[i] = 'A'
 	}
 
-	encrypted, err := chat.EncryptStream(payload, v.conversationKey(t))
+	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	messageID, err := chat.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID failed: %v", err)
+	}
+	encrypted, err := chat.EncryptStream(payload, v.conversationKey(t), messageID, 0)
 	if err != nil {
 		t.Fatalf("EncryptStream (large) failed: %v", err)
 	}
 
-	decrypted, err := chat.DecryptStream(encrypted, v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
+	event := sendMedia(t, chat, v, messageID, []AttachmentDescriptor{mediaAttachment("large")})
+	decrypted, err := chat.DecryptStream(encrypted, event, v.conversationKeys(t), "large")
 	if err != nil {
 		t.Fatalf("DecryptStream (large) failed: %v", err)
 	}
@@ -2164,7 +2339,7 @@ func TestEncryptMessageThenVerifySignature(t *testing.T) {
 	}
 
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "verifiable message",
@@ -2530,16 +2705,9 @@ func TestEventUnknownType(t *testing.T) {
 	}
 }
 
-// TestEncryptMessageSignatureVersionAndRoundtrip exercises the encrypt side of
-// an end-to-end flow and pins the wire signature_version to "7".
-//
-// A full EncryptMessage -> DecryptEvent roundtrip is NOT feasible from the Go
-// API: EncryptMessage returns a SendPayload (encrypted_content, signature,
-// encoded_event_signature, signature_info, ...), but DecryptEvent consumes an
-// opaque base64-encoded webhook event that the server frames around that
-// payload. The Go binding exposes no constructor to assemble such an event from
-// a SendPayload, so we assert the encrypt output shape instead and rely on
-// Encrypt/Decrypt (see TestEncryptDecryptRoundtrip) for symmetric coverage.
+// TestEncryptMessageSignatureVersionAndRoundtrip pins the wire
+// signature_version to "10" and decrypts the sent message from its framed
+// event.
 func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	v := loadVectors(t)
 
@@ -2550,12 +2718,12 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	}
 
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
-		ConversationID:         "conv-1",
+		SenderID:               v.EventSenderID,
+		ConversationID:         v.EventConversationID,
 		ConversationKey:        v.conversationKey(t),
-		Text:                   "version seven please",
-		ConversationKeyVersion: "1",
-		SigningKeyVersion:      "1",
+		Text:                   "version ten please",
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		SigningKeyVersion:      v.EventSigningKeyVersion,
 	})
 	if err != nil {
 		t.Fatalf("EncryptMessage failed: %v", err)
@@ -2569,15 +2737,28 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	if payload.EncodedEventSignature == "" {
 		t.Error("expected non-empty encoded_event_signature")
 	}
-	if payload.ConversationKeyVersion != "1" {
-		t.Errorf("expected conversation_key_version '1', got %q", payload.ConversationKeyVersion)
+	if payload.ConversationKeyVersion != v.EventConversationKeyVersion {
+		t.Errorf("expected conversation_key_version %q, got %q", v.EventConversationKeyVersion, payload.ConversationKeyVersion)
 	}
-	if payload.SignatureInfo.PublicKeyVersion != "1" {
-		t.Errorf("expected signature_info.public_key_version '1', got %q", payload.SignatureInfo.PublicKeyVersion)
+	if payload.SignatureInfo.PublicKeyVersion != v.EventSigningKeyVersion {
+		t.Errorf("expected signature_info.public_key_version %q, got %q", v.EventSigningKeyVersion, payload.SignatureInfo.PublicKeyVersion)
 	}
 	// signature_version is pinned to the current wire format.
-	if payload.SignatureInfo.SignatureVersion != "7" {
-		t.Errorf("expected signature_version '7', got %q", payload.SignatureInfo.SignatureVersion)
+	if payload.SignatureInfo.SignatureVersion != "10" {
+		t.Errorf("expected signature_version '10', got %q", payload.SignatureInfo.SignatureVersion)
+	}
+
+	event, err := chat.DecryptEvent(
+		frameSendPayload(t, payload, v.EventSenderID, v.EventConversationID),
+		v.conversationKeys(t),
+		v.eventSigningKeys(),
+	)
+	msg := mustMessage(t, event, err)
+	if !msg.Verified {
+		t.Error("expected the sent message to verify")
+	}
+	if text := msg.Text(); text != "version ten please" {
+		t.Errorf("decrypted text %q", text)
 	}
 }
 

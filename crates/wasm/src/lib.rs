@@ -457,12 +457,15 @@ impl Chat {
     /// `signingKeyVersion` (resolved from the session identity set via
     /// `setIdentity` when omitted), `conversationKey` (Uint8Array) /
     /// `conversationKeyVersion` (resolved from the opt-in key cache when
-    /// omitted), `entities` (array of `[start, end, "type"]` tuples),
-    /// `attachments` (array of attachment objects), `quickReply` (the same
-    /// shape decrypted text content carries), `shouldNotify`, and `ttlMsec`.
+    /// omitted), `messageId`, `entities` (array of `[start, end, "type"]`
+    /// tuples), `attachments` (array of attachment objects), `quickReply` (the
+    /// same shape decrypted text content carries), `shouldNotify`, and
+    /// `ttlMsec`.
     ///
-    /// The SDK generates the message id and returns it as `messageId` on the
-    /// result; callers do not pass one.
+    /// The message id comes back as `messageId` on the result. A message with
+    /// media takes its id from `newMessageId()` first, since its media is
+    /// encrypted with that id, and passes it as `messageId`; otherwise the SDK
+    /// generates one.
     #[wasm_bindgen(js_name = encryptMessage)]
     pub fn encrypt_message(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsEncryptMessageParams = from_js_params("encryptMessage", params)?;
@@ -471,6 +474,7 @@ impl Chat {
         core_params.signing_key_version = p.signing_key_version;
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
+        core_params.message_id = p.message_id;
         core_params.entities = p.entities.map(entity_tuples_to_descs);
         core_params.attachments = p.attachments;
         core_params.quick_reply = p.quick_reply.map(Into::into);
@@ -493,7 +497,8 @@ impl Chat {
     /// `replyToCkces` (base64 raw key-change events needed to decrypt the
     /// original), and explicit `replyToSequenceId`, `replyToSenderId`,
     /// `replyToText`, `replyToEntities`, `replyToAttachments` overrides for
-    /// callers that no longer hold the raw event.
+    /// callers that no longer hold the raw event. A reply with media passes
+    /// the id its media was encrypted with as `messageId`.
     #[wasm_bindgen(js_name = encryptReply)]
     pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsEncryptReplyParams = from_js_params("encryptReply", params)?;
@@ -508,6 +513,7 @@ impl Chat {
         core_params.signing_key_version = p.signing_key_version;
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
+        core_params.message_id = p.message_id;
         core_params.reply_to_sequence_id = p.reply_to_sequence_id;
         core_params.reply_to_sender_id = p.reply_to_sender_id.map(sender_id_to_i64).transpose()?;
         core_params.reply_to_text = p.reply_to_text;
@@ -604,17 +610,39 @@ impl Chat {
         to_js_value(&js_signature)
     }
 
-    /// Encrypt a stream (e.g. media).
+    /// A fresh message id for a message with media. Media keys derive from
+    /// the message id, so take the id first, pass it to `encryptStream` or
+    /// `streamEncryptor` for every file, then as `messageId` to
+    /// `encryptMessage` or `encryptReply`.
+    #[wasm_bindgen(js_name = newMessageId)]
+    pub fn new_message_id(&self) -> String {
+        self.inner.new_message_id()
+    }
+
+    /// Encrypt a media file for an outgoing message.
+    ///
+    /// `conversationKey` is the key the message is encrypted with,
+    /// `messageId` the message's id from `newMessageId()`, and
+    /// `attachmentIndex` the file's position in the message's `attachments`;
+    /// a link card's banner and favicon both take the card's position.
+    /// Requires `setIdentity`.
     #[wasm_bindgen(js_name = encryptStream)]
     pub fn encrypt_stream(
         &self,
         plaintext: Vec<u8>,
         conversation_key: Vec<u8>,
+        message_id: &str,
+        attachment_index: f64,
     ) -> Result<Vec<u8>, JsError> {
         let ckey = XChatConversationKey::from_bytes(conversation_key)
             .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
         self.inner
-            .encrypt_stream(&plaintext, &ckey)
+            .encrypt_stream(
+                &plaintext,
+                &ckey,
+                message_id,
+                attachment_index_from_js(attachment_index)?,
+            )
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
@@ -640,14 +668,25 @@ impl Chat {
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
-    /// Create an incremental stream encryptor for large payloads.
+    /// Create an incremental encryptor for a media file too large to hold in
+    /// memory. Takes the arguments of `encryptStream` apart from the bytes,
+    /// which are fed to the encryptor.
     #[wasm_bindgen(js_name = streamEncryptor)]
-    pub fn stream_encryptor(&self, conversation_key: Vec<u8>) -> Result<StreamEncryptor, JsError> {
+    pub fn stream_encryptor(
+        &self,
+        conversation_key: Vec<u8>,
+        message_id: &str,
+        attachment_index: f64,
+    ) -> Result<StreamEncryptor, JsError> {
         let ckey = XChatConversationKey::from_bytes(conversation_key)
             .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
         let inner = self
             .inner
-            .stream_encryptor(&ckey)
+            .stream_encryptor(
+                &ckey,
+                message_id,
+                attachment_index_from_js(attachment_index)?,
+            )
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         Ok(StreamEncryptor { inner })
     }
@@ -1047,6 +1086,21 @@ enum JsSenderId {
     Str(String),
 }
 
+/// An attachment position passed as a JS number. Fractions and numbers
+/// beyond the safe-integer range are rejected here; the core checks the
+/// range a message allows.
+fn attachment_index_from_js(index: f64) -> Result<i64, JsError> {
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+    if index.is_finite() && index.fract() == 0.0 && index.abs() <= MAX_SAFE_INTEGER {
+        Ok(index as i64)
+    } else {
+        Err(JsError::new(&format!(
+            "Invalid attachmentIndex {index}: pass the attachment's position in the message's \
+             attachments as an integer"
+        )))
+    }
+}
+
 /// Parse a [`JsSenderId`] into the exact `i64` the reply preview signs,
 /// rejecting non-integral numbers, numbers beyond `Number.MAX_SAFE_INTEGER`
 /// (already rounded by JS), and non-numeric strings.
@@ -1103,6 +1157,7 @@ struct JsEncryptMessageParams {
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
+    message_id: Option<String>,
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
@@ -1122,6 +1177,7 @@ struct JsEncryptReplyParams {
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
+    message_id: Option<String>,
     reply_to_sequence_id: Option<String>,
     reply_to_sender_id: Option<JsSenderId>,
     reply_to_text: Option<String>,

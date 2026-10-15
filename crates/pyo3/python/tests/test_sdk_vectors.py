@@ -56,6 +56,18 @@ def _frame_send_payload(payload, sender_id: str, conversation_id: str) -> str:
     return base64.b64encode(envelope).decode("ascii")
 
 
+def _media(media_hash_key: str) -> dict:
+    return {
+        "attachment_type": "media",
+        "media_hash_key": media_hash_key,
+        "width": 4,
+        "height": 3,
+        "filesize_bytes": 64,
+        "filename": f"{media_hash_key}.jpg",
+        "media_type": 1,
+    }
+
+
 QUICK_REPLY_REQUEST = {
     "request": {
         "options": {
@@ -138,7 +150,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         conv_key = base64.b64decode(v["conversation_key_b64"])
         payload = chat.encrypt_message(
             "conv-1", "hello from python",
-            sender_id="me",
+            sender_id=v["event_sender_id"],
             signing_key_version="1",
             conversation_key=conv_key,
             conversation_key_version="1",
@@ -646,3 +658,141 @@ class TestPythonSdkVectors(unittest.TestCase):
         public_key = v["signature_v10_cev1_public_key_b64"]
         self.assertTrue(chat.verify(public_key, signature, v["payload_message_v10_cev1"].encode()))
         self.assertFalse(chat.verify(public_key, signature, v["payload_message_v10"].encode()))
+
+    def _send_media(self, chat, v, text, attachments, message_id) -> str:
+        """Send a message with ``attachments`` under ``message_id``, check it
+        verifies, and return its event."""
+        payload = chat.encrypt_message(
+            v["event_conversation_id"],
+            text,
+            conversation_key=base64.b64decode(v["conversation_key_b64"]),
+            conversation_key_version=v["event_conversation_key_version"],
+            message_id=message_id,
+            attachments=attachments,
+        )
+        self.assertEqual(payload.message_id, message_id)
+        self.assertEqual(payload.signature_info.signature_version, "10")
+        self.assertEqual(self._decrypt_own(chat, v, payload)["text"], text)
+        return _frame_send_payload(payload, v["event_sender_id"], v["event_conversation_id"])
+
+    def test_media_encrypted_for_its_message_and_position_opens_from_it(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        key = base64.b64decode(v["conversation_key_b64"])
+        keys = {v["event_conversation_key_version"]: key}
+        message_id = chat.new_message_id()
+        photos = [b"\x01" * 3000, b"\x02" * 5000]
+        first = chat.encrypt_stream(photos[0], key, message_id, 0)
+        # Randomized nonces: two encryptions differ.
+        self.assertNotEqual(chat.encrypt_stream(photos[0], key, message_id, 0), first)
+        encryptor = chat.stream_encryptor(key, message_id, 1)
+        second = b"".join(
+            encryptor.push(photos[1][i:i + 700]) for i in range(0, len(photos[1]), 700)
+        ) + encryptor.finish()
+
+        event = self._send_media(
+            chat, v, "two photos", [_media("photo-0"), _media("photo-1")], message_id
+        )
+        for name, encrypted, plaintext in (("photo-0", first, photos[0]), ("photo-1", second, photos[1])):
+            with self.subTest(media=name):
+                self.assertEqual(
+                    self._open_media(event, keys, name, base64.b64encode(encrypted)), plaintext
+                )
+
+        with self.assertRaises(ValueError):
+            chat.decrypt_stream(second, event, keys, "photo-0")
+        wrong_key = bytearray(key)
+        wrong_key[31] ^= 0xFF
+        with self.assertRaises(ValueError) as ctx:
+            chat.decrypt_stream(
+                first, event, {v["event_conversation_key_version"]: bytes(wrong_key)}, "photo-0"
+            )
+        self.assertIn("does not decrypt the message", str(ctx.exception))
+        truncated = chat.stream_decryptor(event, keys, "photo-1")
+        truncated.push(second[:-4])
+        with self.assertRaises(ValueError) as ctx:
+            truncated.finish()
+        self.assertIn("truncated", str(ctx.exception))
+
+    def test_link_card_images_take_the_cards_position(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        key = base64.b64decode(v["conversation_key_b64"])
+        keys = {v["event_conversation_key_version"]: key}
+        message_id = chat.new_message_id()
+        banner = chat.encrypt_stream(b"banner bytes", key, message_id, 0)
+        favicon = chat.encrypt_stream(b"favicon bytes", key, message_id, 0)
+        card = {
+            "attachment_type": "url",
+            "url": "https://example.com",
+            "banner_image": {"media_hash_key": "banner", "filesize_bytes": 12, "filename": "banner.png"},
+            "favicon_image": {"media_hash_key": "favicon", "filesize_bytes": 13, "filename": "favicon.png"},
+        }
+        event = self._send_media(chat, v, "a link", [card], message_id)
+        for name, encrypted, plaintext in (("banner", banner, b"banner bytes"), ("favicon", favicon, b"favicon bytes")):
+            with self.subTest(image=name):
+                self.assertEqual(
+                    self._open_media(event, keys, name, base64.b64encode(encrypted)), plaintext
+                )
+
+    def test_a_message_with_media_needs_its_message_id(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        key = base64.b64decode(v["conversation_key_b64"])
+        with self.assertRaisesRegex(ValueError, "message_id is not set"):
+            chat.encrypt_message(
+                v["event_conversation_id"],
+                "a photo",
+                conversation_key=key,
+                conversation_key_version=v["event_conversation_key_version"],
+                attachments=[_media("photo")],
+            )
+        with self.assertRaisesRegex(ValueError, "message_id is not set"):
+            chat.encrypt_reply(
+                v["event_conversation_id"],
+                "a photo",
+                reply_to_sequence_id="seq-orig",
+                conversation_key=key,
+                conversation_key_version=v["event_conversation_key_version"],
+                attachments=[_media("photo")],
+            )
+
+    def test_message_ids_and_attachment_positions_are_checked(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        key = base64.b64decode(v["conversation_key_b64"])
+        message_id = chat.new_message_id()
+        self.assertEqual(str(uuid.UUID(message_id)), message_id)
+        self.assertNotEqual(chat.new_message_id(), message_id)
+
+        for bad in (message_id.upper(), "msg-1", message_id + " "):
+            with self.subTest(message_id=bad):
+                with self.assertRaisesRegex(ValueError, "Invalid message_id"):
+                    chat.encrypt_stream(b"photo", key, bad, 0)
+                with self.assertRaisesRegex(ValueError, "Invalid message_id"):
+                    chat.stream_encryptor(key, bad, 0)
+                with self.assertRaisesRegex(ValueError, "Invalid message_id"):
+                    chat.encrypt_message(
+                        v["event_conversation_id"],
+                        "text",
+                        conversation_key=key,
+                        conversation_key_version=v["event_conversation_key_version"],
+                        message_id=bad,
+                    )
+        for index in (-1, 10):
+            with self.subTest(attachment_index=index):
+                with self.assertRaisesRegex(ValueError, "Invalid attachment_index"):
+                    chat.encrypt_stream(b"photo", key, message_id, index)
+                with self.assertRaisesRegex(ValueError, "Invalid attachment_index"):
+                    chat.stream_encryptor(key, message_id, index)
+
+    def test_media_encryption_needs_the_session_identity(self):
+        from chat_xdk import Chat
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        with self.assertRaisesRegex(ValueError, "set_identity"):
+            chat.encrypt_stream(
+                b"photo", base64.b64decode(v["conversation_key_b64"]), chat.new_message_id(), 0
+            )

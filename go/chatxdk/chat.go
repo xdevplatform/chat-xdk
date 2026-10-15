@@ -589,14 +589,27 @@ func (c *Chat) DecryptStream(encrypted []byte, eventB64 string, conversationKeys
 	return base64.StdEncoding.DecodeString(outB64)
 }
 
-// EncryptStream encrypts a stream (e.g., media) with the raw 32-byte
-// conversation key. Raw bytes in, raw bytes out; the FFI transports base64
-// internally.
-func (c *Chat) EncryptStream(plaintext, conversationKey []byte) ([]byte, error) {
+// NewMessageID returns a fresh message id for a message with media. Media
+// keys derive from the message id, so take the id first, pass it to
+// EncryptStream or StreamEncryptor for every file, then as MessageID to
+// EncryptMessage or EncryptReply.
+func (c *Chat) NewMessageID() (string, error) {
+	defer runtime.KeepAlive(c)
+	return ffiNewMessageID(c.h)
+}
+
+// EncryptStream encrypts a media file for an outgoing message.
+// conversationKey is the raw 32-byte key the message is encrypted with,
+// messageID the message's id from NewMessageID, and attachmentIndex the
+// file's position in the message's Attachments; a link card's banner and
+// favicon both take the card's position. Requires SetIdentity. Raw bytes
+// in, raw bytes out; the FFI transports base64 internally.
+func (c *Chat) EncryptStream(plaintext, conversationKey []byte, messageID string, attachmentIndex int) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	outB64, err := ffiEncryptStream(c.h,
 		base64.StdEncoding.EncodeToString(plaintext),
-		base64.StdEncoding.EncodeToString(conversationKey))
+		base64.StdEncoding.EncodeToString(conversationKey),
+		messageID, attachmentIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -611,12 +624,14 @@ type StreamEncryptor struct {
 	h streamEncryptorHandle
 }
 
-// StreamEncryptor creates an incremental stream encryptor for the given
-// raw 32-byte conversation key.
-func (c *Chat) StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error) {
-	h := ffiStreamEncryptorNew(base64.StdEncoding.EncodeToString(conversationKey))
-	if h == nil {
-		return nil, errors.New("invalid conversation key (expected 32 bytes)")
+// StreamEncryptor creates an incremental encryptor for a media file too
+// large to hold in memory. It takes the arguments of EncryptStream apart
+// from the bytes, which are fed to Push.
+func (c *Chat) StreamEncryptor(conversationKey []byte, messageID string, attachmentIndex int) (*StreamEncryptor, error) {
+	defer runtime.KeepAlive(c)
+	h, err := ffiStreamEncryptorNew(c.h, base64.StdEncoding.EncodeToString(conversationKey), messageID, attachmentIndex)
+	if err != nil {
+		return nil, err
 	}
 	e := &StreamEncryptor{h: h}
 	// GC backstop for encryptors never explicitly Closed. A receiver becomes

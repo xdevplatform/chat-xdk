@@ -720,18 +720,38 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Encrypt a media payload (e.g. an image or video) with a conversation key.
+     * A fresh message id for a message with media. Media keys derive from the message id, so
+     * take the id first, pass it to {@link #encryptStream} or {@link #streamEncryptor} for every
+     * file, then as {@code messageId} on {@link Types.EncryptMessageParams} or
+     * {@link Types.EncryptReplyParams}.
+     */
+    public String newMessageId() {
+        throwIfDisposed();
+        try {
+            return FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_new_message_id(handle));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Encrypt a media file for an outgoing message. Requires {@link #setIdentity}.
      *
      * @param plaintext Raw bytes to encrypt.
-     * @param conversationKey Raw 32-byte conversation key.
+     * @param conversationKey Raw 32-byte conversation key the message is encrypted with.
+     * @param messageId The message's id, from {@link #newMessageId}.
+     * @param attachmentIndex The file's position in the message's attachments; a link card's
+     *     banner and favicon both take the card's position.
      * @return Encrypted bytes.
      */
-    public byte[] encryptStream(byte[] plaintext, byte[] conversationKey) {
+    public byte[] encryptStream(
+            byte[] plaintext, byte[] conversationKey, String messageId, int attachmentIndex) {
         throwIfDisposed();
         try (Memory pt = FfiStrings.utf8(Base64.getEncoder().encodeToString(plaintext));
-                Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey))) {
-            String resultB64 =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_encrypt_stream(handle, pt, key));
+                Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey));
+                Memory id = FfiStrings.utf8(messageId)) {
+            String resultB64 = FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_encrypt_stream(handle, pt, key, id, attachmentIndex));
             return Base64.getDecoder().decode(resultB64);
         } finally {
             Reference.reachabilityFence(this);
@@ -739,14 +759,18 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Create an incremental stream encryptor for large payloads.
+     * Create an incremental encryptor for a media file too large to hold in memory. Takes the
+     * arguments of {@link #encryptStream} apart from the bytes, which are fed to the encryptor.
      *
-     * @param conversationKey Raw 32-byte conversation key.
      * @return A new {@link StreamEncryptor}; close it when finished.
      */
-    public StreamEncryptor streamEncryptor(byte[] conversationKey) {
+    public StreamEncryptor streamEncryptor(byte[] conversationKey, String messageId, int attachmentIndex) {
         throwIfDisposed();
-        return StreamEncryptor.create(conversationKey);
+        try {
+            return StreamEncryptor.create(handle, conversationKey, messageId, attachmentIndex);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
     }
 
     /**
@@ -931,6 +955,9 @@ public final class Chat implements AutoCloseable {
         n.put("conversation_id", p.conversationId);
         n.put("text", p.text);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        if (p.messageId != null) {
+            n.put("message_id", p.messageId);
+        }
         if (p.entities != null) {
             n.set("entities", ChatJson.MAPPER.valueToTree(serializeEntities(p.entities)));
         }
@@ -963,6 +990,9 @@ public final class Chat implements AutoCloseable {
             n.set("reply_to_ckces", ChatJson.MAPPER.valueToTree(p.replyToCkces));
         }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        if (p.messageId != null) {
+            n.put("message_id", p.messageId);
+        }
         if (p.replyToSequenceId != null) {
             n.put("reply_to_sequence_id", p.replyToSequenceId);
         }
