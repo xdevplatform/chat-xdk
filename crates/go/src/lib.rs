@@ -18,10 +18,10 @@ use chat_xdk_core::crypto::keys::XChatConversationKey;
 #[cfg(feature = "juicebox")]
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor,
-    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply,
-    SigningKeyEntry,
+    AttachmentDescriptor, ConversationKeyChangeParams, ConversationSetting,
+    ConversationSettingsParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
 };
 
 // FFI result type
@@ -1010,6 +1010,18 @@ struct FfiMessageDeleteParams {
 }
 
 #[derive(serde::Deserialize)]
+struct FfiConversationSettingsParams {
+    conversation_id: String,
+    setting: String,
+    #[serde(default)]
+    ttl_msec: Option<i64>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct FfiConversationKeyChangeParams {
     public_keys: Vec<PublicKeyInput>,
     #[serde(default)]
@@ -1228,6 +1240,51 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_message_delete(&params) {
+            Ok(signature) => match serde_json::to_string(&signature) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_result(&e.to_string()),
+            },
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// Build the signed action for changing a conversation setting.
+///
+/// `params_json` — single JSON document: `conversation_id`, `setting` (one of
+/// `message_duration`, `remove_message_duration`, `mute`, `unmute`,
+/// `enable_screen_capture_blocking`, `disable_screen_capture_blocking`),
+/// `ttl_msec` (required for `message_duration` and rejected otherwise), plus
+/// optional `sender_id` / `signing_key_version` (unset resolves from the
+/// session identity). Mute and unmute are signed for the sender's own
+/// `{sender_id}:{sender_id}` conversation.
+///
+/// Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+/// on it.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_conversation_settings_change(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiConversationSettingsParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let setting = match ConversationSetting::from_name(&p.setting, p.ttl_msec) {
+            Ok(s) => s,
+            Err(e) => return err_from(e),
+        };
+
+        let mut params = ConversationSettingsParams::new(p.conversation_id, setting);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+
+        match h.inner.prepare_conversation_settings_change(&params) {
             Ok(signature) => match serde_json::to_string(&signature) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),

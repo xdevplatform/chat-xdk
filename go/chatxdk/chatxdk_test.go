@@ -940,6 +940,73 @@ func TestPrepareMessageDelete(t *testing.T) {
 	}
 }
 
+func TestPrepareConversationSettingsChange(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	ttl := int64(86400000)
+	sig, err := chat.PrepareConversationSettingsChange(ConversationSettingsParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "222-111",
+		Setting:           SettingMessageDuration,
+		TTLMsec:           &ttl,
+	})
+	if err != nil {
+		t.Fatalf("PrepareConversationSettingsChange failed: %v", err)
+	}
+	if sig.EncodedMessageEventDetail == "" || sig.Signature == "" {
+		t.Error("expected a non-empty event detail and signature")
+	}
+	want := fmt.Sprintf("ConversationMetadataChangeEvent.MessageDurationChange,%s,111,111:222,86400000", sig.MessageID)
+	if sig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
+	}
+
+	// Mute is signed for the sender's own conversation.
+	muteSig, err := chat.PrepareConversationSettingsChange(ConversationSettingsParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "222-111",
+		Setting:           SettingMute,
+	})
+	if err != nil {
+		t.Fatalf("PrepareConversationSettingsChange (mute) failed: %v", err)
+	}
+	want = fmt.Sprintf("ConversationMetadataChangeEvent.MuteConversation,%s,111,111:111,111:222", muteSig.MessageID)
+	if muteSig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, muteSig.SignaturePayload)
+	}
+
+	cases := []struct {
+		setting ConversationSetting
+		ttl     *int64
+		want    string
+	}{
+		{SettingMessageDuration, nil, "ttl_msec is required"},
+		{SettingMute, &ttl, "ttl_msec only applies"},
+		{"archive", nil, `unknown setting "archive"`},
+		{"", nil, "setting is empty"},
+	}
+	for _, tc := range cases {
+		_, err := chat.PrepareConversationSettingsChange(ConversationSettingsParams{
+			SenderID:          "111",
+			SigningKeyVersion: "1",
+			ConversationID:    "g1",
+			Setting:           tc.setting,
+			TTLMsec:           tc.ttl,
+		})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("setting %q: expected error containing %q, got %v", tc.setting, tc.want, err)
+		}
+	}
+}
+
 func TestPrepareConversationKeyChange(t *testing.T) {
 	v := loadVectors(t)
 

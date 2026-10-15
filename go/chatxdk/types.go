@@ -355,6 +355,43 @@ type MessageDeleteParams struct {
 	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
+// ConversationSetting names a setting PrepareConversationSettingsChange can
+// change.
+type ConversationSetting string
+
+const (
+	// SettingMessageDuration makes new messages disappear TTLMsec
+	// milliseconds after they are sent.
+	SettingMessageDuration ConversationSetting = "message_duration"
+	// SettingRemoveMessageDuration turns disappearing messages off.
+	SettingRemoveMessageDuration ConversationSetting = "remove_message_duration"
+	// SettingMute mutes the conversation for the sender only.
+	SettingMute ConversationSetting = "mute"
+	// SettingUnmute unmutes the conversation for the sender only.
+	SettingUnmute ConversationSetting = "unmute"
+	// SettingEnableScreenCaptureBlocking asks participants' clients to block
+	// screenshots and screen recordings.
+	SettingEnableScreenCaptureBlocking ConversationSetting = "enable_screen_capture_blocking"
+	// SettingDisableScreenCaptureBlocking lifts screen-capture blocking.
+	SettingDisableScreenCaptureBlocking ConversationSetting = "disable_screen_capture_blocking"
+)
+
+// ConversationSettingsParams are the parameters for
+// PrepareConversationSettingsChange.
+//
+// SenderID and SigningKeyVersion are optional overrides: empty resolves from
+// the session identity set via SetIdentity.
+type ConversationSettingsParams struct {
+	ConversationID string              `json:"conversation_id"`
+	Setting        ConversationSetting `json:"setting"`
+	// TTLMsec is how long new messages last before they disappear, in
+	// milliseconds. Required for SettingMessageDuration and rejected for
+	// every other setting.
+	TTLMsec           *int64 `json:"ttl_msec,omitempty"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
 // ActionSignature authenticates a conversation key change, member add, or
 // message delete.
 type ActionSignature struct {

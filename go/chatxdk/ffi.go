@@ -222,6 +222,12 @@ func ffiPrepareMessageDelete(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_prepare_message_delete(h, c))
 }
 
+func ffiPrepareConversationSettingsChange(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_conversation_settings_change(h, c))
+}
+
 // decrypt
 
 func ffiDecryptEvent(h handle, eventB64, convKeysJSON, signingKeysJSON string) (string, error) {
