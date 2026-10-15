@@ -245,13 +245,19 @@ public final class ChatCore implements AutoCloseable {
     }
 
     /**
-     * Decrypt a media blob with the incremental stream API.
+     * Decrypt a downloaded media blob with the incremental stream API.
      *
-     * <p>{@code finish} throws if the stream was truncated, so plaintext from
-     * {@code push} must not be treated as complete until it succeeds.
+     * <p>{@code eventB64} is the raw event of the message that carries the
+     * media and {@code conversationKeys} its conversation's key map, as passed
+     * to {@link #decryptOne}; the SDK finds {@code mediaHashKey} in the event
+     * and derives that file's key. {@code finish} throws if the stream was
+     * truncated, so plaintext from {@code push} must not be treated as complete
+     * until it succeeds.
      */
-    public byte[] decryptMedia(byte[] ciphertext, byte[] conversationKey) throws Exception {
-        try (StreamDecryptor dec = chat.streamDecryptor(conversationKey)) {
+    public byte[] decryptMedia(
+            byte[] ciphertext, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)
+            throws Exception {
+        try (StreamDecryptor dec = chat.streamDecryptor(eventB64, conversationKeys, mediaHashKey)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             for (int offset = 0; offset < ciphertext.length; offset += MEDIA_CHUNK) {
                 int end = Math.min(offset + MEDIA_CHUNK, ciphertext.length);

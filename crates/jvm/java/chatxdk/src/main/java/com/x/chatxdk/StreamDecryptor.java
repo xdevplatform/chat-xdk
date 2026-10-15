@@ -2,6 +2,7 @@ package com.x.chatxdk;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
+import com.sun.jna.ptr.PointerByReference;
 
 import java.lang.ref.Cleaner;
 import java.lang.ref.Reference;
@@ -55,13 +56,15 @@ public final class StreamDecryptor implements AutoCloseable {
         this.cleanable = Chat.CLEANER.register(this, new FreeHandle(handle));
     }
 
-    static StreamDecryptor create(byte[] conversationKey) {
-        try (Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey))) {
-            Pointer h = ChatNative.INSTANCE.chat_xdk_stream_decryptor_new(key);
-            if (h == null) {
-                throw new ChatXdkException("Invalid conversation key (expected 32 bytes)");
-            }
-            return new StreamDecryptor(h);
+    static StreamDecryptor create(
+            Pointer chatHandle, String eventB64, String conversationKeysJson, String mediaHashKey) {
+        try (Memory ev = FfiStrings.utf8(eventB64);
+                Memory cj = FfiStrings.utf8(conversationKeysJson);
+                Memory hash = FfiStrings.utf8(mediaHashKey)) {
+            PointerByReference out = new PointerByReference();
+            FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_stream_decryptor_new(chatHandle, ev, cj, hash, out));
+            return new StreamDecryptor(out.getValue());
         }
     }
 

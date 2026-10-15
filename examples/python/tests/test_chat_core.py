@@ -223,14 +223,22 @@ class TestPreparedChanges(unittest.TestCase):
 
     def test_media_stream_encrypt_decrypt_roundtrip(self):
         # The chunked stream path the media flow uses: multi-chunk payload in,
-        # identical bytes out, and truncation is detected.
+        # identical bytes out, and truncation is detected. The fixture
+        # conversation-key message names one media file under the
+        # conversation key, so the upload decrypts through that message.
         core, _ = self._core_and_keys()
-        conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
+        v = self.vectors
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        conv_keys = {v["event_conversation_key_version"]: conv_key}
+        event, media_hash_key = v["event_conversation_key_media_b64"], v["media_conversation_key_hash_key"]
         plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
 
         ciphertext = core.encrypt_media(plaintext, conv_key)
         self.assertNotEqual(ciphertext[: len(plaintext)], plaintext)
-        self.assertEqual(core.decrypt_media(ciphertext, conv_key), plaintext)
+        self.assertEqual(
+            core.decrypt_media(ciphertext, event, conv_keys, media_hash_key), plaintext
+        )
 
-        with self.assertRaises(Exception):
-            core.decrypt_media(ciphertext[:-4], conv_key)
+        with self.assertRaises(ValueError) as ctx:
+            core.decrypt_media(ciphertext[:-4], event, conv_keys, media_hash_key)
+        self.assertIn("truncated", str(ctx.exception))

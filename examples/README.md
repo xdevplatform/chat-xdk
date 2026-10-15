@@ -137,8 +137,10 @@ Each example ships **two** test paths:
 
 Media never travels in the message: the message carries a `media` attachment
 descriptor referencing a `media_hash_key`, and the bytes themselves are
-stream-encrypted with the conversation key and stored via the chat media
-endpoints. Every example's crypto core shows the pattern with the SDK's
+stream-encrypted and stored via the chat media endpoints. The examples encrypt
+uploads with the conversation key; to decrypt, the SDK reads the message that
+carries the media and derives that file's key, whichever client sent it.
+Every example's crypto core shows the pattern with the SDK's
 **incremental** stream API (`streamEncryptor` / `streamDecryptor`), feeding
 fixed-size chunks through `push` and sealing with `finish` — memory stays
 bounded regardless of file size, which matters most in the WASM binding where
@@ -150,8 +152,9 @@ the heap cannot hold large files whole:
   attachment descriptor references that key
 - **download + decrypt**: `downloadMedia`/`download_media` (raw **bytes** —
   never decode the body as text; that corrupts the ciphertext) →
-  `decryptMedia`/`decrypt_media` (chunked `push`, then `finish`, which
-  errors if the stream was truncated)
+  `decryptMedia`/`decrypt_media` with the raw event of the message that
+  carries the media, the conversation key map and the `media_hash_key`
+  (chunked `push`, then `finish`, which errors if the stream was truncated)
 
 ## What these examples are not
 

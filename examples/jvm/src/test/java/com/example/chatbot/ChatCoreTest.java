@@ -3,6 +3,7 @@ package com.example.chatbot;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.x.chatxdk.ChatXdkException;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PublicKeyInput;
@@ -221,10 +222,15 @@ class ChatCoreTest {
     @Test
     void mediaStreamEncryptDecryptRoundtrip() throws Exception {
         // The chunked stream path the media flow uses: multi-chunk payload in,
-        // identical bytes out, and truncation is detected.
+        // identical bytes out, and truncation is detected. The fixture
+        // conversation-key message names one media file under the
+        // conversation key, so the upload decrypts through that message.
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
             byte[] convKey = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
+            Map<String, byte[]> convKeys = Map.of(v.get("event_conversation_key_version").asText(), convKey);
+            String event = v.get("event_conversation_key_media_b64").asText();
+            String mediaHashKey = v.get("media_conversation_key_hash_key").asText();
             byte[] plaintext = new byte[300_000];
             for (int i = 0; i < plaintext.length; i++) {
                 plaintext[i] = (byte) ((i * 31 + 7) % 256);
@@ -232,10 +238,12 @@ class ChatCoreTest {
 
             byte[] ciphertext = core.encryptMedia(plaintext, convKey);
             assertFalse(Arrays.equals(Arrays.copyOf(ciphertext, plaintext.length), plaintext));
-            assertArrayEquals(plaintext, core.decryptMedia(ciphertext, convKey));
+            assertArrayEquals(plaintext, core.decryptMedia(ciphertext, event, convKeys, mediaHashKey));
 
             byte[] truncated = Arrays.copyOf(ciphertext, ciphertext.length - 4);
-            assertThrows(Exception.class, () -> core.decryptMedia(truncated, convKey));
+            ChatXdkException e = assertThrows(
+                    ChatXdkException.class, () -> core.decryptMedia(truncated, event, convKeys, mediaHashKey));
+            assertTrue(e.getMessage().contains("truncated"), e.getMessage());
         }
     }
 }

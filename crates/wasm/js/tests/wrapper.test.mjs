@@ -307,13 +307,17 @@ async function delegationTests() {
   // Generic + stream crypto delegations (roundtrips prove both arguments).
   const ct = chat.encrypt("wrapper text", convKey);
   assert.equal(chat.decrypt(ct, convKey), "wrapper text");
+  const mediaKeys = { [v.event_conversation_key_version]: convKey };
   const streamCt = chat.encryptStream(b64ToBytes(v.plaintext_b64), convKey);
-  assert.deepEqual(chat.decryptStream(streamCt, convKey), b64ToBytes(v.plaintext_b64));
+  assert.deepEqual(
+    chat.decryptStream(streamCt, v.event_conversation_key_media_b64, mediaKeys, v.media_conversation_key_hash_key),
+    b64ToBytes(v.plaintext_b64),
+  );
   const enc = chat.streamEncryptor(convKey);
   const piece = enc.push(b64ToBytes(v.plaintext_b64));
   const finalPiece = enc.finish();
   const streamed = new Uint8Array([...piece, ...finalPiece]);
-  const dec = chat.streamDecryptor(convKey);
+  const dec = chat.streamDecryptor(v.event_conversation_key_media_b64, mediaKeys, v.media_conversation_key_hash_key);
   const out = new Uint8Array([...dec.push(streamed), ...dec.finish()]);
   assert.deepEqual(out, b64ToBytes(v.plaintext_b64));
 

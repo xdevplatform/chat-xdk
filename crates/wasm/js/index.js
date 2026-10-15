@@ -498,9 +498,13 @@ export class ChatWithJuicebox {
   encryptEdit(params) { return this.#inner.encryptEdit(params); }
   prepareMessageDelete(params) { return this.#inner.prepareMessageDelete(params); }
   encryptStream(plaintext, key) { return this.#inner.encryptStream(plaintext, key); }
-  decryptStream(encrypted, key) { return this.#inner.decryptStream(encrypted, key); }
+  decryptStream(encrypted, eventB64, conversationKeys, mediaHashKey) {
+    return this.#inner.decryptStream(encrypted, eventB64, conversationKeys, mediaHashKey);
+  }
   streamEncryptor(key) { return this.#inner.streamEncryptor(key); }
-  streamDecryptor(key) { return this.#inner.streamDecryptor(key); }
+  streamDecryptor(eventB64, conversationKeys, mediaHashKey) {
+    return this.#inner.streamDecryptor(eventB64, conversationKeys, mediaHashKey);
+  }
   encrypt(plaintext, key) { return this.#inner.encrypt(plaintext, key); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
   prepareConversationKeyChange(params) { return this.#inner.prepareConversationKeyChange(params); }

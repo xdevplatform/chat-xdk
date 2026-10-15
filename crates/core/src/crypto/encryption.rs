@@ -281,6 +281,23 @@ pub struct StreamDecryptor {
     saw_chunk: bool,
     /// Whether the final frame has been decrypted.
     saw_final: bool,
+    /// Media hash key of the file being decrypted, named in errors.
+    media_hash_key: Option<String>,
+}
+
+/// Ways a stream fails to decrypt.
+#[derive(Clone, Copy)]
+enum StreamFault {
+    /// A frame followed by more data failed to authenticate.
+    BadFrame,
+    /// The last frame failed to authenticate, so it may also be cut short.
+    BadLastFrame,
+    /// Data follows the final frame.
+    TrailingData,
+    /// The input ended inside the header.
+    TruncatedHeader,
+    /// The input ended before the final frame.
+    Truncated,
 }
 
 impl StreamDecryptor {
@@ -293,6 +310,51 @@ impl StreamDecryptor {
             buf: Vec::new(),
             saw_chunk: false,
             saw_final: false,
+            media_hash_key: None,
+        })
+    }
+
+    /// Create a decryptor for the media file named by `media_hash_key`,
+    /// whose errors name that media and say what to pass instead.
+    pub(crate) fn for_media(
+        key: &XChatConversationKey,
+        media_hash_key: &str,
+    ) -> Result<Self, CryptoError> {
+        let mut decryptor = Self::new(key)?;
+        decryptor.media_hash_key = Some(media_hash_key.to_string());
+        Ok(decryptor)
+    }
+
+    fn fault(&self, fault: StreamFault) -> CryptoError {
+        let Some(hash) = self.media_hash_key.as_deref() else {
+            return CryptoError::DecryptionFailed(
+                match fault {
+                    StreamFault::BadFrame | StreamFault::BadLastFrame => "secretstream pull failed",
+                    StreamFault::TrailingData => "data after final stream frame",
+                    StreamFault::TruncatedHeader => "stream ended before header was complete",
+                    StreamFault::Truncated => "stream truncated: ended before final frame",
+                }
+                .into(),
+            );
+        };
+        CryptoError::DecryptionFailed(match fault {
+            StreamFault::BadFrame => format!(
+                "the bytes are not the encrypted file of media_hash_key '{hash}', or they are \
+                 corrupted: pass the bytes downloaded for that media hash key"
+            ),
+            StreamFault::BadLastFrame => format!(
+                "the bytes are not the complete encrypted file of media_hash_key '{hash}': they \
+                 are truncated, corrupted, or another file; pass the complete bytes downloaded \
+                 for that media hash key"
+            ),
+            StreamFault::TrailingData => format!(
+                "the bytes continue past the end of the encrypted file of media_hash_key \
+                 '{hash}': pass only the bytes downloaded for that media hash key"
+            ),
+            StreamFault::TruncatedHeader | StreamFault::Truncated => format!(
+                "the bytes of media_hash_key '{hash}' are truncated: pass the complete bytes \
+                 downloaded for that media hash key"
+            ),
         })
     }
 
@@ -302,9 +364,7 @@ impl StreamDecryptor {
     /// returned bytes may be empty until enough input has arrived.
     pub fn push(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if self.saw_final {
-            return Err(CryptoError::DecryptionFailed(
-                "data after final stream frame".into(),
-            ));
+            return Err(self.fault(StreamFault::TrailingData));
         }
         let mut input = ciphertext;
 
@@ -326,22 +386,20 @@ impl StreamDecryptor {
         }
 
         self.buf.extend_from_slice(input);
-        let pull = self.pull.as_mut().expect("pull initialized above");
 
         // While more than one full frame is buffered, the leading frame has
         // data after it and so must be a non-final message frame.
         let mut out = Vec::new();
         while self.buf.len() > ENCRYPTED_CHUNK_SIZE {
             let mut frame: Vec<u8> = self.buf.drain(..ENCRYPTED_CHUNK_SIZE).collect();
-            let tag = pull
-                .pull(&mut frame, &[])
-                .map_err(|_| CryptoError::DecryptionFailed("secretstream pull failed".into()))?;
+            let pull = self.pull.as_mut().expect("pull initialized above");
+            let Ok(tag) = pull.pull(&mut frame, &[]) else {
+                return Err(self.fault(StreamFault::BadFrame));
+            };
             self.saw_chunk = true;
             out.extend_from_slice(&frame);
             if tag == crypto_secretstream::Tag::Final {
-                return Err(CryptoError::DecryptionFailed(
-                    "data after final stream frame".into(),
-                ));
+                return Err(self.fault(StreamFault::TrailingData));
             }
         }
         Ok(out)
@@ -353,16 +411,16 @@ impl StreamDecryptor {
     /// detects truncation. A stream of only the 24-byte header decrypts to
     /// empty output.
     pub fn finish(mut self) -> Result<Vec<u8>, CryptoError> {
-        let pull = self.pull.as_mut().ok_or_else(|| {
-            CryptoError::DecryptionFailed("stream ended before header was complete".into())
-        })?;
+        let Some(pull) = self.pull.as_mut() else {
+            return Err(self.fault(StreamFault::TruncatedHeader));
+        };
 
         let mut out = Vec::new();
         if !self.buf.is_empty() {
             let mut frame = std::mem::take(&mut self.buf);
-            let tag = pull
-                .pull(&mut frame, &[])
-                .map_err(|_| CryptoError::DecryptionFailed("secretstream pull failed".into()))?;
+            let Ok(tag) = pull.pull(&mut frame, &[]) else {
+                return Err(self.fault(StreamFault::BadLastFrame));
+            };
             self.saw_chunk = true;
             out.extend_from_slice(&frame);
             if tag == crypto_secretstream::Tag::Final {
@@ -371,12 +429,26 @@ impl StreamDecryptor {
         }
 
         if self.saw_chunk && !self.saw_final {
-            return Err(CryptoError::DecryptionFailed(
-                "stream truncated: ended before final frame".into(),
-            ));
+            return Err(self.fault(StreamFault::Truncated));
         }
         Ok(out)
     }
+}
+
+/// Decrypt the whole encrypted media file named by `media_hash_key` (see
+/// [`StreamDecryptor::for_media`]).
+pub(crate) fn decrypt_media(
+    key: &XChatConversationKey,
+    media_hash_key: &str,
+    encrypted: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let mut decryptor = StreamDecryptor::for_media(key, media_hash_key)?;
+    let mut plaintext = Vec::with_capacity(encrypted.len());
+    for chunk in encrypted.chunks(ENCRYPTED_CHUNK_SIZE) {
+        plaintext.extend_from_slice(&decryptor.push(chunk)?);
+    }
+    plaintext.extend_from_slice(&decryptor.finish()?);
+    Ok(plaintext)
 }
 
 /// Decrypt all of `reader` into `writer`, rejecting truncated streams.
@@ -978,5 +1050,98 @@ mod tests {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let dec = StreamDecryptor::new(&key).unwrap();
         assert!(dec.finish().is_err());
+    }
+
+    fn encrypted_media(key: &XChatConversationKey, len: usize) -> (Vec<u8>, Vec<u8>) {
+        let plaintext: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let mut encrypted = Vec::new();
+        encrypt_stream(key, Cursor::new(&plaintext), &mut encrypted).unwrap();
+        (plaintext, encrypted)
+    }
+
+    #[test]
+    fn test_decrypt_media_round_trips() {
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        for len in [0usize, 1, 1024, 1025, 5000] {
+            let (plaintext, encrypted) = encrypted_media(&key, len);
+            assert_eq!(
+                decrypt_media(&key, "h", &encrypted).unwrap(),
+                plaintext,
+                "len={len}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_media_errors_name_the_media_and_what_to_pass() {
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        let other = XChatConversationKey::from_bytes(vec![0x43u8; 32]).unwrap();
+        let (_, encrypted) = encrypted_media(&key, 3000);
+        let error = |key: &XChatConversationKey, bytes: &[u8]| {
+            decrypt_media(key, "photo-1", bytes)
+                .unwrap_err()
+                .to_string()
+        };
+
+        let wrong_file = error(&other, &encrypted);
+        assert!(
+            wrong_file.contains("not the encrypted file of media_hash_key 'photo-1'"),
+            "{wrong_file}"
+        );
+        assert!(
+            wrong_file.contains("pass the bytes downloaded for that media hash key"),
+            "{wrong_file}"
+        );
+
+        let cut_at_frame = error(
+            &key,
+            &encrypted[..SECRETSTREAM_HEADER_SIZE + ENCRYPTED_CHUNK_SIZE],
+        );
+        assert!(
+            cut_at_frame.contains("media_hash_key 'photo-1' are truncated"),
+            "{cut_at_frame}"
+        );
+        let cut_in_header = error(&key, &encrypted[..10]);
+        assert!(cut_in_header.contains("are truncated"), "{cut_in_header}");
+        let empty = error(&key, &[]);
+        assert!(empty.contains("are truncated"), "{empty}");
+
+        let cut_in_frame = error(&key, &encrypted[..encrypted.len() - 5]);
+        assert!(
+            cut_in_frame.contains("not the complete encrypted file of media_hash_key 'photo-1'"),
+            "{cut_in_frame}"
+        );
+
+        let (_, one_frame) = encrypted_media(&key, DECRYPTED_CHUNK_SIZE);
+        let mut trailing = one_frame.clone();
+        trailing.extend_from_slice(&[0u8; 100]);
+        let trailing = error(&key, &trailing);
+        assert!(trailing.contains("continue past the end"), "{trailing}");
+    }
+
+    #[test]
+    fn test_incremental_media_decryptor_reports_the_same_errors() {
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        let other = XChatConversationKey::from_bytes(vec![0x43u8; 32]).unwrap();
+        let (plaintext, encrypted) = encrypted_media(&key, 3000);
+
+        let mut decryptor = StreamDecryptor::for_media(&key, "photo-1").unwrap();
+        let mut out = Vec::new();
+        for chunk in encrypted.chunks(333) {
+            out.extend(decryptor.push(chunk).unwrap());
+        }
+        out.extend(decryptor.finish().unwrap());
+        assert_eq!(out, plaintext);
+
+        let mut decryptor = StreamDecryptor::for_media(&other, "photo-1").unwrap();
+        let err = decryptor.push(&encrypted).unwrap_err().to_string();
+        assert!(err.contains("media_hash_key 'photo-1'"), "{err}");
+
+        let mut decryptor = StreamDecryptor::for_media(&key, "photo-1").unwrap();
+        decryptor
+            .push(&encrypted[..SECRETSTREAM_HEADER_SIZE + 2 * ENCRYPTED_CHUNK_SIZE])
+            .unwrap();
+        let err = decryptor.finish().unwrap_err().to_string();
+        assert!(err.contains("are truncated"), "{err}");
     }
 }

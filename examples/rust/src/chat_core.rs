@@ -295,16 +295,24 @@ impl ChatCore {
         Ok(out)
     }
 
-    /// Decrypt a media blob with the incremental stream API.
+    /// Decrypt a downloaded media blob with the incremental stream API.
     ///
-    /// `finish` errors if the stream was truncated, so plaintext from `push`
-    /// must not be treated as complete until it succeeds.
+    /// `event_b64` is the raw event of the message that carries the media and
+    /// `conversation_keys` its conversation's key map, as passed to
+    /// `decrypt_one`; the SDK finds `media_hash_key` in the event and derives
+    /// that file's key. `finish` errors if the stream was truncated, so
+    /// plaintext from `push` must not be treated as complete until it
+    /// succeeds.
     pub fn decrypt_media(
         &self,
         ciphertext: &[u8],
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut dec = self.inner.stream_decryptor(conversation_key)?;
+        let mut dec = self
+            .inner
+            .stream_decryptor(event_b64, conversation_keys, media_hash_key)?;
         let mut out = Vec::new();
         for chunk in ciphertext.chunks(Self::MEDIA_CHUNK) {
             out.extend(dec.push(chunk)?);

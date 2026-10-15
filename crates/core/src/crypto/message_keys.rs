@@ -1,14 +1,16 @@
-//! Per-message keys.
+//! Per-message and per-attachment keys.
 //!
 //! A message whose `contents_encryption_version` is 1 or more is encrypted
-//! under a key derived for that message from the conversation key. Messages
-//! without a version use the conversation key.
+//! under a key derived for that message from the conversation key, and each
+//! of its attachments under a key derived from the message key. Messages
+//! without a version use the conversation key for both.
 
 use crate::crypto::hash::hkdf_with_info;
 use crate::crypto::keys::XChatConversationKey;
 use crate::error::CryptoError;
 
 const MESSAGE_KEY_SALT: &str = "xchat-message-key";
+const ATTACHMENT_KEY_SALT: &str = "xchat-attachment-key";
 const KEY_LENGTH: usize = 32;
 
 /// Whether a message with this `contents_encryption_version` uses a message
@@ -37,6 +39,29 @@ pub(crate) fn derive_message_key(
     derive(conversation_key, MESSAGE_KEY_SALT, info.as_bytes())
 }
 
+/// Derive an attachment's key from its message key and attachment id.
+pub(crate) fn derive_attachment_key(
+    message_key: &XChatConversationKey,
+    attachment_id: &str,
+) -> Result<XChatConversationKey, CryptoError> {
+    derive(message_key, ATTACHMENT_KEY_SALT, attachment_id.as_bytes())
+}
+
+/// The id an attachment's key is derived from: the attachment's own id when
+/// set (an empty id counts), otherwise the message id for the first
+/// attachment and `<message id>#<index>` for later ones.
+pub(crate) fn resolve_attachment_id(
+    stored_id: Option<&str>,
+    message_id: &str,
+    index: usize,
+) -> String {
+    match stored_id {
+        Some(id) => id.to_string(),
+        None if index == 0 => message_id.to_string(),
+        None => format!("{}#{}", message_id, index),
+    }
+}
+
 fn derive(
     secret: &XChatConversationKey,
     salt: &str,
@@ -56,13 +81,23 @@ mod tests {
     }
 
     #[test]
-    fn message_keys_match_known_answers() {
+    fn message_and_attachment_keys_match_known_answers() {
         let ckey = key("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         let message_id = "9d8c7b6a-5f4e-4d3c-8b2a-190807060504";
         let message_key = derive_message_key(&ckey, "1876543210987654321", message_id).unwrap();
         assert_eq!(
             hex::encode(message_key.encoded()),
             "4d443b9a862e9584ccd0aee2753162aa7c5c1dbcb5f967610155f65ae41d8084"
+        );
+        let first = derive_attachment_key(&message_key, message_id).unwrap();
+        assert_eq!(
+            hex::encode(first.encoded()),
+            "1ef86545f91f8a3078e276949f7555df2ca584e9c6509b261a558a2e618a1b4b"
+        );
+        let second = derive_attachment_key(&message_key, &format!("{}#1", message_id)).unwrap();
+        assert_eq!(
+            hex::encode(second.encoded()),
+            "8a7bc01f2ff35c661140da68606b2370cecc13810f245d791aeb8ba6b40d4ea8"
         );
     }
 
@@ -74,6 +109,23 @@ mod tests {
         assert_eq!(
             hex::encode(message_key.encoded()),
             "685bd4a20c7efb64c99147ab5854560c72eac9a826b04880b64e1951d4ef4cc7"
+        );
+        let attachment_key = derive_attachment_key(&message_key, message_id).unwrap();
+        assert_eq!(
+            hex::encode(attachment_key.encoded()),
+            "4f7d8ca1ef7cb1319743204496358333126086d0a23bdae26bbe5186ba8de093"
+        );
+    }
+
+    #[test]
+    fn attachment_key_for_message_id_matches_known_answer() {
+        let ckey = XChatConversationKey::from_bytes(vec![7u8; 32]).unwrap();
+        let message_id = "1975816253410000000";
+        let message_key = derive_message_key(&ckey, "42", message_id).unwrap();
+        let attachment_key = derive_attachment_key(&message_key, message_id).unwrap();
+        assert_eq!(
+            hex::encode(attachment_key.encoded()),
+            "d3f7222df89d36796148c1e5a7520b7e71baacde799acf247eeea2c80d0933bf"
         );
     }
 
@@ -98,5 +150,19 @@ mod tests {
         assert!(!uses_message_key(Some(-1)));
         assert!(uses_message_key(Some(1)));
         assert!(uses_message_key(Some(2)));
+    }
+
+    #[test]
+    fn missing_attachment_ids_fall_back_to_the_message_id_by_position() {
+        assert_eq!(resolve_attachment_id(None, "m", 0), "m");
+        assert_eq!(resolve_attachment_id(None, "m", 1), "m#1");
+        assert_eq!(resolve_attachment_id(None, "m", 2), "m#2");
+    }
+
+    #[test]
+    fn a_set_attachment_id_wins_even_when_empty() {
+        assert_eq!(resolve_attachment_id(Some("att-9"), "m", 0), "att-9");
+        assert_eq!(resolve_attachment_id(Some("att-9"), "m", 3), "att-9");
+        assert_eq!(resolve_attachment_id(Some(""), "m", 1), "");
     }
 }

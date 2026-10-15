@@ -618,17 +618,25 @@ impl Chat {
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
-    /// Decrypt a streaming-encrypted payload (e.g. media).
+    /// Decrypt an encrypted media file, as downloaded.
+    ///
+    /// `eventB64` is the event of the message that carries the media and
+    /// `conversationKeys` the conversation's `version → key bytes` map, as
+    /// passed to `decryptEvent`; the map must hold the key for the message's
+    /// version. `mediaHashKey` names the media: one of the message's media
+    /// attachments, a link card's banner or favicon, or media quoted in its
+    /// reply preview. Errors say what to pass instead.
     #[wasm_bindgen(js_name = decryptStream)]
     pub fn decrypt_stream(
         &self,
         encrypted: Vec<u8>,
-        conversation_key: Vec<u8>,
+        event_b64: &str,
+        conversation_keys: JsValue,
+        media_hash_key: &str,
     ) -> Result<Vec<u8>, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
+        let conv_keys = js_to_media_conv_keys(conversation_keys)?;
         self.inner
-            .decrypt_stream(&encrypted, &ckey)
+            .decrypt_stream(&encrypted, event_b64, &conv_keys, media_hash_key)
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
@@ -644,14 +652,20 @@ impl Chat {
         Ok(StreamEncryptor { inner })
     }
 
-    /// Create an incremental stream decryptor for large payloads.
+    /// Create an incremental decryptor for an encrypted media file too large
+    /// to hold in memory. Takes the arguments of `decryptStream` apart from
+    /// the bytes, which are fed to the decryptor.
     #[wasm_bindgen(js_name = streamDecryptor)]
-    pub fn stream_decryptor(&self, conversation_key: Vec<u8>) -> Result<StreamDecryptor, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
+    pub fn stream_decryptor(
+        &self,
+        event_b64: &str,
+        conversation_keys: JsValue,
+        media_hash_key: &str,
+    ) -> Result<StreamDecryptor, JsError> {
+        let conv_keys = js_to_media_conv_keys(conversation_keys)?;
         let inner = self
             .inner
-            .stream_decryptor(&ckey)
+            .stream_decryptor(event_b64, &conv_keys, media_hash_key)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         Ok(StreamDecryptor { inner })
     }
@@ -965,6 +979,34 @@ fn js_to_conv_keys(js: JsValue) -> Result<HashMap<String, XChatConversationKey>,
         if let Some(key) = XChatConversationKey::from_bytes(bytes) {
             result.insert(version, key);
         }
+    }
+    Ok(result)
+}
+
+/// Parse the `conversationKeys` map of a media call. Absent/null is an empty
+/// map; an entry that is not a 32-byte `Uint8Array` is an error.
+fn js_to_media_conv_keys(js: JsValue) -> Result<HashMap<String, XChatConversationKey>, JsError> {
+    let mut result = HashMap::new();
+    if js.is_undefined() || js.is_null() {
+        return Ok(result);
+    }
+    let entries = js_sys::Object::entries(&js_sys::Object::from(js));
+    for i in 0..entries.length() {
+        let pair = js_sys::Array::from(&entries.get(i));
+        let version = pair.get(0).as_string().unwrap_or_default();
+        let value = pair.get(1);
+        let key = value
+            .dyn_ref::<js_sys::Uint8Array>()
+            .and_then(|bytes| XChatConversationKey::from_bytes(bytes.to_vec()))
+            .ok_or_else(|| {
+                JsError::new(&format!(
+                    "the key for version '{}' in the conversation key map is not 32 bytes: pass \
+                     the raw 32-byte conversation keys (the `keys` map of \
+                     extractConversationKeys)",
+                    version
+                ))
+            })?;
+        result.insert(version, key);
     }
     Ok(result)
 }

@@ -407,16 +407,11 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 // are such events returned with Verified=false.
 func (c *Chat) DecryptEvent(eventB64 string, conversationKeys map[string][]byte, signingKeys []SigningKeyEntry) (*Event, error) {
 	defer runtime.KeepAlive(c)
-	var convKeysJSON, signingKeysJSON string
+	var signingKeysJSON string
 
-	if conversationKeys != nil {
-		b, err := json.Marshal(conversationKeys)
-		if err != nil {
-			return nil, err
-		}
-		convKeysJSON = string(b)
-	} else {
-		convKeysJSON = "{}"
+	convKeysJSON, err := marshalConversationKeys(conversationKeys)
+	if err != nil {
+		return nil, err
 	}
 
 	if signingKeys != nil {
@@ -438,6 +433,19 @@ func (c *Chat) DecryptEvent(eventB64 string, conversationKeys map[string][]byte,
 		return nil, err
 	}
 	return &event, nil
+}
+
+// marshalConversationKeys encodes a version -> key map as the FFI's
+// {"version": "base64"} JSON; a nil map encodes as an empty object.
+func marshalConversationKeys(conversationKeys map[string][]byte) (string, error) {
+	if conversationKeys == nil {
+		return "{}", nil
+	}
+	b, err := json.Marshal(conversationKeys)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // EncryptMessage encrypts a message for the X API.
@@ -558,14 +566,23 @@ func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, er
 	return ffiDecrypt(c.h, ciphertextB64, base64.StdEncoding.EncodeToString(conversationKey))
 }
 
-// DecryptStream decrypts a streaming-encrypted payload (e.g., media) with the
-// raw 32-byte conversation key. Raw bytes in, raw bytes out; the FFI
-// transports base64 internally.
-func (c *Chat) DecryptStream(encrypted, conversationKey []byte) ([]byte, error) {
+// DecryptStream decrypts an encrypted media file, as downloaded.
+//
+// eventB64 is the event of the message that carries the media and
+// conversationKeys the conversation's key map, as passed to DecryptEvent; the
+// map must hold the key for the message's version. mediaHashKey names the
+// media: one of the message's media attachments, a link card's banner or
+// favicon, or media quoted in its reply preview. Errors say what to pass
+// instead. Raw bytes in, raw bytes out; the FFI transports base64 internally.
+func (c *Chat) DecryptStream(encrypted []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
 	defer runtime.KeepAlive(c)
+	convKeysJSON, err := marshalConversationKeys(conversationKeys)
+	if err != nil {
+		return nil, err
+	}
 	outB64, err := ffiDecryptStream(c.h,
 		base64.StdEncoding.EncodeToString(encrypted),
-		base64.StdEncoding.EncodeToString(conversationKey))
+		eventB64, convKeysJSON, mediaHashKey)
 	if err != nil {
 		return nil, err
 	}
@@ -653,12 +670,18 @@ type StreamDecryptor struct {
 	h streamDecryptorHandle
 }
 
-// StreamDecryptor creates an incremental stream decryptor for the given
-// raw 32-byte conversation key.
-func (c *Chat) StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error) {
-	h := ffiStreamDecryptorNew(base64.StdEncoding.EncodeToString(conversationKey))
-	if h == nil {
-		return nil, errors.New("invalid conversation key (expected 32 bytes)")
+// StreamDecryptor creates an incremental decryptor for an encrypted media file
+// too large to hold in memory. It takes the arguments of DecryptStream apart
+// from the bytes, which are fed to the decryptor.
+func (c *Chat) StreamDecryptor(eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) (*StreamDecryptor, error) {
+	defer runtime.KeepAlive(c)
+	convKeysJSON, err := marshalConversationKeys(conversationKeys)
+	if err != nil {
+		return nil, err
+	}
+	h, err := ffiStreamDecryptorNew(c.h, eventB64, convKeysJSON, mediaHashKey)
+	if err != nil {
+		return nil, err
 	}
 	d := &StreamDecryptor{h: h}
 	// GC backstop for decryptors never explicitly Closed. A receiver becomes

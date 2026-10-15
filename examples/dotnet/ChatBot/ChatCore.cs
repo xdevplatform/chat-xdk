@@ -193,14 +193,19 @@ public sealed class ChatCore : IDisposable
     }
 
     /// <summary>
-    /// Decrypt a media blob with the incremental stream API.
+    /// Decrypt a downloaded media blob with the incremental stream API.
     ///
-    /// <c>Finish</c> throws if the stream was truncated, so plaintext from
-    /// <c>Push</c> must not be treated as complete until it succeeds.
+    /// <paramref name="eventB64"/> is the raw event of the message that carries the
+    /// media and <paramref name="conversationKeys"/> its conversation's key map, as
+    /// passed to <see cref="DecryptOne"/>; the SDK finds <paramref name="mediaHashKey"/>
+    /// in the event and derives that file's key. <c>Finish</c> throws if the stream
+    /// was truncated, so plaintext from <c>Push</c> must not be treated as complete
+    /// until it succeeds.
     /// </summary>
-    public byte[] DecryptMedia(byte[] ciphertext, byte[] conversationKey)
+    public byte[] DecryptMedia(
+        byte[] ciphertext, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)
     {
-        using var dec = _chat.StreamDecryptor(conversationKey);
+        using var dec = _chat.StreamDecryptor(eventB64, conversationKeys, mediaHashKey);
         using var output = new MemoryStream();
         for (var offset = 0; offset < ciphertext.Length; offset += MediaChunk)
         {

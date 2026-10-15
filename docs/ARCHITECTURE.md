@@ -131,6 +131,7 @@ The SDK is a **pure function library**. It transforms data but does not perform 
 crates/core/src/
 ├── lib.rs                        # Public API exports & prelude
 ├── core.rs                       # ChatCore — platform-agnostic encryption engine
+├── core/media.rs                 # Media keys found from the event that carries the media
 ├── chat.rs                       # Chat — Juicebox wrapper over ChatCore
 ├── pipeline.rs                   # Stateless encrypt-sign pipeline (internal)
 ├── signatures.rs                 # Group operation action signatures
@@ -143,7 +144,7 @@ crates/core/src/
 │   ├── keys.rs                   # Key type definitions (XChatKeyPair, etc.)
 │   ├── key_factory.rs            # Key generation, ECDH, signing, verification
 │   ├── hash.rs                   # SHA-256, HKDF-SHA256, HMAC-SHA256
-│   ├── message_keys.rs           # Per-message key derivation
+│   ├── message_keys.rs           # Per-message and per-attachment key derivation
 │   └── encryption.rs             # XSalsa20-Poly1305 message & streaming encryption
 │
 ├── keys/                         # Layer 2: Key Lifecycle Management
@@ -259,15 +260,17 @@ Uses `p256` and `aes-gcm` crates from RustCrypto. All functions are pure — no 
 | `sha256(data)` | SHA-256 hash |
 | `hmac_sha256(message, key)` | HMAC-SHA256 |
 | `hkdf(secret, salt, len)` | HKDF-SHA256 key derivation |
-| `hkdf_with_info(secret, salt, info, len)` | HKDF-SHA256 with an `info` input (message keys) |
+| `hkdf_with_info(secret, salt, info, len)` | HKDF-SHA256 with an `info` input (message and attachment keys) |
 | `kdf2_sha256(shared_secret, shared_info, len)` | X9.63 KDF (used in ECIES) |
 
-#### `crypto/message_keys.rs` — Message Keys
+#### `crypto/message_keys.rs` — Message and Attachment Keys
 
 | Function | Description |
 |----------|-------------|
 | `uses_message_key(contents_encryption_version)` | Whether a message is encrypted under a message key (version ≥ 1) |
 | `derive_message_key(ckey, sender_id, message_id)` | Message key derived from the conversation key |
+| `derive_attachment_key(message_key, attachment_id)` | Attachment key derived from the message key |
+| `resolve_attachment_id(stored_id, message_id, index)` | The id an attachment's key derives from |
 
 See [CRYPTO.md — Message Keys](CRYPTO.md#message-keys).
 
@@ -409,6 +412,11 @@ Holds:
 - `keypair_manager: KeypairManager` — in-memory key state
 - `reject_unverified: bool` — signature verification policy (defaults to `true`)
 - `conversation_key_high_water: RwLock<HashMap<String, u64>>` — per-conversation monotonic high-water mark of verified key versions, backing the anti-downgrade guarantee on `latest_version`
+
+`decrypt_stream` / `stream_decryptor` use none of this state: `core/media.rs`
+finds the attachment a media hash key names in the given message event and
+derives its key from the given key map (see
+[CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
 
 #### `chat.rs` — `Chat` (Juicebox wrapper)
 
