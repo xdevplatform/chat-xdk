@@ -209,6 +209,7 @@ class Chat:
         reply_to_text: Optional[str] = None,
         reply_to_entities: Optional[list[tuple[int, int, str]]] = None,
         reply_to_attachments: Optional[list[dict]] = None,
+        reply_to_attachment_id: Optional[str] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
@@ -230,6 +231,7 @@ class Chat:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+        target_attachment_id: Optional[str] = None,
     ) -> SendPayload: ...
     def encrypt_remove_reaction(
         self,
@@ -242,6 +244,7 @@ class Chat:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+        target_attachment_id: Optional[str] = None,
     ) -> SendPayload: ...
     # `updated_text` is required at runtime (missing it raises TypeError)
     # even though it sits after the optional `target_event` positional; the
