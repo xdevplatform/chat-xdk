@@ -128,6 +128,15 @@ class Chat:
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
     ) -> dict: ...
+    def prepare_conversation_settings_change(
+        self,
+        conversation_id: str,
+        setting: str,
+        *,
+        ttl_msec: Optional[int] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> dict: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> dict: ...

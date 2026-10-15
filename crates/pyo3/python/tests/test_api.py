@@ -601,6 +601,68 @@ class TestApiShapes(unittest.TestCase):
             f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1",
         )
 
+    def test_prepare_conversation_settings_change_shape(self):
+        chat, v = self._unlocked_chat()
+
+        sig = chat.prepare_conversation_settings_change(
+            "222-111",
+            "message_duration",
+            ttl_msec=86400000,
+            sender_id="111",
+            signing_key_version="1",
+        )
+        self.assertTrue(sig["encoded_message_event_detail"])
+        self.assertTrue(sig["signature"])
+        self.assertEqual(
+            sig["signature_payload"],
+            "ConversationMetadataChangeEvent.MessageDurationChange,"
+            f"{sig['message_id']},111,111:222,86400000",
+        )
+
+        # Mute is signed for the sender's own conversation.
+        sig = chat.prepare_conversation_settings_change(
+            "222-111", "mute", sender_id="111", signing_key_version="1"
+        )
+        self.assertEqual(
+            sig["signature_payload"],
+            "ConversationMetadataChangeEvent.MuteConversation,"
+            f"{sig['message_id']},111,111:111,111:222",
+        )
+
+        sig = chat.prepare_conversation_settings_change(
+            "g999",
+            "enable_screen_capture_blocking",
+            sender_id="111",
+            signing_key_version="1",
+        )
+        self.assertEqual(
+            sig["signature_payload"],
+            "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"
+            f"{sig['message_id']},111,g999",
+        )
+
+    def test_prepare_conversation_settings_change_rejects_bad_input(self):
+        chat, v = self._unlocked_chat()
+
+        cases = [
+            ("g1", "message_duration", None, "ttl_msec is required"),
+            ("g1", "mute", 1000, "ttl_msec only applies"),
+            ("g1", "archive", None, 'unknown setting "archive"'),
+            ("g1", "", None, "setting is empty"),
+            ("g1", "message_duration", 0, "ttl_msec must be positive"),
+            ("", "mute", None, "conversation_id is empty"),
+        ]
+        for conversation_id, setting, ttl, expected in cases:
+            with self.assertRaises(Exception) as ctx:
+                chat.prepare_conversation_settings_change(
+                    conversation_id,
+                    setting,
+                    ttl_msec=ttl,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
+            self.assertIn(expected, str(ctx.exception))
+
     def test_optional_arguments_are_keyword_only(self):
         chat, v = self._unlocked_chat()
 

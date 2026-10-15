@@ -33,9 +33,10 @@ use std::sync::Arc;
 
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor,
-    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams, QuickReply,
+    AttachmentDescriptor, ConversationKeyChangeParams, ConversationSetting,
+    ConversationSettingsParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams, QuickReply,
 };
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
@@ -1481,6 +1482,55 @@ impl Chat {
         let signature = self
             .inner
             .prepare_message_delete(&params)
+            .map_err(to_py_err)?;
+        Python::attach(|py| Ok(action_signature_to_pydict(py, &signature)?.into()))
+    }
+
+    /// Build the signed action for changing a conversation setting.
+    ///
+    /// Like a delete, a settings change is a signed plaintext event, so no
+    /// conversation key is involved. The SDK generates the action's message
+    /// id; read it back from the result.
+    ///
+    /// Mute and unmute are personal: they are signed for your own
+    /// ``"{sender_id}:{sender_id}"`` conversation, with ``conversation_id``
+    /// as the muted conversation. The other settings apply to every
+    /// participant of ``conversation_id``.
+    ///
+    /// Args:
+    ///     conversation_id: The conversation whose setting changes.
+    ///     setting: One of ``"message_duration"``,
+    ///         ``"remove_message_duration"``, ``"mute"``, ``"unmute"``,
+    ///         ``"enable_screen_capture_blocking"``,
+    ///         ``"disable_screen_capture_blocking"``.
+    ///     ttl_msec: How long new messages last before they disappear, in
+    ///         milliseconds. Required for ``"message_duration"`` and
+    ///         rejected for every other setting. Keyword-only, like every
+    ///         optional argument below it.
+    ///     sender_id: Your user ID; defaults to the ``set_identity`` value.
+    ///     signing_key_version: Your registered signing public key version;
+    ///         defaults to the ``set_identity`` value.
+    ///
+    /// Returns:
+    ///     A dict with ``message_id``, ``encoded_message_event_detail``,
+    ///     ``signature``, ``signature_version``, ``public_key_version``,
+    ///     ``signature_payload``.
+    #[pyo3(signature = (conversation_id, setting, *, ttl_msec=None, sender_id=None, signing_key_version=None))]
+    fn prepare_conversation_settings_change(
+        &self,
+        conversation_id: &str,
+        setting: &str,
+        ttl_msec: Option<i64>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let setting = ConversationSetting::from_name(setting, ttl_msec).map_err(to_py_err)?;
+        let mut params = ConversationSettingsParams::new(conversation_id, setting);
+        params.sender_id = sender_id;
+        params.signing_key_version = signing_key_version;
+        let signature = self
+            .inner
+            .prepare_conversation_settings_change(&params)
             .map_err(to_py_err)?;
         Python::attach(|py| Ok(action_signature_to_pydict(py, &signature)?.into()))
     }
