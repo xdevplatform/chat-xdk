@@ -389,6 +389,19 @@ async function main() {
   assert.ok(removePayload.signature.length > 0);
   assert.ok(removePayload.encodedEventSignature.length > 0);
 
+  // 4c1. Attachment targets reach the core, which needs the raw event to
+  // check the attachment belongs to the target.
+  for (const method of ["encryptAddReaction", "encryptRemoveReaction"]) {
+    assert.throws(
+      () => chat[method]({ ...reactionParams, targetAttachmentId: "att-1" }),
+      /target_attachment_id needs target_event/,
+    );
+  }
+  assert.throws(
+    () => chat.encryptReply({ ...replyParamsBase, replyToAttachmentId: "att-1" }),
+    /reply_to_attachment_id needs reply_to_event/,
+  );
+
   // 4c2. encryptEdit produces a signed payload whose encrypted contents
   // decrypt back to the edit: updated text, target sequence id, and the
   // [start, end, type] entity tuple all survive the WASM boundary.
