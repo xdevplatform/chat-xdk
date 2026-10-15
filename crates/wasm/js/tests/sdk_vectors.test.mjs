@@ -290,7 +290,7 @@ async function main() {
         }),
       );
       assert.equal(content.text, "Continue?");
-      assert.deepEqual(content.quick_reply, quickReply);
+      assert.deepEqual(content.quickReply, quickReply);
 
       // A received quick reply can be sent back unchanged.
       const resent = decryptOwn(
@@ -298,10 +298,10 @@ async function main() {
           conversationId: v.event_conversation_id,
           text: "again",
           ...key,
-          quickReply: content.quick_reply,
+          quickReply: content.quickReply,
         }),
       );
-      assert.deepEqual(resent.quick_reply, quickReply);
+      assert.deepEqual(resent.quickReply, quickReply);
     }
 
     const replyContent = decryptOwn(
@@ -315,12 +315,12 @@ async function main() {
         quickReply: QUICK_REPLY_RESPONSE,
       }),
     );
-    assert.deepEqual(replyContent.quick_reply, QUICK_REPLY_RESPONSE);
+    assert.deepEqual(replyContent.quickReply, QUICK_REPLY_RESPONSE);
 
     const plain = decryptOwn(
       qr.encryptMessage({ conversationId: v.event_conversation_id, text: "plain", ...key }),
     );
-    assert.equal(plain.quick_reply, undefined);
+    assert.equal(plain.quickReply, undefined);
 
     assert.throws(
       () =>

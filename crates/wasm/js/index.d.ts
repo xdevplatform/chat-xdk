@@ -204,8 +204,18 @@ export type EntityTuple = [number, number, string];
  * encryptReply unchanged.
  */
 export type QuickReply =
-  | { request: { options: QuickReplyOptionsRequest } }
-  | { response: { options: QuickReplyOptionsResponse } };
+  | { request: QuickReplyRequest }
+  | { response: QuickReplyResponse };
+
+/** A quick-reply request offering a set of selectable options. */
+export interface QuickReplyRequest {
+  options: QuickReplyOptionsRequest;
+}
+
+/** A quick-reply response selecting a previously offered option. */
+export interface QuickReplyResponse {
+  options: QuickReplyOptionsResponse;
+}
 
 /** The options offered by a quick-reply request. */
 export interface QuickReplyOptionsRequest {
@@ -636,8 +646,8 @@ export interface MessageContent {
   forwardedMessage?: unknown;
   /** Present on 'text' content: the surface the message was sent from. */
   sentFrom?: string | number;
-  /** Present on 'text' content: quick-reply payload. */
-  quickReply?: unknown;
+  /** Present on 'text' content: quick-reply payload, accepted unchanged by encryptMessage / encryptReply. */
+  quickReply?: QuickReply;
   /** Present on 'text' content: call-to-action buttons. */
   ctas?: unknown[];
   /** Present on 'unknown' content: the unrecognized numeric type id. */
