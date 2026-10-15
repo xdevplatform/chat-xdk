@@ -59,6 +59,7 @@ fn error_text(result: Result<Vec<u8>, SdkError>) -> String {
 
 /// A v10 message from `author` under key version "7" that uses a message
 /// key, carrying `attachments`.
+#[allow(clippy::vec_box)]
 fn message_with(
     author: &Party,
     message_id: &str,
@@ -332,6 +333,7 @@ impl Quote {
     }
 
     /// The replier's reply under version "8", with its own `attachments`.
+    #[allow(clippy::vec_box)]
     fn reply(
         &self,
         preview: ThriftPreview,
