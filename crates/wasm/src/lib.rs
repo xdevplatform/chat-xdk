@@ -641,6 +641,31 @@ impl Chat {
         to_js_value(&js_signature)
     }
 
+    /// Build the signed action for changing a conversation setting.
+    ///
+    /// Takes a single params object with camelCase keys: `conversationId`,
+    /// `setting` (`"message_duration"`, `"remove_message_duration"`,
+    /// `"mute"`, `"unmute"`, `"enable_screen_capture_blocking"` or
+    /// `"disable_screen_capture_blocking"`), `ttlMsec` (milliseconds, only
+    /// and always for `"message_duration"`), plus optional `senderId` /
+    /// `signingKeyVersion`. Mute and unmute are signed for the sender's own
+    /// `"{senderId}:{senderId}"` conversation. Returns the action signature;
+    /// the SDK generates the action's message id (`messageId` on the result).
+    #[wasm_bindgen(js_name = prepareConversationSettingsChange)]
+    pub fn prepare_conversation_settings_change(
+        &self,
+        params: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let p: JsConversationSettingsParams =
+            from_js_params("prepareConversationSettingsChange", params)?;
+        let signature = self
+            .inner
+            .prepare_conversation_settings_change(&p.into_core()?)
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let js_signature: JsActionSignature = signature.into();
+        to_js_value(&js_signature)
+    }
+
     /// Encrypt a stream (e.g. media).
     #[wasm_bindgen(js_name = encryptStream)]
     pub fn encrypt_stream(
@@ -1226,6 +1251,40 @@ impl JsMessageDeleteParams {
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsConversationSettingsParams {
+    conversation_id: String,
+    setting: String,
+    ttl_msec: Option<f64>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsConversationSettingsParams {
+    fn into_core(self) -> Result<chat_xdk_core::ConversationSettingsParams, JsError> {
+        const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+        let ttl_msec = match self.ttl_msec {
+            None => None,
+            Some(t) if t.is_finite() && t.fract() == 0.0 && t.abs() <= MAX_SAFE_INTEGER => {
+                Some(t as i64)
+            }
+            Some(t) => {
+                return Err(JsError::new(&format!(
+                    "Invalid ttlMsec: {t} is not a whole number of milliseconds"
+                )))
+            }
+        };
+        let setting = chat_xdk_core::ConversationSetting::from_name(&self.setting, ttl_msec)
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let mut params =
+            chat_xdk_core::ConversationSettingsParams::new(self.conversation_id, setting);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        Ok(params)
     }
 }
 

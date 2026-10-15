@@ -453,6 +453,38 @@ export interface MessageDeleteParams {
 }
 
 /**
+ * A conversation setting accepted by prepareConversationSettingsChange.
+ */
+export type ConversationSetting =
+  | "message_duration"
+  | "remove_message_duration"
+  | "mute"
+  | "unmute"
+  | "enable_screen_capture_blocking"
+  | "disable_screen_capture_blocking";
+
+/**
+ * Parameters for prepareConversationSettingsChange.
+ *
+ * Like a delete, a settings change is a signed plaintext event. Mute and
+ * unmute are personal: they are signed for the sender's own
+ * `"{senderId}:{senderId}"` conversation, with `conversationId` as the muted
+ * conversation. The other settings apply to every participant.
+ */
+export interface ConversationSettingsParams {
+  /** ID of the conversation whose setting changes. */
+  conversationId: string;
+  /** The setting to change. */
+  setting: ConversationSetting;
+  /** How long new messages last before they disappear, in milliseconds. Required for "message_duration" and rejected for every other setting. */
+  ttlMsec?: number | null;
+  /** User ID of the sender signing the change; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the change; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
+/**
  * Parameters for prepareConversationKeyChange.
  */
 export interface ConversationKeyChangeParams {
@@ -952,6 +984,9 @@ interface ChatCrypto {
   /** Build the signed action for deleting messages from a conversation. */
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
 
+  /** Build the signed action for changing a conversation setting. */
+  prepareConversationSettingsChange(params: ConversationSettingsParams): ActionSignature;
+
   /** Encrypt a stream (e.g. media). */
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
 
@@ -1050,6 +1085,7 @@ declare class Chat implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+  prepareConversationSettingsChange(params: ConversationSettingsParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
@@ -1119,6 +1155,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+  prepareConversationSettingsChange(params: ConversationSettingsParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;

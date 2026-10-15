@@ -464,6 +464,53 @@ async function main() {
     `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
   );
 
+  // 4c4. prepareConversationSettingsChange signs metadata changes; mute is
+  // signed for the sender's own conversation.
+  const ttlSig = chat.prepareConversationSettingsChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "222-111",
+    setting: "message_duration",
+    ttlMsec: 86400000,
+  });
+  assert.ok(ttlSig.encodedMessageEventDetail.length > 0);
+  assert.equal(
+    ttlSig.signaturePayload,
+    `ConversationMetadataChangeEvent.MessageDurationChange,${ttlSig.messageId},111,111:222,86400000`,
+  );
+  const muteSig = chat.prepareConversationSettingsChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "222-111",
+    setting: "mute",
+  });
+  assert.equal(
+    muteSig.signaturePayload,
+    `ConversationMetadataChangeEvent.MuteConversation,${muteSig.messageId},111,111:111,111:222`,
+  );
+  const settingsBase = { senderId: "111", signingKeyVersion: "1", conversationId: "g1" };
+  assert.throws(
+    () => chat.prepareConversationSettingsChange({ ...settingsBase, setting: "message_duration" }),
+    /ttl_msec is required/,
+  );
+  assert.throws(
+    () => chat.prepareConversationSettingsChange({ ...settingsBase, setting: "mute", ttlMsec: 1000 }),
+    /ttl_msec only applies/,
+  );
+  assert.throws(
+    () => chat.prepareConversationSettingsChange({ ...settingsBase, setting: "archive" }),
+    /unknown setting "archive"/,
+  );
+  assert.throws(
+    () =>
+      chat.prepareConversationSettingsChange({
+        ...settingsBase,
+        setting: "message_duration",
+        ttlMsec: 1.5,
+      }),
+    /whole number of milliseconds/,
+  );
+
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({
