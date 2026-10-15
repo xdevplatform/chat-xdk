@@ -341,6 +341,7 @@ The signature protocol is versioned, and the version travels with each signature
 |----------|-------|---------|
 | `SIGNATURE_VERSION` (current) | `"7"` | Stamped on every signature the SDK produces |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
+| `MAX_SIGNATURE_VERSION` (internal) | `11` | Newest version accepted on verification; a signature labeled with a newer version is rejected, since its payload layout is unknown |
 | `CKEY_PLAINTEXT_SIGNATURE_VERSION` | `6` | First version whose conversation-key-change payload signs the plaintext conversation key (so a recipient can reproduce and verify it) |
 
 ### What Gets Signed
@@ -394,6 +395,31 @@ payloads (`signatures.rs`):
 Both `prepare_group_create` and `prepare_group_members_change` emit **two**
 action signatures — a `ConversationKeyChangeEvent` plus the group change — since
 the backend validates the pair together.
+
+#### Verifying newer versions
+
+The layouts above are the ones the SDK signs, at v7. Verification rebuilds
+each payload in the layout of the version its signature carries, 2 through 11:
+
+- **v8**: the message payload's conversation-key-version component is the
+  version parsed as an integer, `null` when missing or not an integer (v7 and
+  below sign the carried string, empty when missing). GroupMemberAdd appends
+  `current_description`.
+- **v9**: every payload — messages, conversation-key changes, and group
+  actions — ends with `,signature_version={n}`. GroupCreate appends the number
+  of its `group_type`.
+- **v10**: the message payload appends `contents_encryption_version` before
+  that suffix, so a message's key choice cannot be changed or stripped without
+  breaking its signature. GroupCreate appends `ttl_msec`.
+- **v11**: GroupMemberRemove appends `conversation_key_version` after the
+  member ids.
+
+Unset optional components render as `null`. For example, a v10 message with
+`contents_encryption_version` 1 signs:
+
+```
+"MessageCreateEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{contents_b64_no_pad},1,signature_version=10"
+```
 
 These payloads are comma-joined with no escaping, and the verifier rejects any
 component containing a comma. String fields signed inline — group `title` and
