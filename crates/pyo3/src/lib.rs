@@ -789,8 +789,8 @@ impl Chat {
     ///     conversation_key_version: The current conversation key version (from KeyChange event).
     ///     entities: Optional list of (start, end, entity_type) tuples for rich-text.
     ///     attachments: Optional list of attachment dicts (each with "attachment_type" key).
-    ///     quick_reply: Optional quick-reply dict, in the same shape as the
-    ///         ``quick_reply`` of decrypted text content.
+    ///     quick_reply: Optional ``QuickReply`` dict: a request offering
+    ///         options, or a response selecting one.
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]
@@ -869,8 +869,8 @@ impl Chat {
     ///     entities: Optional list of (start, end, entity_type) tuples for
     ///         rich-text in the reply text.
     ///     attachments: Optional list of attachment dicts (each with "attachment_type" key).
-    ///     quick_reply: Optional quick-reply dict, in the same shape as the
-    ///         ``quick_reply`` of decrypted text content.
+    ///     quick_reply: Optional ``QuickReply`` dict: a request offering
+    ///         options, or a response selecting one.
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]

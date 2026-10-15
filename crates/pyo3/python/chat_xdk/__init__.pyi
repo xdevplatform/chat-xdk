@@ -1,6 +1,6 @@
 """Type stubs for chat-xdk Python bindings."""
 
-from typing import Optional, Union, overload
+from typing import Optional, TypedDict, Union, overload
 
 __version__: str
 
@@ -9,6 +9,48 @@ def encrypted_stream_size(plaintext_size: int) -> int: ...
 # ---------------------------------------------------------------------------
 # Classes
 # ---------------------------------------------------------------------------
+
+class QuickReplyOption(TypedDict, total=False):
+    """A single selectable quick-reply option."""
+
+    id: Optional[str]
+    label: Optional[str]
+    metadata: Optional[str]
+    description: Optional[str]
+
+class QuickReplyOptionsRequest(TypedDict, total=False):
+    """The options offered by a quick-reply request."""
+
+    id: Optional[str]
+    options: Optional[list[QuickReplyOption]]
+
+class QuickReplyOptionsResponse(TypedDict, total=False):
+    """The option selected in a quick-reply response."""
+
+    request_id: Optional[str]
+    metadata: Optional[str]
+    selected_option_id: Optional[str]
+
+class QuickReplyRequest(TypedDict):
+    """A quick-reply request offering a set of selectable options."""
+
+    options: QuickReplyOptionsRequest
+
+class QuickReplyResponse(TypedDict):
+    """A quick-reply response selecting a previously offered option."""
+
+    options: QuickReplyOptionsResponse
+
+class QuickReply(TypedDict, total=False):
+    """A quick reply carried by a text message.
+
+    Set exactly one of ``request`` (offering selectable options) or
+    ``response`` (selecting one). The ``quick_reply`` of decrypted text
+    content has this shape, so a received value can be sent back unchanged.
+    """
+
+    request: QuickReplyRequest
+    response: QuickReplyResponse
 
 class PublicKeys:
     identity: str
@@ -155,7 +197,7 @@ class Chat:
         conversation_key_version: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
-        quick_reply: Optional[dict] = None,
+        quick_reply: Optional[QuickReply] = None,
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
     ) -> SendPayload: ...
@@ -178,7 +220,7 @@ class Chat:
         conversation_key_version: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
-        quick_reply: Optional[dict] = None,
+        quick_reply: Optional[QuickReply] = None,
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
     ) -> SendPayload: ...
