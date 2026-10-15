@@ -547,6 +547,21 @@ jobs:
             cp artifacts/dotnet-native-"$rid"/* "$base/$rid/"
           done
           find "$base" -type f
+      # Maven 3.10 stages a maven-metadata-local.xml that
+      # central-publishing-maven-plugin 0.11.0 leaves in the upload bundle, and
+      # Central rejects the bundle ("Bundle has content that does NOT have a
+      # .pom file"). Republishing an existing tag builds that tag's pom, so the
+      # Maven version is pinned here rather than in the pom.
+      - name: Install Maven 3.9.16
+        run: |
+          set -euo pipefail
+          v=3.9.16
+          tgz="$RUNNER_TEMP/apache-maven-$v-bin.tar.gz"
+          curl -fsSL -o "$tgz" "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$v/apache-maven-$v-bin.tar.gz"
+          echo "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6  $tgz" | sha512sum -c -
+          tar -xzf "$tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-$v/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/apache-maven-$v/bin/mvn" -v
       - name: Package jar
         run: mvn -B -DskipTests -f crates/jvm/java/chatxdk/pom.xml package
       # A jar without the natives fails every consumer with
