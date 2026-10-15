@@ -511,6 +511,62 @@ async function main() {
     /whole number of milliseconds/,
   );
 
+  // 4c5. prepareGroupAdminChange signs roster and invite-link actions.
+  const adminSig = chat.prepareGroupAdminChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g999",
+    action: "remove_members",
+    userIds: ["222"],
+  });
+  assert.ok(adminSig.encodedMessageEventDetail.length > 0);
+  assert.equal(
+    adminSig.signaturePayload,
+    `GroupChangeEvent.GroupMemberRemoveChange,${adminSig.messageId},111,g999,222`,
+  );
+  const inviteSig = chat.prepareGroupAdminChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g999",
+    action: "enable_invite_link",
+    inviteUrl: "https://example.com/i/abc",
+    expiresAtMsec: 1_900_000_000_000,
+  });
+  assert.equal(
+    inviteSig.signaturePayload,
+    `GroupChangeEvent.GroupInviteEnable,${inviteSig.messageId},111,g999,https://example.com/i/abc,1900000000000,null`,
+  );
+  const adminBase = { senderId: "111", signingKeyVersion: "1", conversationId: "g1" };
+  assert.throws(
+    () => chat.prepareGroupAdminChange({ ...adminBase, action: "add_admins" }),
+    /user_ids is required/,
+  );
+  assert.throws(
+    () =>
+      chat.prepareGroupAdminChange({ ...adminBase, action: "disable_invite_link", userIds: ["2"] }),
+    /takes no other fields/,
+  );
+  assert.throws(
+    () =>
+      chat.prepareGroupAdminChange({
+        ...adminBase,
+        action: "enable_invite_link",
+        inviteUrl: "https://example.com/i/abc",
+        expiresAtMsec: 1.5,
+      }),
+    /expiresAtMsec: 1.5 is not a whole number/,
+  );
+  assert.throws(
+    () =>
+      chat.prepareGroupAdminChange({
+        ...adminBase,
+        conversationId: "111:222",
+        action: "add_admins",
+        userIds: ["2"],
+      }),
+    /is not a group/,
+  );
+
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({

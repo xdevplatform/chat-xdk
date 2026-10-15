@@ -499,6 +499,7 @@ export class ChatWithJuicebox {
   encryptEdit(params) { return this.#inner.encryptEdit(params); }
   prepareMessageDelete(params) { return this.#inner.prepareMessageDelete(params); }
   prepareConversationSettingsChange(params) { return this.#inner.prepareConversationSettingsChange(params); }
+  prepareGroupAdminChange(params) { return this.#inner.prepareGroupAdminChange(params); }
   encryptStream(plaintext, key) { return this.#inner.encryptStream(plaintext, key); }
   decryptStream(encrypted, key) { return this.#inner.decryptStream(encrypted, key); }
   streamEncryptor(key) { return this.#inner.streamEncryptor(key); }
