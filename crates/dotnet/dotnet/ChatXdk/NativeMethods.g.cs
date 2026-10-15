@@ -380,13 +380,18 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_decrypt(ChatHandle* handle, byte* ciphertext_b64, byte* conversation_key_b64);
 
         /// <summary>
-        ///  Decrypt a streaming-encrypted payload (e.g. media files).
+        ///  Decrypt an encrypted media file (e.g. an image or video).
         ///
-        ///  Both arguments are base64-encoded.
+        ///  - `encrypted_b64` — the encrypted bytes, base64.
+        ///  - `event_b64` — the event of the message that carries the media.
+        ///  - `conversation_keys_json` — JSON object `{"version": "base64_key"}`
+        ///    holding the key for the message's version.
+        ///  - `media_hash_key` — the media's hash key from the decrypted message.
+        ///
         ///  Returns base64-encoded decrypted bytes.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_stream", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_decrypt_stream(ChatHandle* handle, byte* encrypted_b64, byte* conversation_key_b64);
+        internal static extern FfiResult chat_xdk_decrypt_stream(ChatHandle* handle, byte* encrypted_b64, byte* event_b64, byte* conversation_keys_json, byte* media_hash_key);
 
         /// <summary>
         ///  Encrypt a stream (e.g. media files) with a conversation key.
@@ -423,11 +428,15 @@ namespace ChatXdk
         internal static extern void chat_xdk_stream_encryptor_free(StreamEncryptorHandle* handle);
 
         /// <summary>
-        ///  Create a stream decryptor for a base64 conversation key. Returns NULL on a
-        ///  bad key; free the handle with `chat_xdk_stream_decryptor_free`.
+        ///  Create an incremental decryptor for an encrypted media file, taking the
+        ///  arguments of `chat_xdk_decrypt_stream` apart from the bytes.
+        ///
+        ///  On success writes the new handle to `out_decryptor` and returns an empty
+        ///  result; free the handle with `chat_xdk_stream_decryptor_free`. On failure
+        ///  writes NULL and returns the error.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_stream_decryptor_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern StreamDecryptorHandle* chat_xdk_stream_decryptor_new(byte* conversation_key_b64);
+        internal static extern FfiResult chat_xdk_stream_decryptor_new(ChatHandle* handle, byte* event_b64, byte* conversation_keys_json, byte* media_hash_key, StreamDecryptorHandle** out_decryptor);
 
         /// <summary>
         ///  Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.

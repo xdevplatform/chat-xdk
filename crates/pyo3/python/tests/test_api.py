@@ -666,27 +666,34 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotEqual(chat.encrypt(plaintext, conv_key), ciphertext)
         self.assertEqual(chat.decrypt(ciphertext, conv_key), plaintext)
 
+    def _media_message(self, v):
+        """The fixture conversation-key message with one media attachment, and
+        the key map and media hash key that open its media."""
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        keys = {v["event_conversation_key_version"]: conv_key}
+        return v["event_conversation_key_media_b64"], keys, v["media_conversation_key_hash_key"], conv_key
+
     def test_stream_roundtrip_and_wrong_key_fails(self):
         chat, v = self._unlocked_chat()
-
-        conv_key = base64.b64decode(v["conversation_key_b64"])
+        event, keys, media_hash_key, conv_key = self._media_message(v)
         plaintext = base64.b64decode(v["plaintext_b64"])
 
         encrypted = chat.encrypt_stream(plaintext, conv_key)
         self.assertNotEqual(encrypted, plaintext)
         # Randomized nonces: two encryptions differ.
         self.assertNotEqual(chat.encrypt_stream(plaintext, conv_key), encrypted)
-        self.assertEqual(chat.decrypt_stream(encrypted, conv_key), plaintext)
+        self.assertEqual(chat.decrypt_stream(encrypted, event, keys, media_hash_key), plaintext)
 
         wrong_key = bytearray(conv_key)
         wrong_key[31] ^= 0xFF
-        with self.assertRaises(Exception):
-            chat.decrypt_stream(encrypted, bytes(wrong_key))
+        wrong_keys = {v["event_conversation_key_version"]: bytes(wrong_key)}
+        with self.assertRaises(ValueError) as ctx:
+            chat.decrypt_stream(encrypted, event, wrong_keys, media_hash_key)
+        self.assertIn("does not decrypt the message", str(ctx.exception))
 
     def test_incremental_stream_roundtrip_and_truncation(self):
         chat, v = self._unlocked_chat()
-
-        conv_key = base64.b64decode(v["conversation_key_b64"])
+        event, keys, media_hash_key, conv_key = self._media_message(v)
         # A multi-frame payload so chunking and re-framing are exercised.
         plaintext = b"\xab" * 5000
 
@@ -696,7 +703,7 @@ class TestApiShapes(unittest.TestCase):
             ciphertext += enc.push(plaintext[i:i + 700])
         ciphertext += enc.finish()
 
-        dec = chat.stream_decryptor(conv_key)
+        dec = chat.stream_decryptor(event, keys, media_hash_key)
         out = b""
         for i in range(0, len(ciphertext), 333):
             out += dec.push(ciphertext[i:i + 333])
@@ -704,10 +711,11 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(out, plaintext)
 
         # A truncated stream is missing its final frame: finish() raises.
-        truncated = chat.stream_decryptor(conv_key)
+        truncated = chat.stream_decryptor(event, keys, media_hash_key)
         truncated.push(ciphertext[:-4])
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError) as ctx:
             truncated.finish()
+        self.assertIn("truncated", str(ctx.exception))
 
     def test_export_lock_reimport_roundtrip(self):
         chat, v = self._unlocked_chat()
