@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -2916,25 +2917,34 @@ func frameSendPayload(t *testing.T, p *SendPayload, senderID, conversationID str
 	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
-// canonicalJSON re-marshals a JSON document so key order does not affect
-// comparisons.
-func canonicalJSON(t *testing.T, raw []byte) string {
+func strPtr(s string) *string { return &s }
+
+func quickReplyRequest() *QuickReply {
+	return &QuickReply{Request: &QuickReplyRequest{Options: QuickReplyOptionsRequest{
+		ID: strPtr("qr-1"),
+		Options: []QuickReplyOption{
+			{ID: strPtr("yes"), Label: strPtr("Yes"), Metadata: strPtr("m-yes"), Description: strPtr("Confirm")},
+			{ID: strPtr("no"), Label: strPtr("No")},
+		},
+	}}}
+}
+
+func quickReplyResponse() *QuickReply {
+	return &QuickReply{Response: &QuickReplyResponse{Options: QuickReplyOptionsResponse{
+		RequestID:        strPtr("qr-1"),
+		Metadata:         strPtr("m-yes"),
+		SelectedOptionID: strPtr("yes"),
+	}}}
+}
+
+func quickReplyJSON(t *testing.T, qr *QuickReply) string {
 	t.Helper()
-	var v interface{}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("unmarshal %s: %v", raw, err)
-	}
-	out, err := json.Marshal(v)
+	out, err := json.Marshal(qr)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("marshal quick reply: %v", err)
 	}
 	return string(out)
 }
-
-const (
-	quickReplyRequestJSON  = `{"request":{"options":{"id":"qr-1","options":[{"id":"yes","label":"Yes","metadata":"m-yes","description":"Confirm"},{"id":"no","label":"No","metadata":"m-no","description":"Decline"}]}}}`
-	quickReplyResponseJSON = `{"response":{"options":{"request_id":"qr-1","metadata":"m-yes","selected_option_id":"yes"}}}`
-)
 
 func decryptOwnText(t *testing.T, chat *Chat, v sdkVectors, p *SendPayload) *TextContent {
 	t.Helper()
@@ -2970,20 +2980,20 @@ func TestEncryptMessageQuickReplyRoundTrip(t *testing.T) {
 	chat := quickReplyChat(t, v)
 	defer chat.Close()
 
-	for _, qr := range []string{quickReplyRequestJSON, quickReplyResponseJSON} {
+	for _, qr := range []*QuickReply{quickReplyRequest(), quickReplyResponse()} {
 		payload, err := chat.EncryptMessage(EncryptMessageParams{
 			ConversationID:         v.EventConversationID,
 			Text:                   "Continue?",
 			ConversationKey:        v.conversationKey(t),
 			ConversationKeyVersion: v.EventConversationKeyVersion,
-			QuickReply:             json.RawMessage(qr),
+			QuickReply:             qr,
 		})
 		if err != nil {
 			t.Fatalf("EncryptMessage failed: %v", err)
 		}
 		text := decryptOwnText(t, chat, v, payload)
-		if got, want := canonicalJSON(t, text.QuickReply), canonicalJSON(t, []byte(qr)); got != want {
-			t.Errorf("quick reply mismatch:\n got  %s\n want %s", got, want)
+		if !reflect.DeepEqual(text.QuickReply, qr) {
+			t.Errorf("quick reply mismatch:\n got  %s\n want %s", quickReplyJSON(t, text.QuickReply), quickReplyJSON(t, qr))
 		}
 		// A received quick reply can be sent back unchanged.
 		resent, err := chat.EncryptMessage(EncryptMessageParams{
@@ -2997,8 +3007,8 @@ func TestEncryptMessageQuickReplyRoundTrip(t *testing.T) {
 			t.Fatalf("EncryptMessage (resend) failed: %v", err)
 		}
 		again := decryptOwnText(t, chat, v, resent)
-		if got, want := canonicalJSON(t, again.QuickReply), canonicalJSON(t, []byte(qr)); got != want {
-			t.Errorf("resent quick reply mismatch:\n got  %s\n want %s", got, want)
+		if !reflect.DeepEqual(again.QuickReply, qr) {
+			t.Errorf("resent quick reply mismatch:\n got  %s\n want %s", quickReplyJSON(t, again.QuickReply), quickReplyJSON(t, qr))
 		}
 	}
 
@@ -3012,7 +3022,7 @@ func TestEncryptMessageQuickReplyRoundTrip(t *testing.T) {
 		t.Fatalf("EncryptMessage failed: %v", err)
 	}
 	if qr := decryptOwnText(t, chat, v, plain).QuickReply; qr != nil {
-		t.Errorf("expected no quick reply, got %s", qr)
+		t.Errorf("expected no quick reply, got %s", quickReplyJSON(t, qr))
 	}
 }
 
@@ -3031,14 +3041,14 @@ func TestEncryptReplyQuickReplyRoundTrip(t *testing.T) {
 		ReplyToSequenceID:      "seq-orig",
 		ReplyToSenderID:        &senderID,
 		ReplyToText:            &originalText,
-		QuickReply:             json.RawMessage(quickReplyResponseJSON),
+		QuickReply:             quickReplyResponse(),
 	})
 	if err != nil {
 		t.Fatalf("EncryptReply failed: %v", err)
 	}
 	text := decryptOwnText(t, chat, v, payload)
-	if got, want := canonicalJSON(t, text.QuickReply), canonicalJSON(t, []byte(quickReplyResponseJSON)); got != want {
-		t.Errorf("quick reply mismatch:\n got  %s\n want %s", got, want)
+	if want := quickReplyResponse(); !reflect.DeepEqual(text.QuickReply, want) {
+		t.Errorf("quick reply mismatch:\n got  %s\n want %s", quickReplyJSON(t, text.QuickReply), quickReplyJSON(t, want))
 	}
 }
 
@@ -3047,14 +3057,18 @@ func TestEncryptMessageRejectsInvalidQuickReply(t *testing.T) {
 	chat := quickReplyChat(t, v)
 	defer chat.Close()
 
-	_, err := chat.EncryptMessage(EncryptMessageParams{
-		ConversationID:         v.EventConversationID,
-		Text:                   "bad",
-		ConversationKey:        v.conversationKey(t),
-		ConversationKeyVersion: v.EventConversationKeyVersion,
-		QuickReply:             json.RawMessage(`{"neither":{}}`),
-	})
-	if err == nil || !strings.Contains(err.Error(), "Invalid quick reply") {
-		t.Fatalf("expected an invalid quick reply error, got %v", err)
+	both := quickReplyRequest()
+	both.Response = quickReplyResponse().Response
+	for name, qr := range map[string]*QuickReply{"neither": {}, "both": both} {
+		_, err := chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         v.EventConversationID,
+			Text:                   "bad",
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			QuickReply:             qr,
+		})
+		if err == nil || !strings.Contains(err.Error(), "Invalid quick reply") {
+			t.Errorf("%s: expected an invalid quick reply error, got %v", name, err)
+		}
 	}
 }
