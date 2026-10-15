@@ -234,12 +234,16 @@ func ffiDecryptEvent(h handle, eventB64, convKeysJSON, signingKeysJSON string) (
 	return ffiResult(C.chat_xdk_decrypt_event(h, cEv, cConvKeys, cSigningKeys))
 }
 
-func ffiDecryptStream(h handle, encB64, ckeyB64 string) (string, error) {
+func ffiDecryptStream(h handle, encB64, eventB64, convKeysJSON, mediaHashKey string) (string, error) {
 	cEnc := C.CString(encB64)
 	defer C.free(unsafe.Pointer(cEnc))
-	cKey := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(cKey))
-	return ffiResult(C.chat_xdk_decrypt_stream(h, cEnc, cKey))
+	cEv := C.CString(eventB64)
+	defer C.free(unsafe.Pointer(cEv))
+	cConvKeys := C.CString(convKeysJSON)
+	defer C.free(unsafe.Pointer(cConvKeys))
+	cHash := C.CString(mediaHashKey)
+	defer C.free(unsafe.Pointer(cHash))
+	return ffiResult(C.chat_xdk_decrypt_stream(h, cEnc, cEv, cConvKeys, cHash))
 }
 
 // encrypt
@@ -307,10 +311,18 @@ func ffiStreamEncryptorFree(h streamEncryptorHandle) {
 	C.chat_xdk_stream_encryptor_free(h)
 }
 
-func ffiStreamDecryptorNew(h handle, ckeyB64 string) streamDecryptorHandle {
-	c := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(c))
-	return C.chat_xdk_stream_decryptor_new_with_chat(h, c)
+func ffiStreamDecryptorNew(h handle, eventB64, convKeysJSON, mediaHashKey string) (streamDecryptorHandle, error) {
+	cEv := C.CString(eventB64)
+	defer C.free(unsafe.Pointer(cEv))
+	cConvKeys := C.CString(convKeysJSON)
+	defer C.free(unsafe.Pointer(cConvKeys))
+	cHash := C.CString(mediaHashKey)
+	defer C.free(unsafe.Pointer(cHash))
+	var out streamDecryptorHandle
+	if _, err := ffiResult(C.chat_xdk_stream_decryptor_new(h, cEv, cConvKeys, cHash, &out)); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func ffiStreamDecryptorPush(h streamDecryptorHandle, ciphertextB64 string) (string, error) {

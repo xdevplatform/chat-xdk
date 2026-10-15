@@ -484,12 +484,7 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
 
-            // Serialise conv keys as { "version": "base64", ... }
-            var convKeysB64 = new Dictionary<string, string>();
-            if (conversationKeys != null)
-                foreach (var (version, key) in conversationKeys)
-                    convKeysB64[version] = Convert.ToBase64String(key);
-            var convKeysJson = JsonSerializer.Serialize(convKeysB64, JsonOpts);
+            var convKeysJson = ConversationKeysJson(conversationKeys);
 
             var signingKeysList = signingKeys != null
                 ? new List<SigningKeyEntry>(signingKeys)
@@ -509,6 +504,16 @@ namespace ChatXdk
 
             using var doc = JsonDocument.Parse(resultJson);
             return doc.RootElement.Clone();
+        }
+
+        /// <summary>Serialise a version → key map as <c>{ "version": "base64", ... }</c>.</summary>
+        private static string ConversationKeysJson(Dictionary<string, byte[]>? conversationKeys)
+        {
+            var convKeysB64 = new Dictionary<string, string>();
+            if (conversationKeys != null)
+                foreach (var (version, key) in conversationKeys)
+                    convKeysB64[version] = Convert.ToBase64String(key);
+            return JsonSerializer.Serialize(convKeysB64, JsonOpts);
         }
 
         /// <summary>
@@ -779,20 +784,46 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Decrypt a streaming-encrypted media payload (e.g. an image or video).
+        /// Decrypt an encrypted media file (e.g. an image or video), as downloaded.
         /// </summary>
         /// <param name="encrypted">Encrypted bytes.</param>
-        /// <param name="conversationKey">Raw 32-byte conversation key.</param>
+        /// <param name="eventB64">
+        /// Base64-encoded event of the message that carries the media, as passed to
+        /// <c>DecryptEvent</c>.
+        /// </param>
+        /// <param name="conversationKeys">
+        /// Map of version → raw 32-byte key bytes from <see cref="ExtractConversationKeys"/> or
+        /// <see cref="DecryptEventsResult.ConversationKeys"/>. It must hold the key for the
+        /// message's version.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The media's hash key from the decrypted message: one of its media attachments, a link
+        /// card's banner or favicon, or media quoted in its reply preview.
+        /// </param>
         /// <returns>Decrypted bytes.</returns>
-        public byte[] DecryptStream(byte[] encrypted, byte[] conversationKey)
+        /// <exception cref="ChatXdkException">
+        /// The key version is missing, the event is not an encrypted message with this media, or
+        /// <paramref name="encrypted"/> is not the media's complete encrypted file. The message says
+        /// what to pass instead.
+        /// </exception>
+        public byte[] DecryptStream(
+            byte[] encrypted,
+            string eventB64,
+            Dictionary<string, byte[]> conversationKeys,
+            string mediaHashKey)
         {
             ThrowIfDisposed();
             var encB64 = Utf8Z(Convert.ToBase64String(encrypted));
-            var keyB64 = Utf8Z(Convert.ToBase64String(conversationKey));
+            var eventBytes = Utf8Z(eventB64);
+            var convBytes = Utf8Z(ConversationKeysJson(conversationKeys));
+            var hashBytes = Utf8Z(mediaHashKey);
             string resultB64;
             fixed (byte* encPtr = encB64)
-            fixed (byte* keyPtr = keyB64)
-                resultB64 = ConsumeResult(NativeMethods.chat_xdk_decrypt_stream(_handle, encPtr, keyPtr));
+            fixed (byte* evtPtr = eventBytes)
+            fixed (byte* convPtr = convBytes)
+            fixed (byte* hashPtr = hashBytes)
+                resultB64 = ConsumeResult(
+                    NativeMethods.chat_xdk_decrypt_stream(_handle, encPtr, evtPtr, convPtr, hashPtr));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
@@ -827,13 +858,18 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Create an incremental stream decryptor for large payloads.
+        /// Create an incremental decryptor for an encrypted media file too large to hold in
+        /// memory. Takes the arguments of <see cref="DecryptStream"/> apart from the bytes, which
+        /// are fed to the decryptor.
         /// </summary>
-        /// <param name="conversationKey">Raw 32-byte conversation key.</param>
-        public StreamDecryptor StreamDecryptor(byte[] conversationKey)
+        public StreamDecryptor StreamDecryptor(
+            string eventB64,
+            Dictionary<string, byte[]> conversationKeys,
+            string mediaHashKey)
         {
             ThrowIfDisposed();
-            var decryptor = ChatXdk.StreamDecryptor.Create(_handle, conversationKey);
+            var decryptor = ChatXdk.StreamDecryptor.Create(
+                _handle, eventB64, ConversationKeysJson(conversationKeys), mediaHashKey);
             GC.KeepAlive(this);
             return decryptor;
         }

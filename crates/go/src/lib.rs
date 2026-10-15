@@ -1644,14 +1644,48 @@ pub extern "C" fn chat_xdk_decrypt(
     })
 }
 
-/// Decrypt a streaming-encrypted payload.
+/// Parse the conversation-key JSON of a media call: `{"version":
+/// "base64_key", ...}`. An entry that is not a base64 32-byte key is an
+/// error.
+fn parse_media_conversation_keys(
+    json: &str,
+) -> Result<HashMap<String, XChatConversationKey>, FfiResult> {
+    let entries: HashMap<String, String> = serde_json::from_str(json)
+        .map_err(|e| err_result(&format!("Invalid conversation keys JSON: {}", e)))?;
+    entries
+        .into_iter()
+        .map(|(version, key_b64)| {
+            let key = BASE64
+                .decode(&key_b64)
+                .ok()
+                .and_then(XChatConversationKey::from_bytes)
+                .ok_or_else(|| {
+                    err_result(&format!(
+                        "the key for version '{}' in the conversation key map is not 32 bytes: \
+                         pass the raw 32-byte conversation keys",
+                        version
+                    ))
+                })?;
+            Ok((version, key))
+        })
+        .collect()
+}
+
+/// Decrypt an encrypted media file.
+///
+/// `encrypted_b64`: the encrypted bytes, base64. `event_b64`: the event of
+/// the message that carries the media. `conversation_keys_json`: JSON object
+/// `{"version": "base64_key"}` holding the key for the message's version.
+/// `media_hash_key`: the media's hash key from the decrypted message.
 ///
 /// Returns base64-encoded decrypted bytes.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_stream(
     handle: *const ChatHandle,
     encrypted_b64: *const c_char,
-    conversation_key_b64: *const c_char,
+    event_b64: *const c_char,
+    conversation_keys_json: *const c_char,
+    media_hash_key: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
@@ -1659,18 +1693,23 @@ pub extern "C" fn chat_xdk_decrypt_stream(
         }
         let h = unsafe { &*handle };
         let encrypted_b64 = try_str!(encrypted_b64);
-        let ckey_b64 = try_str!(conversation_key_b64);
+        let event_b64 = try_str!(event_b64);
+        let conv_keys_str = try_str!(conversation_keys_json);
+        let media_hash_key = try_str!(media_hash_key);
 
         let encrypted = match BASE64.decode(encrypted_b64) {
             Ok(b) => b,
             Err(e) => return err_result(&format!("Base64 error: {}", e)),
         };
-        let ckey = match parse_ckey(ckey_b64) {
+        let conv_keys = match parse_media_conversation_keys(conv_keys_str) {
             Ok(k) => k,
             Err(e) => return e,
         };
 
-        match h.inner.decrypt_stream(&encrypted, &ckey) {
+        match h
+            .inner
+            .decrypt_stream(&encrypted, event_b64, &conv_keys, media_hash_key)
+        {
             Ok(output) => ok_data(&BASE64.encode(&output)),
             Err(e) => err_from(e),
         }
@@ -1803,51 +1842,47 @@ pub extern "C" fn chat_xdk_stream_encryptor_free(handle: *mut StreamEncryptorHan
     })
 }
 
-/// Create a stream decryptor for a base64 conversation key. Returns NULL on a
-/// bad key; free the handle with [`chat_xdk_stream_decryptor_free`].
+/// Create an incremental decryptor for an encrypted media file, taking the
+/// arguments of [`chat_xdk_decrypt_stream`] apart from the bytes.
+///
+/// On success writes the new handle to `out_decryptor` and returns an empty
+/// result; free the handle with [`chat_xdk_stream_decryptor_free`]. On
+/// failure writes NULL and returns the error.
 #[no_mangle]
 pub extern "C" fn chat_xdk_stream_decryptor_new(
-    conversation_key_b64: *const c_char,
-) -> *mut StreamDecryptorHandle {
-    catch_ffi_or(std::ptr::null_mut(), || {
-        let ckey = match parse_ckey(match unsafe { from_c_str(conversation_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }) {
-            Ok(k) => k,
-            Err(_) => return std::ptr::null_mut(),
-        };
-        match chat_xdk_core::StreamDecryptor::new(&ckey) {
-            Ok(dec) => Box::into_raw(Box::new(StreamDecryptorHandle { inner: Some(dec) })),
-            Err(_) => std::ptr::null_mut(),
-        }
-    })
-}
-
-/// Create a stream decryptor through a chat instance, which also tries the
-/// attachment keys of messages that instance has decrypted under the given
-/// conversation key. Returns NULL on a null handle or bad key; free the
-/// handle with [`chat_xdk_stream_decryptor_free`].
-#[no_mangle]
-pub extern "C" fn chat_xdk_stream_decryptor_new_with_chat(
     handle: *const ChatHandle,
-    conversation_key_b64: *const c_char,
-) -> *mut StreamDecryptorHandle {
-    catch_ffi_or(std::ptr::null_mut(), || {
+    event_b64: *const c_char,
+    conversation_keys_json: *const c_char,
+    media_hash_key: *const c_char,
+    out_decryptor: *mut *mut StreamDecryptorHandle,
+) -> FfiResult {
+    catch_ffi(|| {
+        if out_decryptor.is_null() {
+            return err_result("Null out_decryptor");
+        }
+        unsafe { *out_decryptor = std::ptr::null_mut() };
         if handle.is_null() {
-            return std::ptr::null_mut();
+            return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let ckey = match parse_ckey(match unsafe { from_c_str(conversation_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }) {
+        let event_b64 = try_str!(event_b64);
+        let conv_keys_str = try_str!(conversation_keys_json);
+        let media_hash_key = try_str!(media_hash_key);
+
+        let conv_keys = match parse_media_conversation_keys(conv_keys_str) {
             Ok(k) => k,
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => return e,
         };
-        match h.inner.stream_decryptor(&ckey) {
-            Ok(dec) => Box::into_raw(Box::new(StreamDecryptorHandle { inner: Some(dec) })),
-            Err(_) => std::ptr::null_mut(),
+        match h
+            .inner
+            .stream_decryptor(event_b64, &conv_keys, media_hash_key)
+        {
+            Ok(dec) => {
+                let boxed = Box::new(StreamDecryptorHandle { inner: Some(dec) });
+                unsafe { *out_decryptor = Box::into_raw(boxed) };
+                ok_void()
+            }
+            Err(e) => err_from(e),
         }
     })
 }

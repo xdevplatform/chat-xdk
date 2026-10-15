@@ -433,13 +433,20 @@ struct FfiResult chat_xdk_decrypt(const struct ChatHandle *handle,
                                   const char *conversation_key_b64);
 
 /**
- * Decrypt a streaming-encrypted payload.
+ * Decrypt an encrypted media file.
+ *
+ * `encrypted_b64`: the encrypted bytes, base64. `event_b64`: the event of
+ * the message that carries the media. `conversation_keys_json`: JSON object
+ * `{"version": "base64_key"}` holding the key for the message's version.
+ * `media_hash_key`: the media's hash key from the decrypted message.
  *
  * Returns base64-encoded decrypted bytes.
  */
 struct FfiResult chat_xdk_decrypt_stream(const struct ChatHandle *handle,
                                          const char *encrypted_b64,
-                                         const char *conversation_key_b64);
+                                         const char *event_b64,
+                                         const char *conversation_keys_json,
+                                         const char *media_hash_key);
 
 /**
  * Encrypt a stream (e.g., media) with a conversation key. Returns base64.
@@ -471,19 +478,18 @@ struct FfiResult chat_xdk_stream_encryptor_finish(struct StreamEncryptorHandle *
 void chat_xdk_stream_encryptor_free(struct StreamEncryptorHandle *handle);
 
 /**
- * Create a stream decryptor for a base64 conversation key. Returns NULL on a
- * bad key; free the handle with [`chat_xdk_stream_decryptor_free`].
+ * Create an incremental decryptor for an encrypted media file, taking the
+ * arguments of [`chat_xdk_decrypt_stream`] apart from the bytes.
+ *
+ * On success writes the new handle to `out_decryptor` and returns an empty
+ * result; free the handle with [`chat_xdk_stream_decryptor_free`]. On
+ * failure writes NULL and returns the error.
  */
-struct StreamDecryptorHandle *chat_xdk_stream_decryptor_new(const char *conversation_key_b64);
-
-/**
- * Create a stream decryptor through a chat instance, which also tries the
- * attachment keys of messages that instance has decrypted under the given
- * conversation key. Returns NULL on a null handle or bad key; free the
- * handle with [`chat_xdk_stream_decryptor_free`].
- */
-struct StreamDecryptorHandle *chat_xdk_stream_decryptor_new_with_chat(const struct ChatHandle *handle,
-                                                                      const char *conversation_key_b64);
+struct FfiResult chat_xdk_stream_decryptor_new(const struct ChatHandle *handle,
+                                               const char *event_b64,
+                                               const char *conversation_keys_json,
+                                               const char *media_hash_key,
+                                               struct StreamDecryptorHandle **out_decryptor);
 
 /**
  * Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.

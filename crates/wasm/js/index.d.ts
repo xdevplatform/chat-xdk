@@ -874,14 +874,34 @@ interface ChatCrypto {
   /** Encrypt a stream (e.g. media). */
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
 
-  /** Decrypt a streaming-encrypted payload (e.g. media). */
-  decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
+  /**
+   * Decrypt an encrypted media file, as downloaded.
+   *
+   * `eventB64` is the event of the message that carries the media and
+   * `conversationKeys` the conversation's key map, as passed to
+   * `decryptEvent`; the map must hold the key for the message's version.
+   * `mediaHashKey` names the media: one of the message's media attachments,
+   * a link card's banner or favicon, or media quoted in its reply preview.
+   * Throws, saying what to pass instead, when the key version is missing,
+   * the event is not an encrypted message with this media, or `encrypted`
+   * is not the media's complete encrypted file.
+   */
+  decryptStream(
+    encrypted: Uint8Array,
+    eventB64: string,
+    conversationKeys: ConversationKeyMap,
+    mediaHashKey: string,
+  ): Uint8Array;
 
   /** Create an incremental stream encryptor for large payloads. */
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
 
-  /** Create an incremental stream decryptor for large payloads. */
-  streamDecryptor(conversationKey: Uint8Array): StreamDecryptor;
+  /**
+   * Create an incremental decryptor for an encrypted media file too large to
+   * hold in memory. Takes the arguments of `decryptStream` apart from the
+   * bytes, which are fed to the decryptor.
+   */
+  streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
 
   /** Encrypt a UTF-8 string and return base64 ciphertext. Use for metadata fields like group names. */
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
@@ -969,9 +989,9 @@ declare class Chat implements ChatCrypto {
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
-  decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
+  decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
-  streamDecryptor(conversationKey: Uint8Array): StreamDecryptor;
+  streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
@@ -1037,9 +1057,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
-  decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
+  decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
-  streamDecryptor(conversationKey: Uint8Array): StreamDecryptor;
+  streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
