@@ -667,13 +667,15 @@ fn a_reply_quoting_an_older_key_version_validates_through_its_embedded_key_chang
 
 fn decrypt_payload_contents(
     payload: &SendPayload,
-    contents_key: &XChatConversationKey,
+    sender_id: &str,
+    conversation_key: &XChatConversationKey,
 ) -> Contents {
-    let event = sent_event(payload, REPLIER, CONVERSATION);
+    let event = sent_event(payload, sender_id, CONVERSATION);
     let Some(Detail::MessageCreateEvent(mce)) = event.detail else {
         panic!("expected a MessageCreateEvent");
     };
-    let plaintext = decrypt_message_bytes(contents_key, mce.contents.as_ref().unwrap()).unwrap();
+    let contents_key = message_key(conversation_key, sender_id, &payload.message_id);
+    let plaintext = decrypt_message_bytes(&contents_key, mce.contents.as_ref().unwrap()).unwrap();
     ChatCore::parse_thrift_entry_contents(&plaintext).unwrap()
 }
 
@@ -687,7 +689,7 @@ fn a_reply_to_a_message_key_original_carries_its_key_and_its_edits_key() {
     params.reply_to_edit_event = Some(frame(&edit));
     let payload = f.replier.core.encrypt_reply(params).unwrap();
 
-    let Contents::Message(message) = decrypt_payload_contents(&payload, &f.ckey) else {
+    let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &f.ckey) else {
         panic!("expected a message");
     };
     let preview = message.replying_to_preview.unwrap();
@@ -725,7 +727,7 @@ fn a_reply_to_a_conversation_key_original_carries_no_key() {
                 .with_conversation_key(ckey.to_bytes(), "7"),
         )
         .unwrap();
-    let Contents::Message(message) = decrypt_payload_contents(&payload, &ckey) else {
+    let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &ckey) else {
         panic!("expected a message");
     };
     let preview = message.replying_to_preview.unwrap();
@@ -743,7 +745,7 @@ fn a_reply_with_every_preview_field_set_needs_no_key_for_a_message_key_original(
     params.reply_to_entities = Some(vec![]);
     params.reply_to_attachments = Some(vec![]);
     let payload = f.replier.core.encrypt_reply(params).unwrap();
-    let Contents::Message(message) = decrypt_payload_contents(&payload, &key(8)) else {
+    let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &key(8)) else {
         panic!("expected a message");
     };
     assert!(message
@@ -773,7 +775,7 @@ fn a_reply_still_embeds_the_key_changes_it_is_given() {
         .with_conversation_key(f.ckey.to_bytes(), "7");
     params.reply_to_ckces = Some(vec![frame(&kce)]);
     let payload = f.replier.core.encrypt_reply(params).unwrap();
-    let Contents::Message(message) = decrypt_payload_contents(&payload, &f.ckey) else {
+    let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &f.ckey) else {
         panic!("expected a message");
     };
     assert_eq!(
@@ -793,7 +795,7 @@ fn an_edit_names_the_message_it_edits() {
         .with_identity(AUTHOR, SIGNING_KEY_VERSION)
         .with_conversation_key(f.ckey.to_bytes(), "7");
     let payload = f.author.core.encrypt_edit(&params).unwrap();
-    let Contents::MessageEdit(edit) = decrypt_payload_contents(&payload, &f.ckey) else {
+    let Contents::MessageEdit(edit) = decrypt_payload_contents(&payload, AUTHOR, &f.ckey) else {
         panic!("expected an edit");
     };
     assert_eq!(edit.message_id.as_deref(), Some("orig-1"));
@@ -809,7 +811,7 @@ fn an_edit_with_explicit_target_fields_ignores_an_unreadable_target_event() {
     params.conversation_id = Some(CONVERSATION.to_string());
     params.target_message_sequence_id = Some("200".to_string());
     let payload = f.author.core.encrypt_edit(&params).unwrap();
-    let Contents::MessageEdit(edit) = decrypt_payload_contents(&payload, &f.ckey) else {
+    let Contents::MessageEdit(edit) = decrypt_payload_contents(&payload, AUTHOR, &f.ckey) else {
         panic!("expected an edit");
     };
     assert!(edit.message_id.is_none());

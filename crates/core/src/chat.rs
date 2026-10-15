@@ -319,6 +319,11 @@ impl Chat {
         self.inner.decrypt_events(events, signing_keys)
     }
 
+    /// A fresh message id for a message with media; see
+    /// [`crate::ChatCore::new_message_id`].
+    pub fn new_message_id(&self) -> String {
+        self.inner.new_message_id()
+    }
     /// Encrypt a text message.
     pub fn encrypt_message(&self, params: EncryptMessageParams) -> Result<SendPayload, SdkError> {
         self.inner.encrypt_message(params)
@@ -359,13 +364,17 @@ impl Chat {
     ) -> Result<XChatConversationKey, SdkError> {
         self.inner.decrypt_conversation_key(encrypted_key_b64)
     }
-    /// Encrypt a stream.
+    /// Encrypt a media file for an outgoing message; see
+    /// [`crate::ChatCore::encrypt_stream`].
     pub fn encrypt_stream(
         &self,
         plaintext: &[u8],
         conversation_key: &XChatConversationKey,
+        message_id: &str,
+        attachment_index: i64,
     ) -> Result<Vec<u8>, SdkError> {
-        self.inner.encrypt_stream(plaintext, conversation_key)
+        self.inner
+            .encrypt_stream(plaintext, conversation_key, message_id, attachment_index)
     }
     /// Decrypt an encrypted media file; see [`crate::ChatCore::decrypt_stream`].
     pub fn decrypt_stream(
@@ -379,12 +388,16 @@ impl Chat {
             .decrypt_stream(encrypted, event_b64, conversation_keys, media_hash_key)
     }
 
-    /// Create an incremental stream encryptor for large payloads.
+    /// Create an incremental encryptor for a media file; see
+    /// [`crate::ChatCore::stream_encryptor`].
     pub fn stream_encryptor(
         &self,
         conversation_key: &XChatConversationKey,
+        message_id: &str,
+        attachment_index: i64,
     ) -> Result<crate::crypto::encryption::StreamEncryptor, SdkError> {
-        self.inner.stream_encryptor(conversation_key)
+        self.inner
+            .stream_encryptor(conversation_key, message_id, attachment_index)
     }
 
     /// Create an incremental decryptor for an encrypted media file; see
@@ -686,7 +699,7 @@ mod tests {
         let payload = chat
             .encrypt_message(
                 EncryptMessageParams::new("conv-1", "Hello!")
-                    .with_identity("me", "1")
+                    .with_identity("4201", "1")
                     .with_conversation_key(ckey.to_bytes(), "1"),
             )
             .unwrap();
@@ -775,12 +788,12 @@ mod tests {
         let payload = chat
             .encrypt_message(
                 EncryptMessageParams::new("conv-1", "Versioned message")
-                    .with_identity("me", "s1")
-                    .with_conversation_key(ckey.to_bytes(), "v1"),
+                    .with_identity("4201", "s1")
+                    .with_conversation_key(ckey.to_bytes(), "1"),
             )
             .unwrap();
         assert!(!payload.encrypted_content.is_empty());
-        assert_eq!(payload.conversation_key_version, "v1");
+        assert_eq!(payload.conversation_key_version, "1");
     }
 
     #[tokio::test]
@@ -794,14 +807,14 @@ mod tests {
         let payload = chat
             .encrypt_message(
                 EncryptMessageParams::new("conv-1", "Hello via API!")
-                    .with_identity("user-1", "v7")
-                    .with_conversation_key(ckey.to_bytes(), "v42"),
+                    .with_identity("4101", "v7")
+                    .with_conversation_key(ckey.to_bytes(), "42"),
             )
             .unwrap();
         assert!(!payload.encrypted_content.is_empty());
         assert!(!payload.signature.is_empty());
         assert!(!payload.encoded_event_signature.is_empty());
-        assert_eq!(payload.conversation_key_version, "v42");
+        assert_eq!(payload.conversation_key_version, "42");
     }
 
     #[tokio::test]
@@ -813,8 +826,8 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         let mut params = EncryptReplyParams::new("conv-1", "This is a reply", "")
-            .with_identity("user-1", "v1")
-            .with_conversation_key(ckey.to_bytes(), "v1");
+            .with_identity("4101", "v1")
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-99".into());
         params.reply_to_sender_id = Some(12345);
         params.reply_to_text = Some("Original message".into());
@@ -830,8 +843,8 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
         let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("user-1", "v1")
-            .with_conversation_key(ckey.to_bytes(), "v1");
+            .with_identity("4101", "v1")
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
 
@@ -839,8 +852,8 @@ mod tests {
         assert!(!add_payload.encrypted_content.is_empty());
 
         let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("user-1", "v1")
-            .with_conversation_key(ckey.to_bytes(), "v1");
+            .with_identity("4101", "v1")
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
 
@@ -858,8 +871,8 @@ mod tests {
 
         // should_notify=false, ttl_msec=30s
         let mut params = EncryptMessageParams::new("conv-1", "Disappearing!")
-            .with_identity("me", "s1")
-            .with_conversation_key(ckey.to_bytes(), "v1");
+            .with_identity("4201", "s1")
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.should_notify = Some(false);
         params.ttl_msec = Some(30_000);
         let payload = chat.encrypt_message(params).unwrap();
@@ -913,8 +926,8 @@ mod tests {
             },
         ];
         let mut params = EncryptMessageParams::new("conv-1", "text with all entity types")
-            .with_identity("me", "s1")
-            .with_conversation_key(ckey.to_bytes(), "v1");
+            .with_identity("4201", "s1")
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.entities = Some(entities);
         let payload = chat.encrypt_message(params).unwrap();
         assert!(!payload.encrypted_content.is_empty());
@@ -928,9 +941,11 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
+        let message_id = chat.new_message_id();
         let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
-            .with_identity("me", "s1")
-            .with_conversation_key(ckey.to_bytes(), "v1");
+            .with_identity("4201", "s1")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_message_id(message_id.clone());
         params.reply_to_sequence_id = Some("seq-99".into());
         params.reply_to_sender_id = Some(12345);
         params.reply_to_text = Some("Original".into());
@@ -948,6 +963,7 @@ mod tests {
         let payload = chat.encrypt_reply(params).unwrap();
         assert!(!payload.encrypted_content.is_empty());
         assert!(!payload.should_notify);
+        assert_eq!(payload.message_id, message_id);
     }
 
     #[tokio::test]
@@ -1370,7 +1386,7 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         let params = EncryptMessageParams::new("conv-1", "Hello, World!")
-            .with_identity("sender-1", "1")
+            .with_identity("4001", "1")
             .with_conversation_key(ckey.to_bytes(), "1");
         let payload = chat.encrypt_message(params).unwrap();
 
@@ -1378,64 +1394,93 @@ mod tests {
         assert!(!payload.signature.is_empty());
         assert!(!payload.encoded_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
-        assert_eq!(payload.signature_info.signature_version, "7");
+        assert_eq!(payload.signature_info.signature_version, "10");
         assert!(payload.should_notify);
     }
 
     // Stream encrypt/decrypt
 
-    /// A conversation-key message under key version "1" with one media
-    /// attachment named `media_hash_key`, and the key map that opens it.
-    fn media_message(
+    /// An unlocked `Chat` with the session identity of user 1000.
+    async fn sending_chat() -> Chat {
+        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
+        chat.generate_keypairs().unwrap();
+        chat.setup(b"2580").await.unwrap();
+        chat.set_identity("1000", "1");
+        chat
+    }
+
+    /// The delivered event of a message `chat` sends under key version "1"
+    /// with `message_id`, whose only attachment is the media
+    /// `media_hash_key`, and the key map that opens it.
+    fn sent_media_message(
+        chat: &Chat,
         ckey: &XChatConversationKey,
+        message_id: &str,
         media_hash_key: &str,
     ) -> (
         String,
         std::collections::HashMap<String, XChatConversationKey>,
     ) {
-        use crate::thrift::event::{MessageCreateEvent, MessageEvent, MessageEventDetail};
-        use crate::thrift::product::{MediaAttachment, MessageAttachment};
-        let media = Box::new(MessageAttachment::Media(Box::new(MediaAttachment {
-            media_hash_key: Some(media_hash_key.to_string()),
-            ..Default::default()
-        })));
-        let content =
-            crate::pipeline::build_message_content("media", None, Some(vec![media]), None).unwrap();
+        use crate::thrift::event::{MessageCreateEvent, MessageEvent, MessageEventSignature};
+        let mut params = EncryptMessageParams::new("1000:2000", "media")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_message_id(message_id);
+        params.attachments = Some(vec![crate::AttachmentDescriptor::Media {
+            media_hash_key: media_hash_key.to_string(),
+            width: 4,
+            height: 3,
+            filesize_bytes: 64,
+            filename: "photo.png".to_string(),
+            media_type: None,
+            duration_millis: None,
+        }]);
+        let payload = chat.encrypt_message(params).unwrap();
+        let bytes =
+            crate::protocol::serialization::base64_decode(&payload.encrypted_content).unwrap();
+        let mut raw =
+            thrift::protocol::TBinaryInputProtocol::new(std::io::Cursor::new(bytes), true);
+        let mut protocol = crate::protocol::safe_reader::BoundedProtocol::new(&mut raw);
+        let create =
+            <MessageCreateEvent as thrift::protocol::TSerializable>::read_from_in_protocol(
+                &mut protocol,
+            )
+            .unwrap();
         let event = MessageEvent {
-            message_id: Some("m-1".to_string()),
-            sender_id: Some("1".to_string()),
-            conversation_id: Some("1:2".to_string()),
-            detail: Some(MessageEventDetail::MessageCreateEvent(MessageCreateEvent {
-                contents: Some(crate::crypto::encryption::encrypt_message(ckey, &content).unwrap()),
-                conversation_key_version: Some("1".to_string()),
+            message_id: Some(payload.message_id.clone()),
+            sender_id: Some("1000".to_string()),
+            conversation_id: Some("1000:2000".to_string()),
+            detail: Some(crate::thrift::event::MessageEventDetail::MessageCreateEvent(create)),
+            message_event_signature: Some(MessageEventSignature {
+                signature: Some(payload.signature.clone()),
+                public_key_version: Some(payload.signature_info.public_key_version.clone()),
+                signature_version: Some(payload.signature_info.signature_version.clone()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
-        let event_b64 = crate::protocol::serialization::base64_encode(
-            &crate::pipeline::serialize_thrift(&event).unwrap(),
-        );
         (
-            event_b64,
+            crate::protocol::serialization::base64_encode(
+                &crate::pipeline::serialize_thrift(&event).unwrap(),
+            ),
             [("1".to_string(), ckey.clone())].into_iter().collect(),
         )
     }
 
     #[tokio::test]
     async fn test_stream_encrypt_decrypt_roundtrip() {
-        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
-        chat.generate_keypairs().unwrap();
-        chat.setup(b"2580").await.unwrap();
-
+        let chat = sending_chat().await;
         let ckey = chat.inner.generate_conversation_key().unwrap();
-        let (event, keys) = media_message(&ckey, "hash-1");
+        let message_id = chat.new_message_id();
         let plaintext =
             b"Hello stream! This is some media content that could be an image or video.";
 
-        let encrypted = chat.encrypt_stream(plaintext, &ckey).unwrap();
+        let encrypted = chat
+            .encrypt_stream(plaintext, &ckey, &message_id, 0)
+            .unwrap();
         assert_ne!(encrypted, plaintext);
         assert!(encrypted.len() > plaintext.len()); // overhead from nonce, tag, header
 
+        let (event, keys) = sent_media_message(&chat, &ckey, &message_id, "hash-1");
         let decrypted = chat
             .decrypt_stream(&encrypted, &event, &keys, "hash-1")
             .unwrap();
@@ -1444,20 +1489,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_encrypt_decrypt_large() {
-        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
-        chat.generate_keypairs().unwrap();
-        chat.setup(b"2580").await.unwrap();
-
+        let chat = sending_chat().await;
         let ckey = chat.inner.generate_conversation_key().unwrap();
-        let (event, keys) = media_message(&ckey, "hash-1");
+        let message_id = chat.new_message_id();
         // > 1024 bytes to test multi-chunk streaming
         let plaintext: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
 
-        let encrypted = chat.encrypt_stream(&plaintext, &ckey).unwrap();
-        let decrypted = chat
-            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+        let encrypted = chat
+            .encrypt_stream(&plaintext, &ckey, &message_id, 0)
             .unwrap();
-        assert_eq!(decrypted, plaintext);
+        let mut encryptor = chat.stream_encryptor(&ckey, &message_id, 0).unwrap();
+        let mut incremental_encrypted = Vec::new();
+        for chunk in plaintext.chunks(700) {
+            incremental_encrypted.extend(encryptor.push(chunk).unwrap());
+        }
+        incremental_encrypted.extend(encryptor.finish().unwrap());
+
+        let (event, keys) = sent_media_message(&chat, &ckey, &message_id, "hash-1");
+        for encrypted in [&encrypted, &incremental_encrypted] {
+            let decrypted = chat
+                .decrypt_stream(encrypted, &event, &keys, "hash-1")
+                .unwrap();
+            assert_eq!(decrypted, plaintext);
+        }
 
         let mut decryptor = chat.stream_decryptor(&event, &keys, "hash-1").unwrap();
         let mut incremental = Vec::new();
@@ -1470,16 +1524,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_wrong_key_fails() {
-        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
-        chat.generate_keypairs().unwrap();
-        chat.setup(b"2580").await.unwrap();
-
+        let chat = sending_chat().await;
         let ckey1 = chat.inner.generate_conversation_key().unwrap();
         let ckey2 = chat.inner.generate_conversation_key().unwrap();
-        let (event, keys) = media_message(&ckey2, "hash-1");
+        let message_id = chat.new_message_id();
         let plaintext = b"secret media content";
 
-        let encrypted = chat.encrypt_stream(plaintext, &ckey1).unwrap();
+        let encrypted = chat
+            .encrypt_stream(plaintext, &ckey1, &message_id, 0)
+            .unwrap();
+        let (event, keys) = sent_media_message(&chat, &ckey2, &message_id, "hash-1");
         let result = chat.decrypt_stream(&encrypted, &event, &keys, "hash-1");
         assert!(result.is_err());
     }

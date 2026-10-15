@@ -13,6 +13,9 @@ const MESSAGE_KEY_SALT: &str = "xchat-message-key";
 const ATTACHMENT_KEY_SALT: &str = "xchat-attachment-key";
 const KEY_LENGTH: usize = 32;
 
+/// The `contents_encryption_version` of the messages this SDK sends.
+pub(crate) const SEND_CONTENTS_ENCRYPTION_VERSION: i16 = 1;
+
 /// Whether a message with this `contents_encryption_version` uses a message
 /// key. Unset, zero, and negative versions use the conversation key.
 pub(crate) fn uses_message_key(contents_encryption_version: Option<i16>) -> bool {

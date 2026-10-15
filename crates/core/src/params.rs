@@ -6,13 +6,16 @@
 //! existing callers:
 //!
 //! ```rust,ignore
-//! chat.set_identity("my-user-id", signing_key_version);
+//! chat.set_identity("1876543210", signing_key_version);
 //! let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 //! params.ttl_msec = Some(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
 //! let payload = chat.encrypt_message(params)?;
 //! let message_id = payload.message_id;
 //! ```
+//!
+//! A message with media takes its id from `new_message_id` before the media
+//! is encrypted, and passes the same id here as `message_id`.
 //!
 //! Identity fields (`sender_id`, `signing_key_version`) and key fields
 //! (`conversation_key`, `conversation_key_version`) are optional overrides:
@@ -54,6 +57,10 @@ pub struct EncryptMessageParams {
     /// Version of the conversation key used for encryption; resolves from the
     /// key cache when unset (set together with `conversation_key`).
     pub conversation_key_version: Option<String>,
+    /// Id of the message, from `new_message_id`; generated when unset.
+    /// Required when the attachments include encrypted media, whose keys
+    /// derive from this id.
+    pub message_id: Option<String>,
     /// Optional rich-text entities (URLs, mentions, etc.) to embed.
     pub entities: Option<Vec<EntityDescriptor>>,
     /// Optional attachments (posts, URLs, media, etc.) to include in the message.
@@ -77,6 +84,7 @@ impl EncryptMessageParams {
             signing_key_version: None,
             conversation_key: None,
             conversation_key_version: None,
+            message_id: None,
             entities: None,
             attachments: None,
             quick_reply: None,
@@ -110,6 +118,12 @@ impl EncryptMessageParams {
         self.signing_key_version = non_empty(signing_key_version);
         self
     }
+
+    /// Set the message id the message's media was encrypted with.
+    pub fn with_message_id(mut self, message_id: impl Into<String>) -> Self {
+        self.message_id = non_empty(message_id);
+        self
+    }
 }
 
 impl Drop for EncryptMessageParams {
@@ -130,6 +144,7 @@ impl std::fmt::Debug for EncryptMessageParams {
                 &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("conversation_key_version", &self.conversation_key_version)
+            .field("message_id", &self.message_id)
             .field("entities", &self.entities)
             .field("attachments", &self.attachments)
             .field("quick_reply", &self.quick_reply)
@@ -181,6 +196,10 @@ pub struct EncryptReplyParams {
     /// Version of the conversation key used for encryption; resolves from the
     /// key cache when unset (set together with `conversation_key`).
     pub conversation_key_version: Option<String>,
+    /// Id of the reply, from `new_message_id`; generated when unset.
+    /// Required when the attachments include encrypted media, whose keys
+    /// derive from this id.
+    pub message_id: Option<String>,
     /// The `sequence_id` of the message being replied to; derived from
     /// `reply_to_event` when unset.
     pub reply_to_sequence_id: Option<String>,
@@ -229,6 +248,7 @@ impl EncryptReplyParams {
             signing_key_version: None,
             conversation_key: None,
             conversation_key_version: None,
+            message_id: None,
             reply_to_sequence_id: None,
             reply_to_sender_id: None,
             reply_to_text: None,
@@ -267,6 +287,12 @@ impl EncryptReplyParams {
         self.signing_key_version = non_empty(signing_key_version);
         self
     }
+
+    /// Set the message id the reply's media was encrypted with.
+    pub fn with_message_id(mut self, message_id: impl Into<String>) -> Self {
+        self.message_id = non_empty(message_id);
+        self
+    }
 }
 
 impl Drop for EncryptReplyParams {
@@ -290,6 +316,7 @@ impl std::fmt::Debug for EncryptReplyParams {
                 &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("conversation_key_version", &self.conversation_key_version)
+            .field("message_id", &self.message_id)
             .field("reply_to_sequence_id", &self.reply_to_sequence_id)
             .field("reply_to_sender_id", &self.reply_to_sender_id)
             .field("reply_to_text", &self.reply_to_text)
@@ -786,6 +813,7 @@ mod tests {
         assert_eq!(a.signing_key_version, b.signing_key_version);
         assert_eq!(a.conversation_key, b.conversation_key);
         assert_eq!(a.conversation_key_version, b.conversation_key_version);
+        assert_eq!(a.message_id, b.message_id);
         assert_eq!(a.entities, b.entities);
         assert_eq!(a.attachments, b.attachments);
         assert_eq!(a.quick_reply, b.quick_reply);
@@ -799,20 +827,23 @@ mod tests {
         let ckey = crate::crypto::key_factory::KeyFactory::generate_conversation_key()
             .unwrap()
             .to_bytes();
+        let message_id = core.new_message_id();
 
         let mut via_new = EncryptMessageParams::new("conv-1", "hi")
-            .with_identity("me", "2")
-            .with_conversation_key(ckey.clone(), "1");
+            .with_identity("1000", "2")
+            .with_conversation_key(ckey.clone(), "1")
+            .with_message_id(message_id.clone());
         via_new.should_notify = Some(false);
         via_new.ttl_msec = Some(30_000);
 
         let full = EncryptMessageParams {
             conversation_id: "conv-1".into(),
             text: "hi".into(),
-            sender_id: Some("me".into()),
+            sender_id: Some("1000".into()),
             signing_key_version: Some("2".into()),
             conversation_key: Some(ckey),
             conversation_key_version: Some("1".into()),
+            message_id: Some(message_id.clone()),
             entities: None,
             attachments: None,
             quick_reply: None,
@@ -824,6 +855,7 @@ mod tests {
         let payload = core.encrypt_message(via_new).unwrap();
         assert!(!payload.should_notify);
         assert_eq!(payload.conversation_key_version, "1");
+        assert_eq!(payload.message_id, message_id);
     }
 
     #[test]
@@ -834,7 +866,7 @@ mod tests {
             .to_bytes();
 
         let mut params = EncryptReplyParams::new("conv-1", "a reply", "")
-            .with_identity("me", "2")
+            .with_identity("1000", "2")
             .with_conversation_key(ckey, "1");
         params.reply_to_sequence_id = Some("seq-9".into());
         params.reply_to_sender_id = Some(42);
@@ -855,7 +887,7 @@ mod tests {
             .to_bytes();
 
         let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("me", "2")
+            .with_identity("1000", "2")
             .with_conversation_key(ckey, "1");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());

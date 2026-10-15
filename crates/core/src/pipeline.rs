@@ -9,9 +9,13 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use crate::crypto::encryption::encrypt_message;
 use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
+use crate::crypto::message_keys;
 use crate::error::SdkError;
 use crate::protocol::serialization::base64_encode;
-use crate::thrift::event::{MessageCreateEvent, MessageEventSignature};
+use crate::signatures::MESSAGE_SIGNATURE_VERSION;
+use crate::thrift::event::{
+    MessageCreateEvent, MessageEvent, MessageEventDetail, MessageEventSignature,
+};
 use crate::thrift::product::{
     AddressRichTextContent, CashtagRichTextContent, EmailRichTextContent, HashtagRichTextContent,
     MediaAttachment as ThriftMediaAttachmentStruct, MediaDimensions as ThriftMediaDimensions,
@@ -164,19 +168,25 @@ pub(crate) fn canonical_conversation_id<'a>(
 
 /// Encrypt pre-built content bytes and sign for the API.
 ///
-/// This is the shared pipeline used by all `encrypt_*` methods.
-/// It takes already-serialized Thrift content bytes, encrypts them,
-/// builds the `MessageCreateEvent` and `MessageEventSignature` Thrift
-/// structures, signs, and returns a ready-to-send [`SendPayload`].
+/// This is the shared pipeline used by all `encrypt_*` methods. It encrypts
+/// the content under the message key derived from the conversation key, the
+/// sender id, and the message id, marks the `MessageCreateEvent` with the
+/// `contents_encryption_version` that tells recipients to derive the same
+/// key, signs at [`MESSAGE_SIGNATURE_VERSION`], and returns a ready-to-send
+/// [`SendPayload`].
 pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload, SdkError> {
     let should_notify = params.should_notify.unwrap_or(true);
+    validate_sender_id(params.sender_id)?;
+    validate_conversation_key_version(params.conversation_key_version)?;
 
-    // 1. Encrypt content
-    let encrypted = encrypt_message(params.conversation_key, params.content_bytes)?;
-
-    // 2. Build MessageCreateEvent Thrift
+    let message_key = message_keys::derive_message_key(
+        params.conversation_key,
+        params.sender_id,
+        params.message_id,
+    )?;
+    let encrypted = encrypt_message(&message_key, params.content_bytes)?;
     let event = MessageCreateEvent::new(
-        Some(encrypted.clone()),
+        Some(encrypted),
         Some(params.conversation_key_version.to_string()),
         Some(should_notify),
         params.ttl_msec,
@@ -187,43 +197,47 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
         None,
         None,
-        None,
+        Some(message_keys::SEND_CONTENTS_ENCRYPTION_VERSION),
     );
     let event_bytes = serialize_thrift(&event)?;
 
-    // 3. Build signature payload.
-    //
     // The conversation id is signed in its canonical, colon-separated form —
     // the form carried inside fanned-out events and reconstructed by verifiers.
     // Callers commonly hold the hyphen-separated form from conversation listing
     // and URL paths, or the bare recipient id the REST paths accept, so
     // normalize here to keep signatures verifiable regardless of input form.
     let conversation_id = canonical_conversation_id(params.conversation_id, params.sender_id);
-    let contents_b64_no_pad = STANDARD_NO_PAD.encode(&encrypted);
-    let components = [
-        "MessageCreateEvent",
-        params.message_id,
-        params.sender_id,
-        conversation_id.as_ref(),
-        params.conversation_key_version,
-        contents_b64_no_pad.as_str(),
-    ];
-    if components.iter().any(|c| c.contains(',')) {
-        return Err(SdkError::Parse(
-            "Signature payload contains comma-separated component".into(),
-        ));
-    }
-    let payload = components.join(",").into_bytes();
+    let signature_version = MESSAGE_SIGNATURE_VERSION.to_string();
+    // The payload comes from the builder verification uses, so what is signed
+    // is exactly what recipients rebuild from the delivered event.
+    let signed = MessageEvent {
+        message_id: Some(params.message_id.to_string()),
+        sender_id: Some(params.sender_id.to_string()),
+        conversation_id: Some(conversation_id.into_owned()),
+        message_event_signature: Some(MessageEventSignature::new(
+            None,
+            None,
+            Some(signature_version.clone()),
+            None,
+            None,
+        )),
+        ..Default::default()
+    };
+    let payload = crate::core::build_event_signature_payload(
+        &signed,
+        &MessageEventDetail::MessageCreateEvent(event),
+        None,
+    )
+    .ok_or_else(|| {
+        SdkError::Parse("Signature payload contains comma-separated component".into())
+    })?;
 
-    // 4. Sign
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
     let signature_b64 = STANDARD_NO_PAD.encode(&signature);
-
-    // 5. Build MessageEventSignature Thrift
     let signature_struct = MessageEventSignature::new(
         Some(signature_b64.clone()),
         Some(params.signing_key_version.to_string()),
-        Some(crate::signatures::SIGNATURE_VERSION.to_string()),
+        Some(signature_version.clone()),
         None,
         None,
     );
@@ -237,11 +251,90 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         encoded_event_signature,
         signature_info: SignatureInfo {
             public_key_version: params.signing_key_version.to_string(),
-            signature_version: crate::signatures::SIGNATURE_VERSION.to_string(),
+            signature_version,
         },
         conversation_key_version: params.conversation_key_version.to_string(),
         should_notify,
     })
+}
+
+/// Check that a sender id is a user id in canonical decimal form. The id is
+/// signed as given, while recipients rebuild the payload from the numeric id
+/// on the delivered event and derive the message key from that number, so
+/// any other spelling yields a message no recipient can verify.
+fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
+    let canonical = sender_id
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .map(|id| id.to_string());
+    if canonical.as_deref() == Some(sender_id) {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidState(format!(
+            "Invalid sender_id '{sender_id}': pass the sender's numeric user id (digits only), \
+             which message keys are derived from"
+        )))
+    }
+}
+
+/// Check that a conversation key version is an integer in canonical decimal
+/// form: recipients look the key up by the version as carried, while the
+/// signature covers its integer value.
+fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
+    if version.parse::<i64>().map(|v| v.to_string()).as_deref() == Ok(version) {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidState(format!(
+            "Invalid conversation_key_version '{version}': pass the key version as the integer \
+             its key-change event carries"
+        )))
+    }
+}
+
+/// Check a caller-supplied message id: it must be a UUID in the lowercase
+/// hyphenated form the SDK generates. The id goes into the message and
+/// attachment keys and into the signature, so two spellings of one UUID
+/// would yield media no recipient can decrypt.
+pub(crate) fn validate_message_id(message_id: &str) -> Result<(), SdkError> {
+    let canonical = uuid::Uuid::try_parse(message_id)
+        .ok()
+        .map(|id| id.hyphenated().to_string());
+    if canonical.as_deref() == Some(message_id) {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidState(format!(
+            "Invalid message_id '{message_id}': pass the id new_message_id() returned, unchanged"
+        )))
+    }
+}
+
+/// The key an outgoing message's attachment at `attachment_index` is
+/// encrypted under: derived from the message key for `sender_id` and
+/// `message_id`, and the attachment id recipients resolve for that position.
+/// A link card's banner and favicon both use the card's position.
+pub(crate) fn outgoing_attachment_key(
+    conversation_key: &XChatConversationKey,
+    sender_id: &str,
+    message_id: &str,
+    attachment_index: i64,
+) -> Result<XChatConversationKey, SdkError> {
+    validate_sender_id(sender_id)?;
+    validate_message_id(message_id)?;
+    let index = usize::try_from(attachment_index)
+        .ok()
+        .filter(|index| *index < MAX_ATTACHMENTS_PER_MESSAGE)
+        .ok_or_else(|| {
+            SdkError::InvalidState(format!(
+                "Invalid attachment_index {attachment_index}: pass the attachment's position in \
+                 the message's attachments, below {MAX_ATTACHMENTS_PER_MESSAGE}"
+            ))
+        })?;
+    let message_key = message_keys::derive_message_key(conversation_key, sender_id, message_id)?;
+    Ok(message_keys::derive_attachment_key(
+        &message_key,
+        &message_keys::resolve_attachment_id(None, message_id, index),
+    )?)
 }
 
 // Content builders
@@ -493,6 +586,42 @@ pub fn build_thrift_attachments(
         .collect()
 }
 
+/// Convert an outgoing message's own [`AttachmentDescriptor`]s, giving each
+/// the id its key derives from: the message id for the first attachment and
+/// `<message id>#<index>` for later ones, the ids recipients resolve for an
+/// attachment that carries none.
+#[allow(clippy::vec_box)]
+pub fn build_message_attachments(
+    descs: &[AttachmentDescriptor],
+    message_id: &str,
+) -> Vec<Box<ThriftMessageAttachment>> {
+    let mut attachments = build_thrift_attachments(descs);
+    for (index, attachment) in attachments.iter_mut().enumerate() {
+        let id = Some(message_keys::resolve_attachment_id(None, message_id, index));
+        match attachment.as_mut() {
+            ThriftMessageAttachment::Media(media) => media.attachment_id = id,
+            ThriftMessageAttachment::Url(card) => card.attachment_id = id,
+            ThriftMessageAttachment::Post(post) => post.attachment_id = id,
+            _ => {}
+        }
+    }
+    attachments
+}
+
+/// Whether any descriptor references encrypted media: a media attachment, or
+/// a URL card with a banner or favicon image.
+pub(crate) fn has_encrypted_media(descs: &[AttachmentDescriptor]) -> bool {
+    descs.iter().any(|desc| match desc {
+        AttachmentDescriptor::Media { .. } => true,
+        AttachmentDescriptor::Url {
+            banner_image,
+            favicon_image,
+            ..
+        } => banner_image.is_some() || favicon_image.is_some(),
+        AttachmentDescriptor::Post { .. } => false,
+    })
+}
+
 /// Convert a [`UrlAttachmentImageDescriptor`] into a Thrift `UrlAttachmentImage`.
 ///
 /// Emit the dimensions struct only when at least one side is known; an
@@ -573,7 +702,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-1",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
@@ -597,7 +726,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-1",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
@@ -619,7 +748,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg,1",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
@@ -801,7 +930,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-1",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
@@ -1403,24 +1532,27 @@ mod tests {
     // encrypt_and_sign — error / edge branches
 
     #[test]
-    fn test_encrypt_and_sign_rejects_comma_in_sender_id() {
+    fn test_encrypt_and_sign_rejects_a_sender_id_that_is_not_a_user_id() {
         let (ckey, signing_key) = test_keys();
         let content = build_message_content("Hi", None, None, None).unwrap();
 
-        let params = EncryptAndSignParams::new(
-            &ckey,
-            &signing_key,
-            "msg-1",
-            "sender,1", // comma in sender id
-            "conv-1",
-            &content,
-            "1",
-            "1",
-        );
-        let result = encrypt_and_sign(params);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("comma"));
+        for sender_id in ["sender,1", "sender-1", "+12", "012", "0", "-5", " 12", ""] {
+            let params = EncryptAndSignParams::new(
+                &ckey,
+                &signing_key,
+                "msg-1",
+                sender_id,
+                "conv-1",
+                &content,
+                "1",
+                "1",
+            );
+            let err_msg = encrypt_and_sign(params).unwrap_err().to_string();
+            assert!(
+                err_msg.contains(&format!("Invalid sender_id '{sender_id}'")),
+                "{sender_id}: {err_msg}"
+            );
+        }
     }
 
     #[test]
@@ -1432,7 +1564,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-1",
-            "sender-1",
+            "4001",
             "conv,1", // comma in conversation id
             &content,
             "1",
@@ -1486,21 +1618,27 @@ mod tests {
     }
 
     #[test]
-    fn test_encrypt_and_sign_rejects_comma_in_key_version() {
+    fn test_encrypt_and_sign_rejects_a_key_version_that_is_not_an_integer() {
         let (ckey, signing_key) = test_keys();
         let content = build_message_content("Hi", None, None, None).unwrap();
 
-        let params = EncryptAndSignParams::new(
-            &ckey,
-            &signing_key,
-            "msg-1",
-            "sender-1",
-            "conv-1",
-            &content,
-            "1,2", // comma in key version
-            "1",
-        );
-        assert!(encrypt_and_sign(params).is_err());
+        for version in ["1,2", "v1", "01", "+1", " 1", ""] {
+            let params = EncryptAndSignParams::new(
+                &ckey,
+                &signing_key,
+                "msg-1",
+                "4001",
+                "conv-1",
+                &content,
+                version,
+                "1",
+            );
+            let err_msg = encrypt_and_sign(params).unwrap_err().to_string();
+            assert!(
+                err_msg.contains(&format!("Invalid conversation_key_version '{version}'")),
+                "{version}: {err_msg}"
+            );
+        }
     }
 
     #[test]
@@ -1512,7 +1650,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-42",
-            "sender-99",
+            "4099",
             "conv-77",
             &content,
             "5",
@@ -1520,7 +1658,7 @@ mod tests {
         );
         let payload = encrypt_and_sign(params).unwrap();
         assert_eq!(payload.signature_info.public_key_version, "3");
-        assert_eq!(payload.signature_info.signature_version, "7");
+        assert_eq!(payload.signature_info.signature_version, "10");
         assert_eq!(payload.conversation_key_version, "5");
         assert!(payload.should_notify); // default
     }
@@ -1534,7 +1672,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-empty",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
@@ -1554,7 +1692,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-1",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
@@ -1566,7 +1704,7 @@ mod tests {
             &ckey,
             &signing_key,
             "msg-1",
-            "sender-1",
+            "4001",
             "conv-1",
             &content,
             "1",
