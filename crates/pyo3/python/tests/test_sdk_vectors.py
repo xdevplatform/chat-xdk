@@ -281,40 +281,127 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(payload.encrypted_content)
         self.assertTrue(payload.encoded_event_signature)
 
-    def test_message_key_event_decrypts_and_its_media_open_with_the_conversation_key(self):
+    def _open_media(self, event_b64, keys, media_hash_key, encrypted_b64):
+        """Decrypt media whole and in 700-byte chunks, checking both agree."""
+        from chat_xdk import Chat
+
+        chat = Chat()
+        encrypted = base64.b64decode(encrypted_b64)
+        whole = chat.decrypt_stream(encrypted, event_b64, keys, media_hash_key)
+        decryptor = chat.stream_decryptor(event_b64, keys, media_hash_key)
+        incremental = b"".join(
+            decryptor.push(encrypted[i:i + 700]) for i in range(0, len(encrypted), 700)
+        ) + decryptor.finish()
+        self.assertEqual(whole, incremental)
+        return whole
+
+    def test_message_key_event_decrypts_with_the_conversation_key(self):
         from chat_xdk import Chat, hex_to_bytes
 
         v = _load_vectors()
-        chat = Chat()
-        version = v["message_key_conversation_key_version"]
-        ckey = hex_to_bytes(v["message_key_conversation_key_hex"])
-        first = base64.b64decode(v["media_first_encrypted_b64"])
-        first_plaintext = base64.b64decode(v["media_first_plaintext_b64"])
-
-        # The media keys come from the message, so they are unknown before it.
-        with self.assertRaises(Exception):
-            chat.decrypt_stream(first, ckey)
-
-        event = chat.decrypt_event(
+        event = Chat().decrypt_event(
             v["event_message_key_b64"],
-            {version: ckey},
+            {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])},
             _signing_keys_for(v, v["message_key_sender_id"]),
         )
         self.assertEqual(event["type"], "Message")
         self.assertTrue(event["verified"])
         self.assertEqual(event["content"]["text"], v["event_message_key_text"])
-        self.assertEqual(len(event["attachments"]), 2)
-
-        self.assertEqual(chat.decrypt_stream(first, ckey), first_plaintext)
         self.assertEqual(
-            chat.decrypt_stream(base64.b64decode(v["media_second_encrypted_b64"]), ckey),
-            base64.b64decode(v["media_second_plaintext_b64"]),
+            [h["media_hash_key"] for h in event["media_hashes"]],
+            [v["media_first_hash_key"], v["media_second_hash_key"]],
         )
-        decryptor = chat.stream_decryptor(ckey)
-        plaintext = b"".join(
-            decryptor.push(first[i:i + 700]) for i in range(0, len(first), 700)
-        ) + decryptor.finish()
-        self.assertEqual(plaintext, first_plaintext)
+
+    def test_one_media_file_opens_from_its_message(self):
+        from chat_xdk import hex_to_bytes
+
+        v = _load_vectors()
+        keys = {
+            v["message_key_short_conversation_key_version"]:
+                hex_to_bytes(v["message_key_short_conversation_key_hex"]),
+        }
+        self.assertEqual(
+            self._open_media(
+                v["event_message_key_short_b64"], keys, v["media_short_hash_key"],
+                v["media_short_encrypted_b64"],
+            ),
+            base64.b64decode(v["media_short_plaintext_b64"]),
+        )
+
+    def test_several_media_files_open_from_their_message(self):
+        from chat_xdk import hex_to_bytes
+
+        v = _load_vectors()
+        keys = {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])}
+        for name in ("first", "second"):
+            with self.subTest(media=name):
+                self.assertEqual(
+                    self._open_media(
+                        v["event_message_key_b64"], keys, v[f"media_{name}_hash_key"],
+                        v[f"media_{name}_encrypted_b64"],
+                    ),
+                    base64.b64decode(v[f"media_{name}_plaintext_b64"]),
+                )
+
+    def test_link_card_images_open_from_their_message(self):
+        from chat_xdk import hex_to_bytes
+
+        v = _load_vectors()
+        keys = {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])}
+        for name in ("banner", "favicon"):
+            with self.subTest(image=name):
+                self.assertEqual(
+                    self._open_media(
+                        v["event_link_card_b64"], keys, v[f"media_{name}_hash_key"],
+                        v[f"media_{name}_encrypted_b64"],
+                    ),
+                    base64.b64decode(v[f"media_{name}_plaintext_b64"]),
+                )
+
+    def test_conversation_key_media_opens_from_its_message(self):
+        v = _load_vectors()
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        self.assertEqual(
+            self._open_media(
+                v["event_legacy_media_b64"], keys, v["media_legacy_hash_key"],
+                v["media_legacy_encrypted_b64"],
+            ),
+            base64.b64decode(v["media_legacy_plaintext_b64"]),
+        )
+
+    def test_media_errors_say_what_to_pass(self):
+        from chat_xdk import Chat, hex_to_bytes
+
+        v = _load_vectors()
+        chat = Chat()
+        mk_keys = {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])}
+        fixture_keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        first = base64.b64decode(v["media_first_encrypted_b64"])
+        second = base64.b64decode(v["media_second_encrypted_b64"])
+        first_hash = v["media_first_hash_key"]
+        cases = [
+            (first, v["event_message_key_b64"], fixture_keys, first_hash,
+             f"no key for version '{v['message_key_conversation_key_version']}'"),
+            (first, v["event_message_key_b64"], mk_keys, "not-a-hash-key", "is not in the message"),
+            (first, v["event_key_change_b64"], mk_keys, first_hash, "the event is not a message"),
+            (first, v["event_message_b64"], fixture_keys, first_hash, "the message has no media"),
+            (second, v["event_message_key_b64"], mk_keys, first_hash,
+             f"encrypted file of media_hash_key '{first_hash}'"),
+            (first[:len(first) // 2], v["event_message_key_b64"], mk_keys, first_hash, "truncated"),
+            (first, v["event_unencrypted_b64"], mk_keys, v["media_unencrypted_hash_key"],
+             "the message is not encrypted"),
+            (first, v["event_message_key_b64"], {v["message_key_conversation_key_version"]: b"short"},
+             first_hash, "is not 32 bytes"),
+        ]
+        for encrypted, event, keys, media_hash_key, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaises(ValueError) as ctx:
+                    chat.decrypt_stream(encrypted, event, keys, media_hash_key)
+                self.assertIn(expected, str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            chat.stream_decryptor(v["event_message_key_b64"], fixture_keys, first_hash)
+        self.assertIn("no key for version", str(ctx.exception))
 
     def test_message_key_event_decrypts_in_a_batch_with_its_key_change(self):
         from chat_xdk import Chat, hex_to_bytes
@@ -339,8 +426,12 @@ class TestPythonSdkVectors(unittest.TestCase):
             if m["event"]["type"] == "Message"
         ]
         self.assertEqual(texts, [v["event_message_key_text"]])
+        batch_keys = {k: bytes(key) for k, key in result["conversation_keys"]["keys"].items()}
         self.assertEqual(
-            chat.decrypt_stream(base64.b64decode(v["media_second_encrypted_b64"]), ckey),
+            self._open_media(
+                v["event_message_key_b64"], batch_keys, v["media_second_hash_key"],
+                v["media_second_encrypted_b64"],
+            ),
             base64.b64decode(v["media_second_plaintext_b64"]),
         )
 
@@ -374,7 +465,10 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(event["content"]["text"], v["event_reply_message_key_text"])
         self.assertEqual(event["reply_preview_validation"], "Valid")
         self.assertEqual(
-            chat.decrypt_stream(base64.b64decode(v["media_first_encrypted_b64"]), ckey),
+            self._open_media(
+                v["event_reply_message_key_b64"], {v["event_conversation_key_version"]: ckey},
+                v["media_first_hash_key"], v["media_first_encrypted_b64"],
+            ),
             base64.b64decode(v["media_first_plaintext_b64"]),
         )
 

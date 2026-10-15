@@ -240,11 +240,17 @@ async function main() {
   // randomized ciphertext
   assert.notEqual(chat.encrypt(text, convKey), chat.encrypt(text, convKey));
 
+  // Media decrypts through the message that names it: the fixture
+  // conversation-key message whose media is under the conversation key.
+  const mediaEvent = v.event_legacy_media_b64;
+  const mediaKeys = { [v.event_conversation_key_version]: convKey };
+  const mediaHashKey = v.media_legacy_hash_key;
+
   const plaintext = b64ToBytes(v.plaintext_b64);
   const streamCt1 = chat.encryptStream(plaintext, convKey);
   const streamCt2 = chat.encryptStream(plaintext, convKey);
   assert.notDeepEqual(streamCt1, streamCt2); // randomized nonces
-  assert.deepEqual(chat.decryptStream(streamCt1, convKey), plaintext);
+  assert.deepEqual(chat.decryptStream(streamCt1, mediaEvent, mediaKeys, mediaHashKey), plaintext);
 
   // 3b. Incremental streams: chunked encryptor/decryptor roundtrip over a
   // multi-frame payload, and a truncated stream fails at finish (missing
@@ -268,7 +274,7 @@ async function main() {
     ctPieces.push(enc.finish());
     const ciphertext = concat(ctPieces);
 
-    const dec = chat.streamDecryptor(convKey);
+    const dec = chat.streamDecryptor(mediaEvent, mediaKeys, mediaHashKey);
     const ptPieces = [];
     for (let i = 0; i < ciphertext.length; i += 333) {
       ptPieces.push(dec.push(ciphertext.subarray(i, i + 333)));
@@ -276,9 +282,9 @@ async function main() {
     ptPieces.push(dec.finish());
     assert.deepEqual(concat(ptPieces), bigPlain);
 
-    const truncated = chat.streamDecryptor(convKey);
+    const truncated = chat.streamDecryptor(mediaEvent, mediaKeys, mediaHashKey);
     truncated.push(ciphertext.subarray(0, ciphertext.length - 4));
-    assert.throws(() => truncated.finish());
+    assert.throws(() => truncated.finish(), /truncated/);
   }
 
   // 4. encryptMessage returns a SendPayload with signatureVersion === "7"

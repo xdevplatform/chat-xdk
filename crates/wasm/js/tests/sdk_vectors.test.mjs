@@ -66,18 +66,29 @@ async function main() {
   // stream fixture uses the deterministic conversation key
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // stream encrypt/decrypt roundtrip (ciphertext randomized)
+  // stream encrypt/decrypt roundtrip (ciphertext randomized), decrypted
+  // through the conversation-key message whose media hash key names it
+  const legacyKeys = { [v.event_conversation_key_version]: convKey };
   const plaintext = b64ToBytes(v.plaintext_b64);
   const ct1 = chat.encryptStream(plaintext, convKey);
   const ct2 = chat.encryptStream(plaintext, convKey);
   assert.notDeepEqual(ct1, ct2); // randomized nonces
-  const pt1 = chat.decryptStream(ct1, convKey);
+  const pt1 = chat.decryptStream(ct1, v.event_legacy_media_b64, legacyKeys, v.media_legacy_hash_key);
   assert.deepEqual(pt1, plaintext);
 
-  // wrong key fails decryption
+  // a wrong key for the message's version fails
   const wrongKey = new Uint8Array(convKey);
   wrongKey[31] ^= 0xff;
-  assert.throws(() => chat.decryptStream(ct1, wrongKey));
+  assert.throws(
+    () =>
+      chat.decryptStream(
+        ct1,
+        v.event_legacy_media_b64,
+        { [v.event_conversation_key_version]: wrongKey },
+        v.media_legacy_hash_key,
+      ),
+    /does not decrypt the message/,
+  );
 
   // decryptEvents over the fixture event vectors: [signed KeyChange, signed
   // message, garbage]. The batch never throws; the garbage event lands in
@@ -226,32 +237,55 @@ async function main() {
       userIds.map((userId) => ({ ...signingKeys[0], userId }));
     const mkVersion = v.message_key_conversation_key_version;
     const mkKey = hexToBytes(v.message_key_conversation_key_hex);
-    const first = b64ToBytes(v.media_first_encrypted_b64);
-    const firstPlaintext = b64ToBytes(v.media_first_plaintext_b64);
-    const second = b64ToBytes(v.media_second_encrypted_b64);
-    const secondPlaintext = b64ToBytes(v.media_second_plaintext_b64);
+    const mkKeys = { [mkVersion]: mkKey };
+    const shortKeys = {
+      [v.message_key_short_conversation_key_version]: hexToBytes(
+        v.message_key_short_conversation_key_hex,
+      ),
+    };
 
-    // The media keys come from the message, so they are unknown before it.
+    // Decrypt media whole and in 700-byte chunks on a fresh instance,
+    // checking both agree.
+    const openMedia = (eventB64, keys, mediaHashKey, encryptedB64) => {
+      const media = new Chat();
+      const encrypted = b64ToBytes(encryptedB64);
+      const whole = media.decryptStream(encrypted, eventB64, keys, mediaHashKey);
+      const decryptor = media.streamDecryptor(eventB64, keys, mediaHashKey);
+      const parts = [];
+      for (let i = 0; i < encrypted.length; i += 700) {
+        parts.push(decryptor.push(encrypted.subarray(i, i + 700)));
+      }
+      parts.push(decryptor.finish());
+      assert.deepEqual(Uint8Array.from(Buffer.concat(parts)), whole);
+      return whole;
+    };
+
     const receiver = new Chat();
-    assert.throws(() => receiver.decryptStream(first, mkKey));
     const mkMessage = receiver.decryptEvent(
       v.event_message_key_b64,
-      { [mkVersion]: mkKey },
+      mkKeys,
       signingKeysFor(v.message_key_sender_id),
     );
     assert.equal(mkMessage.type, "message");
     assert.equal(mkMessage.verified, true);
     assert.equal(mkMessage.content.text, v.event_message_key_text);
-    assert.equal(mkMessage.attachments.length, 2);
-    assert.deepEqual(receiver.decryptStream(first, mkKey), firstPlaintext);
-    assert.deepEqual(receiver.decryptStream(second, mkKey), secondPlaintext);
-    const decryptor = receiver.streamDecryptor(mkKey);
-    const parts = [];
-    for (let i = 0; i < first.length; i += 700) {
-      parts.push(decryptor.push(first.subarray(i, i + 700)));
+    assert.deepEqual(
+      mkMessage.mediaHashes.map((h) => h.mediaHashKey),
+      [v.media_first_hash_key, v.media_second_hash_key],
+    );
+
+    // Several files in one message.
+    for (const name of ["first", "second"]) {
+      assert.deepEqual(
+        openMedia(
+          v.event_message_key_b64,
+          mkKeys,
+          v[`media_${name}_hash_key`],
+          v[`media_${name}_encrypted_b64`],
+        ),
+        b64ToBytes(v[`media_${name}_plaintext_b64`]),
+      );
     }
-    parts.push(decryptor.finish());
-    assert.deepEqual(Uint8Array.from(Buffer.concat(parts)), firstPlaintext);
 
     // Batch path: the key change in the batch supplies the conversation key.
     const batchReceiver = new Chat();
@@ -266,32 +300,103 @@ async function main() {
       mkBatch.messages.filter((m) => m.event.type === "message").map((m) => m.event.content.text),
       [v.event_message_key_text],
     );
-    assert.deepEqual(batchReceiver.decryptStream(second, mkKey), secondPlaintext);
+    assert.deepEqual(
+      openMedia(
+        v.event_message_key_b64,
+        mkBatch.conversationKeys.keys,
+        v.media_second_hash_key,
+        v.media_second_encrypted_b64,
+      ),
+      b64ToBytes(v.media_second_plaintext_b64),
+    );
 
-    // A v11 message from a short sender id.
+    // A v11 message from a short sender id, with one file.
     const short = new Chat().decryptEvent(
       v.event_message_key_short_b64,
-      {
-        [v.message_key_short_conversation_key_version]: hexToBytes(
-          v.message_key_short_conversation_key_hex,
-        ),
-      },
+      shortKeys,
       signingKeysFor(v.message_key_short_sender_id),
     );
     assert.equal(short.verified, true);
     assert.equal(short.content.text, v.event_message_key_short_text);
+    assert.deepEqual(
+      openMedia(
+        v.event_message_key_short_b64,
+        shortKeys,
+        v.media_short_hash_key,
+        v.media_short_encrypted_b64,
+      ),
+      b64ToBytes(v.media_short_plaintext_b64),
+    );
 
-    // A reply under the fixture key carries the quoted message's key, and the
-    // quoted media opens with the reply's conversation key.
+    // A link card's banner and favicon share the card's key.
+    for (const name of ["banner", "favicon"]) {
+      assert.deepEqual(
+        openMedia(
+          v.event_link_card_b64,
+          mkKeys,
+          v[`media_${name}_hash_key`],
+          v[`media_${name}_encrypted_b64`],
+        ),
+        b64ToBytes(v[`media_${name}_plaintext_b64`]),
+      );
+    }
+
+    // A conversation-key message's media is under the conversation key.
+    assert.deepEqual(
+      openMedia(
+        v.event_legacy_media_b64,
+        legacyKeys,
+        v.media_legacy_hash_key,
+        v.media_legacy_encrypted_b64,
+      ),
+      b64ToBytes(v.media_legacy_plaintext_b64),
+    );
+
+    // A reply under the fixture key carries the quoted message's key, and
+    // the quoted media opens through the reply.
     const replyReceiver = new Chat();
     const mkReply = replyReceiver.decryptEvent(
       v.event_reply_message_key_b64,
-      { [v.event_conversation_key_version]: convKey },
+      legacyKeys,
       signingKeysFor(v.event_sender_id, v.message_key_sender_id),
     );
     assert.equal(mkReply.content.text, v.event_reply_message_key_text);
     assert.equal(mkReply.replyPreviewValidation, "valid");
-    assert.deepEqual(replyReceiver.decryptStream(first, convKey), firstPlaintext);
+    assert.deepEqual(
+      openMedia(
+        v.event_reply_message_key_b64,
+        legacyKeys,
+        v.media_first_hash_key,
+        v.media_first_encrypted_b64,
+      ),
+      b64ToBytes(v.media_first_plaintext_b64),
+    );
+
+    // Each error says what to pass.
+    const first = b64ToBytes(v.media_first_encrypted_b64);
+    const second = b64ToBytes(v.media_second_encrypted_b64);
+    const firstHash = v.media_first_hash_key;
+    const errorCases = [
+      [first, v.event_message_key_b64, legacyKeys, firstHash, `no key for version '${mkVersion}'`],
+      [first, v.event_message_key_b64, mkKeys, "not-a-hash-key", "is not in the message"],
+      [first, v.event_key_change_b64, mkKeys, firstHash, "the event is not a message"],
+      [first, v.event_message_b64, legacyKeys, firstHash, "the message has no media"],
+      [second, v.event_message_key_b64, mkKeys, firstHash, `encrypted file of media_hash_key '${firstHash}'`],
+      [first.subarray(0, first.length >> 1), v.event_message_key_b64, mkKeys, firstHash, "truncated"],
+      [first, v.event_unencrypted_b64, mkKeys, v.media_unencrypted_hash_key, "the message is not encrypted"],
+      [first, v.event_message_key_b64, { [mkVersion]: new Uint8Array(5) }, firstHash, "is not 32 bytes"],
+    ];
+    for (const [encrypted, eventB64, keys, mediaHashKey, expected] of errorCases) {
+      assert.throws(
+        () => new Chat().decryptStream(encrypted, eventB64, keys, mediaHashKey),
+        (e) => e.message.includes(expected),
+        expected,
+      );
+    }
+    assert.throws(
+      () => new Chat().streamDecryptor(v.event_message_key_b64, legacyKeys, firstHash),
+      /no key for version/,
+    );
 
     // The known signature covers contents_encryption_version.
     const knownSignature = b64ToBytes(v.signature_v10_cev1_b64);
