@@ -17,13 +17,18 @@ use crate::thrift::product::{
 pub(super) const SIGNING_KEY_VERSION: &str = "1";
 pub(super) const CONVERSATION: &str = "2:1491585161162473473";
 
-/// Known-answer inputs and output of the message key derivation.
+/// Known-answer inputs and outputs of the message and attachment key
+/// derivations.
 pub(super) const KAT_CONVERSATION_KEY: &str =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 pub(super) const KAT_KEY_SENDER: &str = "1876543210987654321";
 pub(super) const KAT_KEY_MESSAGE_ID: &str = "9d8c7b6a-5f4e-4d3c-8b2a-190807060504";
 pub(super) const KAT_MESSAGE_KEY: &str =
     "4d443b9a862e9584ccd0aee2753162aa7c5c1dbcb5f967610155f65ae41d8084";
+pub(super) const KAT_FIRST_ATTACHMENT_KEY: &str =
+    "1ef86545f91f8a3078e276949f7555df2ca584e9c6509b261a558a2e618a1b4b";
+pub(super) const KAT_SECOND_ATTACHMENT_KEY: &str =
+    "8a7bc01f2ff35c661140da68606b2370cecc13810f245d791aeb8ba6b40d4ea8";
 
 /// A participant signing with its own `ChatCore`'s signing key.
 pub(super) struct Party {
