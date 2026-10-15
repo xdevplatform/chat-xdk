@@ -264,8 +264,7 @@ pub enum SentFromSurfaceKnown {
 /// A quick-reply carried by a message: either a request offering options or a
 /// response selecting one.
 ///
-/// Deserialization rejects a value carrying both `request` and `response`
-/// rather than keeping whichever variant matches first.
+/// Deserialization accepts exactly one of `request` or `response`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged, deny_unknown_fields)]

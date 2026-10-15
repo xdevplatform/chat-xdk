@@ -571,8 +571,8 @@ fn transform_enum_serde_attrs(attrs: &[syn::Attribute]) -> Vec<proc_macro2::Toke
                 // Transform tag = "snake_case" to tag = "camelCase"
                 if tokens_str.contains("tag") {
                     let transformed = transform_tag_value(&tokens_str);
-                    // A silent fallback would keep the snake_case tag in the JS
-                    // output, so a failed rewrite is a compile error.
+                    // A tag that cannot be rewritten fails the build, so every
+                    // JS tag is camelCase.
                     return Some(match transformed.parse::<proc_macro2::TokenStream>() {
                         Ok(tokens) => quote! { #[serde(#tokens)] },
                         Err(_) => syn::Error::new_spanned(
