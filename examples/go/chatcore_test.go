@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
@@ -25,6 +26,8 @@ type vectors struct {
 	EventConversationKeyVersion   string `json:"event_conversation_key_version"`
 	EventSigningKeyVersion        string `json:"event_signing_key_version"`
 	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
+	EventLegacyMediaB64           string `json:"event_legacy_media_b64"`
+	MediaLegacyHashKey            string `json:"media_legacy_hash_key"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -268,10 +271,13 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 
 func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
 	// The chunked stream path the media flow uses: multi-chunk payload in,
-	// identical bytes out, and truncation is detected.
+	// identical bytes out, and truncation is detected. The fixture
+	// conversation-key message names one media file under the conversation
+	// key, so the upload decrypts through that message.
 	core, v := loadedCore(t)
 	defer core.Close()
 	key := v.conversationKey(t)
+	keys := map[string][]byte{v.EventConversationKeyVersion: key}
 	plaintext := make([]byte, 300_000)
 	for i := range plaintext {
 		plaintext[i] = byte((i*31 + 7) % 256)
@@ -284,7 +290,7 @@ func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
 	if bytes.Equal(ciphertext[:len(plaintext)], plaintext) {
 		t.Fatal("ciphertext prefix equals plaintext")
 	}
-	decrypted, err := core.DecryptMedia(ciphertext, key)
+	decrypted, err := core.DecryptMedia(ciphertext, v.EventLegacyMediaB64, keys, v.MediaLegacyHashKey)
 	if err != nil {
 		t.Fatalf("DecryptMedia: %v", err)
 	}
@@ -292,8 +298,9 @@ func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
 		t.Error("media round-trip did not return the original bytes")
 	}
 
-	if _, err := core.DecryptMedia(ciphertext[:len(ciphertext)-4], key); err == nil {
-		t.Error("expected an error for a truncated stream")
+	_, err = core.DecryptMedia(ciphertext[:len(ciphertext)-4], v.EventLegacyMediaB64, keys, v.MediaLegacyHashKey)
+	if err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("expected a truncation error, got %v", err)
 	}
 }
 

@@ -257,10 +257,23 @@ fn threaded_reply_with_entities_and_ttl() {
 #[test]
 fn media_stream_encrypt_decrypt_roundtrip() {
     // The chunked stream path the media flow uses: multi-chunk payload in,
-    // identical bytes out, and truncation is detected.
+    // identical bytes out, and truncation is detected. The fixture
+    // conversation-key message names one media file under the conversation
+    // key, so the upload decrypts through that message.
     let v = load_vectors();
     let core = loaded_core(&v);
     let key = conversation_key(&v);
+    let keys = [(
+        v["event_conversation_key_version"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+        key.clone(),
+    )]
+    .into_iter()
+    .collect();
+    let event = v["event_legacy_media_b64"].as_str().unwrap();
+    let media_hash_key = v["media_legacy_hash_key"].as_str().unwrap();
     let plaintext: Vec<u8> = (0..300_000u32)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
@@ -268,12 +281,18 @@ fn media_stream_encrypt_decrypt_roundtrip() {
     let ciphertext = core.encrypt_media(&plaintext, &key).expect("encrypt_media");
     assert_ne!(&ciphertext[..plaintext.len()], plaintext.as_slice());
     assert_eq!(
-        core.decrypt_media(&ciphertext, &key)
+        core.decrypt_media(&ciphertext, event, &keys, media_hash_key)
             .expect("decrypt_media"),
         plaintext
     );
 
-    assert!(core
-        .decrypt_media(&ciphertext[..ciphertext.len() - 4], &key)
-        .is_err());
+    let err = core
+        .decrypt_media(
+            &ciphertext[..ciphertext.len() - 4],
+            event,
+            &keys,
+            media_hash_key,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("truncated"), "{err}");
 }

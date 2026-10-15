@@ -343,13 +343,23 @@ class ChatCore:
         out += enc.finish()
         return bytes(out)
 
-    def decrypt_media(self, ciphertext: bytes, conversation_key: bytes) -> bytes:
-        """Decrypt a media blob with the incremental stream API.
+    def decrypt_media(
+        self,
+        ciphertext: bytes,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        media_hash_key: str,
+    ) -> bytes:
+        """Decrypt a downloaded media blob with the incremental stream API.
 
-        ``finish`` raises if the stream was truncated, so plaintext from
-        ``push`` must not be treated as complete until it succeeds.
+        ``event_b64`` is the raw event of the message that carries the media and
+        ``conversation_keys`` its conversation's key map, as passed to
+        ``decrypt_one``; the SDK finds ``media_hash_key`` in the event and
+        derives that file's key. ``finish`` raises if the stream was truncated,
+        so plaintext from ``push`` must not be treated as complete until it
+        succeeds.
         """
-        dec = self.chat.stream_decryptor(conversation_key)
+        dec = self.chat.stream_decryptor(event_b64, conversation_keys, media_hash_key)
         out = bytearray()
         for offset in range(0, len(ciphertext), self.MEDIA_CHUNK):
             out += dec.push(ciphertext[offset : offset + self.MEDIA_CHUNK])

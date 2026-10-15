@@ -93,11 +93,7 @@ fn await_decrypted(
             let Event::Message(msg) = &one else { continue };
             if is_target || msg.meta.id.as_deref() == Some(message_id) {
                 // The REST item's id IS the event's sequence id.
-                let seq = msg
-                    .meta
-                    .sequence_id
-                    .clone()
-                    .unwrap_or_else(|| e.id.clone());
+                let seq = msg.meta.sequence_id.clone().unwrap_or_else(|| e.id.clone());
                 return (one, seq, e.encoded_event.clone());
             }
         }
@@ -392,7 +388,7 @@ fn e2e_live() {
             .expect("encrypt media message");
         api.send_message(&canonical_conv, &media_msg)
             .expect("send media message");
-        let (one, _, _) = await_decrypted(
+        let (one, _, media_event_b64) = await_decrypted(
             &api,
             &core,
             &conv,
@@ -425,7 +421,7 @@ fn e2e_live() {
             .download_media(&canonical_conv, &media_hash_key)
             .expect("download_media");
         assert_eq!(
-            core.decrypt_media(&downloaded, &key)
+            core.decrypt_media(&downloaded, &media_event_b64, &conv_keys, &media_hash_key)
                 .expect("decrypt_media"),
             plaintext,
             "downloaded media did not decrypt to the original bytes"

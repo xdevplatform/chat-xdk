@@ -294,12 +294,16 @@ func (c *ChatCore) EncryptMedia(plaintext, conversationKey []byte) ([]byte, erro
 	return append(out, final...), nil
 }
 
-// DecryptMedia decrypts a media blob with the incremental stream API.
+// DecryptMedia decrypts a downloaded media blob with the incremental stream
+// API.
 //
-// Finish errors if the stream was truncated, so plaintext from Push must not
-// be treated as complete until it succeeds.
-func (c *ChatCore) DecryptMedia(ciphertext, conversationKey []byte) ([]byte, error) {
-	dec, err := c.chat.StreamDecryptor(conversationKey)
+// eventB64 is the raw event of the message that carries the media and
+// conversationKeys its conversation's key map, as passed to DecryptOne; the
+// SDK finds mediaHashKey in the event and derives that file's key. Finish
+// errors if the stream was truncated, so plaintext from Push must not be
+// treated as complete until it succeeds.
+func (c *ChatCore) DecryptMedia(ciphertext []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
+	dec, err := c.chat.StreamDecryptor(eventB64, conversationKeys, mediaHashKey)
 	if err != nil {
 		return nil, err
 	}

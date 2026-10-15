@@ -311,7 +311,7 @@ public class E2ELiveTests
                 },
                 ttlMsec: 24L * 60 * 60 * 1000);
             await api.SendMessageAsync(canonicalConv, mediaMsg);
-            var (mediaOne, _) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, mediaMsg.MessageId);
+            var (mediaOne, mediaRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, mediaMsg.MessageId);
             Assert.True(mediaOne.TryGetProperty("verified", out var v5) && v5.GetBoolean(),
                 "media message failed signature verification");
             var atts = mediaOne.TryGetProperty("content", out var mContent)
@@ -328,7 +328,8 @@ public class E2ELiveTests
                 $"attachment did not round-trip: {JsonSerializer.Serialize(atts)}");
 
             var downloaded = await api.DownloadMediaAsync(canonicalConv, mediaHashKey);
-            Assert.True(core.DecryptMedia(downloaded, key).AsSpan().SequenceEqual(plaintext),
+            Assert.True(
+                core.DecryptMedia(downloaded, mediaRawB64, convKeys, mediaHashKey).AsSpan().SequenceEqual(plaintext),
                 "downloaded media did not decrypt to the original bytes");
             Console.WriteLine("media downloaded + stream-decrypted to the original bytes");
         }
