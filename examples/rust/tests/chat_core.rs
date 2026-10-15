@@ -285,6 +285,30 @@ fn encrypt_reaction_produces_sendable_payload() {
 }
 
 #[test]
+fn attachment_reaction_checks_the_attachment_is_on_the_event() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let key = conversation_key(&v);
+    // The fixture message carries no attachments, so the SDK refuses to
+    // react to one.
+    let err = core
+        .encrypt_attachment_reaction(
+            true,
+            v["event_message_b64"].as_str().unwrap(),
+            "att-1",
+            "\u{1f525}",
+            &key,
+            v["event_conversation_key_version"].as_str().unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("has no attachments with an attachment_id"),
+        "{err}"
+    );
+}
+
+#[test]
 fn threaded_reply_with_entities_and_ttl() {
     let v = load_vectors();
     let core = loaded_core(&v);

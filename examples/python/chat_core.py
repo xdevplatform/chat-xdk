@@ -361,6 +361,35 @@ class ChatCore:
             "encoded_message_event_signature": payload.encoded_event_signature,
         }
 
+    def encrypt_attachment_reaction(
+        self,
+        *,
+        add: bool,
+        target_event: str,
+        attachment_id: str,
+        emoji: str,
+        conversation_key: bytes,
+        conversation_key_version: str,
+    ) -> dict[str, str]:
+        """Encrypt + sign a reaction add/remove on one attachment of a raw event.
+
+        ``attachment_id`` names the attachment as it appears on the decrypted
+        message; the SDK checks the event carries it.
+        """
+        method = self.chat.encrypt_add_reaction if add else self.chat.encrypt_remove_reaction
+        payload = method(
+            target_event,
+            emoji,
+            target_attachment_id=attachment_id,
+            conversation_key=conversation_key,
+            conversation_key_version=conversation_key_version,
+        )
+        return {
+            "message_id": payload.message_id,
+            "encoded_message_create_event": payload.encrypted_content,
+            "encoded_message_event_signature": payload.encoded_event_signature,
+        }
+
     # -- Group management -----------------------------------------------------
 
     def prepare_group_create(

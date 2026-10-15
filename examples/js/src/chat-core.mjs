@@ -217,10 +217,18 @@ export class ChatCore {
   /**
    * Encrypt + sign a reaction add/remove. `targetEvent` is the base64 raw
    * event being reacted to; the conversation id and target sequence id are
-   * derived from it.
+   * derived from it. `targetAttachmentId` optionally narrows the reaction to
+   * one attachment of that event.
    */
-  encryptReaction({ add, targetEvent, emoji, conversationKey, conversationKeyVersion }) {
-    const params = { emoji, targetEvent, conversationKey, conversationKeyVersion };
+  encryptReaction({
+    add,
+    targetEvent,
+    targetAttachmentId,
+    emoji,
+    conversationKey,
+    conversationKeyVersion,
+  }) {
+    const params = { emoji, targetEvent, targetAttachmentId, conversationKey, conversationKeyVersion };
     const payload = add
       ? this.#chat.encryptAddReaction(params)
       : this.#chat.encryptRemoveReaction(params);

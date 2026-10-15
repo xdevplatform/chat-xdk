@@ -200,6 +200,26 @@ public sealed class ChatCore : IDisposable
         return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
     }
 
+    /// <summary>Encrypt + sign a reaction add/remove on one attachment of a raw
+    /// event, named by its <c>attachment_id</c>.</summary>
+    public SendBody EncryptAttachmentReaction(
+        bool add,
+        string targetEventB64,
+        string attachmentId,
+        string emoji,
+        byte[] conversationKey,
+        string conversationKeyVersion)
+    {
+        var parameters = new EncryptReactionParams(targetEventB64, emoji)
+        {
+            TargetAttachmentId = attachmentId,
+            ConversationKey = conversationKey,
+            ConversationKeyVersion = conversationKeyVersion,
+        };
+        var payload = add ? _chat.EncryptAddReaction(parameters) : _chat.EncryptRemoveReaction(parameters);
+        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
+    }
+
     // -- Group management -----------------------------------------------------
 
     /// <summary>Prepare a group creation: fresh key + the two required signatures.</summary>

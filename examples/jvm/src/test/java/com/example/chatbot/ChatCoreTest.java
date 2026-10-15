@@ -240,6 +240,25 @@ class ChatCoreTest {
     }
 
     @Test
+    void attachmentReactionChecksTheAttachmentIsOnTheEvent() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
+            // The fixture message carries no attachments, so the SDK refuses
+            // to react to one.
+            Exception err = assertThrows(Exception.class, () -> core.encryptAttachmentReaction(
+                    true,
+                    v.get("event_message_b64").asText(),
+                    "att-1",
+                    "\uD83D\uDD25",
+                    key,
+                    v.get("event_conversation_key_version").asText()));
+            assertTrue(err.getMessage().contains("has no attachments with an attachment_id"), err.getMessage());
+        }
+    }
+
+    @Test
     void threadedReplyWithEntitiesAndTtl() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

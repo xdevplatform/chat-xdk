@@ -258,19 +258,26 @@ func (c *ChatCore) PrepareAdminChange(groupID string, action chatxdk.GroupAdminA
 // EncryptAddReaction encrypts + signs a reaction add targeting a raw event.
 // conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptAddReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
-	return c.encryptReaction(true, targetEventB64, emoji, conversationKey, conversationKeyVersion)
+	return c.encryptReaction(true, targetEventB64, "", emoji, conversationKey, conversationKeyVersion)
 }
 
 // EncryptRemoveReaction encrypts + signs a reaction remove targeting a raw
 // event. conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptRemoveReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
-	return c.encryptReaction(false, targetEventB64, emoji, conversationKey, conversationKeyVersion)
+	return c.encryptReaction(false, targetEventB64, "", emoji, conversationKey, conversationKeyVersion)
 }
 
-func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
+// EncryptAttachmentReaction encrypts + signs a reaction add/remove on one
+// attachment of a raw event, named by its attachment_id.
+func (c *ChatCore) EncryptAttachmentReaction(add bool, targetEventB64, attachmentID, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
+	return c.encryptReaction(add, targetEventB64, attachmentID, emoji, conversationKey, conversationKeyVersion)
+}
+
+func (c *ChatCore) encryptReaction(add bool, targetEventB64, attachmentID, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
 	// The conversation id and target sequence id derive from the raw event.
 	params := chatxdk.EncryptReactionParams{
 		TargetEvent:            targetEventB64,
+		TargetAttachmentID:     attachmentID,
 		Emoji:                  emoji,
 		ConversationKey:        conversationKey,
 		ConversationKeyVersion: conversationKeyVersion,

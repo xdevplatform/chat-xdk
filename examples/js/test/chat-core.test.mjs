@@ -230,6 +230,24 @@ test("encryptReaction targeting a raw event produces a sendable payload", async 
   ]);
 });
 
+test("encryptReaction checks a targeted attachment is on the event", async () => {
+  const core = await loadedCore();
+  // The fixture message carries no attachments, so the SDK refuses to react
+  // to one.
+  assert.throws(
+    () =>
+      core.encryptReaction({
+        add: true,
+        targetEvent: vectors.event_message_b64,
+        targetAttachmentId: "att-1",
+        emoji: "\u{1f525}",
+        conversationKey: convKey(),
+        conversationKeyVersion: vectors.event_conversation_key_version,
+      }),
+    /has no attachments with an attachment_id/,
+  );
+});
+
 test("threaded reply by raw event with entities and TTL encrypts", async () => {
   const core = await loadedCore();
   const body = core.encryptReply({

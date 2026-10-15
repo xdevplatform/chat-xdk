@@ -248,6 +248,24 @@ public final class ChatCore implements AutoCloseable {
         return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
     }
 
+    /** Encrypt + sign a reaction add/remove on one attachment of a raw event,
+     * named by its {@code attachment_id}. */
+    public SendBody encryptAttachmentReaction(
+            boolean add,
+            String targetEventB64,
+            String attachmentId,
+            String emoji,
+            byte[] conversationKey,
+            String conversationKeyVersion)
+            throws Exception {
+        EncryptReactionParams params = new EncryptReactionParams(targetEventB64, emoji);
+        params.targetAttachmentId = attachmentId;
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        SendPayload payload = add ? chat.encryptAddReaction(params) : chat.encryptRemoveReaction(params);
+        return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
+    }
+
     // -- Group management -----------------------------------------------------
 
     /** Prepare a group creation: fresh key + the two required signatures. */
