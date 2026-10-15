@@ -710,6 +710,7 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 | 30 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
 | 31 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
 | 32 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(conversation_id, sequence_ids, delete_for_all, *, sender_id=None, signing_key_version=None) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
+| 33 | **prepare_conversation_settings_change** | `prepare_conversation_settings_change(&ConversationSettingsParams) → ActionSignature` | `prepareConversationSettingsChange(params: ConversationSettingsParams) → ActionSignature` | `prepare_conversation_settings_change(conversation_id, setting, *, ttl_msec=None, sender_id=None, signing_key_version=None) → dict` | `PrepareConversationSettingsChange(params ConversationSettingsParams) (*ActionSignature, error)` | `prepareConversationSettingsChange(ConversationSettingsParams)` | `PrepareConversationSettingsChange(ConversationSettingsParams)` |
 
 Required fields of `EncryptMessageParams` (all bindings, names per language
 idiom): `conversation_id` and `text`. Everything else is an optional override:
@@ -817,6 +818,23 @@ optional `sender_id` / `signing_key_version` overrides resolve from the
 session identity, and a one-to-one id is signed in its canonical colon form,
 as everywhere.
 
+**Conversation settings are signed the same way.**
+`ConversationSettingsParams` requires `conversation_id` and a `setting`:
+`message_duration` (with `ttl_msec`, a positive number of milliseconds after
+which new messages disappear), `remove_message_duration`, `mute`, `unmute`,
+`enable_screen_capture_blocking`, or `disable_screen_capture_blocking`.
+`ttl_msec` is required for `message_duration` and rejected for every other
+setting. Rust takes a `ConversationSetting` enum whose `MessageDuration`
+variant carries the TTL; JS, Python, and Go take the setting name as a
+string (Go also has `Setting…` constants), and JVM and .NET take a
+`ConversationSetting` enum next to a separate `ttlMsec` / `TtlMsec` field.
+`prepare_conversation_settings_change` returns a single `ActionSignature`
+carrying the `ConversationMetadataChangeEvent`. Duration and screen-capture
+changes apply to every participant. Mute and unmute are personal, matching
+the native clients: they are signed for the sender's own
+`"{sender_id}:{sender_id}"` conversation, with `conversation_id` listed as
+the muted conversation.
+
 The Rust structs pair a `new(…required…)` constructor with public optional
 fields:
 
@@ -841,6 +859,13 @@ let reaction =
 let mut forward = EncryptForwardParams::new(other_conversation_id, original_text);
 forward.text = Some("fyi".into());
 let forwarded = chat.encrypt_forward(forward)?;
+
+// Make new messages disappear after a day
+let settings = ConversationSettingsParams::new(
+    conversation_id,
+    ConversationSetting::MessageDuration { ttl_msec: 86_400_000 },
+);
+let signature = chat.prepare_conversation_settings_change(&settings)?;
 ```
 
 ```typescript
@@ -867,6 +892,12 @@ const forwarded = chat.encryptForward({
   forwardedText: originalText,
   text: "fyi",
 });
+
+const signature = chat.prepareConversationSettingsChange({
+  conversationId,
+  setting: "message_duration",
+  ttlMsec: 86_400_000,
+});
 ```
 
 ```python
@@ -881,16 +912,20 @@ reply = chat.encrypt_reply(conversation_id, "pong", original_event_b64)
 reaction = chat.encrypt_add_reaction(original_event_b64, "👍")
 
 forwarded = chat.encrypt_forward(other_conversation_id, original_text, text="fyi")
+
+signature = chat.prepare_conversation_settings_change(
+    conversation_id, "message_duration", ttl_msec=86_400_000
+)
 ```
 
 ### Streams (Media)
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 33 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
-| 34 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
-| 35 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
-| 36 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
+| 34 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
+| 35 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
+| 36 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
+| 37 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
 
 Methods 32/33 take the **decrypted** conversation key (raw bytes) and process the whole payload in memory.
 
@@ -907,8 +942,8 @@ const plaintext = chat.decryptStream(encryptedMedia, key);
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 37 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
-| 38 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
+| 38 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
+| 39 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
 
 Encrypt/decrypt arbitrary UTF-8 strings using XSalsa20-Poly1305 with a conversation key. Use for encrypted metadata fields like `group_name`, `group_avatar_url`, and `group_description` returned by the XChat API.
 
@@ -931,17 +966,18 @@ group_name = chat.decrypt(conversation["group_name"], conv_key)
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 39 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
-| 40 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
-| 41 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
-| 42 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
+| 40 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
+| 41 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
+| 42 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
+| 43 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
 
 Conversation-key changes, group creates, and group member-adds are signed by the
 one-call prepare methods (`prepare_conversation_key_change`,
 `prepare_group_create`, `prepare_group_members_change`), which return the
 `actionSignatures` ready to POST. Group create and member-add each return two
 signatures (a conversation-key change plus the group change). Message deletes
-are signed by `prepare_message_delete`, which returns a single `ActionSignature`.
+are signed by `prepare_message_delete` and conversation setting changes by
+`prepare_conversation_settings_change`; each returns a single `ActionSignature`.
 
 ### Utilities
 
@@ -949,13 +985,13 @@ Common helpers exported as module-level functions (Rust crate root / JS module /
 
 | # | Function | Rust | JS | Python | Go | JVM | .NET |
 |---|----------|------|-----|--------|-----|------|------|
-| 43 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
-| 44 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
-| 45 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
-| 46 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
-| 47 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
-| 48 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
-| 49 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
+| 44 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
+| 45 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
+| 46 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
+| 47 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
+| 48 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
+| 49 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
+| 50 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
 
 `encrypted_stream_size` returns the exact byte length that `encrypt_stream`
 or `stream_encryptor` will produce, without encrypting or requiring a key:
