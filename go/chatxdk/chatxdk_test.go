@@ -1007,6 +1007,70 @@ func TestPrepareConversationSettingsChange(t *testing.T) {
 	}
 }
 
+func TestPrepareGroupAdminChange(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	sig, err := chat.PrepareGroupAdminChange(GroupAdminChangeParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g999",
+		Action:            AdminActionRemoveAdmins,
+		UserIDs:           []string{"222", "333"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareGroupAdminChange failed: %v", err)
+	}
+	if sig.EncodedMessageEventDetail == "" || sig.Signature == "" {
+		t.Error("expected a non-empty event detail and signature")
+	}
+	want := fmt.Sprintf("GroupChangeEvent.GroupAdminRemoveChange,%s,111,g999,222,333", sig.MessageID)
+	if sig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
+	}
+
+	expires := int64(1900000000000)
+	inviteSig, err := chat.PrepareGroupAdminChange(GroupAdminChangeParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g999",
+		Action:            AdminActionEnableInviteLink,
+		InviteURL:         "https://example.com/i/abc",
+		ExpiresAtMsec:     &expires,
+		AffiliateID:       "aff-1",
+	})
+	if err != nil {
+		t.Fatalf("PrepareGroupAdminChange (invite) failed: %v", err)
+	}
+	want = fmt.Sprintf("GroupChangeEvent.GroupInviteEnable,%s,111,g999,https://example.com/i/abc,1900000000000,aff-1", inviteSig.MessageID)
+	if inviteSig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, inviteSig.SignaturePayload)
+	}
+
+	cases := []struct {
+		params GroupAdminChangeParams
+		want   string
+	}{
+		{GroupAdminChangeParams{ConversationID: "g1", Action: AdminActionAddAdmins}, "user_ids is required"},
+		{GroupAdminChangeParams{ConversationID: "g1", Action: AdminActionDisableInviteLink, InviteURL: "u"}, "takes no other fields"},
+		{GroupAdminChangeParams{ConversationID: "g1", Action: "promote"}, `unknown action "promote"`},
+		{GroupAdminChangeParams{ConversationID: "111:222", Action: AdminActionAddAdmins, UserIDs: []string{"2"}}, "is not a group"},
+	}
+	for _, tc := range cases {
+		tc.params.SenderID = "111"
+		tc.params.SigningKeyVersion = "1"
+		_, err := chat.PrepareGroupAdminChange(tc.params)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("action %q: expected error containing %q, got %v", tc.params.Action, tc.want, err)
+		}
+	}
+}
+
 func TestPrepareConversationKeyChange(t *testing.T) {
 	v := loadVectors(t)
 
