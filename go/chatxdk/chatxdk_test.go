@@ -39,18 +39,75 @@ type sdkVectors struct {
 	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
 	EventMessageText              string `json:"event_message_text"`
 	EventReplyText                string `json:"event_reply_text"`
+
+	MessageKeyConversationKeyHex          string `json:"message_key_conversation_key_hex"`
+	MessageKeyConversationKeyVersion      string `json:"message_key_conversation_key_version"`
+	MessageKeySenderID                    string `json:"message_key_sender_id"`
+	MessageKeyShortConversationKeyHex     string `json:"message_key_short_conversation_key_hex"`
+	MessageKeyShortConversationKeyVersion string `json:"message_key_short_conversation_key_version"`
+	MessageKeyShortSenderID               string `json:"message_key_short_sender_id"`
+	EventMessageKeyB64                    string `json:"event_message_key_b64"`
+	EventMessageKeyText                   string `json:"event_message_key_text"`
+	EventMessageKeyShortB64               string `json:"event_message_key_short_b64"`
+	EventMessageKeyShortText              string `json:"event_message_key_short_text"`
+	EventKeyChangeMessageKeyB64           string `json:"event_key_change_message_key_b64"`
+	EventReplyMessageKeyB64               string `json:"event_reply_message_key_b64"`
+	EventReplyMessageKeyText              string `json:"event_reply_message_key_text"`
+	PayloadMessageV10Cev1                 string `json:"payload_message_v10_cev1"`
+	PayloadMessageV10                     string `json:"payload_message_v10"`
+	SignatureV10Cev1PublicKeyB64          string `json:"signature_v10_cev1_public_key_b64"`
+	SignatureV10Cev1B64                   string `json:"signature_v10_cev1_b64"`
 }
 
 // eventSigningKeys builds the SigningKeyEntry list matching the fixture's
 // event vectors (sender id, key version, and identity binding).
 func (v sdkVectors) eventSigningKeys() []SigningKeyEntry {
-	return []SigningKeyEntry{{
-		UserID:                     v.EventSenderID,
-		PublicKeyVersion:           v.EventSigningKeyVersion,
-		PublicKey:                  v.SigningPublicB64,
-		IdentityPublicKey:          v.IdentityPublicB64,
-		IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
-	}}
+	return v.signingKeysFor(v.EventSenderID)
+}
+
+// signingKeysFor registers the fixture signing key to each of userIDs.
+func (v sdkVectors) signingKeysFor(userIDs ...string) []SigningKeyEntry {
+	entries := make([]SigningKeyEntry, 0, len(userIDs))
+	for _, userID := range userIDs {
+		entries = append(entries, SigningKeyEntry{
+			UserID:                     userID,
+			PublicKeyVersion:           v.EventSigningKeyVersion,
+			PublicKey:                  v.SigningPublicB64,
+			IdentityPublicKey:          v.IdentityPublicB64,
+			IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
+		})
+	}
+	return entries
+}
+
+func mustDecodeB64(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	return b
+}
+
+func mustDecodeHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := HexToBytes(s)
+	if err != nil {
+		t.Fatalf("hex decode: %v", err)
+	}
+	return b
+}
+
+func mustMessage(t *testing.T, event *Event, err error) *Message {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("DecryptEvent failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil {
+		t.Fatalf("expected a Message event, got %q", event.Type)
+	}
+	return msg
 }
 
 func loadVectors(t *testing.T) sdkVectors {
@@ -81,6 +138,13 @@ func (v sdkVectors) conversationKey(t *testing.T) []byte {
 		t.Fatalf("failed to decode conversation_key_b64: %v", err)
 	}
 	return key
+}
+
+// messageKeyConversationKeys is the key map that opens the message-key
+// vectors.
+func (v sdkVectors) messageKeyConversationKeys(t *testing.T) map[string][]byte {
+	t.Helper()
+	return map[string][]byte{v.MessageKeyConversationKeyVersion: mustDecodeHex(t, v.MessageKeyConversationKeyHex)}
 }
 
 // privateKeys decodes the fixture's base64 private-key blob into the raw
@@ -3070,5 +3134,102 @@ func TestEncryptMessageRejectsInvalidQuickReply(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "Invalid quick reply") {
 			t.Errorf("%s: expected an invalid quick reply error, got %v", name, err)
 		}
+	}
+}
+
+// The message-key vectors' contents are encrypted directly under the known
+// message keys, so they open only if the SDK derives the same keys from the
+// conversation key.
+func TestMessageKeyEventDecryptsWithTheConversationKey(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	event, err := chat.DecryptEvent(v.EventMessageKeyB64, v.messageKeyConversationKeys(t), v.signingKeysFor(v.MessageKeySenderID))
+	msg := mustMessage(t, event, err)
+	if !msg.Verified || msg.Text() != v.EventMessageKeyText {
+		t.Fatalf("unexpected message: verified=%v text=%q", msg.Verified, msg.Text())
+	}
+	if len(msg.MediaHashes) != 2 {
+		t.Fatalf("want 2 media hashes, got %d", len(msg.MediaHashes))
+	}
+}
+
+func TestMessageKeyEventDecryptsInABatchWithItsKeyChange(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
+		t.Fatalf("ImportKeysWithVersion: %v", err)
+	}
+	result, err := chat.DecryptEvents(
+		[]string{v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64},
+		v.signingKeysFor(v.EventSenderID, v.MessageKeySenderID),
+	)
+	if err != nil {
+		t.Fatalf("DecryptEvents: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	key := result.ConversationKeys.Keys[v.MessageKeyConversationKeyVersion]
+	if !bytes.Equal(key, mustDecodeHex(t, v.MessageKeyConversationKeyHex)) {
+		t.Fatal("conversation key not adopted from the key change")
+	}
+	var texts []string
+	for _, m := range result.Messages {
+		if msg := m.Event.AsMessage(); msg != nil {
+			texts = append(texts, msg.Text())
+		}
+	}
+	if len(texts) != 1 || texts[0] != v.EventMessageKeyText {
+		t.Fatalf("unexpected messages: %q", texts)
+	}
+}
+
+func TestShortSenderMessageKeyEventVerifiesAtV11(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	event, err := chat.DecryptEvent(
+		v.EventMessageKeyShortB64,
+		map[string][]byte{
+			v.MessageKeyShortConversationKeyVersion: mustDecodeHex(t, v.MessageKeyShortConversationKeyHex),
+		},
+		v.signingKeysFor(v.MessageKeyShortSenderID),
+	)
+	msg := mustMessage(t, event, err)
+	if !msg.Verified || msg.Text() != v.EventMessageKeyShortText {
+		t.Fatalf("unexpected message: verified=%v text=%q", msg.Verified, msg.Text())
+	}
+}
+
+func TestReplyCarryingAMessageKeyValidates(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	key := v.conversationKey(t)
+	event, err := chat.DecryptEvent(
+		v.EventReplyMessageKeyB64,
+		map[string][]byte{v.EventConversationKeyVersion: key},
+		v.signingKeysFor(v.EventSenderID, v.MessageKeySenderID),
+	)
+	msg := mustMessage(t, event, err)
+	if msg.Text() != v.EventReplyMessageKeyText || msg.ReplyPreviewValidation != "Valid" {
+		t.Fatalf("unexpected reply: text=%q validation=%q", msg.Text(), msg.ReplyPreviewValidation)
+	}
+}
+
+func TestKnownSignatureCoversTheContentsEncryptionVersion(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	signature := mustDecodeB64(t, v.SignatureV10Cev1B64)
+	signed, err := chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature, []byte(v.PayloadMessageV10Cev1))
+	if err != nil || !signed {
+		t.Fatalf("known signature did not verify: err=%v", err)
+	}
+	stripped, err := chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature, []byte(v.PayloadMessageV10))
+	if err != nil || stripped {
+		t.Fatalf("known signature verified without its contents encryption version: err=%v", err)
 	}
 }

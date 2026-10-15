@@ -18,13 +18,18 @@ def _load_vectors() -> dict:
 
 
 def _fixture_signing_keys(v: dict) -> list[dict]:
+    return _signing_keys_for(v, v["event_sender_id"])
+
+
+def _signing_keys_for(v: dict, *user_ids: str) -> list[dict]:
+    """The fixture signing key, registered to each of ``user_ids``."""
     return [{
-        "user_id": v["event_sender_id"],
+        "user_id": user_id,
         "public_key_version": v["event_signing_key_version"],
         "public_key": v["signing_public_b64"],
         "identity_public_key": v["identity_public_b64"],
         "identity_public_key_signature": v["identity_public_key_signature_b64"],
-    }]
+    } for user_id in user_ids]
 
 
 def _thrift_string_field(field_id: int, value: str) -> bytes:
@@ -440,3 +445,81 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
         self.assertEqual(request, QUICK_REPLY_REQUEST)
         self.assertEqual(response, QUICK_REPLY_RESPONSE)
+
+    def test_message_key_event_decrypts_with_the_conversation_key(self):
+        from chat_xdk import Chat, hex_to_bytes
+
+        v = _load_vectors()
+        event = Chat().decrypt_event(
+            v["event_message_key_b64"],
+            {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])},
+            _signing_keys_for(v, v["message_key_sender_id"]),
+        )
+        self.assertEqual(event["type"], "Message")
+        self.assertTrue(event["verified"])
+        self.assertEqual(event["content"]["text"], v["event_message_key_text"])
+        self.assertEqual(len(event["media_hashes"]), 2)
+
+    def test_message_key_event_decrypts_in_a_batch_with_its_key_change(self):
+        from chat_xdk import Chat, hex_to_bytes
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(
+            base64.b64decode(v["private_keys_concat_b64"]),
+            version=v["event_recipient_key_version"],
+        )
+        result = chat.decrypt_events(
+            [v["event_key_change_message_key_b64"], v["event_message_key_b64"]],
+            _signing_keys_for(v, v["event_sender_id"], v["message_key_sender_id"]),
+        )
+        self.assertEqual(result["errors"], {})
+        version = v["message_key_conversation_key_version"]
+        ckey = bytes(result["conversation_keys"]["keys"][version])
+        self.assertEqual(ckey, hex_to_bytes(v["message_key_conversation_key_hex"]))
+        texts = [
+            m["event"]["content"]["text"]
+            for m in result["messages"]
+            if m["event"]["type"] == "Message"
+        ]
+        self.assertEqual(texts, [v["event_message_key_text"]])
+
+    def test_short_sender_message_key_event_verifies_at_v11(self):
+        from chat_xdk import Chat, hex_to_bytes
+
+        v = _load_vectors()
+        event = Chat().decrypt_event(
+            v["event_message_key_short_b64"],
+            {
+                v["message_key_short_conversation_key_version"]:
+                    hex_to_bytes(v["message_key_short_conversation_key_hex"]),
+            },
+            _signing_keys_for(v, v["message_key_short_sender_id"]),
+        )
+        self.assertTrue(event["verified"])
+        self.assertEqual(event["content"]["text"], v["event_message_key_short_text"])
+
+    def test_reply_carrying_a_message_key_validates(self):
+        from chat_xdk import Chat
+
+        v = _load_vectors()
+        chat = Chat()
+        ckey = base64.b64decode(v["conversation_key_b64"])
+        event = chat.decrypt_event(
+            v["event_reply_message_key_b64"],
+            {v["event_conversation_key_version"]: ckey},
+            _signing_keys_for(v, v["event_sender_id"], v["message_key_sender_id"]),
+        )
+        self.assertTrue(event["verified"])
+        self.assertEqual(event["content"]["text"], v["event_reply_message_key_text"])
+        self.assertEqual(event["reply_preview_validation"], "Valid")
+
+    def test_known_signature_covers_the_contents_encryption_version(self):
+        from chat_xdk import Chat
+
+        v = _load_vectors()
+        chat = Chat()
+        signature = base64.b64decode(v["signature_v10_cev1_b64"])
+        public_key = v["signature_v10_cev1_public_key_b64"]
+        self.assertTrue(chat.verify(public_key, signature, v["payload_message_v10_cev1"].encode()))
+        self.assertFalse(chat.verify(public_key, signature, v["payload_message_v10"].encode()))
