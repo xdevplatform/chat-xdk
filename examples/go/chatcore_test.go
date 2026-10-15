@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -26,8 +27,14 @@ type vectors struct {
 	EventConversationKeyVersion   string `json:"event_conversation_key_version"`
 	EventSigningKeyVersion        string `json:"event_signing_key_version"`
 	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
-	EventConversationKeyMediaB64  string `json:"event_conversation_key_media_b64"`
-	MediaConversationKeyHashKey   string `json:"media_conversation_key_hash_key"`
+	// A message sent under a per-message key, with two media attachments.
+	EventMessageKeyB64               string `json:"event_message_key_b64"`
+	MessageKeySenderID               string `json:"message_key_sender_id"`
+	MessageKeyMessageID              string `json:"message_key_message_id"`
+	MessageKeyConversationKeyHex     string `json:"message_key_conversation_key_hex"`
+	MessageKeyConversationKeyVersion string `json:"message_key_conversation_key_version"`
+	MediaFirstHashKey                string `json:"media_first_hash_key"`
+	MediaSecondHashKey               string `json:"media_second_hash_key"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -271,36 +278,70 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 
 func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
 	// The chunked stream path the media flow uses: multi-chunk payload in,
-	// identical bytes out, and truncation is detected. The fixture
-	// conversation-key message names one media file under the conversation
-	// key, so the upload decrypts through that message.
+	// identical bytes out, and truncation is detected. Media is encrypted
+	// for its message and position, so encrypting as the fixture message's
+	// sender, under its message id and key, yields media that opens through
+	// that message: its first and second attachments.
 	core, v := loadedCore(t)
 	defer core.Close()
-	key := v.conversationKey(t)
-	keys := map[string][]byte{v.EventConversationKeyVersion: key}
+	if err := core.SetIdentity(v.MessageKeySenderID); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	key, err := hex.DecodeString(v.MessageKeyConversationKeyHex)
+	if err != nil {
+		t.Fatalf("decode message_key_conversation_key_hex: %v", err)
+	}
+	keys := map[string][]byte{v.MessageKeyConversationKeyVersion: key}
 	plaintext := make([]byte, 300_000)
 	for i := range plaintext {
 		plaintext[i] = byte((i*31 + 7) % 256)
 	}
 
-	ciphertext, err := core.EncryptMedia(plaintext, key)
-	if err != nil {
-		t.Fatalf("EncryptMedia: %v", err)
-	}
-	if bytes.Equal(ciphertext[:len(plaintext)], plaintext) {
-		t.Fatal("ciphertext prefix equals plaintext")
-	}
-	decrypted, err := core.DecryptMedia(ciphertext, v.EventConversationKeyMediaB64, keys, v.MediaConversationKeyHashKey)
-	if err != nil {
-		t.Fatalf("DecryptMedia: %v", err)
-	}
-	if !bytes.Equal(decrypted, plaintext) {
-		t.Error("media round-trip did not return the original bytes")
+	var ciphertext []byte
+	for index, mediaHashKey := range []string{v.MediaFirstHashKey, v.MediaSecondHashKey} {
+		ciphertext, err = core.EncryptMedia(plaintext, key, v.MessageKeyMessageID, index)
+		if err != nil {
+			t.Fatalf("EncryptMedia: %v", err)
+		}
+		if bytes.Equal(ciphertext[:len(plaintext)], plaintext) {
+			t.Fatal("ciphertext prefix equals plaintext")
+		}
+		decrypted, err := core.DecryptMedia(ciphertext, v.EventMessageKeyB64, keys, mediaHashKey)
+		if err != nil {
+			t.Fatalf("DecryptMedia: %v", err)
+		}
+		if !bytes.Equal(decrypted, plaintext) {
+			t.Error("media round-trip did not return the original bytes")
+		}
 	}
 
-	_, err = core.DecryptMedia(ciphertext[:len(ciphertext)-4], v.EventConversationKeyMediaB64, keys, v.MediaConversationKeyHashKey)
+	_, err = core.DecryptMedia(ciphertext[:len(ciphertext)-4], v.EventMessageKeyB64, keys, v.MediaSecondHashKey)
 	if err == nil || !strings.Contains(err.Error(), "truncated") {
 		t.Errorf("expected a truncation error, got %v", err)
+	}
+
+	messageID, err := core.NewMessageID()
+	if err != nil {
+		t.Fatalf("NewMessageID: %v", err)
+	}
+	mediaType := int32(5)
+	body, err := core.EncryptReply("6789:12345", "a photo", &ReplyOptions{
+		ConversationKey:        key,
+		ConversationKeyVersion: v.MessageKeyConversationKeyVersion,
+		MessageID:              messageID,
+		Attachments: []chatxdk.AttachmentDescriptor{{
+			AttachmentType: "media",
+			MediaHashKey:   "photo",
+			FilesizeBytes:  int64(len(ciphertext)),
+			Filename:       "photo.bin",
+			MediaType:      &mediaType,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EncryptReply (media): %v", err)
+	}
+	if body.MessageID != messageID {
+		t.Errorf("message id %q, want %q", body.MessageID, messageID)
 	}
 }
 

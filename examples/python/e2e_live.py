@@ -244,7 +244,8 @@ def main() -> None:
         # A deterministic multi-chunk payload, so the incremental encryptor
         # emits several frames and any corruption is byte-attributable.
         plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
-        ciphertext = core.encrypt_media(plaintext, key)
+        media_message_id = core.new_message_id()
+        ciphertext = core.encrypt_media(plaintext, key, media_message_id, 0)
         media_hash_key = api.upload_media(canonical_conv, ciphertext)
         print(f"encrypted media uploaded: {media_hash_key} ({len(ciphertext)} bytes)")
 
@@ -253,6 +254,7 @@ def main() -> None:
             text=f"chat-xdk e2e media [python] {int(time.time())}",
             conversation_key=key,
             conversation_key_version=kv,
+            message_id=media_message_id,
             attachments=[
                 {
                     "attachment_type": "media",

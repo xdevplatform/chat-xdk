@@ -150,8 +150,10 @@ export class ChatCore {
    * a *threaded* reply and derives the preview from the signed original;
    * without it this sends a fresh message. The conversation key pair is
    * optional once the cache is enabled. `entities` are `[start, end, type]`
-   * byte ranges; `quickReply` offers selectable options or answers them;
-   * `ttlMsec` makes the message disappear after the given lifetime.
+   * byte ranges; a message with media `attachments` passes the `messageId`
+   * its media was encrypted with (from `newMessageId`); `quickReply` offers
+   * selectable options or answers them; `ttlMsec` makes the message
+   * disappear after the given lifetime.
    */
   encryptReply({
     conversationId,
@@ -161,6 +163,7 @@ export class ChatCore {
     replyToEvent,
     entities,
     attachments,
+    messageId,
     quickReply,
     ttlMsec,
   }) {
@@ -171,6 +174,7 @@ export class ChatCore {
       conversationKeyVersion,
       entities,
       attachments,
+      messageId,
       quickReply,
       ttlMsec,
     };
@@ -178,7 +182,7 @@ export class ChatCore {
       ? this.#chat.encryptReply({ ...params, replyToEvent })
       : this.#chat.encryptMessage(params);
     return {
-      // The SDK generates the message id and returns it in the payload.
+      // The message id: the caller's, or one the SDK generated.
       message_id: payload.messageId,
       encoded_message_create_event: payload.encryptedContent,
       encoded_message_event_signature: payload.encodedEventSignature,
@@ -266,16 +270,23 @@ export class ChatCore {
 
   static MEDIA_CHUNK = 1024 * 1024;
 
+  /** A fresh id for a message with media, taken before its media is encrypted. */
+  newMessageId() {
+    return this.#chat.newMessageId();
+  }
+
   /**
    * Encrypt a media blob with the incremental stream API.
    *
-   * Feeding fixed-size chunks through `push` keeps memory bounded no matter
-   * how large the file is (the WASM heap cannot hold large files whole);
-   * `finish` emits the final frame that seals the stream — decryption fails
-   * without it.
+   * The blob is encrypted for the message `messageId` (from `newMessageId`)
+   * at `attachmentIndex` in its attachments; send the message with the same
+   * id. Feeding fixed-size chunks through `push` keeps memory bounded no
+   * matter how large the file is (the WASM heap cannot hold large files
+   * whole); `finish` emits the final frame that seals the stream —
+   * decryption fails without it.
    */
-  encryptMedia(plaintext, conversationKey) {
-    const enc = this.#chat.streamEncryptor(conversationKey);
+  encryptMedia(plaintext, conversationKey, messageId, attachmentIndex) {
+    const enc = this.#chat.streamEncryptor(conversationKey, messageId, attachmentIndex);
     const parts = [];
     // A throw from push would otherwise leak the encryptor's live secretstream
     // key state in WASM memory; free() reclaims it. finish() consumes the

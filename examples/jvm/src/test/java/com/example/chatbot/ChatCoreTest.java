@@ -222,28 +222,51 @@ class ChatCoreTest {
     @Test
     void mediaStreamEncryptDecryptRoundtrip() throws Exception {
         // The chunked stream path the media flow uses: multi-chunk payload in,
-        // identical bytes out, and truncation is detected. The fixture
-        // conversation-key message names one media file under the
-        // conversation key, so the upload decrypts through that message.
+        // identical bytes out, and truncation is detected. Media is encrypted
+        // for its message and position, so encrypting as the fixture
+        // message's sender, under its message id and key, yields media that
+        // opens through that message: its first and second attachments.
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
-            byte[] convKey = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
-            Map<String, byte[]> convKeys = Map.of(v.get("event_conversation_key_version").asText(), convKey);
-            String event = v.get("event_conversation_key_media_b64").asText();
-            String mediaHashKey = v.get("media_conversation_key_hash_key").asText();
+            core.setIdentity(v.get("message_key_sender_id").asText());
+            byte[] convKey = java.util.HexFormat.of().parseHex(v.get("message_key_conversation_key_hex").asText());
+            String keyVersion = v.get("message_key_conversation_key_version").asText();
+            Map<String, byte[]> convKeys = Map.of(keyVersion, convKey);
+            String event = v.get("event_message_key_b64").asText();
+            String messageId = v.get("message_key_message_id").asText();
             byte[] plaintext = new byte[300_000];
             for (int i = 0; i < plaintext.length; i++) {
                 plaintext[i] = (byte) ((i * 31 + 7) % 256);
             }
 
-            byte[] ciphertext = core.encryptMedia(plaintext, convKey);
-            assertFalse(Arrays.equals(Arrays.copyOf(ciphertext, plaintext.length), plaintext));
-            assertArrayEquals(plaintext, core.decryptMedia(ciphertext, event, convKeys, mediaHashKey));
+            String[] mediaHashKeys = {v.get("media_first_hash_key").asText(), v.get("media_second_hash_key").asText()};
+            byte[] ciphertext = new byte[0];
+            for (int index = 0; index < mediaHashKeys.length; index++) {
+                ciphertext = core.encryptMedia(plaintext, convKey, messageId, index);
+                assertFalse(Arrays.equals(Arrays.copyOf(ciphertext, plaintext.length), plaintext));
+                assertArrayEquals(plaintext, core.decryptMedia(ciphertext, event, convKeys, mediaHashKeys[index]));
+            }
 
             byte[] truncated = Arrays.copyOf(ciphertext, ciphertext.length - 4);
             ChatXdkException e = assertThrows(
-                    ChatXdkException.class, () -> core.decryptMedia(truncated, event, convKeys, mediaHashKey));
+                    ChatXdkException.class, () -> core.decryptMedia(truncated, event, convKeys, mediaHashKeys[1]));
             assertTrue(e.getMessage().contains("truncated"), e.getMessage());
+
+            String newId = core.newMessageId();
+            ChatCore.SendBody body = core.encryptReply(
+                    "6789:12345",
+                    "a photo",
+                    convKey,
+                    keyVersion,
+                    null,
+                    null,
+                    List.of(com.x.chatxdk.Types.AttachmentDescriptor.media(
+                            "photo", 4, 3, ciphertext.length, "photo.bin", 5, null)),
+                    null,
+                    null,
+                    null,
+                    newId);
+            assertEquals(newId, body.messageId());
         }
     }
 }

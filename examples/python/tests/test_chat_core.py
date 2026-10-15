@@ -223,22 +223,46 @@ class TestPreparedChanges(unittest.TestCase):
 
     def test_media_stream_encrypt_decrypt_roundtrip(self):
         # The chunked stream path the media flow uses: multi-chunk payload in,
-        # identical bytes out, and truncation is detected. The fixture
-        # conversation-key message names one media file under the
-        # conversation key, so the upload decrypts through that message.
+        # identical bytes out, and truncation is detected. Media is encrypted
+        # for its message and position, so encrypting as the fixture
+        # message's sender, under its message id and key, yields media that
+        # opens through that message: its first and second attachments.
         core, _ = self._core_and_keys()
         v = self.vectors
-        conv_key = base64.b64decode(v["conversation_key_b64"])
-        conv_keys = {v["event_conversation_key_version"]: conv_key}
-        event, media_hash_key = v["event_conversation_key_media_b64"], v["media_conversation_key_hash_key"]
+        core.set_identity(v["message_key_sender_id"])
+        conv_key = bytes.fromhex(v["message_key_conversation_key_hex"])
+        conv_keys = {v["message_key_conversation_key_version"]: conv_key}
+        event = v["event_message_key_b64"]
         plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
 
-        ciphertext = core.encrypt_media(plaintext, conv_key)
-        self.assertNotEqual(ciphertext[: len(plaintext)], plaintext)
-        self.assertEqual(
-            core.decrypt_media(ciphertext, event, conv_keys, media_hash_key), plaintext
-        )
+        for index, media_hash_key in enumerate((v["media_first_hash_key"], v["media_second_hash_key"])):
+            ciphertext = core.encrypt_media(plaintext, conv_key, v["message_key_message_id"], index)
+            self.assertNotEqual(ciphertext[: len(plaintext)], plaintext)
+            self.assertEqual(
+                core.decrypt_media(ciphertext, event, conv_keys, media_hash_key), plaintext
+            )
 
         with self.assertRaises(ValueError) as ctx:
-            core.decrypt_media(ciphertext[:-4], event, conv_keys, media_hash_key)
+            core.decrypt_media(ciphertext[:-4], event, conv_keys, v["media_second_hash_key"])
         self.assertIn("truncated", str(ctx.exception))
+
+        message_id = core.new_message_id()
+        body = core.encrypt_reply(
+            conversation_id="6789:12345",
+            text="a photo",
+            conversation_key=conv_key,
+            conversation_key_version=v["message_key_conversation_key_version"],
+            message_id=message_id,
+            attachments=[
+                {
+                    "attachment_type": "media",
+                    "media_hash_key": "photo",
+                    "width": 4,
+                    "height": 3,
+                    "filesize_bytes": len(ciphertext),
+                    "filename": "photo.bin",
+                    "media_type": 5,
+                }
+            ],
+        )
+        self.assertEqual(body["message_id"], message_id)

@@ -206,23 +206,54 @@ test("threaded reply by raw event with entities and TTL encrypts", async () => {
 
 test("media stream encrypt -> decrypt round-trip and truncation", async () => {
   // The chunked stream path the media flow uses: multi-chunk payload in,
-  // identical bytes out, and truncation is detected. The fixture
-  // conversation-key message names one media file under the conversation
-  // key, so the upload decrypts through that message.
+  // identical bytes out, and truncation is detected. Media is encrypted for
+  // its message and position, so encrypting as the fixture message's sender,
+  // under its message id and key, yields media that opens through that
+  // message: its first and second attachments.
   const core = await loadedCore();
-  const key = convKey();
-  const keys = { [vectors.event_conversation_key_version]: key };
-  const event = vectors.event_conversation_key_media_b64;
-  const mediaHashKey = vectors.media_conversation_key_hash_key;
+  core.setIdentity(vectors.message_key_sender_id);
+  const key = new Uint8Array(Buffer.from(vectors.message_key_conversation_key_hex, "hex"));
+  const keys = { [vectors.message_key_conversation_key_version]: key };
+  const event = vectors.event_message_key_b64;
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
 
-  const ciphertext = core.encryptMedia(plaintext, key);
-  const decrypted = core.decryptMedia(ciphertext, event, keys, mediaHashKey);
-  assert.equal(decrypted.length, plaintext.length);
-  assert.ok(decrypted.every((b, i) => b === plaintext[i]));
+  let ciphertext;
+  for (const [index, mediaHashKey] of [vectors.media_first_hash_key, vectors.media_second_hash_key].entries()) {
+    ciphertext = core.encryptMedia(plaintext, key, vectors.message_key_message_id, index);
+    const decrypted = core.decryptMedia(ciphertext, event, keys, mediaHashKey);
+    assert.equal(decrypted.length, plaintext.length);
+    assert.ok(decrypted.every((b, i) => b === plaintext[i]));
+  }
 
   assert.throws(
-    () => core.decryptMedia(ciphertext.subarray(0, ciphertext.length - 4), event, keys, mediaHashKey),
+    () =>
+      core.decryptMedia(
+        ciphertext.subarray(0, ciphertext.length - 4),
+        event,
+        keys,
+        vectors.media_second_hash_key,
+      ),
     /truncated/,
   );
+
+  const messageId = core.newMessageId();
+  const body = core.encryptReply({
+    conversationId: "6789:12345",
+    text: "a photo",
+    conversationKey: key,
+    conversationKeyVersion: vectors.message_key_conversation_key_version,
+    messageId,
+    attachments: [
+      {
+        attachment_type: "media",
+        media_hash_key: "photo",
+        width: 4,
+        height: 3,
+        filesize_bytes: ciphertext.length,
+        filename: "photo.bin",
+        media_type: 5,
+      },
+    ],
+  });
+  assert.equal(body.message_id, messageId);
 });

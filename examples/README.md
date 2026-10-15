@@ -123,10 +123,11 @@ Each example ships **two** test paths:
      assert it verifies — closing the sign → verify loop end to end
   4. add a reaction to the sent message, decrypt + verify it, then remove it
 
-  Three optional extras: `CHATXDK_E2E_MEDIA=1` additionally stream-encrypts
-  a media blob, uploads it (initialize → append → finalize), sends a message
-  referencing its `media_hash_key`, then downloads and stream-decrypts it
-  back to the original bytes; `CHATXDK_E2E_GROUPS=1` additionally creates a
+  Three optional extras: `CHATXDK_E2E_MEDIA=1` additionally takes a message
+  id, stream-encrypts a media blob for it, uploads it (initialize → append →
+  finalize), sends the message under that id referencing its
+  `media_hash_key`, then downloads and stream-decrypts it back to the
+  original bytes; `CHATXDK_E2E_GROUPS=1` additionally creates a
   group (the two-signature create), sends a group message, and adds the 1:1
   partner as a member (a key rotation); `CHAT_PIN=…` (Python only)
   additionally unlocks keys via live Juicebox and checks they match the
@@ -137,19 +138,24 @@ Each example ships **two** test paths:
 
 Media never travels in the message: the message carries a `media` attachment
 descriptor referencing a `media_hash_key`, and the bytes themselves are
-stream-encrypted and stored via the chat media endpoints. The examples encrypt
-uploads with the conversation key; to decrypt, the SDK reads the message that
-carries the media and derives that file's key, whichever client sent it.
+stream-encrypted and stored via the chat media endpoints. Each file is
+encrypted under a key derived from the conversation key, the sender, the
+message's id, and the file's position in the message's attachments, so the
+message id comes first: take it from `newMessageId`/`new_message_id`, encrypt
+every file with it, and send the message with the same id. To decrypt, the SDK
+reads the message that carries the media and derives that file's key,
+whichever client sent it.
 Every example's crypto core shows the pattern with the SDK's
 **incremental** stream API (`streamEncryptor` / `streamDecryptor`), feeding
 fixed-size chunks through `push` and sealing with `finish` — memory stays
 bounded regardless of file size, which matters most in the WASM binding where
 the heap cannot hold large files whole:
 
-- **encrypt + upload**: `encryptMedia`/`encrypt_media` (chunked `push` +
-  `finish`) → `uploadMedia`/`upload_media` (initialize → 3 MB appends →
-  finalize, returning the `media_hash_key`) → send a message whose
-  attachment descriptor references that key
+- **encrypt + upload**: `newMessageId`/`new_message_id` →
+  `encryptMedia`/`encrypt_media` with that id and the file's position
+  (chunked `push` + `finish`) → `uploadMedia`/`upload_media` (initialize →
+  3 MB appends → finalize, returning the `media_hash_key`) → send the message
+  under the same id, its attachment descriptor referencing that key
 - **download + decrypt**: `downloadMedia`/`download_media` (raw **bytes** —
   never decode the body as text; that corrupts the ciphertext) →
   `decryptMedia`/`decrypt_media` with the raw event of the message that

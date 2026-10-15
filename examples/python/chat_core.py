@@ -210,6 +210,7 @@ class ChatCore:
         reply_to_sequence_id: str | None = None,
         entities: list[tuple[int, int, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        message_id: str | None = None,
         quick_reply: QuickReply | None = None,
         ttl_msec: int | None = None,
     ) -> dict[str, str]:
@@ -222,7 +223,9 @@ class ChatCore:
         builds a *threaded* reply. Omit the conversation key pair to resolve
         it from the SDK's verified-key cache (``set_cache_keys``).
         ``entities`` are ``(start, end, type)`` byte ranges; ``attachments``
-        are attachment descriptors (e.g. a media reference); ``quick_reply``
+        are attachment descriptors (e.g. a media reference), and a message
+        with media passes the ``message_id`` its media was encrypted with
+        (from ``new_message_id``); ``quick_reply``
         offers selectable options or answers them; ``ttl_msec`` makes the message disappear after the given lifetime. Signed with the
         ``set_identity`` session identity.
         """
@@ -234,6 +237,7 @@ class ChatCore:
                 conversation_key_version=conversation_key_version,
                 entities=entities,
                 attachments=attachments,
+                message_id=message_id,
                 quick_reply=quick_reply,
                 ttl_msec=ttl_msec,
             )
@@ -247,11 +251,12 @@ class ChatCore:
                 conversation_key_version=conversation_key_version,
                 entities=entities,
                 attachments=attachments,
+                message_id=message_id,
                 quick_reply=quick_reply,
                 ttl_msec=ttl_msec,
             )
         return {
-            # The SDK generates the message id and returns it in the payload.
+            # The message id: the caller's, or one the SDK generated.
             "message_id": payload.message_id,
             "encoded_message_create_event": payload.encrypted_content,
             "encoded_message_event_signature": payload.encoded_event_signature,
@@ -332,14 +337,27 @@ class ChatCore:
 
     MEDIA_CHUNK = 1024 * 1024
 
-    def encrypt_media(self, plaintext: bytes, conversation_key: bytes) -> bytes:
+    def new_message_id(self) -> str:
+        """A fresh id for a message with media, taken before its media is encrypted."""
+        return self.chat.new_message_id()
+
+    def encrypt_media(
+        self,
+        plaintext: bytes,
+        conversation_key: bytes,
+        message_id: str,
+        attachment_index: int,
+    ) -> bytes:
         """Encrypt a media blob with the incremental stream API.
 
-        Feeding fixed-size chunks through ``push`` keeps memory bounded no
-        matter how large the file is; ``finish`` emits the final frame that
-        seals the stream (decryption fails without it).
+        The blob is encrypted for the message ``message_id`` (from
+        ``new_message_id``) at ``attachment_index`` in its attachments; send
+        the message with the same id. Feeding fixed-size chunks through
+        ``push`` keeps memory bounded no matter how large the file is;
+        ``finish`` emits the final frame that seals the stream (decryption
+        fails without it).
         """
-        enc = self.chat.stream_encryptor(conversation_key)
+        enc = self.chat.stream_encryptor(conversation_key, message_id, attachment_index)
         out = bytearray()
         for offset in range(0, len(plaintext), self.MEDIA_CHUNK):
             out += enc.push(plaintext[offset : offset + self.MEDIA_CHUNK])

@@ -296,7 +296,8 @@ public class E2ELiveTests
             // emits several frames and any corruption is byte-attributable.
             var plaintext = new byte[300_000];
             for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
-            var ciphertext = core.EncryptMedia(plaintext, key);
+            var mediaMessageId = core.NewMessageId();
+            var ciphertext = core.EncryptMedia(plaintext, key, mediaMessageId, 0);
             var mediaHashKey = await api.UploadMediaAsync(canonicalConv, ciphertext);
             Console.WriteLine($"encrypted media uploaded: {mediaHashKey} ({ciphertext.Length} bytes)");
 
@@ -309,7 +310,8 @@ public class E2ELiveTests
                 {
                     AttachmentDescriptor.Media(mediaHashKey, 0, 0, plaintext.Length, "e2e.bin", 5),
                 },
-                ttlMsec: 24L * 60 * 60 * 1000);
+                ttlMsec: 24L * 60 * 60 * 1000,
+                messageId: mediaMessageId);
             await api.SendMessageAsync(canonicalConv, mediaMsg);
             var (mediaOne, mediaRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, mediaMsg.MessageId);
             Assert.True(mediaOne.TryGetProperty("verified", out var v5) && v5.GetBoolean(),

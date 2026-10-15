@@ -154,11 +154,34 @@ public final class ChatCore implements AutoCloseable {
             List<String> replyToCkces,
             QuickReply quickReply)
             throws Exception {
+        return encryptReply(conversationId, text, conversationKey, conversationKeyVersion,
+                replyToEvent, entities, attachments, ttlMsec, replyToCkces, quickReply, null);
+    }
+
+    /**
+     * Like the overload above, plus {@code messageId}: the id from
+     * {@link #newMessageId} that the message's media was encrypted with,
+     * required when {@code attachments} include media.
+     */
+    public SendBody encryptReply(
+            String conversationId,
+            String text,
+            byte[] conversationKey,
+            String conversationKeyVersion,
+            String replyToEvent,
+            List<EntityDescriptor> entities,
+            List<AttachmentDescriptor> attachments,
+            Long ttlMsec,
+            List<String> replyToCkces,
+            QuickReply quickReply,
+            String messageId)
+            throws Exception {
         SendPayload payload;
         if (replyToEvent == null) {
             EncryptMessageParams params = new EncryptMessageParams(conversationId, text);
             params.conversationKey = conversationKey;
             params.conversationKeyVersion = conversationKeyVersion;
+            params.messageId = messageId;
             params.entities = entities;
             params.attachments = attachments;
             params.quickReply = quickReply;
@@ -168,6 +191,7 @@ public final class ChatCore implements AutoCloseable {
             EncryptReplyParams params = new EncryptReplyParams(conversationId, text, replyToEvent);
             params.conversationKey = conversationKey;
             params.conversationKeyVersion = conversationKeyVersion;
+            params.messageId = messageId;
             params.replyToCkces = replyToCkces;
             params.entities = entities;
             params.attachments = attachments;
@@ -175,7 +199,7 @@ public final class ChatCore implements AutoCloseable {
             params.ttlMsec = ttlMsec;
             payload = chat.encryptReply(params);
         }
-        // The SDK generates the message id and returns it in the payload.
+        // The message id: the caller's, or one the SDK generated.
         return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
     }
 
@@ -225,15 +249,24 @@ public final class ChatCore implements AutoCloseable {
 
     private static final int MEDIA_CHUNK = 1024 * 1024;
 
+    /** A fresh id for a message with media, taken before its media is encrypted. */
+    public String newMessageId() {
+        return chat.newMessageId();
+    }
+
     /**
      * Encrypt a media blob with the incremental stream API.
      *
-     * <p>Feeding fixed-size chunks through {@code push} keeps memory bounded no
-     * matter how large the file is; {@code finish} emits the final frame that
-     * seals the stream (decryption fails without it).
+     * <p>The blob is encrypted for the message {@code messageId} (from
+     * {@link #newMessageId}) at {@code attachmentIndex} in its attachments;
+     * send the message with the same id. Feeding fixed-size chunks through
+     * {@code push} keeps memory bounded no matter how large the file is;
+     * {@code finish} emits the final frame that seals the stream (decryption
+     * fails without it).
      */
-    public byte[] encryptMedia(byte[] plaintext, byte[] conversationKey) throws Exception {
-        try (StreamEncryptor enc = chat.streamEncryptor(conversationKey)) {
+    public byte[] encryptMedia(byte[] plaintext, byte[] conversationKey, String messageId, int attachmentIndex)
+            throws Exception {
+        try (StreamEncryptor enc = chat.streamEncryptor(conversationKey, messageId, attachmentIndex)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             for (int offset = 0; offset < plaintext.length; offset += MEDIA_CHUNK) {
                 int end = Math.min(offset + MEDIA_CHUNK, plaintext.length);

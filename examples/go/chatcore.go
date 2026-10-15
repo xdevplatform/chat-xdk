@@ -142,6 +142,9 @@ type ReplyOptions struct {
 	Entities []chatxdk.EntityTuple
 	// Attachments are attachment descriptors (e.g. a media reference).
 	Attachments []chatxdk.AttachmentDescriptor
+	// MessageID is the id from NewMessageID that the message's media was
+	// encrypted with; required when Attachments include media.
+	MessageID string
 	// QuickReply offers selectable options or answers them; a received
 	// TextContent.QuickReply can be passed back unchanged.
 	QuickReply *chatxdk.QuickReply
@@ -175,6 +178,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			Text:                   text,
 			ConversationKey:        opts.ConversationKey,
 			ConversationKeyVersion: opts.ConversationKeyVersion,
+			MessageID:              opts.MessageID,
 			Entities:               opts.Entities,
 			Attachments:            opts.Attachments,
 			QuickReply:             opts.QuickReply,
@@ -188,6 +192,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			ReplyToCkces:           opts.ReplyToCkces,
 			ConversationKey:        opts.ConversationKey,
 			ConversationKeyVersion: opts.ConversationKeyVersion,
+			MessageID:              opts.MessageID,
 			Entities:               opts.Entities,
 			Attachments:            opts.Attachments,
 			QuickReply:             opts.QuickReply,
@@ -198,7 +203,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 		return nil, err
 	}
 	return &SendBody{
-		// The SDK generates the message id and returns it in the payload.
+		// The message id: the caller's, or one the SDK generated.
 		MessageID:                    payload.MessageID,
 		EncodedMessageCreateEvent:    payload.EncryptedContent,
 		EncodedMessageEventSignature: payload.EncodedEventSignature,
@@ -272,13 +277,21 @@ func (c *ChatCore) PrepareGroupMembersChange(publicKeys []chatxdk.PublicKeyInput
 // mediaChunk is the fixed chunk size fed through the incremental stream API.
 const mediaChunk = 1024 * 1024
 
+// NewMessageID returns a fresh id for a message with media, taken before its
+// media is encrypted.
+func (c *ChatCore) NewMessageID() (string, error) {
+	return c.chat.NewMessageID()
+}
+
 // EncryptMedia encrypts a media blob with the incremental stream API.
 //
+// The blob is encrypted for the message messageID (from NewMessageID) at
+// attachmentIndex in its attachments; send the message with the same id.
 // Feeding fixed-size chunks through Push keeps memory bounded no matter how
 // large the file is; Finish emits the final frame that seals the stream
 // (decryption fails without it).
-func (c *ChatCore) EncryptMedia(plaintext, conversationKey []byte) ([]byte, error) {
-	enc, err := c.chat.StreamEncryptor(conversationKey)
+func (c *ChatCore) EncryptMedia(plaintext, conversationKey []byte, messageID string, attachmentIndex int) ([]byte, error) {
+	enc, err := c.chat.StreamEncryptor(conversationKey, messageID, attachmentIndex)
 	if err != nil {
 		return nil, err
 	}

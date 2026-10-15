@@ -82,9 +82,11 @@ public sealed class ChatCore : IDisposable
     /// *threaded* reply whose preview is derived from that raw signed event.
     /// <paramref name="entities"/> are (start, end, type) byte ranges;
     /// <paramref name="attachments"/> are attachment descriptors (e.g. a media
-    /// reference); <paramref name="quickReply"/> offers selectable options
-    /// or answers them; <paramref name="ttlMsec"/> makes the message
-    /// disappear after the given lifetime.
+    /// reference), and a message with media passes the
+    /// <paramref name="messageId"/> its media was encrypted with (from
+    /// <see cref="NewMessageId"/>); <paramref name="quickReply"/> offers
+    /// selectable options or answers them; <paramref name="ttlMsec"/> makes
+    /// the message disappear after the given lifetime.
     /// </summary>
     public SendBody EncryptReply(
         string conversationId,
@@ -96,13 +98,15 @@ public sealed class ChatCore : IDisposable
         IReadOnlyList<AttachmentDescriptor>? attachments = null,
         long? ttlMsec = null,
         IReadOnlyList<string>? replyToCkces = null,
-        QuickReply? quickReply = null)
+        QuickReply? quickReply = null,
+        string? messageId = null)
     {
         var payload = replyToEvent is null
             ? _chat.EncryptMessage(new EncryptMessageParams(conversationId, text)
             {
                 ConversationKey = conversationKey,
                 ConversationKeyVersion = conversationKeyVersion,
+                MessageId = messageId,
                 Entities = entities,
                 Attachments = attachments,
                 QuickReply = quickReply,
@@ -112,6 +116,7 @@ public sealed class ChatCore : IDisposable
             {
                 ConversationKey = conversationKey,
                 ConversationKeyVersion = conversationKeyVersion,
+                MessageId = messageId,
                 // Key-change events for the original's key version, when it
                 // differs from this reply's version.
                 ReplyToCkces = replyToCkces,
@@ -120,7 +125,7 @@ public sealed class ChatCore : IDisposable
                 QuickReply = quickReply,
                 TtlMsec = ttlMsec,
             });
-        // The SDK generates the message id and returns it in the payload.
+        // The message id: the caller's, or one the SDK generated.
         return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
     }
 
@@ -172,16 +177,22 @@ public sealed class ChatCore : IDisposable
 
     private const int MediaChunk = 1024 * 1024;
 
+    /// <summary>A fresh id for a message with media, taken before its media is encrypted.</summary>
+    public string NewMessageId() => _chat.NewMessageId();
+
     /// <summary>
     /// Encrypt a media blob with the incremental stream API.
     ///
-    /// Feeding fixed-size chunks through <c>Push</c> keeps memory bounded no
-    /// matter how large the file is; <c>Finish</c> emits the final frame that
-    /// seals the stream (decryption fails without it).
+    /// The blob is encrypted for the message <paramref name="messageId"/> (from
+    /// <see cref="NewMessageId"/>) at <paramref name="attachmentIndex"/> in its
+    /// attachments; send the message with the same id. Feeding fixed-size chunks
+    /// through <c>Push</c> keeps memory bounded no matter how large the file is;
+    /// <c>Finish</c> emits the final frame that seals the stream (decryption fails
+    /// without it).
     /// </summary>
-    public byte[] EncryptMedia(byte[] plaintext, byte[] conversationKey)
+    public byte[] EncryptMedia(byte[] plaintext, byte[] conversationKey, string messageId, int attachmentIndex)
     {
-        using var enc = _chat.StreamEncryptor(conversationKey);
+        using var enc = _chat.StreamEncryptor(conversationKey, messageId, attachmentIndex);
         using var output = new MemoryStream();
         for (var offset = 0; offset < plaintext.Length; offset += MediaChunk)
         {

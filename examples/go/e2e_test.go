@@ -306,7 +306,11 @@ func TestE2ELive(t *testing.T) {
 		for i := range plaintext {
 			plaintext[i] = byte((i*31 + 7) % 256)
 		}
-		ciphertext, err := core.EncryptMedia(plaintext, key)
+		mediaMessageID, err := core.NewMessageID()
+		if err != nil {
+			t.Fatalf("NewMessageID: %v", err)
+		}
+		ciphertext, err := core.EncryptMedia(plaintext, key, mediaMessageID, 0)
 		if err != nil {
 			t.Fatalf("EncryptMedia: %v", err)
 		}
@@ -321,6 +325,7 @@ func TestE2ELive(t *testing.T) {
 		mediaBody, err := core.EncryptReply(canonicalConv, mediaText, &ReplyOptions{
 			ConversationKey:        key,
 			ConversationKeyVersion: kv,
+			MessageID:              mediaMessageID,
 			Attachments: []chatxdk.AttachmentDescriptor{{
 				AttachmentType: "media",
 				MediaHashKey:   mediaHashKey,

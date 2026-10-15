@@ -273,7 +273,8 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
   // A deterministic multi-chunk payload, so the incremental encryptor emits
   // several frames and any corruption is byte-attributable.
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
-  const ciphertext = core.encryptMedia(plaintext, key);
+  const mediaMessageId = core.newMessageId();
+  const ciphertext = core.encryptMedia(plaintext, key, mediaMessageId, 0);
   const mediaHashKey = await api.uploadMedia(canonicalConv, ciphertext);
   console.log(`encrypted media uploaded: ${mediaHashKey} (${ciphertext.length} bytes)`);
 
@@ -282,6 +283,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     text: `chat-xdk e2e media [js] ${Date.now()}`,
     conversationKey: key,
     conversationKeyVersion: kv,
+    messageId: mediaMessageId,
     attachments: [
       {
         attachment_type: "media",

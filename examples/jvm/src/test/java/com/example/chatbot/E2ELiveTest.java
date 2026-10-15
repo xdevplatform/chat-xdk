@@ -379,7 +379,8 @@ class E2ELiveTest {
         for (int i = 0; i < plaintext.length; i++) {
             plaintext[i] = (byte) ((i * 31 + 7) % 256);
         }
-        byte[] ciphertext = core.encryptMedia(plaintext, key);
+        String mediaMessageId = core.newMessageId();
+        byte[] ciphertext = core.encryptMedia(plaintext, key, mediaMessageId, 0);
         String mediaHashKey = api.uploadMedia(canonicalConv, ciphertext);
         System.out.println("encrypted media uploaded: " + mediaHashKey
                 + " (" + ciphertext.length + " bytes)");
@@ -395,7 +396,9 @@ class E2ELiveTest {
                 null,
                 List.of(descriptor),
                 24L * 60 * 60 * 1000,
-                null);
+                null,
+                null,
+                mediaMessageId);
         api.sendMessage(canonicalConv, mediaMsg);
         Decrypted media = awaitDecrypted(api, core, conv, convKeys, signing, mediaMsg.messageId());
         ObjectNode one = media.event();

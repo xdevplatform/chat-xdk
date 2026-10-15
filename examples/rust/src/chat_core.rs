@@ -37,6 +37,9 @@ pub struct ReplyOptions {
     pub entities: Option<Vec<EntityDescriptor>>,
     /// Attachment descriptors (e.g. a media reference) to embed.
     pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// Id from [`ChatCore::new_message_id`] that the message's media was
+    /// encrypted with; required when `attachments` include media.
+    pub message_id: Option<String>,
     /// Quick reply offering selectable options, or answering them.
     pub quick_reply: Option<QuickReply>,
     /// Disappearing-message lifetime in milliseconds.
@@ -179,6 +182,7 @@ impl ChatCore {
                     .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
                 params.entities = options.entities;
                 params.attachments = options.attachments;
+                params.message_id = options.message_id;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_message(params)?
@@ -193,13 +197,14 @@ impl ChatCore {
                 params.reply_to_ckces = options.reply_to_ckces.clone();
                 params.entities = options.entities;
                 params.attachments = options.attachments;
+                params.message_id = options.message_id;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_reply(params)?
             }
         };
         Ok(SendBody {
-            // The SDK generates the message id and returns it in the payload.
+            // The message id: the caller's, or one the SDK generated.
             message_id: payload.message_id,
             encoded_message_create_event: payload.encrypted_content,
             encoded_message_event_signature: payload.encoded_event_signature,
@@ -276,17 +281,30 @@ impl ChatCore {
     /// Chunk size fed through the incremental stream encryptor/decryptor.
     pub const MEDIA_CHUNK: usize = 1024 * 1024;
 
+    /// A fresh id for a message with media, taken before its media is
+    /// encrypted.
+    pub fn new_message_id(&self) -> String {
+        self.inner.new_message_id()
+    }
+
     /// Encrypt a media blob with the incremental stream API.
     ///
-    /// Feeding fixed-size chunks through `push` keeps memory bounded no
-    /// matter how large the file is; `finish` emits the final frame that
-    /// seals the stream (decryption fails without it).
+    /// The blob is encrypted for the message `message_id` (from
+    /// [`ChatCore::new_message_id`]) at `attachment_index` in its
+    /// attachments; send the message with the same id. Feeding fixed-size
+    /// chunks through `push` keeps memory bounded no matter how large the
+    /// file is; `finish` emits the final frame that seals the stream
+    /// (decryption fails without it).
     pub fn encrypt_media(
         &self,
         plaintext: &[u8],
         conversation_key: &XChatConversationKey,
+        message_id: &str,
+        attachment_index: i64,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut enc = self.inner.stream_encryptor(conversation_key)?;
+        let mut enc =
+            self.inner
+                .stream_encryptor(conversation_key, message_id, attachment_index)?;
         let mut out = Vec::new();
         for chunk in plaintext.chunks(Self::MEDIA_CHUNK) {
             out.extend(enc.push(chunk)?);

@@ -247,6 +247,7 @@ fn threaded_reply_with_entities_and_ttl() {
                     entity_type: "mention".to_string(),
                 }]),
                 attachments: None,
+                message_id: None,
                 quick_reply: None,
                 ttl_msec: Some(60_000),
             },
@@ -258,42 +259,75 @@ fn threaded_reply_with_entities_and_ttl() {
 #[test]
 fn media_stream_encrypt_decrypt_roundtrip() {
     // The chunked stream path the media flow uses: multi-chunk payload in,
-    // identical bytes out, and truncation is detected. The fixture
-    // conversation-key message names one media file under the conversation
-    // key, so the upload decrypts through that message.
+    // identical bytes out, and truncation is detected. Media is encrypted
+    // for its message and position, so encrypting as the fixture message's
+    // sender, under its message id and key, yields media that opens through
+    // that message: its first and second attachments.
     let v = load_vectors();
     let core = loaded_core(&v);
-    let key = conversation_key(&v);
-    let keys = [(
-        v["event_conversation_key_version"]
-            .as_str()
-            .unwrap()
-            .to_string(),
-        key.clone(),
-    )]
-    .into_iter()
-    .collect();
-    let event = v["event_conversation_key_media_b64"].as_str().unwrap();
-    let media_hash_key = v["media_conversation_key_hash_key"].as_str().unwrap();
+    core.set_identity(v["message_key_sender_id"].as_str().unwrap());
+    let key = XChatConversationKey::from_bytes(
+        chat_xdk_core::utils::hex_to_bytes(v["message_key_conversation_key_hex"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let key_version = v["message_key_conversation_key_version"].as_str().unwrap();
+    let keys = [(key_version.to_string(), key.clone())]
+        .into_iter()
+        .collect();
+    let event = v["event_message_key_b64"].as_str().unwrap();
+    let message_id = v["message_key_message_id"].as_str().unwrap();
     let plaintext: Vec<u8> = (0..300_000u32)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
 
-    let ciphertext = core.encrypt_media(&plaintext, &key).expect("encrypt_media");
-    assert_ne!(&ciphertext[..plaintext.len()], plaintext.as_slice());
-    assert_eq!(
-        core.decrypt_media(&ciphertext, event, &keys, media_hash_key)
-            .expect("decrypt_media"),
-        plaintext
-    );
+    let mut ciphertext = Vec::new();
+    for (index, media_hash_key) in [&v["media_first_hash_key"], &v["media_second_hash_key"]]
+        .into_iter()
+        .enumerate()
+    {
+        ciphertext = core
+            .encrypt_media(&plaintext, &key, message_id, index as i64)
+            .expect("encrypt_media");
+        assert_ne!(&ciphertext[..plaintext.len()], plaintext.as_slice());
+        assert_eq!(
+            core.decrypt_media(&ciphertext, event, &keys, media_hash_key.as_str().unwrap())
+                .expect("decrypt_media"),
+            plaintext
+        );
+    }
 
     let err = core
         .decrypt_media(
             &ciphertext[..ciphertext.len() - 4],
             event,
             &keys,
-            media_hash_key,
+            v["media_second_hash_key"].as_str().unwrap(),
         )
         .unwrap_err();
     assert!(err.to_string().contains("truncated"), "{err}");
+
+    let new_id = core.new_message_id();
+    let body = core
+        .encrypt_reply(
+            "6789:12345",
+            "a photo",
+            &key,
+            key_version,
+            ReplyOptions {
+                message_id: Some(new_id.clone()),
+                attachments: Some(vec![chat_xdk_core::AttachmentDescriptor::Media {
+                    media_hash_key: "photo".to_string(),
+                    width: 4,
+                    height: 3,
+                    filesize_bytes: ciphertext.len() as i64,
+                    filename: "photo.bin".to_string(),
+                    media_type: Some(5),
+                    duration_millis: None,
+                }]),
+                ..Default::default()
+            },
+        )
+        .expect("encrypt_reply (media)");
+    assert_eq!(body.message_id, new_id);
 }

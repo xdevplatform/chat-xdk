@@ -294,6 +294,7 @@ fn e2e_live() {
                     entity_type: "mention".to_string(),
                 }]),
                 attachments: None,
+                message_id: None,
                 quick_reply: None,
                 ttl_msec: Some(24 * 60 * 60 * 1000),
             },
@@ -355,7 +356,10 @@ fn e2e_live() {
         let plaintext: Vec<u8> = (0..300_000u32)
             .map(|i| ((i * 31 + 7) % 256) as u8)
             .collect();
-        let ciphertext = core.encrypt_media(&plaintext, &key).expect("encrypt_media");
+        let media_message_id = core.new_message_id();
+        let ciphertext = core
+            .encrypt_media(&plaintext, &key, &media_message_id, 0)
+            .expect("encrypt_media");
         let media_hash_key = api
             .upload_media(&canonical_conv, &ciphertext)
             .expect("upload_media");
@@ -383,6 +387,7 @@ fn e2e_live() {
                         media_type: Some(5),
                         duration_millis: None,
                     }]),
+                    message_id: Some(media_message_id.clone()),
                     quick_reply: None,
                     ttl_msec: Some(24 * 60 * 60 * 1000),
                 },
