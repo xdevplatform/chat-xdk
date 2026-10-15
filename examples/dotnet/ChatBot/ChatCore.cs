@@ -96,7 +96,7 @@ public sealed class ChatCore : IDisposable
         IReadOnlyList<AttachmentDescriptor>? attachments = null,
         long? ttlMsec = null,
         IReadOnlyList<string>? replyToCkces = null,
-        JsonElement? quickReply = null)
+        QuickReply? quickReply = null)
     {
         var payload = replyToEvent is null
             ? _chat.EncryptMessage(new EncryptMessageParams(conversationId, text)
