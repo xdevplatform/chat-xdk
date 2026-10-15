@@ -1038,6 +1038,9 @@ public final class Chat implements AutoCloseable {
         if (p.replyToAttachments != null) {
             n.set("reply_to_attachments", ChatJson.MAPPER.valueToTree(p.replyToAttachments));
         }
+        if (p.replyToAttachmentId != null) {
+            n.put("reply_to_attachment_id", p.replyToAttachmentId);
+        }
         if (p.quickReply != null) {
             n.set("quick_reply", p.quickReply);
         }
@@ -1061,6 +1064,9 @@ public final class Chat implements AutoCloseable {
         }
         if (p.targetMessageSequenceId != null) {
             n.put("target_message_sequence_id", p.targetMessageSequenceId);
+        }
+        if (p.targetAttachmentId != null) {
+            n.put("target_attachment_id", p.targetAttachmentId);
         }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
         return ChatJson.MAPPER.writeValueAsString(n);
