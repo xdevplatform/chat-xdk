@@ -137,6 +137,18 @@ class Chat:
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
     ) -> dict: ...
+    def prepare_group_admin_change(
+        self,
+        conversation_id: str,
+        action: str,
+        *,
+        user_ids: Optional[list[str]] = None,
+        invite_url: Optional[str] = None,
+        expires_at_msec: Optional[int] = None,
+        affiliate_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> dict: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> dict: ...
