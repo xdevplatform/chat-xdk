@@ -646,6 +646,25 @@ namespace ChatXdk
             return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
         }
 
+        /// <summary>
+        /// Build the signed action for changing a conversation setting: the
+        /// disappearing-message duration, mute, or screen-capture blocking.
+        /// Mute and unmute are personal: they are signed for the sender's own
+        /// "{sender}:{sender}" conversation, with ConversationId as the muted
+        /// conversation. The SDK generates the action's message id; read it
+        /// back from the result.
+        /// </summary>
+        public ActionSignature PrepareConversationSettingsChange(ConversationSettingsParams parameters)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(BuildPrepareConversationSettingsChangeJson(parameters));
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_conversation_settings_change(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+        }
+
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
         private PreparedConversationChange CallPrepareEndpoint(string paramsJson, ParamsJsonDelegate fn)
@@ -1088,6 +1107,32 @@ namespace ChatXdk
                 ["conversation_id"] = p.ConversationId,
                 ["sequence_ids"] = p.SequenceIds,
                 ["delete_for_all"] = p.DeleteForAll,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
+            };
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildPrepareConversationSettingsChangeJson(ConversationSettingsParams p)
+        {
+            ArgumentNullException.ThrowIfNull(p);
+            var setting = p.Setting switch
+            {
+                ConversationSetting.MessageDuration => "message_duration",
+                ConversationSetting.RemoveMessageDuration => "remove_message_duration",
+                ConversationSetting.Mute => "mute",
+                ConversationSetting.Unmute => "unmute",
+                ConversationSetting.EnableScreenCaptureBlocking => "enable_screen_capture_blocking",
+                ConversationSetting.DisableScreenCaptureBlocking => "disable_screen_capture_blocking",
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(p),
+                    $"unknown ConversationSetting value {(int)p.Setting}: pass one of the named ConversationSetting values"),
+            };
+            var dict = new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["setting"] = setting,
+                ["ttl_msec"] = p.TtlMsec,
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };

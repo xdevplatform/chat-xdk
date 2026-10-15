@@ -264,6 +264,23 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Build the signed action for changing a conversation setting.
+        ///
+        ///  `params_json` — single JSON document: `conversation_id`, `setting` (one of
+        ///  `message_duration`, `remove_message_duration`, `mute`, `unmute`,
+        ///  `enable_screen_capture_blocking`, `disable_screen_capture_blocking`),
+        ///  `ttl_msec` (required for `message_duration` and rejected otherwise), plus
+        ///  optional `sender_id` / `signing_key_version` (absent resolves from the
+        ///  session identity). Mute and unmute are signed for the sender's own
+        ///  `{sender_id}:{sender_id}` conversation.
+        ///
+        ///  Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+        ///  on it.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_settings_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_conversation_settings_change(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Decrypt a webhook event.
         ///
         ///  - `event_b64` — base64-encoded raw event from the webhook.

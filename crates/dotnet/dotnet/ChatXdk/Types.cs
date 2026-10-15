@@ -876,4 +876,53 @@ namespace ChatXdk
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
     }
+
+    /// <summary>A setting <see cref="Chat.PrepareConversationSettingsChange"/> can change.</summary>
+    public enum ConversationSetting
+    {
+        /// <summary>Make new messages disappear TtlMsec milliseconds after they are sent.</summary>
+        MessageDuration,
+        /// <summary>Turn disappearing messages off.</summary>
+        RemoveMessageDuration,
+        /// <summary>Mute the conversation for the sender only.</summary>
+        Mute,
+        /// <summary>Unmute the conversation for the sender only.</summary>
+        Unmute,
+        /// <summary>Ask participants' clients to block screenshots and screen recordings.</summary>
+        EnableScreenCaptureBlocking,
+        /// <summary>Lift screen-capture blocking.</summary>
+        DisableScreenCaptureBlocking,
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareConversationSettingsChange"/>.
+    /// Like a delete, a settings change is a signed plaintext event, so no
+    /// conversation key is involved.
+    /// </summary>
+    public sealed class ConversationSettingsParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="conversationId">ID of the conversation whose setting changes.</param>
+        /// <param name="setting">The setting to change.</param>
+        public ConversationSettingsParams(string conversationId, ConversationSetting setting)
+        {
+            ConversationId = conversationId;
+            Setting = setting;
+        }
+
+        /// <summary>ID of the conversation whose setting changes.</summary>
+        public string ConversationId { get; }
+        /// <summary>The setting to change.</summary>
+        public ConversationSetting Setting { get; }
+        /// <summary>
+        /// How long new messages last before they disappear, in milliseconds.
+        /// Required for <see cref="ConversationSetting.MessageDuration"/> and
+        /// rejected for every other setting.
+        /// </summary>
+        public long? TtlMsec { get; init; }
+        /// <summary>User ID of the sender signing the change; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
+    }
 }
