@@ -155,6 +155,7 @@ class Chat:
         conversation_key_version: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
+        quick_reply: Optional[dict] = None,
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
     ) -> SendPayload: ...
@@ -177,6 +178,7 @@ class Chat:
         conversation_key_version: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
+        quick_reply: Optional[dict] = None,
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
     ) -> SendPayload: ...

@@ -247,6 +247,7 @@ fn threaded_reply_with_entities_and_ttl() {
                     entity_type: "mention".to_string(),
                 }]),
                 attachments: None,
+                quick_reply: None,
                 ttl_msec: Some(60_000),
             },
         )

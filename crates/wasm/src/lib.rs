@@ -458,8 +458,8 @@ impl Chat {
     /// `setIdentity` when omitted), `conversationKey` (Uint8Array) /
     /// `conversationKeyVersion` (resolved from the opt-in key cache when
     /// omitted), `entities` (array of `[start, end, "type"]` tuples),
-    /// `attachments` (array of attachment objects), `shouldNotify`, and
-    /// `ttlMsec`.
+    /// `attachments` (array of attachment objects), `quickReply` (the same
+    /// shape decrypted text content carries), `shouldNotify`, and `ttlMsec`.
     ///
     /// The SDK generates the message id and returns it as `messageId` on the
     /// result; callers do not pass one.
@@ -473,6 +473,7 @@ impl Chat {
         core_params.conversation_key_version = p.conversation_key_version;
         core_params.entities = p.entities.map(entity_tuples_to_descs);
         core_params.attachments = p.attachments;
+        core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
         core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
         let payload = self
@@ -514,6 +515,7 @@ impl Chat {
         core_params.attachments = p.attachments;
         core_params.reply_to_entities = p.reply_to_entities.map(entity_tuples_to_descs);
         core_params.reply_to_attachments = p.reply_to_attachments;
+        core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
         core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
         let payload = self
@@ -1061,6 +1063,7 @@ struct JsEncryptMessageParams {
     conversation_key_version: Option<String>,
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
+    quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
     ttl_msec: Option<f64>,
 }
@@ -1084,6 +1087,7 @@ struct JsEncryptReplyParams {
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     reply_to_entities: Option<Vec<(i32, i32, String)>>,
     reply_to_attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
+    quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
     ttl_msec: Option<f64>,
 }

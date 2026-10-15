@@ -25,6 +25,48 @@ function bytesToB64(bytes) {
   return Buffer.from(bytes).toString("base64");
 }
 
+// Frame a SendPayload as the base64 MessageEvent envelope decryptEvent
+// consumes: string header fields, the payload's MessageCreateEvent in the
+// detail union, and its encoded signature.
+function frameSendPayload(payload, senderId, conversationId) {
+  const str = (id, value) => {
+    const data = Buffer.from(value, "utf-8");
+    const header = Buffer.alloc(7);
+    header.writeUInt8(11, 0);
+    header.writeUInt16BE(id, 1);
+    header.writeUInt32BE(data.length, 3);
+    return Buffer.concat([header, data]);
+  };
+  return Buffer.concat([
+    str(1, "1"),
+    str(2, payload.messageId),
+    str(3, senderId),
+    str(4, conversationId),
+    str(6, "1700000000000"),
+    Buffer.from([12, 0, 7, 12, 0, 1]),
+    Buffer.from(payload.encryptedContent, "base64"),
+    Buffer.from([0, 12, 0, 9]),
+    Buffer.from(payload.encodedEventSignature, "base64"),
+    Buffer.from([0]),
+  ]).toString("base64");
+}
+
+const QUICK_REPLY_REQUEST = {
+  request: {
+    options: {
+      id: "qr-1",
+      options: [
+        { id: "yes", label: "Yes", metadata: "m-yes", description: "Confirm" },
+        { id: "no", label: "No", metadata: "m-no", description: "Decline" },
+      ],
+    },
+  },
+};
+
+const QUICK_REPLY_RESPONSE = {
+  response: { options: { requestId: "qr-1", metadata: "m-yes", selectedOptionId: "yes" } },
+};
+
 async function main() {
   // wasm-bindgen's default init path uses `fetch(new URL(...))`, which breaks in Node
   // for `file://` URLs. Feed the wasm bytes directly instead.
@@ -214,6 +256,81 @@ async function main() {
           conversationKeyVersion: "1",
         }),
       /sender_id/,
+    );
+  }
+
+  // Quick replies round-trip: what encryptMessage / encryptReply send
+  // decrypts back to the same quickReply, in the shape decryption returns.
+  {
+    const qr = new Chat();
+    qr.importKeys(b64ToBytes(v.private_keys_concat_b64));
+    qr.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    const key = {
+      conversationKey: b64ToBytes(v.conversation_key_b64),
+      conversationKeyVersion: v.event_conversation_key_version,
+    };
+    const keyMap = { [v.event_conversation_key_version]: b64ToBytes(v.conversation_key_b64) };
+    const decryptOwn = (payload) => {
+      const event = qr.decryptEvent(
+        frameSendPayload(payload, v.event_sender_id, v.event_conversation_id),
+        keyMap,
+        signingKeys,
+      );
+      assert.equal(event.verified, true);
+      return event.content;
+    };
+
+    for (const quickReply of [QUICK_REPLY_REQUEST, QUICK_REPLY_RESPONSE]) {
+      const content = decryptOwn(
+        qr.encryptMessage({
+          conversationId: v.event_conversation_id,
+          text: "Continue?",
+          ...key,
+          quickReply,
+        }),
+      );
+      assert.equal(content.text, "Continue?");
+      assert.deepEqual(content.quick_reply, quickReply);
+
+      // A received quick reply can be sent back unchanged.
+      const resent = decryptOwn(
+        qr.encryptMessage({
+          conversationId: v.event_conversation_id,
+          text: "again",
+          ...key,
+          quickReply: content.quick_reply,
+        }),
+      );
+      assert.deepEqual(resent.quick_reply, quickReply);
+    }
+
+    const replyContent = decryptOwn(
+      qr.encryptReply({
+        conversationId: v.event_conversation_id,
+        text: "Yes",
+        ...key,
+        replyToSequenceId: "seq-orig",
+        replyToSenderId: v.event_sender_id,
+        replyToText: "Continue?",
+        quickReply: QUICK_REPLY_RESPONSE,
+      }),
+    );
+    assert.deepEqual(replyContent.quick_reply, QUICK_REPLY_RESPONSE);
+
+    const plain = decryptOwn(
+      qr.encryptMessage({ conversationId: v.event_conversation_id, text: "plain", ...key }),
+    );
+    assert.equal(plain.quick_reply, undefined);
+
+    assert.throws(
+      () =>
+        qr.encryptMessage({
+          conversationId: v.event_conversation_id,
+          text: "bad",
+          ...key,
+          quickReply: { neither: {} },
+        }),
+      /Invalid encryptMessage params/,
     );
   }
 }

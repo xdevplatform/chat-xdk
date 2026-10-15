@@ -19,7 +19,7 @@ use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventsResult,
     EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event,
     GroupCreateParams, GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
-    PublicKeyRegistrationPayload, PublicKeys, SigningKeyEntry,
+    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
 use serde_json::{json, Value};
 
@@ -37,6 +37,8 @@ pub struct ReplyOptions {
     pub entities: Option<Vec<EntityDescriptor>>,
     /// Attachment descriptors (e.g. a media reference) to embed.
     pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// Quick reply offering selectable options, or answering them.
+    pub quick_reply: Option<QuickReply>,
     /// Disappearing-message lifetime in milliseconds.
     pub ttl_msec: Option<i64>,
 }
@@ -159,8 +161,9 @@ impl ChatCore {
     /// `encrypt_message`; with it, the SDK's `encrypt_reply` builds a
     /// *threaded* reply whose preview is derived from that raw event.
     /// `entities` are byte ranges into the text; `attachments` are attachment
-    /// descriptors (e.g. a media reference); `ttl_msec` makes the message
-    /// disappear after the given lifetime. The sender identity comes from
+    /// descriptors (e.g. a media reference); `quick_reply` offers selectable
+    /// options or answers them; `ttl_msec` makes the message disappear after
+    /// the given lifetime. The sender identity comes from
     /// [`ChatCore::set_identity`].
     pub fn encrypt_reply(
         &self,
@@ -176,6 +179,7 @@ impl ChatCore {
                     .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
                 params.entities = options.entities;
                 params.attachments = options.attachments;
+                params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_message(params)?
             }
@@ -189,6 +193,7 @@ impl ChatCore {
                 params.reply_to_ckces = options.reply_to_ckces.clone();
                 params.entities = options.entities;
                 params.attachments = options.attachments;
+                params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_reply(params)?
             }

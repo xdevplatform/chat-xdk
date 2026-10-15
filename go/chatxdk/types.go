@@ -175,6 +175,7 @@ type EncryptMessageParams struct {
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
 	Entities               []EntityTuple          `json:"entities,omitempty"`
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
+	QuickReply             json.RawMessage        `json:"quick_reply,omitempty"` // same shape as TextContent.QuickReply
 	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }
@@ -260,6 +261,7 @@ type EncryptReplyParams struct {
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
 	ReplyToEntities        []EntityTuple          `json:"reply_to_entities,omitempty"`
 	ReplyToAttachments     []AttachmentDescriptor `json:"reply_to_attachments,omitempty"`
+	QuickReply             json.RawMessage        `json:"quick_reply,omitempty"` // same shape as TextContent.QuickReply
 	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }

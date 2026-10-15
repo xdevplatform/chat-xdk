@@ -267,7 +267,7 @@ pub enum SentFromSurfaceKnown {
 
 /// A quick-reply carried by a message: either a request offering options or a
 /// response selecting one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
 pub enum QuickReply {
@@ -282,7 +282,7 @@ pub enum QuickReply {
 }
 
 /// A quick-reply request offering a set of selectable options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
 pub enum QuickReplyRequest {
@@ -293,7 +293,7 @@ pub enum QuickReplyRequest {
 }
 
 /// A quick-reply response selecting a previously offered option.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
 pub enum QuickReplyResponse {
@@ -304,7 +304,7 @@ pub enum QuickReplyResponse {
 }
 
 /// The options offered by a quick-reply request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct QuickReplyOptionsRequest {
     pub id: Option<String>,
@@ -313,7 +313,7 @@ pub struct QuickReplyOptionsRequest {
 }
 
 /// The option selected in a quick-reply response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct QuickReplyOptionsResponse {
     pub request_id: Option<String>,
@@ -322,7 +322,7 @@ pub struct QuickReplyOptionsResponse {
 }
 
 /// A single selectable quick-reply option.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct QuickReplyOption {
     pub id: Option<String>,

@@ -298,6 +298,7 @@ fn e2e_live() {
                     entity_type: "mention".to_string(),
                 }]),
                 attachments: None,
+                quick_reply: None,
                 ttl_msec: Some(24 * 60 * 60 * 1000),
             },
         )
@@ -386,6 +387,7 @@ fn e2e_live() {
                         media_type: Some(5),
                         duration_millis: None,
                     }]),
+                    quick_reply: None,
                     ttl_msec: Some(24 * 60 * 60 * 1000),
                 },
             )
