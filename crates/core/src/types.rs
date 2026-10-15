@@ -104,10 +104,6 @@ pub enum MessageAttachment {
         url: UrlAttachment,
     },
     UnifiedCard {
-        // serde's enum `rename_all` does not cascade to struct-variant fields,
-        // so this explicit rename is what the JsCamelCase macro re-camelCases
-        // to `unifiedCard` for the JS output. Removing it leaks snake_case.
-        #[serde(rename = "unified_card")]
         #[cfg_attr(feature = "js", js_camel(wrap))]
         unified_card: UnifiedCardAttachment,
     },
@@ -1647,6 +1643,86 @@ mod tests {
         assert!(
             !json.contains("unified_card"),
             "JS output must not contain snake_case key, got: {json}"
+        );
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_struct_variant_fields_are_camel_case() {
+        let quick_reply = QuickReply::Response {
+            response: QuickReplyResponse::Options {
+                options: QuickReplyOptionsResponse {
+                    request_id: Some("qr-1".to_string()),
+                    metadata: None,
+                    selected_option_id: Some("yes".to_string()),
+                },
+            },
+        };
+        let text = MessageContent::Text {
+            text: "hi".to_string(),
+            entities: None,
+            attachments: None,
+            replying_to_preview: Some(ReplyingToPreview {
+                sender_id: Some("1".to_string()),
+                message_text: None,
+                entities: None,
+                attachments: None,
+                sender_display_name: None,
+                replying_to_message_sequence_id: None,
+                replying_to_message_id: None,
+            }),
+            forwarded_message: None,
+            sent_from: Some(SentFromSurface::Unknown(9)),
+            quick_reply: Some(quick_reply.clone()),
+            ctas: None,
+        };
+        let json = serde_json::to_value(JsMessageContent::from(text)).unwrap();
+        assert_eq!(json["contentType"], "text");
+        assert!(json.get("replyingToPreview").is_some(), "got: {json}");
+        assert_eq!(json["sentFrom"], 9);
+        assert_eq!(
+            json["quickReply"],
+            serde_json::to_value(JsQuickReply::from(quick_reply)).unwrap()
+        );
+        assert_eq!(
+            json["quickReply"]["response"]["options"]["requestId"],
+            "qr-1"
+        );
+
+        let reaction = MessageContent::Reaction {
+            emoji: "👍".to_string(),
+            target_message_id: "seq-1".to_string(),
+        };
+        let json = serde_json::to_value(JsMessageContent::from(reaction)).unwrap();
+        assert_eq!(json["targetMessageId"], "seq-1");
+
+        let edit = MessageContent::Edit {
+            target_message_id: "seq-1".to_string(),
+            new_text: "fixed".to_string(),
+            entities: None,
+        };
+        let json = serde_json::to_value(JsMessageContent::from(edit)).unwrap();
+        assert_eq!(json["newText"], "fixed");
+
+        let change = GroupChange::TitleChanged {
+            new_title: "New Name".to_string(),
+        };
+        let json = serde_json::to_value(JsGroupChange::from(change)).unwrap();
+        assert_eq!(json["changeType"], "titleChanged");
+        assert_eq!(json["newTitle"], "New Name");
+
+        let setting = SettingsChange::MessageDuration {
+            ttl_msec: 30000,
+            apply_to_all: true,
+        };
+        let json = serde_json::to_value(JsSettingsChange::from(setting)).unwrap();
+        assert_eq!(json["ttlMsec"], 30000);
+        assert_eq!(json["applyToAll"], true);
+
+        let snake = serde_json::to_string(&json).unwrap();
+        assert!(
+            !snake.contains('_'),
+            "JS output must be camelCase, got: {snake}"
         );
     }
 }

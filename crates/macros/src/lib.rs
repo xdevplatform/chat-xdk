@@ -305,10 +305,12 @@ fn generate_enum(
     let to_js_arms: Vec<_> = variants.iter().map(|(_, to_js, _)| to_js).collect();
     let from_js_arms: Vec<_> = variants.iter().map(|(_, _, from_js)| from_js).collect();
 
+    // `rename_all` renames only the variants; the fields of struct variants
+    // need `rename_all_fields` to come out camelCase too.
     let expanded = quote! {
         #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         #(#transformed_serde_attrs)*
-        #[serde(rename_all = "camelCase")]
+        #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
         #vis enum #js_name {
             #(#variant_defs,)*
         }
@@ -569,15 +571,16 @@ fn transform_enum_serde_attrs(attrs: &[syn::Attribute]) -> Vec<proc_macro2::Toke
                 // Transform tag = "snake_case" to tag = "camelCase"
                 if tokens_str.contains("tag") {
                     let transformed = transform_tag_value(&tokens_str);
-                    // Use the original tokens if parsing fails
-                    match transformed.parse::<proc_macro2::TokenStream>() {
-                        Ok(tokens) => return Some(quote! { #[serde(#tokens)] }),
-                        Err(_) => {
-                            // Fall back to original if transformation fails
-                            let tokens = &meta_list.tokens;
-                            return Some(quote! { #[serde(#tokens)] });
-                        }
-                    }
+                    // A silent fallback would keep the snake_case tag in the JS
+                    // output, so a failed rewrite is a compile error.
+                    return Some(match transformed.parse::<proc_macro2::TokenStream>() {
+                        Ok(tokens) => quote! { #[serde(#tokens)] },
+                        Err(_) => syn::Error::new_spanned(
+                            attr,
+                            "JsCamelCase could not camelCase this serde tag",
+                        )
+                        .to_compile_error(),
+                    });
                 }
 
                 // Keep other serde attributes as-is
@@ -659,10 +662,10 @@ fn transform_tag_value(s: &str) -> String {
                 let tag_value = &result[quote_start..quote_end];
                 let camel_value = to_camel_case(tag_value);
                 result = format!(
-                    "{}\"{}\"{}",
+                    "{}{}{}",
                     &result[..quote_start],
                     camel_value,
-                    &result[quote_end + 1..]
+                    &result[quote_end..]
                 );
             }
         }
