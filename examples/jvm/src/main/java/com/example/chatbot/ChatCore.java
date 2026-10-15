@@ -180,6 +180,30 @@ public final class ChatCore implements AutoCloseable {
         return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
     }
 
+    /**
+     * Encrypt + sign a forward of a decrypted message into {@code conversationId}.
+     * {@code forwardedText} and {@code forwardedEntities} (nullable) are the
+     * original's text and entities; {@code comment} (nullable) is a note sent
+     * with it. The sender comes from {@link #setIdentity}.
+     */
+    public SendBody encryptForward(
+            String conversationId,
+            String forwardedText,
+            List<EntityDescriptor> forwardedEntities,
+            String comment,
+            byte[] conversationKey,
+            String conversationKeyVersion)
+            throws Exception {
+        EncryptForwardParams params = new EncryptForwardParams(conversationId, forwardedText);
+        params.forwardedEntities = forwardedEntities;
+        params.text = comment;
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        SendPayload payload = chat.encryptForward(params);
+        // The SDK generates the message id and returns it in the payload.
+        return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
+    }
+
     /** Encrypt + sign a reaction add/remove targeting a raw event
      * (the conversation id and target sequence id are derived from it). */
     public SendBody encryptReaction(

@@ -186,6 +186,35 @@ export class ChatCore {
   }
 
   /**
+   * Encrypt + sign a forward of a decrypted message into `conversationId`.
+   * `forwardedText` / `forwardedEntities` are the original's text and
+   * entities; `text` is an optional comment sent with it.
+   */
+  encryptForward({
+    conversationId,
+    forwardedText,
+    forwardedEntities,
+    text,
+    conversationKey,
+    conversationKeyVersion,
+  }) {
+    const payload = this.#chat.encryptForward({
+      conversationId,
+      forwardedText,
+      forwardedEntities,
+      text,
+      conversationKey,
+      conversationKeyVersion,
+    });
+    return {
+      // The SDK generates the message id and returns it in the payload.
+      message_id: payload.messageId,
+      encoded_message_create_event: payload.encryptedContent,
+      encoded_message_event_signature: payload.encodedEventSignature,
+    };
+  }
+
+  /**
    * Encrypt + sign a reaction add/remove. `targetEvent` is the base64 raw
    * event being reacted to; the conversation id and target sequence id are
    * derived from it.
