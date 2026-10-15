@@ -131,6 +131,7 @@ The SDK is a **pure function library**. It transforms data but does not perform 
 crates/core/src/
 ├── lib.rs                        # Public API exports & prelude
 ├── core.rs                       # ChatCore — platform-agnostic encryption engine
+├── core/media.rs                 # Media keys found from the event that carries the media
 ├── chat.rs                       # Chat — Juicebox wrapper over ChatCore
 ├── pipeline.rs                   # Stateless encrypt-sign pipeline (internal)
 ├── signatures.rs                 # Group operation action signatures
@@ -150,8 +151,7 @@ crates/core/src/
 │   ├── mod.rs
 │   ├── juicebox.rs               # Juicebox SDK integration (PIN-protected storage)
 │   ├── keypair_manager.rs        # In-memory key state
-│   ├── conversation_keys.rs      # Conversation key encrypt/decrypt
-│   └── attachment_keys.rs        # Attachment keys recorded for stream decryption
+│   └── conversation_keys.rs      # Conversation key encrypt/decrypt
 │
 ├── protocol/                     # Layer 3: Serialization Helpers
 │   ├── mod.rs
@@ -353,13 +353,6 @@ Manages unlocked keys in memory. Uses `RwLock` for thread-safe interior mutabili
 | `encrypt_conversation_key_for_recipients(ckey, recipients)` | Encrypt for list of `(user_id, public_key, version)` |
 | `decrypt_conversation_key(encrypted, private_key)` | Decrypt a received conversation key |
 
-#### `keys/attachment_keys.rs` — Recorded Attachment Keys
-
-`AttachmentKeyStore` holds the attachment keys of message-key messages a
-`ChatCore` has decrypted, filed under their conversation key, so the stream
-decrypt methods can find a media key from the conversation key alone. It keeps
-the most recent 4,096 keys and is cleared by `lock`.
-
 ---
 
 ### 4.3 Protocol Module
@@ -419,6 +412,11 @@ Holds:
 - `keypair_manager: KeypairManager` — in-memory key state
 - `reject_unverified: bool` — signature verification policy (defaults to `true`)
 - `conversation_key_high_water: RwLock<HashMap<String, u64>>` — per-conversation monotonic high-water mark of verified key versions, backing the anti-downgrade guarantee on `latest_version`
+
+`decrypt_stream` / `stream_decryptor` use none of this state: `core/media.rs`
+finds the attachment a media hash key names in the given message event and
+derives its key from the given key map (see
+[CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
 
 #### `chat.rs` — `Chat` (Juicebox wrapper)
 

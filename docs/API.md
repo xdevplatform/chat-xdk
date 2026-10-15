@@ -861,22 +861,33 @@ reaction = chat.encrypt_add_reaction(original_event_b64, "👍")
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
 | 32 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
-| 33 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
+| 33 | **decrypt_stream** | `(encrypted: &[u8], event_b64: &str, conversation_keys: &HashMap<String, Key>, media_hash_key: &str) → Vec<u8>` | `decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string) → Uint8Array` | `decrypt_stream(encrypted: bytes, event_b64: str, conversation_keys: dict[str, bytes], media_hash_key: str) → bytes` | `DecryptStream(encrypted []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error)` | `decryptStream(byte[] encrypted, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)` → `byte[]` | `DecryptStream(byte[] encrypted, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)` → `byte[]` |
 | 34 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
-| 35 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
+| 35 | **stream_decryptor** | `(event_b64: &str, conversation_keys: &HashMap<String, Key>, media_hash_key: &str) → StreamDecryptor` | `streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string) → StreamDecryptor` | `stream_decryptor(event_b64: str, conversation_keys: dict[str, bytes], media_hash_key: str) → StreamDecryptor` | `StreamDecryptor(eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) (*StreamDecryptor, error)` | `streamDecryptor(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) → StreamDecryptor` | `StreamDecryptor(string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey) → StreamDecryptor` |
 
-Methods 32/33 take the **decrypted** conversation key (raw bytes) and process the whole payload in memory.
+Methods 32/34 encrypt with the **decrypted** conversation key (raw bytes) of the conversation the media is sent to.
 
-Methods 34/35 return an incremental object for large payloads: feed chunks with `push`, then call `finish` once. `finish` errors if the stream ended before its final frame (truncation detection), so output from `push` must not be treated as complete until `finish` succeeds. The native bindings (Go, JVM, .NET) free the object via `Close`/`close`/`Dispose`. In JS/WASM, `finish()` consumes and frees the object; call `free()` only when abandoning a stream without finishing it (calling it after `finish()` throws).
+Methods 33/35 decrypt one media file. Pass the base64 event of the message that carries the media and the conversation's key map — the same two arguments `decrypt_event` takes — plus the media's `media_hash_key` from the decrypted message: one of its media attachments, a link card's banner or favicon (both listed in `media_hashes`), or media quoted in its reply preview. The SDK finds that attachment in the event, picks the key for the message's version from the map, and derives the file's key: newer clients encrypt each attachment under its own key derived from the message, and older messages encrypt media under the conversation key (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)). Everything comes from these arguments, so any instance can decrypt any media at any time, before or after the message itself. Signatures are not checked here; use the `verified` flag from `decrypt_event`.
 
-**Picking the key.** A conversation can have multiple key versions over its lifetime, and every payload decrypts only with the key of the version it was encrypted under. Each decrypted message event carries that version (`keyVersion` / `key_version`), and `decryptEvents` returns the full version → key map — always select the key by the event's version rather than assuming a single conversation key:
+Methods 32/33 process the whole payload in memory. Methods 34/35 return an incremental object for large payloads: feed chunks with `push`, then call `finish` once. `finish` errors if the stream ended before its final frame (truncation detection), so output from `push` must not be treated as complete until `finish` succeeds. The native bindings (Go, JVM, .NET) free the object via `Close`/`close`/`Dispose`. In JS/WASM, `finish()` consumes and frees the object; call `free()` only when abandoning a stream without finishing it (calling it after `finish()` throws).
+
+Methods 33/35 raise an error that says what to pass instead when:
+
+- the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
+- `media_hash_key` is not in the message (the error lists the media hash keys that are) or is empty;
+- the event is not a message, is an edit, reaction or other entry without media, or is a message with no media;
+- the bytes are not the media's complete encrypted file: another file, corrupted, or truncated;
+- the message is not encrypted, so neither is its media: use the downloaded bytes as they are;
+- a reply shows quoted media but does not embed the quoted message: pass the quoted message's own event.
 
 ```js
-const key = result.conversationKeys.keys[message.keyVersion];
-const plaintext = chat.decryptStream(encryptedMedia, key);
+const keys = result.conversationKeys.keys;
+const message = chat.decryptEvent(eventB64, keys);
+for (const { mediaHashKey } of message.mediaHashes ?? []) {
+  const encrypted = await downloadMedia(mediaHashKey);
+  const plaintext = chat.decryptStream(encrypted, eventB64, keys, mediaHashKey);
+}
 ```
-
-Messages from newer X Chat clients encrypt each attachment under its own key derived from the conversation key. The stream decrypt methods still take the conversation key and find the attachment's key themselves, from the messages the same `Chat` has decrypted, so decrypt a message before its media with the same instance (see [CRYPTO.md — Attachment Keys](CRYPTO.md#attachment-keys)).
 
 ### Generic Encrypt / Decrypt
 
@@ -1068,13 +1079,15 @@ const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: webhookEv
 // ── Metadata (group name, avatar, description) ──
 const groupName = chat.decrypt(conversation.groupName, convKey);
 
-// ── Media (whole-buffer) ──
-const decrypted: Uint8Array = chat.decryptStream(encryptedBytes, convKey);
+// ── Media (whole-buffer): the message's event, its key map, the media hash key ──
+const keys = result.conversationKeys.keys;
+const mediaHashKey = event.mediaHashes[0].mediaHashKey;
+const decrypted: Uint8Array = chat.decryptStream(encryptedBytes, webhookEventB64, keys, mediaHashKey);
 
 // ── Media (incremental, for large files) ──
 // Decrypt chunk-by-chunk as bytes arrive, e.g. from a fetch() body stream,
 // without holding the whole payload in memory.
-const dec = chat.streamDecryptor(convKey);
+const dec = chat.streamDecryptor(webhookEventB64, keys, mediaHashKey);
 const reader = response.body.getReader();
 const parts: Uint8Array[] = [];
 for (;;) {
@@ -1120,8 +1133,10 @@ reaction = chat.encrypt_add_reaction(event_b64, "👍")
 # ── Metadata (group name, avatar, description) ──
 group_name = chat.decrypt(conversation["group_name"], conv_key)
 
-# ── Media ──
-decrypted = chat.decrypt_stream(encrypted_bytes, conv_key)
+# ── Media: the message's event, its key map, the media hash key ──
+keys = result["conversation_keys"]["keys"]
+media_hash_key = event["media_hashes"][0]["media_hash_key"]
+decrypted = chat.decrypt_stream(encrypted_bytes, event_b64, keys, media_hash_key)
 ```
 
 ### Go
@@ -1187,7 +1202,7 @@ func main() {
     })
     _ = reaction
 
-    // Raw 32-byte conversation key for the metadata/media calls below,
+    // Raw 32-byte conversation key for the metadata call below,
     // e.g. from DecryptConversationKey or result.ConversationKeys.Keys.
     convKey := result.ConversationKeys.Keys[keyVersion]
 
@@ -1195,8 +1210,9 @@ func main() {
     groupName, err := chat.Decrypt(conversationGroupNameB64, convKey)
     _ = groupName
 
-    // ── Media (raw bytes in, raw bytes out) ──
-    decrypted, err := chat.DecryptStream(encryptedMedia, convKey)
+    // ── Media: the message's event, its key map, the media hash key ──
+    // Raw bytes in, raw bytes out.
+    decrypted, err := chat.DecryptStream(encryptedMedia, eventB64, result.ConversationKeys.Keys, msg.MediaHashes[0].MediaHashKey)
     _ = decrypted
 }
 ```
@@ -1236,8 +1252,14 @@ let reaction = chat.encrypt_add_reaction(&EncryptReactionParams::new(event_b64, 
 // ── Metadata (group name, avatar, description) ──
 let group_name = chat.decrypt(&conversation.group_name, &conv_key)?;
 
-// ── Media ──
-let decrypted = chat.decrypt_stream(&encrypted_bytes, &conv_key)?;
+// ── Media: the message's event, its key map, the media hash key ──
+// (`media_hash_key` from the decrypted message's `media_hashes`)
+let decrypted = chat.decrypt_stream(
+    &encrypted_bytes,
+    event_b64,
+    &result.conversation_keys.keys,
+    media_hash_key,
+)?;
 ```
 
 ### .NET (C#)
@@ -1275,7 +1297,11 @@ var reply = chat.EncryptReply(new EncryptReplyParams(conversationId, "pong", web
 var reaction = chat.EncryptAddReaction(new EncryptReactionParams(webhookB64, "👍"));
 
 var groupName = chat.Decrypt(conversationGroupNameB64, convKeyBytes);
-var mediaPlain = chat.DecryptStream(encryptedMediaBytes, convKeyBytes);
+
+// Media: the message's event, its key map, the media hash key.
+var mediaHashKey = evt.GetProperty("media_hashes")[0].GetProperty("media_hash_key").GetString()!;
+var mediaPlain = chat.DecryptStream(
+    encryptedMediaBytes, webhookB64, result.ConversationKeys.Keys, mediaHashKey);
 ```
 
 ```bash
@@ -1326,6 +1352,11 @@ try (Chat chat = new Chat()) {
             chat.encryptReply(new EncryptReplyParams(conversationId, "pong", eventB64));
     SendPayload reaction =
             chat.encryptAddReaction(new EncryptReactionParams(eventB64, "👍"));
+
+    // Media: the message's event, its key map, the media hash key
+    String mediaHashKey = event.path("media_hashes").path(0).path("media_hash_key").asText();
+    byte[] media = chat.decryptStream(
+            encryptedMediaBytes, eventB64, batch.conversationKeys.keys, mediaHashKey);
 }
 ```
 
@@ -1621,9 +1652,10 @@ clickable preview card, hydrate the card yourself:
 
 Receivers see the image hashes on the decrypted message (`AttachmentInfo`
 `bannerImageMediaHashKey` and `media_hashes` entries with source
-`"url_banner"`/`"url_favicon"`) and can download + `decryptStream` them like
-any media attachment. Keep banners small (a few hundred KB): clients honor
-data-usage thresholds when deciding whether to auto-load media.
+`"url_banner"`/`"url_favicon"`), download them, and pass the message's event,
+key map and image hash key to `decryptStream` like any media attachment. Keep
+banners small (a few hundred KB): clients honor data-usage thresholds when
+deciding whether to auto-load media.
 
 Rust, .NET, and JVM expose typed variants/factories
 (`AttachmentDescriptor::Url { … }`, `AttachmentDescriptor.UrlCard(url,

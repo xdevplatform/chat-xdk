@@ -321,10 +321,12 @@ input is split. Because truncation is only proven absent once `finish`
 succeeds, plaintext returned by `push` must not be treated as complete until
 `finish` returns successfully.
 
-### Attachment Keys
+### Media Keys
 
-Media of a message that uses a [message key](#message-keys) is encrypted under
-a key derived for each attachment:
+Each media file is stream-encrypted under one key, set by the message that
+carries it. A message without a [message key](#message-keys) encrypts its media
+under the conversation key. A message with one encrypts each attachment under
+its own key:
 
 ```
 attachment_key = HKDF-SHA256(ikm  = message_key,
@@ -336,19 +338,30 @@ attachment_key = HKDF-SHA256(ikm  = message_key,
 `attachment_id` is the attachment's `attachment_id` when set (an empty string
 counts as set); otherwise it is the message id for the first attachment and
 `{message_id}#{index}` for later ones, by position in the message's attachment
-list. A URL card's banner and favicon images share the card's key. Media of a
-message without a message key stays under the conversation key.
+list, counting every attachment, including kinds the SDK does not surface. A
+URL card's banner and favicon images share the card's key.
 
-Callers never handle these keys. When a `Chat` decrypts a message that uses a
-message key, it records the message's attachment keys under the message's
-conversation key; `decrypt_stream` and `stream_decryptor` take the
-conversation key, try it first, then try the keys recorded under it (newest
-first), and keep whichever key authenticates the stream's first frame. A valid
-reply preview quoting such a message records the quoted attachments' keys the
-same way, under both the reply's conversation key and the original's own when
-it is known. The records live in memory: `lock` clears them, and only the most
-recent 4,096 are kept, so decrypt a message with the same `Chat` before its
-media.
+`decrypt_stream` and `stream_decryptor` take the event of the message that
+carries the media, the conversation key map, and the media hash key, and derive
+the key from those alone:
+
+1. Parse the event. It must be a `MessageCreateEvent` with a conversation key
+   version; one without is unencrypted, and so is its media.
+2. Take the key for that version from the map, derive the message key when the
+   message uses one, and decrypt the contents.
+3. Find the attachment whose media hash key matches: a media attachment, or a
+   URL card whose banner or favicon carries it. Its key follows from step 2 as
+   described above.
+4. Otherwise, when the message is a reply whose preview embeds the quoted
+   message from the same conversation, open the quoted message with the key for
+   its own version from the map — or, when the map lacks that version and the
+   quoted message uses a message key, with the key the reply carries for it —
+   and find the attachment there.
+5. Decrypt the bytes with that key alone.
+
+Nothing is kept between calls, so the result does not depend on what the
+instance decrypted before. Signatures are not checked here; the `verified` flag
+from `decrypt_event` covers the message.
 
 ---
 
@@ -508,7 +521,7 @@ The `Chat::verify()` method automatically handles both 91-byte SPKI and 65-byte 
 ### HKDF-SHA256
 
 Used for deriving conversation keys from tree secrets, for
-[message keys](#message-keys) and [attachment keys](#attachment-keys), and for
+[message keys](#message-keys) and [attachment keys](#media-keys), and for
 general key derivation.
 
 ```
@@ -700,9 +713,7 @@ Complete flow for decrypting a webhook event via `decrypt_event()`:
 ```
 
 When `contents_encryption_version` is 1 or more, step 5 decrypts with the
-[message key](#message-keys) derived from the step-4 conversation key, and the
-message's [attachment keys](#attachment-keys) are recorded for the stream
-decrypt methods.
+[message key](#message-keys) derived from the step-4 conversation key.
 
 ### Reply preview validation
 
