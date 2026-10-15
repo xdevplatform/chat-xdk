@@ -36,6 +36,17 @@ pub fn hmac_sha256(message: &[u8], key: &[u8]) -> Vec<u8> {
 /// * `length` - Desired output length (max 32 * 255 = 8160 bytes)
 ///
 pub fn hkdf(secret: &[u8], salt: &str, length: usize) -> Result<Vec<u8>, CryptoError> {
+    hkdf_with_info(secret, salt, &[], length)
+}
+
+/// HKDF-SHA256 with an `info` input, which domain-separates keys derived
+/// from the same secret and salt. [`hkdf`] is this with an empty `info`.
+pub(crate) fn hkdf_with_info(
+    secret: &[u8],
+    salt: &str,
+    info: &[u8],
+    length: usize,
+) -> Result<Vec<u8>, CryptoError> {
     // Maximum output length per HKDF spec
     const MAX_LENGTH: usize = 32 * 255;
 
@@ -64,9 +75,9 @@ pub fn hkdf(secret: &[u8], salt: &str, length: usize) -> Result<Vec<u8>, CryptoE
     let mut counter: u8 = 1;
 
     while offset < length {
-        // Each round hashes T || counter. The HKDF "info" parameter is omitted,
-        // so there is no domain separation between derived keys.
+        // Each round hashes T || info || counter.
         let mut input = t.clone();
+        input.extend_from_slice(info);
         input.push(counter);
 
         t = hmac_sha256(&input, &prk);

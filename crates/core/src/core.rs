@@ -8,6 +8,7 @@
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
 use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{KeypairPurpose, XChatConversationKey, XChatKeyPair, XChatPrivateKey};
+use crate::crypto::message_keys;
 use crate::error::{CryptoError, SdkError};
 use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
@@ -1649,15 +1650,13 @@ impl ChatCore {
                     let version = mce.conversation_key_version.as_deref().unwrap_or("");
                     // The caller-supplied map wins; the opt-in key cache
                     // covers callers that no longer hold the key map.
-                    let cached;
                     let ckey = match conversation_keys.get(version) {
-                        Some(k) => k,
-                        None => {
-                            cached = parsed
-                                .conversation_id
-                                .as_deref()
-                                .and_then(|cid| self.cached_key_for(cid, version));
-                            cached.as_ref().ok_or_else(|| {
+                        Some(k) => k.clone(),
+                        None => parsed
+                            .conversation_id
+                            .as_deref()
+                            .and_then(|cid| self.cached_key_for(cid, version))
+                            .ok_or_else(|| {
                                 let available = conversation_keys
                                     .keys()
                                     .cloned()
@@ -1670,10 +1669,10 @@ impl ChatCore {
                                      or pass the matching key map to decrypt_event().",
                                     version, available
                                 )))
-                            })?
-                        }
+                            })?,
                     };
-                    decrypt_message_bytes(ckey, contents)?
+                    let message_key = Self::message_key_for(parsed, &ckey)?;
+                    decrypt_message_bytes(message_key.as_ref().unwrap_or(&ckey), contents)?
                 };
 
                 let parsed_content = parse_message_content(&plaintext)?;
@@ -1926,10 +1925,20 @@ impl ChatCore {
             &sender_id,
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
+        // Read leniently: an unparsable target event already fails above
+        // unless explicit fields made it unnecessary, and then only the
+        // message id is lost.
+        let target_message_id = params
+            .target_event
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .and_then(|b64| Self::parse_event_b64(b64).ok())
+            .and_then(|event| event.message_id);
         let content_bytes = crate::pipeline::build_message_edit_content(
             &target_sequence_id,
             &params.updated_text,
             params.entities.as_deref(),
+            target_message_id.as_deref(),
         )?;
         let message_id = Self::generate_message_id();
         crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
@@ -2106,19 +2115,110 @@ impl ChatCore {
         }
     }
 
-    /// Decrypt the contents of a raw `MessageCreateEvent`, resolving the key
-    /// from the reply's own key, the supplied key-change events, or the key
-    /// cache.
+    /// The message key of a `MessageCreateEvent` that uses one, derived from
+    /// its conversation key and the event's own sender and message id;
+    /// `None` when the event uses the conversation key directly.
+    fn message_key_for(
+        event: &MessageEvent,
+        conversation_key: &XChatConversationKey,
+    ) -> Result<Option<XChatConversationKey>, SdkError> {
+        let Some(MessageEventDetail::MessageCreateEvent(mce)) = &event.detail else {
+            return Ok(None);
+        };
+        if !message_keys::uses_message_key(mce.contents_encryption_version) {
+            return Ok(None);
+        }
+        let (Some(sender_id), Some(message_id)) =
+            (event.sender_id.as_deref(), event.message_id.as_deref())
+        else {
+            return Err(SdkError::Crypto(CryptoError::DecryptionFailed(
+                "message key needs the event's sender id and message id".into(),
+            )));
+        };
+        Ok(Some(message_keys::derive_message_key(
+            conversation_key,
+            sender_id,
+            message_id,
+        )?))
+    }
+
+    /// Whether a raw event is a `MessageCreateEvent` encrypted under a
+    /// message key.
+    fn uses_message_key(raw: &MessageEvent) -> bool {
+        matches!(
+            &raw.detail,
+            Some(MessageEventDetail::MessageCreateEvent(mce))
+                if message_keys::uses_message_key(mce.contents_encryption_version)
+        )
+    }
+
+    /// The key that opens a raw `MessageCreateEvent`'s contents: its message
+    /// key when it uses one, otherwise the conversation key for its key
+    /// version, from `extra_keys`, the outer message's key, the key cache, or
+    /// the supplied key-change events, in that order. `None` when the
+    /// contents are plaintext.
     ///
     /// A wrong key cannot yield wrong plaintext — the cipher authenticates —
     /// so key-change events are usable here without their own verification.
-    fn decrypt_raw_event_contents(
+    fn raw_event_contents_key(
         &self,
         raw: &MessageEvent,
         outer_key: Option<&XChatConversationKey>,
         outer_version: Option<&str>,
         key_changes: &[MessageEvent],
         extra_keys: &HashMap<String, XChatConversationKey>,
+    ) -> Result<Option<XChatConversationKey>, SdkError> {
+        let Some(MessageEventDetail::MessageCreateEvent(mce)) = &raw.detail else {
+            return Err(SdkError::Parse(
+                "raw event is not a MessageCreateEvent".into(),
+            ));
+        };
+        let Some(version) = mce.conversation_key_version.as_deref() else {
+            return Ok(None);
+        };
+
+        let conversation_key = extra_keys
+            .get(version)
+            .cloned()
+            .or_else(|| {
+                outer_key
+                    .filter(|_| outer_version == Some(version))
+                    .cloned()
+            })
+            .or_else(|| {
+                raw.conversation_id
+                    .as_deref()
+                    .and_then(|conv_id| self.cached_key_for(conv_id, version))
+            })
+            .or_else(|| {
+                key_changes
+                    .iter()
+                    .find_map(|kce_event| match &kce_event.detail {
+                        Some(MessageEventDetail::ConversationKeyChangeEvent(kce))
+                            if kce.conversation_key_version.as_deref() == Some(version) =>
+                        {
+                            self.decrypt_key_change_ckey(kce)
+                        }
+                        _ => None,
+                    })
+            })
+            .ok_or_else(|| {
+                SdkError::Crypto(CryptoError::DecryptionFailed(format!(
+                    "no conversation key for version '{}' of the replied-to message; \
+                     pass reply_to_ckces with its key-change event",
+                    version
+                )))
+            })?;
+        Ok(Some(
+            Self::message_key_for(raw, &conversation_key)?.unwrap_or(conversation_key),
+        ))
+    }
+
+    /// Decrypt a raw `MessageCreateEvent`'s contents with `key`, or return
+    /// them as is when the event carries plaintext (`key` is `None`).
+    fn open_raw_event(
+        raw: &MessageEvent,
+        key: Option<&XChatConversationKey>,
     ) -> Result<Vec<u8>, SdkError> {
         let Some(MessageEventDetail::MessageCreateEvent(mce)) = &raw.detail else {
             return Err(SdkError::Parse(
@@ -2129,41 +2229,35 @@ impl ChatCore {
             .contents
             .as_ref()
             .ok_or_else(|| SdkError::Parse("raw event has no contents".into()))?;
-        // No key version means the contents are already plaintext.
-        let Some(version) = mce.conversation_key_version.as_deref() else {
-            return Ok(contents.clone());
-        };
+        match key {
+            Some(key) => Ok(decrypt_message_bytes(key, contents)?),
+            None => Ok(contents.clone()),
+        }
+    }
 
-        if let Some(key) = extra_keys.get(version) {
-            return Ok(decrypt_message_bytes(key, contents)?);
-        }
-        if outer_version == Some(version) {
-            if let Some(key) = outer_key {
-                return Ok(decrypt_message_bytes(key, contents)?);
-            }
-        }
-        if let Some(conv_id) = raw.conversation_id.as_deref() {
-            if let Some(key) = self.cached_key_for(conv_id, version) {
-                return Ok(decrypt_message_bytes(&key, contents)?);
-            }
-        }
-        for kce_event in key_changes {
-            let Some(MessageEventDetail::ConversationKeyChangeEvent(kce)) = &kce_event.detail
-            else {
-                continue;
-            };
-            if kce.conversation_key_version.as_deref() != Some(version) {
-                continue;
-            }
-            if let Some(key) = self.decrypt_key_change_ckey(kce) {
-                return Ok(decrypt_message_bytes(&key, contents)?);
-            }
-        }
-        Err(SdkError::Crypto(CryptoError::DecryptionFailed(format!(
-            "no conversation key for version '{}' of the replied-to message; \
-             pass reply_to_ckces with its key-change event",
-            version
-        ))))
+    /// Decrypt an event quoted by a received reply. A message-key event
+    /// opens with the key the reply carries for it when there is one, which
+    /// must be a 32-byte key; otherwise its key is resolved like any raw
+    /// event's. Returns the plaintext and, for a message-key event, the
+    /// message key that opened it.
+    fn open_quoted_event(
+        &self,
+        raw: &MessageEvent,
+        carried_key: Option<&[u8]>,
+        key_changes: &[MessageEvent],
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+    ) -> Result<(Vec<u8>, Option<XChatConversationKey>), SdkError> {
+        let uses_message_key = Self::uses_message_key(raw);
+        let key = match carried_key.filter(|_| uses_message_key) {
+            Some(bytes) => Some(
+                XChatConversationKey::from_bytes(bytes.to_vec()).ok_or_else(|| {
+                    SdkError::Parse("carried message key must be 32 bytes".into())
+                })?,
+            ),
+            None => self.raw_event_contents_key(raw, None, None, key_changes, conversation_keys)?,
+        };
+        let plaintext = Self::open_raw_event(raw, key.as_ref())?;
+        Ok((plaintext, key.filter(|_| uses_message_key)))
     }
 
     /// Build the wire `ReplyingToPreview` for an outgoing reply.
@@ -2238,33 +2332,67 @@ impl ChatCore {
         let need_original = params.reply_to_text.is_none()
             || thrift_reply_entities.is_none()
             || thrift_reply_attachments.is_none();
-        let original = if need_original {
-            let plaintext = self.decrypt_raw_event_contents(
+        // When the original was edited, the preview quotes what the message
+        // says now, so text and entities derive from the edit's contents;
+        // attachments stay with the original (edits do not carry them).
+        let need_edit = edit_event.is_some()
+            && (params.reply_to_text.is_none() || thrift_reply_entities.is_none());
+
+        // A quoted message-key event's key is resolved even when its
+        // contents are not needed, so the reply can carry it; failing to
+        // resolve it then only means the reply carries no key.
+        let original_key = if need_original || Self::uses_message_key(&raw) {
+            match self.raw_event_contents_key(
                 &raw,
                 Some(outer_key),
                 Some(outer_version),
                 &key_changes,
                 &HashMap::new(),
-            )?;
-            Some(Self::parse_thrift_message_contents(&plaintext)?)
+            ) {
+                Ok(key) => key,
+                Err(e) if need_original => return Err(e),
+                Err(_) => None,
+            }
         } else {
             None
         };
-
-        // When the original was edited, the preview quotes what the message
-        // says now, so text and entities derive from the edit's contents;
-        // attachments stay with the original (edits do not carry them).
-        let edited = match &edit_event {
-            Some(edit) if params.reply_to_text.is_none() || thrift_reply_entities.is_none() => {
-                let plaintext = self.decrypt_raw_event_contents(
+        let edit_key = match &edit_event {
+            Some(edit) if need_edit || Self::uses_message_key(edit) => {
+                match self.raw_event_contents_key(
                     edit,
                     Some(outer_key),
                     Some(outer_version),
                     &key_changes,
                     &HashMap::new(),
-                )?;
+                ) {
+                    Ok(key) => key,
+                    Err(e) if need_edit => return Err(e),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+
+        let original = if need_original {
+            let plaintext = Self::open_raw_event(&raw, original_key.as_ref())?;
+            Some(Self::parse_thrift_message_contents(&plaintext)?)
+        } else {
+            None
+        };
+        let edited = match &edit_event {
+            Some(edit) if need_edit => {
+                let plaintext = Self::open_raw_event(edit, edit_key.as_ref())?;
                 Some(Self::parse_thrift_message_edit(&plaintext)?)
             }
+            _ => None,
+        };
+
+        // Only per-message keys are carried; a conversation key never is.
+        let raw_event_message_key = original_key
+            .filter(|_| Self::uses_message_key(&raw))
+            .map(|k| k.to_bytes());
+        let raw_event_edit_message_key = match &edit_event {
+            Some(edit) if Self::uses_message_key(edit) => edit_key.map(|k| k.to_bytes()),
             _ => None,
         };
 
@@ -2313,8 +2441,8 @@ impl ChatCore {
             (!embedded_ckces.is_empty()).then_some(embedded_ckces),
             None,
             None,
-            None,
-            None,
+            raw_event_message_key,
+            raw_event_edit_message_key,
         ))
     }
 
@@ -2361,9 +2489,12 @@ impl ChatCore {
         }
 
         let embedded_ckces: Vec<MessageEvent> = preview.raw_event_ckces.clone().unwrap_or_default();
-        let Ok(plaintext) =
-            self.decrypt_raw_event_contents(raw, None, None, &embedded_ckces, conversation_keys)
-        else {
+        let Ok((plaintext, original_message_key)) = self.open_quoted_event(
+            raw,
+            preview.raw_event_message_key.as_deref(),
+            &embedded_ckces,
+            conversation_keys,
+        ) else {
             return ReplyPreviewValidation::Invalid;
         };
         let Ok(original) = Self::parse_thrift_message_contents(&plaintext) else {
@@ -2413,10 +2544,9 @@ impl ChatCore {
                 ) {
                     return ReplyPreviewValidation::Invalid;
                 }
-                let Ok(edit_plaintext) = self.decrypt_raw_event_contents(
+                let Ok((edit_plaintext, _)) = self.open_quoted_event(
                     edit,
-                    None,
-                    None,
+                    preview.raw_event_edit_message_key.as_deref(),
                     &embedded_ckces,
                     conversation_keys,
                 ) else {
@@ -2425,6 +2555,15 @@ impl ChatCore {
                 let Ok(edit_contents) = Self::parse_thrift_message_edit(&edit_plaintext) else {
                     return ReplyPreviewValidation::Invalid;
                 };
+                // An edit quoted with a message-key original must name that
+                // original by its signed message id; an edit without one
+                // cannot be tied to it.
+                if original_message_key.is_some()
+                    && (edit_contents.message_id.is_none()
+                        || edit_contents.message_id != raw.message_id)
+                {
+                    return ReplyPreviewValidation::Invalid;
+                }
                 Some(edit_contents)
             }
         };
@@ -3964,6 +4103,9 @@ mod test_support;
 
 #[cfg(test)]
 mod signature_version_tests;
+
+#[cfg(test)]
+mod message_key_tests;
 
 #[cfg(test)]
 mod tests {
