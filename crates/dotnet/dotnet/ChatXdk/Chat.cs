@@ -707,6 +707,18 @@ namespace ChatXdk
         }
 
         /// <summary>
+        /// Encrypt a forward of an existing message for the X API: the
+        /// original's text and entities travel as the forwarded message, with
+        /// an optional comment as the message text.
+        /// </summary>
+        public SendPayload EncryptForward(EncryptForwardParams parameters)
+        {
+            ThrowIfDisposed();
+            var json = BuildEncryptForwardJson(parameters);
+            return CallEncryptEndpoint(json, NativeMethods.chat_xdk_encrypt_forward);
+        }
+
+        /// <summary>
         /// Encrypt a reply message for the X API.
         /// Like <see cref="EncryptMessage"/> but includes a reply-to preview.
         /// </summary>
@@ -983,6 +995,26 @@ namespace ChatXdk
                 ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
                 ["attachments"] = p.Attachments,
                 ["quick_reply"] = p.QuickReply,
+                ["should_notify"] = p.ShouldNotify,
+                ["ttl_msec"] = p.TtlMsec,
+            };
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildEncryptForwardJson(EncryptForwardParams p)
+        {
+            var dict = new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["forwarded_text"] = p.ForwardedText,
+                ["forwarded_entities"] = p.ForwardedEntities != null ? SerialiseEntities(p.ForwardedEntities) : null,
+                ["text"] = p.Text,
+                ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
+                ["attachments"] = p.Attachments,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
+                ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };

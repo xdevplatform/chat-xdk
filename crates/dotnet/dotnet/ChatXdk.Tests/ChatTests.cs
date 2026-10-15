@@ -1590,5 +1590,43 @@ namespace ChatXdk.Tests
                 }));
             Assert.Contains("Invalid quick reply", ex.Message);
         }
+
+        [Fact]
+        public void EncryptForward_RoundTripsThroughDecrypt()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+
+            var content = DecryptOwnContent(chat, v, chat.EncryptForward(
+                new EncryptForwardParams(v.EventConversationId, "see @alice")
+                {
+                    ForwardedEntities = new[]
+                    {
+                        new EntityDescriptor { Start = 4, End = 10, EntityType = "mention" },
+                    },
+                    Text = "fyi",
+                    ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                }));
+            Assert.Equal("fyi", content.GetProperty("text").GetString());
+            var forwarded = content.GetProperty("forwarded_message");
+            Assert.Equal("see @alice", forwarded.GetProperty("message_text").GetString());
+            Assert.Equal(1, forwarded.GetProperty("entities").GetArrayLength());
+        }
+
+        [Fact]
+        public void EncryptForward_NothingToForward_Throws()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptForward(
+                new EncryptForwardParams(v.EventConversationId, "")
+                {
+                    ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                }));
+            Assert.Contains("nothing to forward", ex.Message);
+        }
     }
 }
