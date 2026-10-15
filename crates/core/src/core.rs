@@ -57,7 +57,8 @@ pub struct ChatCore {
     reject_unverified: bool,
     conversation_key_high_water: std::sync::RwLock<HashMap<String, u64>>,
     /// User id of this instance's owner, set by [`Self::set_identity`] and
-    /// used as the default `sender_id` for signed actions.
+    /// used as the default `sender_id` for signed actions and as the sender
+    /// outgoing media keys derive from.
     owner_user_id: std::sync::RwLock<Option<String>>,
     /// Whether the conversation-key cache is enabled (off by default).
     cache_keys: std::sync::atomic::AtomicBool,
@@ -628,6 +629,42 @@ impl ChatCore {
             }
             None => Ok(Self::generate_message_id()),
         }
+    }
+
+    /// The user id outgoing media keys derive from: the session identity's.
+    fn media_sender_id(&self) -> Result<String, SdkError> {
+        self.owner_user_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                SdkError::InvalidState(
+                    "the session identity is not set: call set_identity() first, since media \
+                     keys derive from the sender's user id"
+                        .into(),
+                )
+            })
+    }
+
+    /// Check that a message with encrypted media is sent as the session
+    /// identity, whose user id its media keys were derived from.
+    fn check_media_sender(
+        &self,
+        sender_id: &str,
+        attachments: Option<&[AttachmentDescriptor]>,
+    ) -> Result<(), SdkError> {
+        if !attachments.is_some_and(crate::pipeline::has_encrypted_media) {
+            return Ok(());
+        }
+        let media_sender_id = self.media_sender_id()?;
+        if sender_id != media_sender_id {
+            return Err(SdkError::InvalidState(format!(
+                "sender_id '{sender_id}' is not the session identity '{media_sender_id}' that \
+                 the message's media keys derive from: leave sender_id unset for a message with \
+                 media"
+            )));
+        }
+        Ok(())
     }
 
     /// Prepare a signed conversation-key change, ready to send to the X API.
@@ -1774,6 +1811,7 @@ impl ChatCore {
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
         }
+        self.check_media_sender(&sender_id, params.attachments.as_deref())?;
         let message_id =
             Self::outgoing_message_id(params.message_id.as_deref(), params.attachments.as_deref())?;
         let thrift_attachments = params
@@ -1832,6 +1870,7 @@ impl ChatCore {
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
         }
+        self.check_media_sender(&sender_id, params.attachments.as_deref())?;
         let message_id =
             Self::outgoing_message_id(params.message_id.as_deref(), params.attachments.as_deref())?;
         let thrift_attachments = params
@@ -2685,18 +2724,7 @@ impl ChatCore {
         message_id: &str,
         attachment_index: i64,
     ) -> Result<XChatConversationKey, SdkError> {
-        let sender_id = self
-            .owner_user_id
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| {
-                SdkError::InvalidState(
-                    "the session identity is not set: call set_identity() first, since media \
-                     keys derive from the sender's user id"
-                        .into(),
-                )
-            })?;
+        let sender_id = self.media_sender_id()?;
         crate::pipeline::outgoing_attachment_key(
             conversation_key,
             &sender_id,
@@ -3115,7 +3143,7 @@ pub fn build_event_signature_payload(
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
             // v8+ signs the key version as a canonical integer, "null" when
             // absent or not an integer. Earlier versions sign it as carried,
-            // empty when absent, which is how this SDK signs at v7.
+            // empty when absent.
             let ckey_ver = if sig_version >= 8 {
                 nullable_i64(
                     mce.conversation_key_version
@@ -4610,8 +4638,8 @@ mod tests {
         let reg = core.generate_keypairs().unwrap();
 
         let ckey = core.generate_conversation_key().unwrap();
+        core.set_identity("4001", "1733889755256");
         let mut params = crate::EncryptMessageParams::new("conv-1", "Check this out")
-            .with_identity("4001", "1733889755256")
             .with_conversation_key(ckey.to_bytes(), "9001")
             .with_message_id(core.new_message_id());
         params.attachments = Some(vec![crate::AttachmentDescriptor::Url {
@@ -8870,6 +8898,7 @@ mod tests {
     fn encrypt_message_rejects_disallowed_attachment_combos() {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
+        core.set_identity("4001", "pkv");
         let ckey = core.generate_conversation_key().unwrap();
 
         let media = |mt: Option<i32>| crate::AttachmentDescriptor::Media {
@@ -8889,7 +8918,6 @@ mod tests {
         };
         let params_with = |attachments: Vec<crate::AttachmentDescriptor>| {
             let mut p = crate::EncryptMessageParams::new("conv-1", "hi")
-                .with_identity("4001", "pkv")
                 .with_conversation_key(ckey.to_bytes(), "1")
                 .with_message_id(core.new_message_id());
             p.attachments = Some(attachments);

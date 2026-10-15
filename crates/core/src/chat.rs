@@ -941,9 +941,9 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
+        chat.set_identity("4201", "s1");
         let message_id = chat.new_message_id();
         let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
-            .with_identity("4201", "s1")
             .with_conversation_key(ckey.to_bytes(), "1")
             .with_message_id(message_id.clone());
         params.reply_to_sequence_id = Some("seq-99".into());

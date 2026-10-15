@@ -501,6 +501,42 @@ fn a_message_with_media_must_carry_its_message_id() {
 }
 
 #[test]
+fn a_message_with_media_is_sent_as_the_session_identity() {
+    let author = author();
+    let ckey = key(3);
+    let message_id = author.core.new_message_id();
+    let with_photo = |sender_id: &str| {
+        let mut params = message_params("a photo", &ckey)
+            .with_message_id(message_id.clone())
+            .with_identity(sender_id, SIGNING_KEY_VERSION);
+        params.attachments = Some(vec![image("photo")]);
+        params
+    };
+    let expected = format!("sender_id '1002' is not the session identity '{AUTHOR}'");
+
+    let err = error_text(author.core.encrypt_message(with_photo("1002")));
+    assert!(err.contains(&expected), "{err}");
+    let mut reply = EncryptReplyParams::new(CONVERSATION, "a photo", "")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
+        .with_message_id(message_id.clone())
+        .with_identity("1002", SIGNING_KEY_VERSION);
+    reply.reply_to_sequence_id = Some("100".to_string());
+    reply.attachments = Some(vec![image("photo")]);
+    let err = error_text(author.core.encrypt_reply(reply));
+    assert!(err.contains(&expected), "{err}");
+
+    author.core.encrypt_message(with_photo(AUTHOR)).unwrap();
+    author
+        .core
+        .encrypt_message(message_params("no media", &ckey).with_identity("1002", "1"))
+        .unwrap();
+
+    let without_identity = Party::new(AUTHOR);
+    let err = error_text(without_identity.core.encrypt_message(with_photo(AUTHOR)));
+    assert!(err.contains("call set_identity() first"), "{err}");
+}
+
+#[test]
 fn a_message_id_must_be_a_lowercase_hyphenated_uuid() {
     let author = author();
     let ckey = key(3);

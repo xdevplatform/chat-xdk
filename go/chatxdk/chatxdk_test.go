@@ -2003,18 +2003,19 @@ func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 		}
 	}
 
+	if err := chat.SetIdentity("1001", "1"); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
 	messageID, err := chat.NewMessageID()
 	if err != nil {
 		t.Fatalf("NewMessageID failed: %v", err)
 	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "check this out",
 		ConversationKeyVersion: "1",
 		MessageID:              messageID,
-		SigningKeyVersion:      "1",
 		Attachments:            []AttachmentDescriptor{attachment},
 	})
 	if err != nil {
@@ -2092,6 +2093,9 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
+	if err := chat.SetIdentity("1001", "1"); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
 	replyText := "original message"
 	senderID := int64(12345)
 	messageID, err := chat.NewMessageID()
@@ -2099,13 +2103,11 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 		t.Fatalf("NewMessageID failed: %v", err)
 	}
 	payload, err := chat.EncryptReply(EncryptReplyParams{
-		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "replying with media",
 		ConversationKeyVersion: "1",
 		MessageID:              messageID,
-		SigningKeyVersion:      "1",
 		ReplyToSequenceID:      "seq-100",
 		ReplyToSenderID:        &senderID,
 		ReplyToText:            &replyText,
@@ -2140,18 +2142,19 @@ func TestEncryptMessageMediaAttachmentZeroDimensions(t *testing.T) {
 	// Zero-valued media dimensions are valid (e.g. audio or file media) and
 	// must be transmitted rather than dropped by omitempty: core requires
 	// the fields and would reject an attachment missing them.
+	if err := chat.SetIdentity("1001", "1"); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
 	messageID, err := chat.NewMessageID()
 	if err != nil {
 		t.Fatalf("NewMessageID failed: %v", err)
 	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "1001",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "attachment with zero dimensions",
 		ConversationKeyVersion: "1",
 		MessageID:              messageID,
-		SigningKeyVersion:      "1",
 		Attachments: []AttachmentDescriptor{
 			{
 				AttachmentType: "media",

@@ -361,10 +361,9 @@ class ChatTest {
     @Test
     void encryptMessageUrlAttachmentWithBannerImageSucceeds() throws Exception {
         try (Chat chat = createUnlocked()) {
+            chat.setIdentity("1001", "s1");
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
-            p.senderId = "1001";
-            p.signingKeyVersion = "s1";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             p.messageId = chat.newMessageId();

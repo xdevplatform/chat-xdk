@@ -482,12 +482,11 @@ namespace ChatXdk.Tests
         public void EncryptMessage_WithMediaAttachment_Succeeds()
         {
             using var chat = CreateUnlocked();
+            chat.SetIdentity("1001", "s1");
             var ckey = NewConvKey(chat);
 
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
             {
-                SenderId = "1001",
-                SigningKeyVersion = "s1",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 MessageId = chat.NewMessageId(),
@@ -535,10 +534,9 @@ namespace ChatXdk.Tests
                 Assert.Contains(key, json);
             }
 
+            chat.SetIdentity("1001", "s1");
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
             {
-                SenderId = "1001",
-                SigningKeyVersion = "s1",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 MessageId = chat.NewMessageId(),
@@ -1628,13 +1626,12 @@ namespace ChatXdk.Tests
         public void EncryptMessage_MediaAttachment_ZeroDimensions_Succeeds()
         {
             using var chat = CreateUnlocked();
+            chat.SetIdentity("1001", "s1");
             var ckey = NewConvKey(chat);
 
             // Width=0 and Height=0 are unusual but must not cause a serialization bug.
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Attachment with zero dimensions")
             {
-                SenderId = "1001",
-                SigningKeyVersion = "s1",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 MessageId = chat.NewMessageId(),

@@ -591,14 +591,12 @@ async function main() {
 
   // 4g. A URL card attachment carries encrypted banner/favicon image
   // references (media hash keys) for clickable preview cards.
-  const urlCardMessageId = chat.newMessageId();
-  const urlCardPayload = chat.encryptMessage({
-    senderId: "111",
+  const urlCardMessageId = sender.newMessageId();
+  const urlCardPayload = sender.encryptMessage({
     conversationId: "conv-1",
     conversationKey: convKey,
     text: "check this out",
     conversationKeyVersion: "1",
-    signingKeyVersion: "1",
     messageId: urlCardMessageId,
     attachments: [
       {

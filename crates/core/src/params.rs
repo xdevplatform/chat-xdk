@@ -15,7 +15,9 @@
 //! ```
 //!
 //! A message with media takes its id from `new_message_id` before the media
-//! is encrypted, and passes the same id here as `message_id`.
+//! is encrypted, and passes the same id here as `message_id`. Its media keys
+//! also derive from the session identity's user id, so its `sender_id` must
+//! be unset or that id.
 //!
 //! Identity fields (`sender_id`, `signing_key_version`) and key fields
 //! (`conversation_key`, `conversation_key_version`) are optional overrides:

@@ -748,13 +748,12 @@ class TestApiShapes(unittest.TestCase):
 
     def test_url_attachment_with_banner_image_encrypts(self):
         chat, v = self._unlocked_chat()
+        chat.set_identity("123", "1")
 
         message_id = chat.new_message_id()
         payload = chat.encrypt_message(
             "123:456",
             "check this out",
-            sender_id="123",
-            signing_key_version="1",
             conversation_key=bytes(32),
             conversation_key_version="1",
             message_id=message_id,
