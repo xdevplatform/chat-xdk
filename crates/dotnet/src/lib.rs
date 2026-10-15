@@ -23,8 +23,9 @@ use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, ConversationSetting,
     ConversationSettingsParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupAdminAction,
+    GroupAdminChangeParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    PublicKeyInput, QuickReply, SigningKeyEntry,
 };
 
 // FFI result type
@@ -359,6 +360,24 @@ struct FfiConversationSettingsParams {
     setting: String,
     #[serde(default)]
     ttl_msec: Option<i64>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupAdminChangeParams {
+    conversation_id: String,
+    action: String,
+    #[serde(default)]
+    user_ids: Option<Vec<String>>,
+    #[serde(default)]
+    invite_url: Option<String>,
+    #[serde(default)]
+    expires_at_msec: Option<i64>,
+    #[serde(default)]
+    affiliate_id: Option<String>,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
@@ -1249,6 +1268,58 @@ pub extern "C" fn chat_xdk_prepare_conversation_settings_change(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_conversation_settings_change(&params) {
+            Ok(signature) => match serde_json::to_string(&signature) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_result(&e.to_string()),
+            },
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// Build the signed action for a group admin change.
+///
+/// `params_json` — single JSON document: `conversation_id` (a group id,
+/// starting with `g`), `action` (one of `add_admins`, `remove_admins`,
+/// `remove_members`, `reject_join_requests`, `enable_invite_link`,
+/// `disable_invite_link`), `user_ids` (for the four roster actions),
+/// `invite_url` plus optional `expires_at_msec` / `affiliate_id` (for
+/// `enable_invite_link`), and optional `sender_id` / `signing_key_version`
+/// (absent resolves from the session identity). Fields an action does not use
+/// are rejected.
+///
+/// Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+/// on it.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_admin_change(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupAdminChangeParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let action = match GroupAdminAction::from_parts(
+            &p.action,
+            p.user_ids,
+            p.invite_url,
+            p.expires_at_msec,
+            p.affiliate_id,
+        ) {
+            Ok(a) => a,
+            Err(e) => return err_from(e),
+        };
+
+        let mut params = GroupAdminChangeParams::new(p.conversation_id, action);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+
+        match h.inner.prepare_group_admin_change(&params) {
             Ok(signature) => match serde_json::to_string(&signature) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),

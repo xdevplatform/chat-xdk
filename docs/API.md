@@ -136,6 +136,7 @@ wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 | 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change([dict], *, conversation_id=None, sender_id=None, signing_key_version=None) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
 | 19 | **prepare_group_members_change** | `prepare_group_members_change(GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change([dict], conversation_id, ids…, *, sender_id=None, signing_key_version=None, current_title=None, current_avatar_url=None, current_ttl_msec=None, current_screen_capture_blocking_enabled=None) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
 | 20 | **prepare_group_create** | `prepare_group_create(GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create([dict], conversation_id, member_ids, admin_ids, *, sender_id=None, signing_key_version=None, title=None, avatar_url=None, ttl_msec=None) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
+| 21 | **prepare_group_admin_change** | `prepare_group_admin_change(&GroupAdminChangeParams) → ActionSignature` | `prepareGroupAdminChange(params: GroupAdminChangeParams) → ActionSignature` | `prepare_group_admin_change(conversation_id, action, *, user_ids=None, invite_url=None, expires_at_msec=None, affiliate_id=None, sender_id=None, signing_key_version=None) → dict` | `PrepareGroupAdminChange(params GroupAdminChangeParams) (*ActionSignature, error)` | `prepareGroupAdminChange(GroupAdminChangeParams)` | `PrepareGroupAdminChange(GroupAdminChangeParams)` |
 
 Every language except Python takes a single params struct/object per method
 (Rust `chat_xdk_core::*Params`, JS plain objects matching the exported
@@ -152,11 +153,11 @@ from the session identity set via `set_identity`.
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 21 | **extract_conversation_keys** | `(events: &[&str]) → ConversationKeyResult` | `extractConversationKeys(string[]) → ConversationKeyResult` | `extract_conversation_keys(list[str]) → dict` | `ExtractConversationKeys(events []string) (*ConversationKeyBundle, error)` | `extractConversationKeys(List<String>)` | `ExtractConversationKeys(IEnumerable<string>)` |
-| 22 | **set_cache_keys** | `set_cache_keys(enabled: bool)` | `setCacheKeys(enabled: boolean)` | `set_cache_keys(enabled: bool)` | `SetCacheKeys(enabled bool)` | `setCacheKeys(boolean)` | `SetCacheKeys(bool)` |
-| 23 | **set_signing_keys** | `set_signing_keys(Vec<SigningKeyEntry>)` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
-| 24 | **decrypt_events** | `(events, &[SigningKeyEntry]) → DecryptEventsResult` | `decryptEvents(string[], SigningKeyEntry[]?) → DecryptEventsResult` | `decrypt_events(list[str], list?=None) → dict` | `DecryptEvents(events []string, signingKeys []SigningKeyEntry) (*DecryptEventsResult, error)` | `decryptEvents(List<String>, List<SigningKeyEntry>)` | `DecryptEvents(IEnumerable<string>, IEnumerable<SigningKeyEntry>? = null)` |
-| 25 | **decrypt_event** | `(b64, &HashMap<version, Key>, &[SigningKeyEntry]) → Event` | `decryptEvent(b64, ConversationKeyMap?, SigningKeyEntry[]?) → Event` | `decrypt_event(b64, dict?, list?) → dict` | `DecryptEvent(eventB64 string, conversationKeys map[string][]byte, signingKeys []SigningKeyEntry) (*Event, error)` | `decryptEvent(String, Map<String, byte[]>/ConversationKeyBundle, List<SigningKeyEntry>)` | `DecryptEvent(string, ConversationKeyBundle/dictionary? = null, IEnumerable<SigningKeyEntry>? = null)` |
+| 22 | **extract_conversation_keys** | `(events: &[&str]) → ConversationKeyResult` | `extractConversationKeys(string[]) → ConversationKeyResult` | `extract_conversation_keys(list[str]) → dict` | `ExtractConversationKeys(events []string) (*ConversationKeyBundle, error)` | `extractConversationKeys(List<String>)` | `ExtractConversationKeys(IEnumerable<string>)` |
+| 23 | **set_cache_keys** | `set_cache_keys(enabled: bool)` | `setCacheKeys(enabled: boolean)` | `set_cache_keys(enabled: bool)` | `SetCacheKeys(enabled bool)` | `setCacheKeys(boolean)` | `SetCacheKeys(bool)` |
+| 24 | **set_signing_keys** | `set_signing_keys(Vec<SigningKeyEntry>)` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
+| 25 | **decrypt_events** | `(events, &[SigningKeyEntry]) → DecryptEventsResult` | `decryptEvents(string[], SigningKeyEntry[]?) → DecryptEventsResult` | `decrypt_events(list[str], list?=None) → dict` | `DecryptEvents(events []string, signingKeys []SigningKeyEntry) (*DecryptEventsResult, error)` | `decryptEvents(List<String>, List<SigningKeyEntry>)` | `DecryptEvents(IEnumerable<string>, IEnumerable<SigningKeyEntry>? = null)` |
+| 26 | **decrypt_event** | `(b64, &HashMap<version, Key>, &[SigningKeyEntry]) → Event` | `decryptEvent(b64, ConversationKeyMap?, SigningKeyEntry[]?) → Event` | `decrypt_event(b64, dict?, list?) → dict` | `DecryptEvent(eventB64 string, conversationKeys map[string][]byte, signingKeys []SigningKeyEntry) (*Event, error)` | `decryptEvent(String, Map<String, byte[]>/ConversationKeyBundle, List<SigningKeyEntry>)` | `DecryptEvent(string, ConversationKeyBundle/dictionary? = null, IEnumerable<SigningKeyEntry>? = null)` |
 
 **Session stores for the decrypt/encrypt paths.** Both decrypt methods accept
 omitted/empty key arguments and fall back to two opt-in session stores:
@@ -224,6 +225,11 @@ returns one.
 
 After any of the three, store the returned `conversationKey` locally and use it
 with `encryptMessage` until the next key change.
+
+Admin actions on an existing group (promoting or demoting admins, removing
+members, declining join requests, the invite link) change no key and are
+signed with `prepareGroupAdminChange`, which returns a single
+`ActionSignature`; see [prepare_group_admin_change](#prepare_group_admin_change).
 
 Two hygiene notes:
 
@@ -366,6 +372,70 @@ conversation-key change (`ConversationKeyChangeEvent`) and the member add
 (`GroupChangeEvent.GroupMemberAddChange`), each with its
 `encodedMessageEventDetail` populated. As with group create, the `title` and
 `avatar_url` fields must not contain a comma.
+
+---
+
+#### prepare_group_admin_change
+
+Sign an admin action on an existing group. Admin actions are signed plaintext
+events, so no conversation key is involved: the result is a single
+`ActionSignature` whose `encodedMessageEventDetail` carries the
+`GroupChangeEvent`, with its `signaturePayload` populated.
+
+| Action | Fields | Event signed |
+|---|---|---|
+| `add_admins` | `user_ids` | `GroupChangeEvent.GroupAdminAddChange` |
+| `remove_admins` | `user_ids` | `GroupChangeEvent.GroupAdminRemoveChange` |
+| `remove_members` | `user_ids` | `GroupChangeEvent.GroupMemberRemoveChange` |
+| `reject_join_requests` | `user_ids` | `GroupChangeEvent.GroupJoinReject` |
+| `enable_invite_link` | `invite_url`, optional `expires_at_msec`, `affiliate_id` | `GroupChangeEvent.GroupInviteEnable` |
+| `disable_invite_link` | none | `GroupChangeEvent.GroupInviteDisable` |
+
+Rust takes a `GroupAdminAction` enum whose variants carry their own fields.
+JS, Python, and Go take the action name as a string (Go also has
+`AdminAction…` constants) next to flat optional fields. JVM and .NET take a
+`GroupAdminAction` enum next to the same optional fields. Every binding
+rejects:
+
+- a field the chosen action does not use (so a mistyped action can't
+  silently drop input)
+- a conversation id that is not a group (`g…`)
+- an empty `user_ids`, or one with empty or repeated ids
+- an empty `invite_url`, or one containing a comma (percent-encode it as
+  `%2C`)
+- an `expires_at_msec` that is not positive
+
+`disable_invite_link` names the signing sender as the member who disabled the
+link, as the native clients do.
+
+Removing members does **not** rotate the conversation key, and removed members
+can still decrypt messages sent under the current key. Follow a removal with
+`prepare_conversation_key_change` for the remaining members.
+
+```rust
+// Rust
+let params = GroupAdminChangeParams::new(
+    group_id,
+    GroupAdminAction::AddAdmins { user_ids: vec![user_id.into()] },
+);
+let signature = chat.prepare_group_admin_change(&params)?;
+```
+
+```typescript
+// JS
+const signature = chat.prepareGroupAdminChange({
+  conversationId: groupId,
+  action: "enable_invite_link",
+  inviteUrl,
+});
+```
+
+```python
+# Python
+signature = chat.prepare_group_admin_change(
+    group_id, "remove_members", user_ids=[user_id]
+)
+```
 
 ---
 
@@ -703,14 +773,14 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
-| 27 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
-| 28 | **encrypt_forward** | `encrypt_forward(EncryptForwardParams) → SendPayload` | `encryptForward(params: EncryptForwardParams) → SendPayload` | `encrypt_forward(conversation_id, forwarded_text, *, forwarded_entities=None, text=None, entities=None, attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptForward(params EncryptForwardParams) (*SendPayload, error)` | `encryptForward(EncryptForwardParams)` | `EncryptForward(EncryptForwardParams)` |
-| 29 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
-| 30 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
-| 31 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
-| 32 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(conversation_id, sequence_ids, delete_for_all, *, sender_id=None, signing_key_version=None) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
-| 33 | **prepare_conversation_settings_change** | `prepare_conversation_settings_change(&ConversationSettingsParams) → ActionSignature` | `prepareConversationSettingsChange(params: ConversationSettingsParams) → ActionSignature` | `prepare_conversation_settings_change(conversation_id, setting, *, ttl_msec=None, sender_id=None, signing_key_version=None) → dict` | `PrepareConversationSettingsChange(params ConversationSettingsParams) (*ActionSignature, error)` | `prepareConversationSettingsChange(ConversationSettingsParams)` | `PrepareConversationSettingsChange(ConversationSettingsParams)` |
+| 27 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 28 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
+| 29 | **encrypt_forward** | `encrypt_forward(EncryptForwardParams) → SendPayload` | `encryptForward(params: EncryptForwardParams) → SendPayload` | `encrypt_forward(conversation_id, forwarded_text, *, forwarded_entities=None, text=None, entities=None, attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptForward(params EncryptForwardParams) (*SendPayload, error)` | `encryptForward(EncryptForwardParams)` | `EncryptForward(EncryptForwardParams)` |
+| 30 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
+| 31 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
+| 32 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
+| 33 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(conversation_id, sequence_ids, delete_for_all, *, sender_id=None, signing_key_version=None) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
+| 34 | **prepare_conversation_settings_change** | `prepare_conversation_settings_change(&ConversationSettingsParams) → ActionSignature` | `prepareConversationSettingsChange(params: ConversationSettingsParams) → ActionSignature` | `prepare_conversation_settings_change(conversation_id, setting, *, ttl_msec=None, sender_id=None, signing_key_version=None) → dict` | `PrepareConversationSettingsChange(params ConversationSettingsParams) (*ActionSignature, error)` | `prepareConversationSettingsChange(ConversationSettingsParams)` | `PrepareConversationSettingsChange(ConversationSettingsParams)` |
 
 Required fields of `EncryptMessageParams` (all bindings, names per language
 idiom): `conversation_id` and `text`. Everything else is an optional override:
@@ -922,10 +992,10 @@ signature = chat.prepare_conversation_settings_change(
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 34 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
-| 35 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
-| 36 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
-| 37 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
+| 35 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
+| 36 | **decrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `DecryptStream(encrypted, conversationKey []byte) ([]byte, error)` | `decryptStream(byte[], byte[])` → `byte[]` | `DecryptStream(byte[], byte[])` → `byte[]` |
+| 37 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
+| 38 | **stream_decryptor** | `(&Key) → StreamDecryptor` | `streamDecryptor(Uint8Array) → StreamDecryptor` | `stream_decryptor(bytes) → StreamDecryptor` | `StreamDecryptor(conversationKey []byte) (*StreamDecryptor, error)` | `streamDecryptor(byte[]) → StreamDecryptor` | `StreamDecryptor(byte[]) → StreamDecryptor` |
 
 Methods 32/33 take the **decrypted** conversation key (raw bytes) and process the whole payload in memory.
 
@@ -942,8 +1012,8 @@ const plaintext = chat.decryptStream(encryptedMedia, key);
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 38 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
-| 39 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
+| 39 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
+| 40 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
 
 Encrypt/decrypt arbitrary UTF-8 strings using XSalsa20-Poly1305 with a conversation key. Use for encrypted metadata fields like `group_name`, `group_avatar_url`, and `group_description` returned by the XChat API.
 
@@ -966,18 +1036,19 @@ group_name = chat.decrypt(conversation["group_name"], conv_key)
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 40 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
-| 41 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
-| 42 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
-| 43 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
+| 41 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
+| 42 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
+| 43 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
+| 44 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
 
 Conversation-key changes, group creates, and group member-adds are signed by the
 one-call prepare methods (`prepare_conversation_key_change`,
 `prepare_group_create`, `prepare_group_members_change`), which return the
 `actionSignatures` ready to POST. Group create and member-add each return two
 signatures (a conversation-key change plus the group change). Message deletes
-are signed by `prepare_message_delete` and conversation setting changes by
-`prepare_conversation_settings_change`; each returns a single `ActionSignature`.
+are signed by `prepare_message_delete`, conversation setting changes by
+`prepare_conversation_settings_change`, and group admin actions by
+`prepare_group_admin_change`; each returns a single `ActionSignature`.
 
 ### Utilities
 
@@ -985,13 +1056,13 @@ Common helpers exported as module-level functions (Rust crate root / JS module /
 
 | # | Function | Rust | JS | Python | Go | JVM | .NET |
 |---|----------|------|-----|--------|-----|------|------|
-| 44 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
-| 45 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
-| 46 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
-| 47 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
-| 48 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
-| 49 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
-| 50 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
+| 45 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
+| 46 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
+| 47 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
+| 48 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
+| 49 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
+| 50 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
+| 51 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
 
 `encrypted_stream_size` returns the exact byte length that `encrypt_stream`
 or `stream_encryptor` will produce, without encrypting or requiring a key:

@@ -485,6 +485,43 @@ export interface ConversationSettingsParams {
 }
 
 /**
+ * A group admin action accepted by prepareGroupAdminChange.
+ */
+export type GroupAdminAction =
+  | "add_admins"
+  | "remove_admins"
+  | "remove_members"
+  | "reject_join_requests"
+  | "enable_invite_link"
+  | "disable_invite_link";
+
+/**
+ * Parameters for prepareGroupAdminChange.
+ *
+ * Admin actions are signed plaintext events. Fields an action does not use
+ * are rejected. Removing members does not rotate the conversation key:
+ * follow up with prepareConversationKeyChange for the remaining members.
+ */
+export interface GroupAdminChangeParams {
+  /** ID of the group (starts with "g"). */
+  conversationId: string;
+  /** The action to sign. */
+  action: GroupAdminAction;
+  /** Users the action applies to. Required for the four roster actions; rejected for the invite-link actions. */
+  userIds?: string[] | null;
+  /** The invite link to publish. Required for "enable_invite_link". */
+  inviteUrl?: string | null;
+  /** When the invite link stops working, in milliseconds since the Unix epoch; omit to keep it open. Only for "enable_invite_link". */
+  expiresAtMsec?: number | null;
+  /** Affiliate the invite link is attributed to. Only for "enable_invite_link". */
+  affiliateId?: string | null;
+  /** User ID of the sender signing the change; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the change; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
+/**
  * Parameters for prepareConversationKeyChange.
  */
 export interface ConversationKeyChangeParams {
@@ -987,6 +1024,9 @@ interface ChatCrypto {
   /** Build the signed action for changing a conversation setting. */
   prepareConversationSettingsChange(params: ConversationSettingsParams): ActionSignature;
 
+  /** Build the signed action for a group admin change. */
+  prepareGroupAdminChange(params: GroupAdminChangeParams): ActionSignature;
+
   /** Encrypt a stream (e.g. media). */
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
 
@@ -1086,6 +1126,7 @@ declare class Chat implements ChatCrypto {
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
   prepareConversationSettingsChange(params: ConversationSettingsParams): ActionSignature;
+  prepareGroupAdminChange(params: GroupAdminChangeParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
@@ -1156,6 +1197,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
   prepareConversationSettingsChange(params: ConversationSettingsParams): ActionSignature;
+  prepareGroupAdminChange(params: GroupAdminChangeParams): ActionSignature;
   encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   decryptStream(encrypted: Uint8Array, conversationKey: Uint8Array): Uint8Array;
   streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;

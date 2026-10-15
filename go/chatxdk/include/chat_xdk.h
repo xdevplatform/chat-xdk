@@ -334,6 +334,24 @@ struct FfiResult chat_xdk_prepare_conversation_settings_change(const struct Chat
                                                                const char *params_json);
 
 /**
+ * Build the signed action for a group admin change.
+ *
+ * `params_json` — single JSON document: `conversation_id` (a group id,
+ * starting with `g`), `action` (one of `add_admins`, `remove_admins`,
+ * `remove_members`, `reject_join_requests`, `enable_invite_link`,
+ * `disable_invite_link`), `user_ids` (for the four roster actions),
+ * `invite_url` plus optional `expires_at_msec` / `affiliate_id` (for
+ * `enable_invite_link`), and optional `sender_id` / `signing_key_version`
+ * (unset resolves from the session identity). Fields an action does not use
+ * are rejected.
+ *
+ * Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+ * on it.
+ */
+struct FfiResult chat_xdk_prepare_group_admin_change(const struct ChatHandle *handle,
+                                                     const char *params_json);
+
+/**
  * Decrypt a webhook event.
  *
  * `event_b64`: Base64-encoded event from webhook.

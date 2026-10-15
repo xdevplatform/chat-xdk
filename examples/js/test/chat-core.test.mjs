@@ -111,6 +111,19 @@ test("prepareSettingsChange signs the setting", async () => {
   assert.ok(sig.signaturePayload.endsWith(",86400000"));
 });
 
+test("prepareAdminChange signs the action", async () => {
+  const core = await loadedCore();
+  const sig = core.prepareAdminChange({
+    groupId: "g123",
+    action: "enable_invite_link",
+    inviteUrl: "https://example.com/i/abc",
+  });
+  assert.ok(sig.encodedMessageEventDetail);
+  assert.ok(sig.signature);
+  assert.ok(sig.signaturePayload.startsWith("GroupChangeEvent.GroupInviteEnable,"));
+  assert.ok(sig.signaturePayload.endsWith(",g123,https://example.com/i/abc,null,null"));
+});
+
 test("session cache: decryptBatch feeds the key cache, encryptReply omits the key", async () => {
   const core = await loadedCore();
   core.setCacheKeys(true);

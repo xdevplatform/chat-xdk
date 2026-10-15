@@ -418,6 +418,31 @@ func (c *Chat) PrepareConversationSettingsChange(params ConversationSettingsPara
 	return &out, nil
 }
 
+// PrepareGroupAdminChange builds the signed action for a group admin change:
+// promoting or demoting admins, removing members, declining join requests, or
+// turning the invite link on or off.
+//
+// Fields an action does not use are rejected. Removing members does not rotate
+// the conversation key: follow up with PrepareConversationKeyChange for the
+// remaining members. The SDK generates the action's message id; read it back
+// from the result.
+func (c *Chat) PrepareGroupAdminChange(params GroupAdminChangeParams) (*ActionSignature, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiPrepareGroupAdminChange(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out ActionSignature
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DecryptEvent decrypts a single webhook event and errors on failure.
 //
 // conversationKeys is a map of version -> raw 32-byte conversation key,

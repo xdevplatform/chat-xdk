@@ -392,6 +392,47 @@ type ConversationSettingsParams struct {
 	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
+// GroupAdminAction names an action PrepareGroupAdminChange can sign.
+type GroupAdminAction string
+
+const (
+	// AdminActionAddAdmins makes existing members admins.
+	AdminActionAddAdmins GroupAdminAction = "add_admins"
+	// AdminActionRemoveAdmins revokes admin rights; the users stay members.
+	AdminActionRemoveAdmins GroupAdminAction = "remove_admins"
+	// AdminActionRemoveMembers removes members from the group.
+	AdminActionRemoveMembers GroupAdminAction = "remove_members"
+	// AdminActionRejectJoinRequests declines pending invite-link join
+	// requests.
+	AdminActionRejectJoinRequests GroupAdminAction = "reject_join_requests"
+	// AdminActionEnableInviteLink turns on joining through InviteURL.
+	AdminActionEnableInviteLink GroupAdminAction = "enable_invite_link"
+	// AdminActionDisableInviteLink turns the invite link off.
+	AdminActionDisableInviteLink GroupAdminAction = "disable_invite_link"
+)
+
+// GroupAdminChangeParams are the parameters for PrepareGroupAdminChange.
+//
+// Set only the fields the action uses; the others are rejected. SenderID and
+// SigningKeyVersion are optional overrides: empty resolves from the session
+// identity set via SetIdentity.
+type GroupAdminChangeParams struct {
+	// ConversationID is the group's id (starts with "g").
+	ConversationID string           `json:"conversation_id"`
+	Action         GroupAdminAction `json:"action"`
+	// UserIDs are the users a roster action applies to.
+	UserIDs []string `json:"user_ids,omitempty"`
+	// InviteURL is the link AdminActionEnableInviteLink publishes.
+	InviteURL string `json:"invite_url,omitempty"`
+	// ExpiresAtMsec is when the invite link stops working, in milliseconds
+	// since the Unix epoch; nil keeps it open.
+	ExpiresAtMsec *int64 `json:"expires_at_msec,omitempty"`
+	// AffiliateID is the affiliate the invite link is attributed to.
+	AffiliateID       string `json:"affiliate_id,omitempty"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
 // ActionSignature authenticates a conversation key change, member add, or
 // message delete.
 type ActionSignature struct {

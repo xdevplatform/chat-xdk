@@ -281,6 +281,24 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_conversation_settings_change(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Build the signed action for a group admin change.
+        ///
+        ///  `params_json` — single JSON document: `conversation_id` (a group id,
+        ///  starting with `g`), `action` (one of `add_admins`, `remove_admins`,
+        ///  `remove_members`, `reject_join_requests`, `enable_invite_link`,
+        ///  `disable_invite_link`), `user_ids` (for the four roster actions),
+        ///  `invite_url` plus optional `expires_at_msec` / `affiliate_id` (for
+        ///  `enable_invite_link`), and optional `sender_id` / `signing_key_version`
+        ///  (absent resolves from the session identity). Fields an action does not use
+        ///  are rejected.
+        ///
+        ///  Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
+        ///  on it.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_admin_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_admin_change(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Decrypt a webhook event.
         ///
         ///  - `event_b64` — base64-encoded raw event from the webhook.

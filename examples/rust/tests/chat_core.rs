@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
-use chat_xdk_core::{ConversationSetting, EntityDescriptor, PublicKeyInput};
+use chat_xdk_core::{ConversationSetting, EntityDescriptor, GroupAdminAction, PublicKeyInput};
 use chatbot_rs::chat_core::{prep_to_request, ChatCore, ReplyOptions};
 use serde_json::Value;
 
@@ -142,6 +142,26 @@ fn prepare_settings_change_signs_the_setting() {
         .signature_payload
         .starts_with("ConversationMetadataChangeEvent.MessageDurationChange,"));
     assert!(sig.signature_payload.ends_with(",86400000"));
+}
+
+#[test]
+fn prepare_admin_change_signs_the_action() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let sig = core
+        .prepare_admin_change(
+            "g123",
+            GroupAdminAction::AddAdmins {
+                user_ids: vec!["6789".into()],
+            },
+        )
+        .expect("prepare_admin_change");
+    assert!(!sig.encoded_message_event_detail.is_empty());
+    assert!(!sig.signature.is_empty());
+    assert!(sig
+        .signature_payload
+        .starts_with("GroupChangeEvent.GroupAdminAddChange,"));
+    assert!(sig.signature_payload.ends_with(",g123,6789"));
 }
 
 #[test]

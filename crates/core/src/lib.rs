@@ -137,7 +137,8 @@ pub use crypto::encryption::{StreamDecryptor, StreamEncryptor};
 pub use params::{
     ConversationKeyChangeParams, ConversationSetting, ConversationSettingsParams,
     EncryptEditParams, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    EncryptReplyParams, GroupAdminAction, GroupAdminChangeParams, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams,
 };
 pub use types::*;
 
@@ -208,7 +209,8 @@ pub mod prelude {
     pub use crate::params::{
         ConversationKeyChangeParams, ConversationSetting, ConversationSettingsParams,
         EncryptEditParams, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
-        EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+        EncryptReplyParams, GroupAdminAction, GroupAdminChangeParams, GroupCreateParams,
+        GroupMembersChangeParams, MessageDeleteParams,
     };
 
     // Types (always available)

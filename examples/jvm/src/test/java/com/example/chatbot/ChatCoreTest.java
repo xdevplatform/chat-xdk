@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.Types.ActionSignature;
 import com.x.chatxdk.Types.ConversationSetting;
 import com.x.chatxdk.Types.EntityDescriptor;
+import com.x.chatxdk.Types.GroupAdminAction;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PublicKeyInput;
 import com.x.chatxdk.Types.PublicKeys;
@@ -126,6 +127,21 @@ class ChatCoreTest {
             assertEquals(
                     "ConversationMetadataChangeEvent.UnmuteConversation," + sig.messageId
                             + ",12345,12345:12345,6789:12345",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
+    void prepareAdminChangeSignsTheAction() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("12345");
+            ActionSignature sig =
+                    core.prepareAdminChange("g123", GroupAdminAction.DISABLE_INVITE_LINK, null, null);
+            assertFalse(sig.encodedMessageEventDetail.isEmpty());
+            assertFalse(sig.signature.isEmpty());
+            assertEquals(
+                    "GroupChangeEvent.GroupInviteDisable," + sig.messageId + ",12345,g123,12345",
                     sig.signaturePayload);
         }
     }

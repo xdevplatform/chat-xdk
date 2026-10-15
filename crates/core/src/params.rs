@@ -820,6 +820,176 @@ impl ConversationSettingsParams {
     }
 }
 
+/// A group admin action to sign with
+/// [`crate::ChatCore::prepare_group_admin_change`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupAdminAction {
+    /// Make existing members admins.
+    AddAdmins {
+        /// Members to promote.
+        user_ids: Vec<String>,
+    },
+    /// Revoke admin rights; the users stay members.
+    RemoveAdmins {
+        /// Admins to demote.
+        user_ids: Vec<String>,
+    },
+    /// Remove members from the group.
+    RemoveMembers {
+        /// Members to remove.
+        user_ids: Vec<String>,
+    },
+    /// Decline pending requests to join through the invite link.
+    RejectJoinRequests {
+        /// Users whose join requests are declined.
+        user_ids: Vec<String>,
+    },
+    /// Turn on joining through an invite link.
+    EnableInviteLink {
+        /// The invite link to publish.
+        invite_url: String,
+        /// When the link stops working, in milliseconds since the Unix
+        /// epoch; `None` keeps it open until disabled.
+        expires_at_msec: Option<i64>,
+        /// Affiliate the link is attributed to, if any.
+        affiliate_id: Option<String>,
+    },
+    /// Turn off the invite link. The event names the signing sender as the
+    /// member who disabled it.
+    DisableInviteLink,
+}
+
+impl GroupAdminAction {
+    /// Every name accepted by [`GroupAdminAction::from_parts`].
+    pub const NAMES: [&'static str; 6] = [
+        "add_admins",
+        "remove_admins",
+        "remove_members",
+        "reject_join_requests",
+        "enable_invite_link",
+        "disable_invite_link",
+    ];
+
+    /// Build an action from the flat form the language bindings take: an
+    /// action name from [`GroupAdminAction::NAMES`] plus only the fields
+    /// that action uses. `user_ids` belongs to the four roster actions;
+    /// `invite_url`, `expires_at_msec`, and `affiliate_id` belong to
+    /// `"enable_invite_link"`. Passing a field the action does not use is an
+    /// error, so a mistyped action name cannot silently drop input.
+    pub fn from_parts(
+        action: &str,
+        user_ids: Option<Vec<String>>,
+        invite_url: Option<String>,
+        expires_at_msec: Option<i64>,
+        affiliate_id: Option<String>,
+    ) -> Result<Self, SdkError> {
+        let invite_fields_set =
+            invite_url.is_some() || expires_at_msec.is_some() || affiliate_id.is_some();
+        match action {
+            "add_admins" | "remove_admins" | "remove_members" | "reject_join_requests" => {
+                if invite_fields_set {
+                    return Err(SdkError::InvalidState(format!(
+                        "invite_url, expires_at_msec and affiliate_id only apply to action \
+                         \"enable_invite_link\": leave them unset for \"{action}\""
+                    )));
+                }
+                let Some(user_ids) = user_ids else {
+                    return Err(SdkError::InvalidState(format!(
+                        "user_ids is required for action \"{action}\": pass the users it \
+                         applies to"
+                    )));
+                };
+                Ok(match action {
+                    "add_admins" => Self::AddAdmins { user_ids },
+                    "remove_admins" => Self::RemoveAdmins { user_ids },
+                    "remove_members" => Self::RemoveMembers { user_ids },
+                    _ => Self::RejectJoinRequests { user_ids },
+                })
+            }
+            "enable_invite_link" => {
+                if user_ids.is_some() {
+                    return Err(SdkError::InvalidState(
+                        "user_ids does not apply to action \"enable_invite_link\": leave it unset"
+                            .into(),
+                    ));
+                }
+                let Some(invite_url) = invite_url else {
+                    return Err(SdkError::InvalidState(
+                        "invite_url is required for action \"enable_invite_link\": pass the \
+                         invite link to publish"
+                            .into(),
+                    ));
+                };
+                Ok(Self::EnableInviteLink {
+                    invite_url,
+                    expires_at_msec,
+                    affiliate_id,
+                })
+            }
+            "disable_invite_link" => {
+                if user_ids.is_some() || invite_fields_set {
+                    return Err(SdkError::InvalidState(
+                        "action \"disable_invite_link\" takes no other fields: leave user_ids, \
+                         invite_url, expires_at_msec and affiliate_id unset"
+                            .into(),
+                    ));
+                }
+                Ok(Self::DisableInviteLink)
+            }
+            "" => Err(SdkError::InvalidState(format!(
+                "action is empty: pass one of {}",
+                Self::NAMES.join(", ")
+            ))),
+            other => Err(SdkError::InvalidState(format!(
+                "unknown action \"{other}\": pass one of {}",
+                Self::NAMES.join(", ")
+            ))),
+        }
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_admin_change`].
+///
+/// Admin actions are signed plaintext events, not encrypted messages, so no
+/// conversation key is involved: the result is an action signature the
+/// caller submits alongside the group change request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupAdminChangeParams {
+    /// ID of the group (starts with `g`).
+    pub conversation_id: String,
+    /// The action to sign.
+    pub action: GroupAdminAction,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupAdminChangeParams {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, action: GroupAdminAction) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            action,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
 /// Parameters for [`crate::ChatCore::prepare_conversation_key_change`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConversationKeyChangeParams {
@@ -1261,6 +1431,86 @@ mod tests {
         assert!(err("mute", Some(1)).contains("ttl_msec only applies"));
         assert!(err("", None).contains("setting is empty: pass one of message_duration"));
         assert!(err("Mute", None).contains("unknown setting \"Mute\": pass one of"));
+    }
+
+    #[test]
+    fn group_admin_action_from_parts_maps_each_name() {
+        use GroupAdminAction as A;
+        let ids = || Some(vec!["222".to_string()]);
+        assert_eq!(
+            A::from_parts("add_admins", ids(), None, None, None).unwrap(),
+            A::AddAdmins {
+                user_ids: vec!["222".into()]
+            }
+        );
+        assert_eq!(
+            A::from_parts("remove_admins", ids(), None, None, None).unwrap(),
+            A::RemoveAdmins {
+                user_ids: vec!["222".into()]
+            }
+        );
+        assert_eq!(
+            A::from_parts("remove_members", ids(), None, None, None).unwrap(),
+            A::RemoveMembers {
+                user_ids: vec!["222".into()]
+            }
+        );
+        assert_eq!(
+            A::from_parts("reject_join_requests", ids(), None, None, None).unwrap(),
+            A::RejectJoinRequests {
+                user_ids: vec!["222".into()]
+            }
+        );
+        assert_eq!(
+            A::from_parts(
+                "enable_invite_link",
+                None,
+                Some("https://example.com/i/a".into()),
+                Some(5),
+                Some("aff".into())
+            )
+            .unwrap(),
+            A::EnableInviteLink {
+                invite_url: "https://example.com/i/a".into(),
+                expires_at_msec: Some(5),
+                affiliate_id: Some("aff".into()),
+            }
+        );
+        assert_eq!(
+            A::from_parts("disable_invite_link", None, None, None, None).unwrap(),
+            A::DisableInviteLink
+        );
+    }
+
+    #[test]
+    fn group_admin_action_from_parts_rejects_mismatched_fields() {
+        let err =
+            |action: &str, ids: Option<Vec<String>>, url: Option<&str>, expires: Option<i64>| {
+                GroupAdminAction::from_parts(action, ids, url.map(str::to_string), expires, None)
+                    .unwrap_err()
+                    .to_string()
+            };
+        let ids = || Some(vec!["222".to_string()]);
+        assert!(err("add_admins", None, None, None).contains("user_ids is required"));
+        assert!(err("remove_members", ids(), Some("u"), None).contains("only apply to"));
+        assert!(err("enable_invite_link", None, None, Some(5)).contains("invite_url is required"));
+        assert!(err("enable_invite_link", ids(), Some("u"), None).contains("does not apply"));
+        assert!(err("disable_invite_link", ids(), None, None).contains("takes no other fields"));
+        assert!(err("", None, None, None).contains("action is empty"));
+        assert!(err("promote", None, None, None).contains("unknown action \"promote\""));
+    }
+
+    #[test]
+    fn group_admin_change_params_new_plus_identity_equals_full_construction() {
+        let via_new = GroupAdminChangeParams::new("g1", GroupAdminAction::DisableInviteLink)
+            .with_identity("me", "2");
+        let full = GroupAdminChangeParams {
+            conversation_id: "g1".into(),
+            action: GroupAdminAction::DisableInviteLink,
+            sender_id: Some("me".into()),
+            signing_key_version: Some("2".into()),
+        };
+        assert_eq!(via_new, full);
     }
 
     #[test]

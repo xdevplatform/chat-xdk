@@ -665,6 +665,26 @@ namespace ChatXdk
             return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
         }
 
+        /// <summary>
+        /// Build the signed action for a group admin change: promoting or
+        /// demoting admins, removing members, declining join requests, or
+        /// turning the invite link on or off. Fields an action does not use
+        /// are rejected. Removing members does not rotate the conversation
+        /// key: follow up with <see cref="PrepareConversationKeyChange"/> for
+        /// the remaining members. The SDK generates the action's message id;
+        /// read it back from the result.
+        /// </summary>
+        public ActionSignature PrepareGroupAdminChange(GroupAdminChangeParams parameters)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(BuildPrepareGroupAdminChangeJson(parameters));
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_group_admin_change(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+        }
+
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
         private PreparedConversationChange CallPrepareEndpoint(string paramsJson, ParamsJsonDelegate fn)
@@ -1133,6 +1153,35 @@ namespace ChatXdk
                 ["conversation_id"] = p.ConversationId,
                 ["setting"] = setting,
                 ["ttl_msec"] = p.TtlMsec,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
+            };
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildPrepareGroupAdminChangeJson(GroupAdminChangeParams p)
+        {
+            ArgumentNullException.ThrowIfNull(p);
+            var action = p.Action switch
+            {
+                GroupAdminAction.AddAdmins => "add_admins",
+                GroupAdminAction.RemoveAdmins => "remove_admins",
+                GroupAdminAction.RemoveMembers => "remove_members",
+                GroupAdminAction.RejectJoinRequests => "reject_join_requests",
+                GroupAdminAction.EnableInviteLink => "enable_invite_link",
+                GroupAdminAction.DisableInviteLink => "disable_invite_link",
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(p),
+                    $"unknown GroupAdminAction value {(int)p.Action}: pass one of the named GroupAdminAction values"),
+            };
+            var dict = new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["action"] = action,
+                ["user_ids"] = p.UserIds,
+                ["invite_url"] = p.InviteUrl,
+                ["expires_at_msec"] = p.ExpiresAtMsec,
+                ["affiliate_id"] = p.AffiliateId,
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };

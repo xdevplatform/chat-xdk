@@ -1025,4 +1025,67 @@ public final class Types {
             this.setting = setting;
         }
     }
+
+    /** An action {@link Chat#prepareGroupAdminChange} can sign. */
+    public enum GroupAdminAction {
+        /** Make existing members ({@code userIds}) admins. */
+        ADD_ADMINS("add_admins"),
+        /** Revoke admin rights from {@code userIds}; they stay members. */
+        REMOVE_ADMINS("remove_admins"),
+        /** Remove {@code userIds} from the group. */
+        REMOVE_MEMBERS("remove_members"),
+        /** Decline the invite-link join requests of {@code userIds}. */
+        REJECT_JOIN_REQUESTS("reject_join_requests"),
+        /** Turn on joining through {@code inviteUrl}. */
+        ENABLE_INVITE_LINK("enable_invite_link"),
+        /** Turn the invite link off. */
+        DISABLE_INVITE_LINK("disable_invite_link");
+
+        final String wireName;
+
+        GroupAdminAction(String wireName) {
+            this.wireName = wireName;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#prepareGroupAdminChange}. Set only the fields
+     * the action uses; the others are rejected.
+     */
+    public static final class GroupAdminChangeParams {
+        /** ID of the group (starts with {@code g}). */
+        public final String conversationId;
+
+        /** The action to sign. */
+        public final GroupAdminAction action;
+
+        /** Users the action applies to; required for the four roster actions. */
+        public List<String> userIds;
+
+        /** The invite link to publish; required for {@link GroupAdminAction#ENABLE_INVITE_LINK}. */
+        public String inviteUrl;
+
+        /** When the invite link stops working, in milliseconds since the Unix epoch; null keeps it open. */
+        public Long expiresAtMsec;
+
+        /** Affiliate the invite link is attributed to, if any. */
+        public String affiliateId;
+
+        /** User ID of the sender signing the change; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param conversationId ID of the group (starts with {@code g}).
+         * @param action The action to sign.
+         */
+        public GroupAdminChangeParams(String conversationId, GroupAdminAction action) {
+            this.conversationId = conversationId;
+            this.action = action;
+        }
+    }
 }

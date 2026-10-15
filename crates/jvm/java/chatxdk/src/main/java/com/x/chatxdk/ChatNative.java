@@ -70,6 +70,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_conversation_settings_change(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_prepare_group_admin_change(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_decrypt_event(
             Pointer handle, Pointer eventB64, Pointer conversationKeysJson, Pointer signingKeysJson);
 

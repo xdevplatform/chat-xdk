@@ -270,6 +270,21 @@ export class ChatCore {
     return this.#chat.prepareConversationSettingsChange({ conversationId, setting, ttlMsec });
   }
 
+  /**
+   * Sign a group admin action, e.g. `action: "add_admins"` with `userIds`,
+   * or `"enable_invite_link"` with `inviteUrl`. Returns the action signature
+   * to submit alongside the group change request.
+   */
+  prepareAdminChange({ groupId, action, userIds, inviteUrl, expiresAtMsec }) {
+    return this.#chat.prepareGroupAdminChange({
+      conversationId: groupId,
+      action,
+      userIds,
+      inviteUrl,
+      expiresAtMsec,
+    });
+  }
+
   // -- Group management ------------------------------------------------------
 
   /** Prepare a group creation: fresh key + the two required signatures. */

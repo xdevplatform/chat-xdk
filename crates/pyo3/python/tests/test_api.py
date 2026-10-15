@@ -663,6 +663,69 @@ class TestApiShapes(unittest.TestCase):
                 )
             self.assertIn(expected, str(ctx.exception))
 
+    def test_prepare_group_admin_change_shape(self):
+        chat, v = self._unlocked_chat()
+
+        sig = chat.prepare_group_admin_change(
+            "g999",
+            "add_admins",
+            user_ids=["222", "333"],
+            sender_id="111",
+            signing_key_version="1",
+        )
+        self.assertTrue(sig["encoded_message_event_detail"])
+        self.assertTrue(sig["signature"])
+        self.assertEqual(
+            sig["signature_payload"],
+            f"GroupChangeEvent.GroupAdminAddChange,{sig['message_id']},111,g999,222,333",
+        )
+
+        sig = chat.prepare_group_admin_change(
+            "g999",
+            "enable_invite_link",
+            invite_url="https://example.com/i/abc",
+            sender_id="111",
+            signing_key_version="1",
+        )
+        self.assertEqual(
+            sig["signature_payload"],
+            "GroupChangeEvent.GroupInviteEnable,"
+            f"{sig['message_id']},111,g999,https://example.com/i/abc,null,null",
+        )
+
+        # The disabling member is the signing sender.
+        sig = chat.prepare_group_admin_change(
+            "g999", "disable_invite_link", sender_id="111", signing_key_version="1"
+        )
+        self.assertEqual(
+            sig["signature_payload"],
+            f"GroupChangeEvent.GroupInviteDisable,{sig['message_id']},111,g999,111",
+        )
+
+    def test_prepare_group_admin_change_rejects_bad_input(self):
+        chat, v = self._unlocked_chat()
+
+        cases = [
+            ("g1", "add_admins", {}, "user_ids is required"),
+            ("g1", "remove_members", {"user_ids": []}, "user_ids is empty"),
+            ("g1", "remove_members", {"user_ids": ["2", "2"]}, "more than once"),
+            ("g1", "add_admins", {"user_ids": ["2"], "invite_url": "u"}, "only apply to"),
+            ("g1", "enable_invite_link", {}, "invite_url is required"),
+            ("g1", "disable_invite_link", {"user_ids": ["2"]}, "takes no other fields"),
+            ("g1", "promote", {}, 'unknown action "promote"'),
+            ("111:222", "add_admins", {"user_ids": ["2"]}, "is not a group"),
+        ]
+        for conversation_id, action, kwargs, expected in cases:
+            with self.assertRaises(Exception) as ctx:
+                chat.prepare_group_admin_change(
+                    conversation_id,
+                    action,
+                    sender_id="111",
+                    signing_key_version="1",
+                    **kwargs,
+                )
+            self.assertIn(expected, str(ctx.exception))
+
     def test_optional_arguments_are_keyword_only(self):
         chat, v = self._unlocked_chat()
 

@@ -35,8 +35,9 @@ use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, ConversationSetting,
     ConversationSettingsParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams, QuickReply,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupAdminAction,
+    GroupAdminChangeParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    QuickReply,
 };
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
@@ -1531,6 +1532,69 @@ impl Chat {
         let signature = self
             .inner
             .prepare_conversation_settings_change(&params)
+            .map_err(to_py_err)?;
+        Python::attach(|py| Ok(action_signature_to_pydict(py, &signature)?.into()))
+    }
+
+    /// Build the signed action for a group admin change.
+    ///
+    /// Admin actions are signed plaintext events, so no conversation key is
+    /// involved. The SDK generates the action's message id; read it back
+    /// from the result. Removing members does not rotate the conversation
+    /// key: follow up with ``prepare_conversation_key_change`` for the
+    /// remaining members.
+    ///
+    /// Args:
+    ///     conversation_id: The group the action applies to (starts with
+    ///         ``"g"``).
+    ///     action: One of ``"add_admins"``, ``"remove_admins"``,
+    ///         ``"remove_members"``, ``"reject_join_requests"``,
+    ///         ``"enable_invite_link"``, ``"disable_invite_link"``.
+    ///     user_ids: The users the action applies to. Required for the four
+    ///         roster actions and rejected for the invite-link actions.
+    ///         Keyword-only, like every optional argument below it.
+    ///     invite_url: The invite link to publish. Required for
+    ///         ``"enable_invite_link"`` and rejected otherwise.
+    ///     expires_at_msec: When the invite link stops working, in
+    ///         milliseconds since the Unix epoch; unset keeps it open. Only
+    ///         for ``"enable_invite_link"``.
+    ///     affiliate_id: Affiliate the invite link is attributed to. Only
+    ///         for ``"enable_invite_link"``.
+    ///     sender_id: Your user ID; defaults to the ``set_identity`` value.
+    ///     signing_key_version: Your registered signing public key version;
+    ///         defaults to the ``set_identity`` value.
+    ///
+    /// Returns:
+    ///     A dict with ``message_id``, ``encoded_message_event_detail``,
+    ///     ``signature``, ``signature_version``, ``public_key_version``,
+    ///     ``signature_payload``.
+    #[pyo3(signature = (conversation_id, action, *, user_ids=None, invite_url=None, expires_at_msec=None, affiliate_id=None, sender_id=None, signing_key_version=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_group_admin_change(
+        &self,
+        conversation_id: &str,
+        action: &str,
+        user_ids: Option<Vec<String>>,
+        invite_url: Option<String>,
+        expires_at_msec: Option<i64>,
+        affiliate_id: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let action = GroupAdminAction::from_parts(
+            action,
+            user_ids,
+            invite_url,
+            expires_at_msec,
+            affiliate_id,
+        )
+        .map_err(to_py_err)?;
+        let mut params = GroupAdminChangeParams::new(conversation_id, action);
+        params.sender_id = sender_id;
+        params.signing_key_version = signing_key_version;
+        let signature = self
+            .inner
+            .prepare_group_admin_change(&params)
             .map_err(to_py_err)?;
         Python::attach(|py| Ok(action_signature_to_pydict(py, &signature)?.into()))
     }
