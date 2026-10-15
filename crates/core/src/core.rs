@@ -14,7 +14,7 @@ use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
     ConversationKeyChangeParams, ConversationSettingsParams, EncryptEditParams,
     EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    GroupAdminChangeParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -2205,6 +2205,172 @@ impl ChatCore {
         signature.encoded_message_event_detail =
             base64_encode(&crate::pipeline::serialize_thrift(&detail)?);
         Ok(signature)
+    }
+
+    /// Sign a group admin action: promoting or demoting admins, removing
+    /// members, declining join requests, or turning the invite link on or
+    /// off.
+    ///
+    /// Returns an [`crate::signatures::ActionSignature`] whose
+    /// `encoded_message_event_detail` carries the `GroupChangeEvent`.
+    /// Removing members does not rotate the conversation key: removed members
+    /// can still decrypt with the current key, so follow up with
+    /// [`Self::prepare_conversation_key_change`] for the remaining members.
+    pub fn prepare_group_admin_change(
+        &self,
+        params: &GroupAdminChangeParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        use crate::params::GroupAdminAction as A;
+        use crate::thrift::event::{self as ev, GroupChange as GC};
+
+        if params.conversation_id.is_empty() {
+            return Err(SdkError::InvalidState(
+                "conversation_id is empty: pass the group the action applies to".into(),
+            ));
+        }
+        if !params.conversation_id.starts_with('g') {
+            return Err(SdkError::InvalidState(format!(
+                "conversation_id \"{}\" is not a group: admin actions apply to group \
+                 conversations, whose ids start with \"g\"",
+                params.conversation_id
+            )));
+        }
+        match &params.action {
+            A::AddAdmins { user_ids }
+            | A::RemoveAdmins { user_ids }
+            | A::RemoveMembers { user_ids }
+            | A::RejectJoinRequests { user_ids } => Self::validate_admin_user_ids(user_ids)?,
+            A::EnableInviteLink {
+                invite_url,
+                expires_at_msec,
+                affiliate_id,
+            } => {
+                if invite_url.is_empty() {
+                    return Err(SdkError::InvalidState(
+                        "invite_url is empty: pass the invite link to publish".into(),
+                    ));
+                }
+                if invite_url.contains(',') {
+                    return Err(SdkError::InvalidState(
+                        "invite_url contains a comma, which the signed payload cannot carry: \
+                         percent-encode it as %2C"
+                            .into(),
+                    ));
+                }
+                if let Some(expires) = expires_at_msec {
+                    if *expires <= 0 {
+                        return Err(SdkError::InvalidState(format!(
+                            "expires_at_msec must be positive, got {expires}: pass the expiry \
+                             in milliseconds since the Unix epoch, or leave it unset for a \
+                             link that stays open"
+                        )));
+                    }
+                }
+                if let Some(affiliate) = affiliate_id {
+                    if affiliate.is_empty() || affiliate.contains(',') {
+                        return Err(SdkError::InvalidState(format!(
+                            "affiliate_id \"{affiliate}\" is invalid: pass a non-empty id \
+                             without commas, or leave it unset"
+                        )));
+                    }
+                }
+            }
+            A::DisableInviteLink => {}
+        }
+
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let signing_key = self.get_signing_private_key()?;
+
+        let expires_str;
+        let affiliate_str;
+        let (name, change, extra): (&str, GC, Vec<&str>) = match &params.action {
+            A::AddAdmins { user_ids } => (
+                "GroupAdminAddChange",
+                GC::GroupAdminAdd(ev::GroupAdminAddChange::new(user_ids.clone())),
+                user_ids.iter().map(String::as_str).collect(),
+            ),
+            A::RemoveAdmins { user_ids } => (
+                "GroupAdminRemoveChange",
+                GC::GroupAdminRemove(ev::GroupAdminRemoveChange::new(user_ids.clone())),
+                user_ids.iter().map(String::as_str).collect(),
+            ),
+            A::RemoveMembers { user_ids } => (
+                "GroupMemberRemoveChange",
+                GC::GroupMemberRemove(ev::GroupMemberRemoveChange::new(user_ids.clone())),
+                user_ids.iter().map(String::as_str).collect(),
+            ),
+            A::RejectJoinRequests { user_ids } => (
+                "GroupJoinReject",
+                GC::GroupJoinReject(ev::GroupJoinReject::new(user_ids.clone())),
+                user_ids.iter().map(String::as_str).collect(),
+            ),
+            A::EnableInviteLink {
+                invite_url,
+                expires_at_msec,
+                affiliate_id,
+            } => {
+                expires_str = nullable_i64(*expires_at_msec);
+                affiliate_str = nullable_str(affiliate_id.as_deref());
+                (
+                    "GroupInviteEnable",
+                    GC::GroupInviteEnable(ev::GroupInviteEnable::new(
+                        *expires_at_msec,
+                        invite_url.clone(),
+                        affiliate_id.clone(),
+                    )),
+                    vec![invite_url.as_str(), &expires_str, &affiliate_str],
+                )
+            }
+            A::DisableInviteLink => (
+                "GroupInviteDisable",
+                GC::GroupInviteDisable(ev::GroupInviteDisable::new(sender_id.clone())),
+                vec![sender_id.as_str()],
+            ),
+        };
+
+        let message_id = Self::generate_message_id();
+        let mut signature = crate::signatures::build_action_signature(
+            &signing_key,
+            &signing_key_version,
+            &format!("GroupChangeEvent.{name}"),
+            &message_id,
+            &sender_id,
+            &params.conversation_id,
+            &extra,
+        )?;
+        let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
+            ev::GroupChangeEvent::new(change, None),
+        );
+        signature.encoded_message_event_detail =
+            base64_encode(&crate::pipeline::serialize_thrift(&detail)?);
+        Ok(signature)
+    }
+
+    /// Check the user ids a roster admin action names: at least one, none
+    /// empty, none repeated, and none with a comma the signed payload cannot
+    /// carry.
+    fn validate_admin_user_ids(user_ids: &[String]) -> Result<(), SdkError> {
+        if user_ids.is_empty() {
+            return Err(SdkError::InvalidState(
+                "user_ids is empty: pass at least one user the action applies to".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for id in user_ids {
+            if id.is_empty() || id.contains(',') {
+                return Err(SdkError::InvalidState(format!(
+                    "user_ids contains an invalid id \"{id}\": every entry must be a user id"
+                )));
+            }
+            if !seen.insert(id.as_str()) {
+                return Err(SdkError::InvalidState(format!(
+                    "user_ids lists \"{id}\" more than once: pass each user once"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Resolve a reaction's conversation id and target sequence id from the
@@ -7462,6 +7628,155 @@ mod tests {
                 err.to_string().contains("ttl_msec must be positive"),
                 "{err}"
             );
+        }
+    }
+
+    fn admin_change(
+        core: &ChatCore,
+        conversation_id: &str,
+        action: crate::GroupAdminAction,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        let params =
+            crate::GroupAdminChangeParams::new(conversation_id, action).with_identity("111", "1");
+        core.prepare_group_admin_change(&params)
+    }
+
+    fn decode_group_change_event(
+        sig: &crate::signatures::ActionSignature,
+    ) -> crate::thrift::event::GroupChangeEvent {
+        match decode_detail(&sig.encoded_message_event_detail) {
+            MessageEventDetail::GroupChangeEvent(e) => e,
+            other => panic!("expected GroupChangeEvent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn group_admin_roster_actions_sign_and_verify() {
+        use crate::thrift::event::GroupChange as GC;
+        use crate::GroupAdminAction as A;
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let ids = || vec!["222".to_string(), "333".to_string()];
+
+        for (action, name) in [
+            (A::AddAdmins { user_ids: ids() }, "GroupAdminAddChange"),
+            (
+                A::RemoveAdmins { user_ids: ids() },
+                "GroupAdminRemoveChange",
+            ),
+            (
+                A::RemoveMembers { user_ids: ids() },
+                "GroupMemberRemoveChange",
+            ),
+            (A::RejectJoinRequests { user_ids: ids() }, "GroupJoinReject"),
+        ] {
+            let sig = admin_change(&core, "g999", action).unwrap();
+            assert_eq!(
+                sig.signature_payload,
+                format!(
+                    "GroupChangeEvent.{name},{},111,g999,222,333",
+                    sig.message_id
+                )
+            );
+            let event = decode_group_change_event(&sig);
+            assert_eq!(event.for_key_rotation, None);
+            let listed = match event.group_change.expect("change is set") {
+                GC::GroupAdminAdd(c) if name == "GroupAdminAddChange" => c.admin_ids,
+                GC::GroupAdminRemove(c) if name == "GroupAdminRemoveChange" => c.admin_ids,
+                GC::GroupMemberRemove(c) if name == "GroupMemberRemoveChange" => c.member_ids,
+                GC::GroupJoinReject(c) if name == "GroupJoinReject" => c.rejected_user_ids,
+                other => panic!("unexpected change for {name}: {:?}", other),
+            };
+            assert_eq!(listed, Some(ids()));
+            assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+        }
+    }
+
+    #[test]
+    fn group_invite_link_actions_sign_and_verify() {
+        use crate::thrift::event::GroupChange as GC;
+        use crate::GroupAdminAction as A;
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let sig = admin_change(
+            &core,
+            "g999",
+            A::EnableInviteLink {
+                invite_url: "https://example.com/i/abc".into(),
+                expires_at_msec: Some(1_900_000_000_000),
+                affiliate_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sig.signature_payload,
+            format!(
+                "GroupChangeEvent.GroupInviteEnable,{},111,g999,https://example.com/i/abc,\
+                 1900000000000,null",
+                sig.message_id
+            )
+        );
+        match decode_group_change_event(&sig).group_change {
+            Some(GC::GroupInviteEnable(c)) => {
+                assert_eq!(c.invite_url.as_deref(), Some("https://example.com/i/abc"));
+                assert_eq!(c.expires_at_msec, Some(1_900_000_000_000));
+                assert_eq!(c.affiliate_id, None);
+            }
+            other => panic!("expected GroupInviteEnable, got {:?}", other),
+        }
+        assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+
+        let sig = admin_change(&core, "g999", A::DisableInviteLink).unwrap();
+        assert_eq!(
+            sig.signature_payload,
+            format!(
+                "GroupChangeEvent.GroupInviteDisable,{},111,g999,111",
+                sig.message_id
+            )
+        );
+        match decode_group_change_event(&sig).group_change {
+            Some(GC::GroupInviteDisable(c)) => {
+                assert_eq!(c.disabled_by_member_id.as_deref(), Some("111"));
+            }
+            other => panic!("expected GroupInviteDisable, got {:?}", other),
+        }
+        assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+    }
+
+    #[test]
+    fn group_admin_change_rejects_invalid_input() {
+        use crate::GroupAdminAction as A;
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let users = |ids: &[&str]| A::AddAdmins {
+            user_ids: ids.iter().map(|s| s.to_string()).collect(),
+        };
+        let invite =
+            |url: &str, expires: Option<i64>, affiliate: Option<&str>| A::EnableInviteLink {
+                invite_url: url.into(),
+                expires_at_msec: expires,
+                affiliate_id: affiliate.map(str::to_string),
+            };
+        let cases = [
+            ("", users(&["222"]), "conversation_id is empty"),
+            ("111:222", users(&["222"]), "is not a group"),
+            ("g1", users(&[]), "user_ids is empty"),
+            ("g1", users(&["222", ""]), "invalid id"),
+            ("g1", users(&["2,3"]), "invalid id"),
+            ("g1", users(&["222", "222"]), "more than once"),
+            ("g1", invite("", None, None), "invite_url is empty"),
+            ("g1", invite("https://x/a,b", None, None), "percent-encode"),
+            (
+                "g1",
+                invite("https://x/a", Some(0), None),
+                "expires_at_msec must be positive",
+            ),
+            ("g1", invite("https://x/a", None, Some("")), "affiliate_id"),
+        ];
+        for (conversation_id, action, expected) in cases {
+            let err = admin_change(&core, conversation_id, action).unwrap_err();
+            assert!(err.to_string().contains(expected), "{expected}: {err}");
         }
     }
 

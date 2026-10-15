@@ -66,7 +66,7 @@ use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, Registe
 use crate::params::{
     ConversationKeyChangeParams, ConversationSettingsParams, EncryptEditParams,
     EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    GroupAdminChangeParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -363,6 +363,13 @@ impl Chat {
         params: &ConversationSettingsParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         self.inner.prepare_conversation_settings_change(params)
+    }
+    /// Build the signed action for a group admin change.
+    pub fn prepare_group_admin_change(
+        &self,
+        params: &GroupAdminChangeParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        self.inner.prepare_group_admin_change(params)
     }
     /// Decrypt an encrypted conversation key (ECIES).
     pub fn decrypt_conversation_key(
