@@ -135,8 +135,9 @@ pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{StreamDecryptor, StreamEncryptor};
 pub use params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
+    MessageDeleteParams,
 };
 pub use types::*;
 
