@@ -925,4 +925,54 @@ namespace ChatXdk
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
     }
+
+    /// <summary>An action <see cref="Chat.PrepareGroupAdminChange"/> can sign.</summary>
+    public enum GroupAdminAction
+    {
+        /// <summary>Make existing members (UserIds) admins.</summary>
+        AddAdmins,
+        /// <summary>Revoke admin rights from UserIds; they stay members.</summary>
+        RemoveAdmins,
+        /// <summary>Remove UserIds from the group.</summary>
+        RemoveMembers,
+        /// <summary>Decline the invite-link join requests of UserIds.</summary>
+        RejectJoinRequests,
+        /// <summary>Turn on joining through InviteUrl.</summary>
+        EnableInviteLink,
+        /// <summary>Turn the invite link off.</summary>
+        DisableInviteLink,
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupAdminChange"/>. Set only the
+    /// fields the action uses; the others are rejected.
+    /// </summary>
+    public sealed class GroupAdminChangeParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="conversationId">ID of the group (starts with "g").</param>
+        /// <param name="action">The action to sign.</param>
+        public GroupAdminChangeParams(string conversationId, GroupAdminAction action)
+        {
+            ConversationId = conversationId;
+            Action = action;
+        }
+
+        /// <summary>ID of the group (starts with "g").</summary>
+        public string ConversationId { get; }
+        /// <summary>The action to sign.</summary>
+        public GroupAdminAction Action { get; }
+        /// <summary>Users the action applies to; required for the four roster actions.</summary>
+        public IReadOnlyList<string>? UserIds { get; init; }
+        /// <summary>The invite link to publish; required for <see cref="GroupAdminAction.EnableInviteLink"/>.</summary>
+        public string? InviteUrl { get; init; }
+        /// <summary>When the invite link stops working, in milliseconds since the Unix epoch; null keeps it open.</summary>
+        public long? ExpiresAtMsec { get; init; }
+        /// <summary>Affiliate the invite link is attributed to, if any.</summary>
+        public string? AffiliateId { get; init; }
+        /// <summary>User ID of the sender signing the change; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
+    }
 }

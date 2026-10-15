@@ -682,6 +682,73 @@ namespace ChatXdk.Tests
             Assert.Contains("pass one of the named ConversationSetting values", ex.Message);
         }
 
+        // PrepareGroupAdminChange
+
+        [Fact]
+        public void PrepareGroupAdminChange_SignsRosterAction()
+        {
+            using var chat = CreateUnlocked();
+
+            var sig = chat.PrepareGroupAdminChange(new GroupAdminChangeParams(
+                "g999", GroupAdminAction.RejectJoinRequests)
+            {
+                UserIds = new[] { "222" },
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.NotEmpty(sig.EncodedMessageEventDetail);
+            Assert.NotEmpty(sig.Signature);
+            Assert.Equal(
+                $"GroupChangeEvent.GroupJoinReject,{sig.MessageId},111,g999,222",
+                sig.SignaturePayload);
+        }
+
+        [Fact]
+        public void PrepareGroupAdminChange_DisableInviteLinkNamesTheSender()
+        {
+            using var chat = CreateUnlocked();
+
+            var sig = chat.PrepareGroupAdminChange(new GroupAdminChangeParams(
+                "g999", GroupAdminAction.DisableInviteLink)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.Equal(
+                $"GroupChangeEvent.GroupInviteDisable,{sig.MessageId},111,g999,111",
+                sig.SignaturePayload);
+        }
+
+        [Fact]
+        public void PrepareGroupAdminChange_RejectsBadInput()
+        {
+            using var chat = CreateUnlocked();
+            ChatXdkException Fails(GroupAdminChangeParams p) =>
+                Assert.Throws<ChatXdkException>(() => chat.PrepareGroupAdminChange(p));
+
+            Assert.Contains("user_ids is required", Fails(new GroupAdminChangeParams("g1", GroupAdminAction.AddAdmins)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            }).Message);
+            Assert.Contains("invite_url is required", Fails(new GroupAdminChangeParams("g1", GroupAdminAction.EnableInviteLink)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            }).Message);
+            Assert.Contains("more than once", Fails(new GroupAdminChangeParams("g1", GroupAdminAction.RemoveMembers)
+            {
+                UserIds = new[] { "2", "2" },
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            }).Message);
+            var outOfRange = Assert.Throws<ArgumentOutOfRangeException>(() => chat.PrepareGroupAdminChange(
+                new GroupAdminChangeParams("g1", (GroupAdminAction)99)));
+            Assert.Contains("pass one of the named GroupAdminAction values", outOfRange.Message);
+        }
+
         // Conversation key encrypt / decrypt
 
         [Fact]
