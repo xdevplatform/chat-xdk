@@ -703,7 +703,7 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
 | 27 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
@@ -721,7 +721,7 @@ idiom): `conversation_id` and `text`. Everything else is an optional override:
   (`Uint8Array` in JS, `bytes` in Python, `[]byte` in Go, `byte[]` in
   JVM/.NET) from `prepare_conversation_key_change()` /
   `decrypt_conversation_key()`.
-- `entities`, `attachments`, `should_notify` (defaults to true), `ttl_msec`.
+- `entities`, `attachments`, `quick_reply`, `should_notify` (defaults to true), `ttl_msec`.
 
 An omitted value and its explicit equivalent produce byte-identical signed
 output for the same logical inputs (Rust: `params.with_identity(…)` /
@@ -737,6 +737,9 @@ type section.
 The `attachments` parameter takes media, URL-card (optionally with encrypted
 banner/favicon preview images), and post descriptors — see
 [AttachmentDescriptor (send side)](#attachmentdescriptor-send-side).
+The `quick_reply` parameter attaches a quick-reply request (selectable
+options) or response (the selected option) — see
+[QuickReply (send side)](#quickreply-send-side).
 **Temporary restriction:** `encrypt_message` and `encrypt_reply` reject
 attachment lists that current first-party clients cannot render — multiple
 attachments are allowed only when every one is image/gif/video media
@@ -1625,6 +1628,61 @@ displayTitle, bannerImage, faviconImage)`, `Types.AttachmentDescriptor
 `AttachmentDescriptor` struct with `BannerImage`/`FaviconImage` pointer
 fields (`URLAttachmentImageDescriptor`); JS and Python pass the plain
 object/dict shape above.
+
+### QuickReply (send side)
+
+The optional `quick_reply` of `EncryptMessageParams` / `EncryptReplyParams`.
+A **request** offers selectable options; a **response** reports the option
+the user picked. The input is the same shape each binding returns as the
+quick reply of decrypted text content, so a received value can be passed
+back to `encrypt_message` / `encrypt_reply` unchanged. Omitting it sends no
+quick reply.
+
+```typescript
+// JS/WASM (inner keys are camelCase)
+type QuickReply =
+  | { request: { options: { id?: string; options?: QuickReplyOption[] } } }
+  | { response: { options: { requestId?: string; metadata?: string; selectedOptionId?: string } } };
+
+interface QuickReplyOption {
+  id?: string;
+  label?: string;
+  metadata?: string;
+  description?: string;
+}
+```
+
+Python, Go, .NET, and JVM use the same structure with snake_case keys
+(`request_id`, `selected_option_id`): a `dict` in Python, a
+`json.RawMessage` in Go, a `JsonElement` in .NET, and a Jackson `JsonNode`
+in JVM. Rust takes the typed `QuickReply` enum. A value matching neither
+variant fails with an "Invalid quick reply" error.
+
+```python
+# Ask a question with two options...
+chat.encrypt_message(conversation_id, "Continue?", quick_reply={
+    "request": {"options": {"id": "qr-1", "options": [
+        {"id": "yes", "label": "Yes", "metadata": "m-yes"},
+        {"id": "no", "label": "No", "metadata": "m-no"},
+    ]}},
+})
+
+# ...and answer it.
+chat.encrypt_message(conversation_id, "Yes", quick_reply={
+    "response": {"options": {
+        "request_id": "qr-1", "metadata": "m-yes", "selected_option_id": "yes",
+    }},
+})
+```
+
+```go
+p := chatxdk.EncryptMessageParams{
+    ConversationID: conversationID,
+    Text:           "Yes",
+    QuickReply: json.RawMessage(`{"response":{"options":` +
+        `{"request_id":"qr-1","metadata":"m-yes","selected_option_id":"yes"}}}`),
+}
+```
 
 ### KeyChangeEvent
 
