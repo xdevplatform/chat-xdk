@@ -354,6 +354,22 @@ struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle,
 struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const char *params_json);
 
 /**
+ * Encrypt a forward of an existing message for the X API.
+ *
+ * `params_json` — single JSON document: `conversation_id` and
+ * `forwarded_text` (the original's full text; `""` only when the original
+ * has attachments but no text), plus optional `forwarded_entities`
+ * (`[[start,end,"type"],...]` into `forwarded_text`), `text` (a comment
+ * sent with the forward), `entities` (into `text`), `attachments` (the
+ * original's attachments, re-encrypted and uploaded under this
+ * conversation), and the same identity, key, `should_notify`, and
+ * `ttl_msec` fields as `chat_xdk_encrypt_message`.
+ *
+ * Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+ */
+struct FfiResult chat_xdk_encrypt_forward(const struct ChatHandle *handle, const char *params_json);
+
+/**
  * Encrypt a reply message for the X API.
  *
  * `params_json` — same document as `chat_xdk_encrypt_message` plus the

@@ -13,7 +13,8 @@ use crate::error::SdkError;
 use crate::protocol::serialization::base64_encode;
 use crate::thrift::event::{MessageCreateEvent, MessageEventSignature};
 use crate::thrift::product::{
-    AddressRichTextContent, CashtagRichTextContent, EmailRichTextContent, HashtagRichTextContent,
+    AddressRichTextContent, CashtagRichTextContent, EmailRichTextContent,
+    ForwardedMessage as ThriftForwardedMessage, HashtagRichTextContent,
     MediaAttachment as ThriftMediaAttachmentStruct, MediaDimensions as ThriftMediaDimensions,
     MediaType as ThriftMediaType, MentionRichTextContent,
     MessageAttachment as ThriftMessageAttachment, MessageContents, MessageEdit,
@@ -287,6 +288,42 @@ pub fn build_message_content_with_preview(
         None,
         None,
         quick_reply,
+        None,
+        None,
+    );
+    let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::Message(Box::new(
+        content,
+    )))));
+    serialize_thrift(&holder)
+}
+
+/// Build forward content: the original's text and entities in
+/// `forwarded_message`, the sender's optional comment in `message_text`.
+#[allow(clippy::vec_box)]
+pub fn build_forward_content(
+    comment: Option<&str>,
+    entities: Option<Vec<Box<ThriftRichTextEntity>>>,
+    attachments: Option<Vec<Box<ThriftMessageAttachment>>>,
+    forwarded_text: Option<&str>,
+    forwarded_entities: Option<&[EntityDescriptor]>,
+) -> Result<Vec<u8>, SdkError> {
+    // ForwardedMessage carries entities unboxed, unlike MessageContents.
+    let forwarded_entities = forwarded_entities.map(|descs| {
+        build_thrift_entities(descs)
+            .into_iter()
+            .map(|e| *e)
+            .collect::<Vec<_>>()
+    });
+    let forwarded =
+        ThriftForwardedMessage::new(forwarded_text.map(str::to_string), forwarded_entities);
+    let content = MessageContents::new(
+        comment.map(str::to_string),
+        entities,
+        attachments,
+        None,
+        Some(Box::new(forwarded)),
+        None,
+        None,
         None,
         None,
     );

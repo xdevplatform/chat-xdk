@@ -146,6 +146,18 @@ func TestEncryptReplyProducesPayload(t *testing.T) {
 	}
 }
 
+func TestEncryptForwardProducesPayload(t *testing.T) {
+	core, v := loadedCore(t)
+	defer core.Close()
+	body, err := core.EncryptForward("6789:12345", "original message", nil, "fyi", v.conversationKey(t), "1710000000000")
+	if err != nil {
+		t.Fatalf("EncryptForward: %v", err)
+	}
+	if body.EncodedMessageCreateEvent == "" || body.EncodedMessageEventSignature == "" || body.MessageID == "" {
+		t.Errorf("incomplete send body: %+v", body)
+	}
+}
+
 func TestDecryptBatchEmptyIsSafe(t *testing.T) {
 	core, _ := loadedCore(t)
 	defer core.Close()

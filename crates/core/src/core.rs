@@ -12,8 +12,9 @@ use crate::error::{CryptoError, SdkError};
 use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
+    MessageDeleteParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -1749,6 +1750,101 @@ impl ChatCore {
             thrift_entities,
             thrift_attachments,
             thrift_quick_reply,
+        )?;
+
+        let message_id = Self::generate_message_id();
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &params.conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
+        );
+        api_params.should_notify = params.should_notify;
+        api_params.ttl_msec = params.ttl_msec;
+        crate::pipeline::encrypt_and_sign(api_params)
+    }
+
+    /// Encrypt a forward of an existing message.
+    ///
+    /// The forward is a new message in `conversation_id` carrying the
+    /// original's text and entities as `forwarded_message`, the optional
+    /// comment as its own text, and the re-uploaded attachments.
+    pub fn encrypt_forward(
+        &self,
+        mut params: EncryptForwardParams,
+    ) -> Result<SendPayload, SdkError> {
+        if params.conversation_id.is_empty() {
+            return Err(SdkError::InvalidState(
+                "conversation_id is empty: pass the conversation to forward the message to".into(),
+            ));
+        }
+        let has_attachments = params.attachments.as_ref().is_some_and(|a| !a.is_empty());
+        if params.forwarded_text.is_empty() && !has_attachments {
+            return Err(SdkError::InvalidState(
+                "nothing to forward: pass the original message's text in forwarded_text, or its \
+                 re-uploaded attachments in attachments"
+                    .into(),
+            ));
+        }
+        if params.forwarded_text.is_empty()
+            && params
+                .forwarded_entities
+                .as_ref()
+                .is_some_and(|e| !e.is_empty())
+        {
+            return Err(SdkError::InvalidState(
+                "forwarded_entities is set but forwarded_text is empty: pass the original \
+                 message's text the entities point into"
+                    .into(),
+            ));
+        }
+        let comment = params.text.take().filter(|t| !t.is_empty());
+        if comment.is_none() && params.entities.as_ref().is_some_and(|e| !e.is_empty()) {
+            return Err(SdkError::InvalidState(
+                "entities is set but text is empty: entities describe the comment, so pass the \
+                 comment in text or leave entities unset"
+                    .into(),
+            ));
+        }
+        if let Some(a) = params.attachments.as_deref() {
+            crate::pipeline::validate_attachment_descriptors(a)?;
+        }
+
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let (ckey, conversation_key_version) = self.resolve_conversation_key(
+            params.conversation_key.as_deref(),
+            params.conversation_key_version.as_deref(),
+            &params.conversation_id,
+            &sender_id,
+        )?;
+        let signing_kp = self.get_signing_keypair_arc()?;
+        // `take()` rather than a destructuring move: the params type zeroizes
+        // its key on drop, which rules out moving fields.
+        let thrift_entities = params
+            .entities
+            .take()
+            .filter(|e| !e.is_empty())
+            .map(|e| crate::pipeline::build_thrift_entities(&e));
+        let thrift_attachments = params
+            .attachments
+            .take()
+            .filter(|a| !a.is_empty())
+            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+        let content_bytes = crate::pipeline::build_forward_content(
+            comment.as_deref(),
+            thrift_entities,
+            thrift_attachments,
+            Some(params.forwarded_text.as_str()).filter(|t| !t.is_empty()),
+            params
+                .forwarded_entities
+                .as_deref()
+                .filter(|e| !e.is_empty()),
         )?;
 
         let message_id = Self::generate_message_id();
@@ -4166,6 +4262,182 @@ mod tests {
     fn encrypt_without_quick_reply_decrypts_without_one() {
         assert_eq!(quick_reply_round_trip(None, false), None);
         assert_eq!(quick_reply_round_trip(None, true), None);
+    }
+
+    /// Encrypt a forward, decrypt it, and return the decrypted text content.
+    fn forward_round_trip(build: impl FnOnce(&mut crate::EncryptForwardParams)) -> MessageContent {
+        let core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+
+        let mut params = crate::EncryptForwardParams::new("conv-1", "see @alice")
+            .with_identity("sender-1", "1733889755256")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        build(&mut params);
+        let payload = core.encrypt_forward(params).unwrap();
+
+        let event_b64 = wrap_signed_payload_with_seq(&payload, "sender-1", "conv-1", "seq-fwd");
+        let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
+        let signing_keys = [SigningKeyEntry {
+            user_id: "sender-1".to_string(),
+            public_key_version: "1733889755256".to_string(),
+            public_key: reg.public_key.signing_public_key.clone(),
+            identity_public_key: reg.public_key.public_key.clone(),
+            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
+        }];
+
+        match core
+            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .unwrap()
+        {
+            Event::Message(msg) => {
+                assert!(msg.verified);
+                msg.content
+            }
+            other => panic!("expected Message, got {:?}", other),
+        }
+    }
+
+    fn mention(start: i32, end: i32) -> crate::types::EntityDescriptor {
+        crate::types::EntityDescriptor {
+            start,
+            end,
+            entity_type: "mention".into(),
+        }
+    }
+
+    #[test]
+    fn encrypt_forward_carries_original_text_and_entities() {
+        let content = forward_round_trip(|p| {
+            p.forwarded_entities = Some(vec![mention(4, 10)]);
+        });
+        let MessageContent::Text {
+            text,
+            entities,
+            forwarded_message,
+            replying_to_preview,
+            ..
+        } = content
+        else {
+            panic!("expected Text content, got {:?}", content);
+        };
+        assert_eq!(text, "");
+        assert!(entities.is_none());
+        assert!(replying_to_preview.is_none());
+        let forwarded = forwarded_message.expect("forwarded_message is set");
+        assert_eq!(forwarded.message_text.as_deref(), Some("see @alice"));
+        let fwd_entities = forwarded.entities.expect("forwarded entities are set");
+        assert_eq!(fwd_entities.len(), 1);
+        assert_eq!(fwd_entities[0].start_index, Some(4));
+        assert_eq!(fwd_entities[0].end_index, Some(10));
+    }
+
+    #[test]
+    fn encrypt_forward_carries_comment_and_attachments() {
+        let content = forward_round_trip(|p| {
+            p.text = Some("look @bob".into());
+            p.entities = Some(vec![mention(5, 9)]);
+            p.attachments = Some(vec![crate::types::AttachmentDescriptor::Post {
+                rest_id: Some("123".into()),
+                post_url: None,
+            }]);
+        });
+        let MessageContent::Text {
+            text,
+            entities,
+            attachments,
+            forwarded_message,
+            ..
+        } = content
+        else {
+            panic!("expected Text content, got {:?}", content);
+        };
+        assert_eq!(text, "look @bob");
+        assert_eq!(entities.expect("comment entities").len(), 1);
+        assert_eq!(attachments.expect("attachments").len(), 1);
+        let forwarded = forwarded_message.expect("forwarded_message is set");
+        assert_eq!(forwarded.message_text.as_deref(), Some("see @alice"));
+        assert!(forwarded.entities.is_none());
+    }
+
+    #[test]
+    fn encrypt_forward_of_attachment_only_message_omits_forwarded_text() {
+        let content = forward_round_trip(|p| {
+            p.forwarded_text = String::new();
+            p.attachments = Some(vec![crate::types::AttachmentDescriptor::Post {
+                rest_id: Some("123".into()),
+                post_url: None,
+            }]);
+        });
+        let MessageContent::Text {
+            forwarded_message, ..
+        } = content
+        else {
+            panic!("expected Text content, got {:?}", content);
+        };
+        assert!(forwarded_message
+            .expect("forwarded_message is set")
+            .message_text
+            .is_none());
+    }
+
+    fn forward_error(build: impl FnOnce(&mut crate::EncryptForwardParams)) -> String {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+        let mut params = crate::EncryptForwardParams::new("conv-1", "hello")
+            .with_identity("sender-1", "1")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        build(&mut params);
+        core.encrypt_forward(params).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn encrypt_forward_rejects_empty_conversation_id() {
+        let err = forward_error(|p| p.conversation_id = String::new());
+        assert!(err.contains("conversation_id"), "{err}");
+    }
+
+    #[test]
+    fn encrypt_forward_rejects_nothing_to_forward() {
+        let err = forward_error(|p| {
+            p.forwarded_text = String::new();
+            p.attachments = Some(vec![]);
+        });
+        assert!(err.contains("forwarded_text"), "{err}");
+        assert!(err.contains("attachments"), "{err}");
+    }
+
+    #[test]
+    fn encrypt_forward_rejects_forwarded_entities_without_forwarded_text() {
+        let err = forward_error(|p| {
+            p.forwarded_text = String::new();
+            p.forwarded_entities = Some(vec![mention(0, 1)]);
+            p.attachments = Some(vec![crate::types::AttachmentDescriptor::Post {
+                rest_id: Some("123".into()),
+                post_url: None,
+            }]);
+        });
+        assert!(err.contains("forwarded_entities"), "{err}");
+    }
+
+    #[test]
+    fn encrypt_forward_rejects_comment_entities_without_comment() {
+        let err = forward_error(|p| {
+            p.text = Some(String::new());
+            p.entities = Some(vec![mention(0, 1)]);
+        });
+        assert!(err.contains("entities is set but text is empty"), "{err}");
+    }
+
+    #[test]
+    fn encrypt_forward_rejects_disallowed_attachment_combination() {
+        let post = crate::types::AttachmentDescriptor::Post {
+            rest_id: Some("123".into()),
+            post_url: None,
+        };
+        let err = forward_error(|p| p.attachments = Some(vec![post.clone(), post]));
+        assert!(err.contains("disallowed attachment combination"), "{err}");
     }
 
     /// The SDK mints the message id: `encrypt_message` returns a fresh UUID in

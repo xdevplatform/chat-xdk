@@ -458,6 +458,24 @@ func (c *Chat) EncryptMessage(params EncryptMessageParams) (*SendPayload, error)
 	return &payload, nil
 }
 
+// EncryptForward encrypts a forward of an existing message for the X API.
+func (c *Chat) EncryptForward(params EncryptForwardParams) (*SendPayload, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiEncryptForward(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var payload SendPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
 // EncryptReply encrypts a reply message for the X API.
 func (c *Chat) EncryptReply(params EncryptReplyParams) (*SendPayload, error) {
 	defer runtime.KeepAlive(c)

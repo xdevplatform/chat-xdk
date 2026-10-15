@@ -21,9 +21,10 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
+    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor,
+    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply,
+    SigningKeyEntry,
 };
 
 // FFI result type
@@ -229,6 +230,32 @@ struct FfiEncryptMessageParams {
     attachments: Option<serde_json::Value>,
     #[serde(default)]
     quick_reply: Option<serde_json::Value>,
+    #[serde(default)]
+    should_notify: Option<bool>,
+    #[serde(default)]
+    ttl_msec: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiEncryptForwardParams {
+    conversation_id: String,
+    forwarded_text: String,
+    #[serde(default)]
+    forwarded_entities: Option<Vec<(i32, i32, String)>>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    entities: Option<Vec<(i32, i32, String)>>,
+    #[serde(default)]
+    attachments: Option<serde_json::Value>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
     #[serde(default)]
     should_notify: Option<bool>,
     #[serde(default)]
@@ -1290,6 +1317,63 @@ pub extern "C" fn chat_xdk_encrypt_message(
         params.ttl_msec = p.ttl_msec;
 
         match h.inner.encrypt_message(params) {
+            Ok(payload) => match serde_json::to_string(&payload) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_result(&e.to_string()),
+            },
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// Encrypt a forward of an existing message for the X API.
+///
+/// `params_json` — single JSON document: `conversation_id` and
+/// `forwarded_text` (the original's full text; `""` only when the original
+/// has attachments but no text), plus optional `forwarded_entities`
+/// (`[[start,end,"type"],...]` into `forwarded_text`), `text` (a comment
+/// sent with the forward), `entities` (into `text`), `attachments` (the
+/// original's attachments, re-encrypted and uploaded under this
+/// conversation), and the same identity, key, `should_notify`, and
+/// `ttl_msec` fields as `chat_xdk_encrypt_message`.
+///
+/// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+#[no_mangle]
+pub extern "C" fn chat_xdk_encrypt_forward(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let mut p: FfiEncryptForwardParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let ckey_bytes = match decode_opt_ckey_bytes(p.conversation_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let attachments = match p.attachments.take().map(parse_attachments).transpose() {
+            Ok(a) => a,
+            Err(e) => return e,
+        };
+
+        let mut params = EncryptForwardParams::new(p.conversation_id, p.forwarded_text);
+        params.forwarded_entities = p.forwarded_entities.map(entity_tuples_to_descs);
+        params.text = p.text;
+        params.entities = p.entities.map(entity_tuples_to_descs);
+        params.attachments = attachments;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        params.conversation_key = ckey_bytes;
+        params.conversation_key_version = p.conversation_key_version;
+        params.should_notify = p.should_notify;
+        params.ttl_msec = p.ttl_msec;
+
+        match h.inner.encrypt_forward(params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),

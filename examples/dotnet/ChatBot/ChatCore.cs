@@ -124,6 +124,32 @@ public sealed class ChatCore : IDisposable
         return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
     }
 
+    /// <summary>
+    /// Encrypt + sign a forward of a decrypted message into
+    /// <paramref name="conversationId"/>. <paramref name="forwardedText"/> and
+    /// <paramref name="forwardedEntities"/> are the original's text and
+    /// entities; <paramref name="comment"/> is an optional note sent with it.
+    /// The sender comes from <see cref="SetIdentity"/>.
+    /// </summary>
+    public SendBody EncryptForward(
+        string conversationId,
+        string forwardedText,
+        byte[] conversationKey,
+        string conversationKeyVersion,
+        IReadOnlyList<EntityDescriptor>? forwardedEntities = null,
+        string? comment = null)
+    {
+        var payload = _chat.EncryptForward(new EncryptForwardParams(conversationId, forwardedText)
+        {
+            ForwardedEntities = forwardedEntities,
+            Text = comment,
+            ConversationKey = conversationKey,
+            ConversationKeyVersion = conversationKeyVersion,
+        });
+        // The SDK generates the message id and returns it in the payload.
+        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
+    }
+
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
     /// (the conversation id and target sequence id are derived from it).</summary>
     public SendBody EncryptReaction(

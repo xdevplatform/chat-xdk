@@ -391,3 +391,34 @@ class TestPythonSdkVectors(unittest.TestCase):
                 conversation_key_version=v["event_conversation_key_version"],
                 quick_reply={"neither": {}},
             )
+
+    def test_encrypt_forward_round_trips(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+
+        payload = chat.encrypt_forward(
+            v["event_conversation_id"],
+            "see @alice",
+            forwarded_entities=[(4, 10, "mention")],
+            text="fyi",
+            conversation_key=base64.b64decode(v["conversation_key_b64"]),
+            conversation_key_version=v["event_conversation_key_version"],
+        )
+        uuid.UUID(payload.message_id)
+        content = self._decrypt_own(chat, v, payload)
+        self.assertEqual(content["text"], "fyi")
+        forwarded = content["forwarded_message"]
+        self.assertEqual(forwarded["message_text"], "see @alice")
+        self.assertEqual(len(forwarded["entities"]), 1)
+
+    def test_encrypt_forward_rejects_nothing_to_forward(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+
+        with self.assertRaisesRegex(ValueError, "nothing to forward"):
+            chat.encrypt_forward(
+                v["event_conversation_id"],
+                "",
+                conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                conversation_key_version=v["event_conversation_key_version"],
+            )

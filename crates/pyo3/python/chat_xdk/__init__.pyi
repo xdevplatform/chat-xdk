@@ -159,6 +159,22 @@ class Chat:
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
     ) -> SendPayload: ...
+    def encrypt_forward(
+        self,
+        conversation_id: str,
+        forwarded_text: str,
+        *,
+        forwarded_entities: Optional[list[tuple[int, int, str]]] = None,
+        text: Optional[str] = None,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        attachments: Optional[list[dict]] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+        should_notify: Optional[bool] = None,
+        ttl_msec: Optional[int] = None,
+    ) -> SendPayload: ...
     def encrypt_reply(
         self,
         conversation_id: str,

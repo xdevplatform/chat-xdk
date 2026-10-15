@@ -1266,4 +1266,37 @@ class ChatTest {
             assertTrue(ex.getMessage().contains("Invalid quick reply"), ex.getMessage());
         }
     }
+
+    @Test
+    void encryptForwardRoundTripsThroughDecrypt() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            EncryptForwardParams p = new EncryptForwardParams(v.get("event_conversation_id").asText(), "see @alice");
+            EntityDescriptor mention = new EntityDescriptor();
+            mention.start = 4;
+            mention.end = 10;
+            mention.entityType = "mention";
+            p.forwardedEntities = List.of(mention);
+            p.text = "fyi";
+            p.conversationKey = b64(v, "conversation_key_b64");
+            p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+            JsonNode content = decryptOwnContent(chat, v, chat.encryptForward(p));
+            assertEquals("fyi", content.get("text").asText());
+            JsonNode forwarded = content.get("forwarded_message");
+            assertEquals("see @alice", forwarded.get("message_text").asText());
+            assertEquals(1, forwarded.get("entities").size());
+        }
+    }
+
+    @Test
+    void encryptForwardNothingToForwardThrows() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            EncryptForwardParams p = new EncryptForwardParams(v.get("event_conversation_id").asText(), "");
+            p.conversationKey = b64(v, "conversation_key_b64");
+            p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+            ChatXdkException ex = assertThrows(ChatXdkException.class, () -> chat.encryptForward(p));
+            assertTrue(ex.getMessage().contains("nothing to forward"), ex.getMessage());
+        }
+    }
 }

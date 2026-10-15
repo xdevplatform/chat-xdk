@@ -257,6 +257,40 @@ class ChatCore:
             "encoded_message_event_signature": payload.encoded_event_signature,
         }
 
+    def encrypt_forward(
+        self,
+        *,
+        conversation_id: str,
+        forwarded_text: str,
+        forwarded_entities: list[tuple[int, int, str]] | None = None,
+        text: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        conversation_key: bytes | None = None,
+        conversation_key_version: str | None = None,
+    ) -> dict[str, str]:
+        """Encrypt + sign a forward of a decrypted message into ``conversation_id``.
+
+        ``forwarded_text`` / ``forwarded_entities`` are the original's text and
+        entities; ``text`` is an optional comment. Attachments must already be
+        re-encrypted and uploaded under the destination conversation's key.
+        Signed with the ``set_identity`` session identity.
+        """
+        payload = self.chat.encrypt_forward(
+            conversation_id,
+            forwarded_text,
+            forwarded_entities=forwarded_entities,
+            text=text,
+            attachments=attachments,
+            conversation_key=conversation_key,
+            conversation_key_version=conversation_key_version,
+        )
+        return {
+            # The SDK generates the message id and returns it in the payload.
+            "message_id": payload.message_id,
+            "encoded_message_create_event": payload.encrypted_content,
+            "encoded_message_event_signature": payload.encoded_event_signature,
+        }
+
     def encrypt_reaction(
         self,
         *,

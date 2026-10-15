@@ -73,6 +73,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_encrypt_message(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_encrypt_forward(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_encrypt_reply(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_add_reaction(Pointer handle, Pointer paramsJson);

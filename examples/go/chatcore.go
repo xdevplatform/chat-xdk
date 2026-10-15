@@ -206,6 +206,30 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 	}, nil
 }
 
+// EncryptForward encrypts + signs a forward of a decrypted message into
+// conversationID under the session identity: forwardedText and
+// forwardedEntities are the original's text and entities, comment an optional
+// note sent with it. conversationKey may be nil to use the SDK's cached key.
+func (c *ChatCore) EncryptForward(conversationID, forwardedText string, forwardedEntities []chatxdk.EntityTuple, comment string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
+	payload, err := c.chat.EncryptForward(chatxdk.EncryptForwardParams{
+		ConversationID:         conversationID,
+		ForwardedText:          forwardedText,
+		ForwardedEntities:      forwardedEntities,
+		Text:                   comment,
+		ConversationKey:        conversationKey,
+		ConversationKeyVersion: conversationKeyVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &SendBody{
+		// The SDK generates the message id and returns it in the payload.
+		MessageID:                    payload.MessageID,
+		EncodedMessageCreateEvent:    payload.EncryptedContent,
+		EncodedMessageEventSignature: payload.EncodedEventSignature,
+	}, nil
+}
+
 // EncryptAddReaction encrypts + signs a reaction add targeting a raw event.
 // conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptAddReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {

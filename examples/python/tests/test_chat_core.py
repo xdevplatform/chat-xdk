@@ -118,6 +118,20 @@ class TestChatCore(unittest.TestCase):
         self.assertTrue(body["encoded_message_create_event"])
         self.assertTrue(body["message_id"])
 
+    def test_encrypt_forward_produces_sendable_payload(self):
+        core = self._loaded_core()
+        core.set_identity("12345")
+        body = core.encrypt_forward(
+            conversation_id="6789:12345",
+            forwarded_text="original message",
+            text="fyi",
+            conversation_key=base64.b64decode(self.vectors["conversation_key_b64"]),
+            conversation_key_version="1710000000000",
+        )
+        self.assertTrue(body["encoded_message_create_event"])
+        self.assertTrue(body["encoded_message_event_signature"])
+        self.assertTrue(body["message_id"])
+
     def test_decrypt_batch_empty_is_safe(self):
         # Drives the real decrypt_events entry point (batch path) — an empty
         # batch yields no messages and no errors.

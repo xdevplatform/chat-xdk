@@ -33,9 +33,9 @@ use std::sync::Arc;
 
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams, QuickReply,
+    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor,
+    GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams, QuickReply,
 };
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
@@ -820,6 +820,71 @@ impl Chat {
         params.should_notify = should_notify;
         params.ttl_msec = ttl_msec;
         let payload = self.inner.encrypt_message(params).map_err(to_py_err)?;
+
+        Ok(to_py_send_payload(payload))
+    }
+
+    /// Encrypt a forward of an existing message for the X API.
+    ///
+    /// The forward is a new message carrying the original's text and
+    /// entities as ``forwarded_message``, with an optional comment of your
+    /// own. Media is encrypted under its conversation's key, so the original's
+    /// attachments do not carry over: re-encrypt them with this conversation's
+    /// key, upload them, and pass the new descriptors in ``attachments``.
+    ///
+    /// The SDK generates the message id and returns it in the payload; read it
+    /// back from ``payload.message_id`` (do not pass one in).
+    ///
+    /// Args:
+    ///     conversation_id: The conversation to forward the message to.
+    ///     forwarded_text: Full text of the message being forwarded; pass
+    ///         ``""`` only when the original has attachments but no text.
+    ///     forwarded_entities: (start, end, entity_type) tuples for
+    ///         rich-text in ``forwarded_text``. Keyword-only, like every
+    ///         optional argument below it.
+    ///     text: Optional comment sent with the forward.
+    ///     entities: (start, end, entity_type) tuples for rich-text in
+    ///         ``text``.
+    ///     attachments: The original's attachments, re-uploaded under this
+    ///         conversation (dicts with an "attachment_type" key).
+    ///     sender_id: Your user ID; defaults to the ``set_identity`` value.
+    ///     signing_key_version: Your registered signing public key version;
+    ///         defaults to the ``set_identity`` value.
+    ///     conversation_key: Raw 32-byte conversation key (``bytes``). Pass it
+    ///         together with ``conversation_key_version``, or omit both to
+    ///         resolve from the opt-in ``set_cache_keys`` cache.
+    ///     conversation_key_version: The current conversation key version.
+    ///     should_notify: Whether to send a push notification (default: True).
+    ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (conversation_id, forwarded_text, *, forwarded_entities=None, text=None, entities=None, attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, should_notify=None, ttl_msec=None))]
+    fn encrypt_forward(
+        &self,
+        conversation_id: &str,
+        forwarded_text: &str,
+        forwarded_entities: Option<Vec<(i32, i32, String)>>,
+        text: Option<String>,
+        entities: Option<Vec<(i32, i32, String)>>,
+        attachments: Option<Vec<HashMap<String, Py<PyAny>>>>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
+        should_notify: Option<bool>,
+        ttl_msec: Option<i64>,
+    ) -> PyResult<SendPayload> {
+        let mut params = EncryptForwardParams::new(conversation_id, forwarded_text);
+        params.forwarded_entities = forwarded_entities.map(parse_entity_descs);
+        params.text = text;
+        params.entities = entities.map(parse_entity_descs);
+        params.attachments = attachments.map(parse_attachment_descs).transpose()?;
+        params.sender_id = sender_id;
+        params.signing_key_version = signing_key_version;
+        params.conversation_key = conversation_key;
+        params.conversation_key_version = conversation_key_version;
+        params.should_notify = should_notify;
+        params.ttl_msec = ttl_msec;
+        let payload = self.inner.encrypt_forward(params).map_err(to_py_err)?;
 
         Ok(to_py_send_payload(payload))
     }

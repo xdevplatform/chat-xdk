@@ -304,6 +304,128 @@ impl std::fmt::Debug for EncryptReplyParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::encrypt_forward`].
+///
+/// A forward quotes an existing message in another conversation:
+/// `forwarded_text` and `forwarded_entities` carry the original's full text
+/// and rich-text entities, and the optional `text` is the sender's own comment
+/// shown with it. Media is encrypted under its conversation's key, so the
+/// original's attachments do not carry over: decrypt them, re-encrypt them
+/// with this conversation's key, upload them, and pass the new descriptors in
+/// `attachments`.
+///
+/// The conversation key is zeroized when the params are dropped and is
+/// redacted from `Debug` output. No `PartialEq` is derived:
+/// equality would byte-compare the key non-constant-time.
+#[derive(Clone)]
+pub struct EncryptForwardParams {
+    /// ID of the conversation the forward is sent to.
+    pub conversation_id: String,
+    /// Full text of the message being forwarded.
+    pub forwarded_text: String,
+    /// Rich-text entities of the message being forwarded.
+    pub forwarded_entities: Option<Vec<EntityDescriptor>>,
+    /// Optional comment sent with the forward.
+    pub text: Option<String>,
+    /// Rich-text entities in `text`.
+    pub entities: Option<Vec<EntityDescriptor>>,
+    /// The original's attachments, re-uploaded under this conversation.
+    pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// User ID of the sender; resolves from the session identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the message; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key used to encrypt the message content;
+    /// resolves from the key cache when unset (set together with
+    /// `conversation_key_version`).
+    pub conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key used for encryption; resolves from the
+    /// key cache when unset (set together with `conversation_key`).
+    pub conversation_key_version: Option<String>,
+    /// Whether to send a push notification. `None` defaults to `true`.
+    pub should_notify: Option<bool>,
+    /// Optional TTL in milliseconds for disappearing messages.
+    pub ttl_msec: Option<i64>,
+}
+
+impl EncryptForwardParams {
+    /// Create params with required fields; all optional fields default to
+    /// `None`. `forwarded_text` is the original message's full text; pass an
+    /// empty string only when forwarding a message that has attachments but
+    /// no text.
+    pub fn new(conversation_id: impl Into<String>, forwarded_text: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            forwarded_text: forwarded_text.into(),
+            forwarded_entities: None,
+            text: None,
+            entities: None,
+            attachments: None,
+            sender_id: None,
+            signing_key_version: None,
+            conversation_key: None,
+            conversation_key_version: None,
+            should_notify: None,
+            ttl_msec: None,
+        }
+    }
+
+    /// Set the explicit conversation key and its version.
+    ///
+    /// The two travel together: the version names the key the recipients use
+    /// to decrypt, so setting one without the other is rejected at encrypt
+    /// time.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = Some(conversation_key_version.into());
+        self
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+impl Drop for EncryptForwardParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for EncryptForwardParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptForwardParams")
+            .field("conversation_id", &self.conversation_id)
+            .field("forwarded_text", &self.forwarded_text)
+            .field("forwarded_entities", &self.forwarded_entities)
+            .field("text", &self.text)
+            .field("entities", &self.entities)
+            .field("attachments", &self.attachments)
+            .field("sender_id", &self.sender_id)
+            .field("signing_key_version", &self.signing_key_version)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .field("should_notify", &self.should_notify)
+            .field("ttl_msec", &self.ttl_msec)
+            .finish()
+    }
+}
+
 /// Parameters for [`crate::ChatCore::encrypt_add_reaction`] and
 /// [`crate::ChatCore::encrypt_remove_reaction`].
 ///
@@ -845,6 +967,55 @@ mod tests {
             payload.should_notify,
             "unset should_notify defaults to true"
         );
+    }
+
+    #[test]
+    fn encrypt_forward_params_new_plus_field_set_equals_full_construction() {
+        let core = unlocked_core();
+        let ckey = crate::crypto::key_factory::KeyFactory::generate_conversation_key()
+            .unwrap()
+            .to_bytes();
+
+        let mut via_new = EncryptForwardParams::new("conv-1", "original")
+            .with_identity("me", "2")
+            .with_conversation_key(ckey.clone(), "1");
+        via_new.text = Some("fyi".into());
+        via_new.should_notify = Some(false);
+
+        let full = EncryptForwardParams {
+            conversation_id: "conv-1".into(),
+            forwarded_text: "original".into(),
+            forwarded_entities: None,
+            text: Some("fyi".into()),
+            entities: None,
+            attachments: None,
+            sender_id: Some("me".into()),
+            signing_key_version: Some("2".into()),
+            conversation_key: Some(ckey),
+            conversation_key_version: Some("1".into()),
+            should_notify: Some(false),
+            ttl_msec: None,
+        };
+        assert_eq!(via_new.conversation_id, full.conversation_id);
+        assert_eq!(via_new.forwarded_text, full.forwarded_text);
+        assert_eq!(via_new.forwarded_entities, full.forwarded_entities);
+        assert_eq!(via_new.text, full.text);
+        assert_eq!(via_new.entities, full.entities);
+        assert_eq!(via_new.attachments, full.attachments);
+        assert_eq!(via_new.sender_id, full.sender_id);
+        assert_eq!(via_new.signing_key_version, full.signing_key_version);
+        assert_eq!(via_new.conversation_key, full.conversation_key);
+        assert_eq!(
+            via_new.conversation_key_version,
+            full.conversation_key_version
+        );
+        assert_eq!(via_new.should_notify, full.should_notify);
+        assert_eq!(via_new.ttl_msec, full.ttl_msec);
+        assert!(format!("{via_new:?}").contains("[REDACTED]"));
+
+        let payload = core.encrypt_forward(via_new).unwrap();
+        assert!(!payload.should_notify);
+        assert_eq!(payload.conversation_key_version, "1");
     }
 
     #[test]

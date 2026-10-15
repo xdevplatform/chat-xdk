@@ -512,6 +512,58 @@ namespace ChatXdk
     }
 
     /// <summary>
+    /// Parameters for <see cref="Chat.EncryptForward"/>.
+    /// A forward quotes an existing message in another conversation. Media is
+    /// encrypted under its conversation's key, so the original's attachments
+    /// do not carry over: re-encrypt them with this conversation's key
+    /// (<see cref="Chat.EncryptStream"/>), upload them, and pass the new
+    /// descriptors in <see cref="Attachments"/>. Identity and key overrides
+    /// resolve like <see cref="EncryptMessageParams"/>.
+    /// </summary>
+    public sealed class EncryptForwardParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="conversationId">ID of the conversation the forward is sent to.</param>
+        /// <param name="forwardedText">
+        /// Full text of the message being forwarded. Pass "" only when the
+        /// original has attachments but no text.
+        /// </param>
+        public EncryptForwardParams(string conversationId, string forwardedText)
+        {
+            ConversationId = conversationId;
+            ForwardedText = forwardedText;
+        }
+
+        /// <summary>ID of the conversation the forward is sent to.</summary>
+        public string ConversationId { get; }
+        /// <summary>Full text of the message being forwarded.</summary>
+        public string ForwardedText { get; }
+        /// <summary>Rich-text entities of the message being forwarded, indexed into <see cref="ForwardedText"/>.</summary>
+        public IReadOnlyList<EntityDescriptor>? ForwardedEntities { get; init; }
+        /// <summary>Optional comment sent with the forward.</summary>
+        public string? Text { get; init; }
+        /// <summary>Rich-text entities in the comment, indexed into <see cref="Text"/>.</summary>
+        public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
+        /// <summary>The original's attachments, re-uploaded under this conversation.</summary>
+        public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
+        /// <summary>User ID of the sender; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
+        /// <summary>
+        /// Raw 32-byte conversation key; resolves from the key cache when null
+        /// (set together with <see cref="ConversationKeyVersion"/>).
+        /// </summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
+        /// <summary>Whether to send a push notification. Defaults to true.</summary>
+        public bool? ShouldNotify { get; init; }
+        /// <summary>Time-to-live for disappearing messages in milliseconds.</summary>
+        public long? TtlMsec { get; init; }
+    }
+
+    /// <summary>
     /// Parameters for <see cref="Chat.EncryptReply"/>.
     /// The preferred form passes the raw signed event being replied to
     /// (<see cref="ReplyToEvent"/>) and lets the SDK derive the reply preview
