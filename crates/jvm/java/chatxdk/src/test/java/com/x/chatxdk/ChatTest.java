@@ -525,6 +525,62 @@ class ChatTest {
     }
 
     @Test
+    void prepareGroupAdminChangeSignsRosterAction() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            GroupAdminChangeParams p = new GroupAdminChangeParams("g999", GroupAdminAction.ADD_ADMINS);
+            p.userIds = List.of("222");
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareGroupAdminChange(p);
+            assertFalse(sig.encodedMessageEventDetail.isEmpty());
+            assertFalse(sig.signature.isEmpty());
+            assertEquals(
+                    "GroupChangeEvent.GroupAdminAddChange," + sig.messageId + ",111,g999,222",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
+    void prepareGroupAdminChangeSignsInviteLink() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            GroupAdminChangeParams p = new GroupAdminChangeParams("g999", GroupAdminAction.ENABLE_INVITE_LINK);
+            p.inviteUrl = "https://example.com/i/abc";
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareGroupAdminChange(p);
+            assertEquals(
+                    "GroupChangeEvent.GroupInviteEnable," + sig.messageId
+                            + ",111,g999,https://example.com/i/abc,null,null",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
+    void prepareGroupAdminChangeRejectsBadInput() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            GroupAdminChangeParams noUsers = new GroupAdminChangeParams("g1", GroupAdminAction.REMOVE_MEMBERS);
+            noUsers.senderId = "111";
+            noUsers.signingKeyVersion = "1";
+            ChatXdkException e1 =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareGroupAdminChange(noUsers));
+            assertTrue(e1.getMessage().contains("user_ids is required"), e1.getMessage());
+
+            GroupAdminChangeParams stray = new GroupAdminChangeParams("g1", GroupAdminAction.DISABLE_INVITE_LINK);
+            stray.expiresAtMsec = 5L;
+            stray.senderId = "111";
+            stray.signingKeyVersion = "1";
+            ChatXdkException e2 =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareGroupAdminChange(stray));
+            assertTrue(e2.getMessage().contains("takes no other fields"), e2.getMessage());
+
+            IllegalArgumentException e3 = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> chat.prepareGroupAdminChange(new GroupAdminChangeParams("g1", null)));
+            assertTrue(e3.getMessage().contains("pass a GroupAdminAction"), e3.getMessage());
+        }
+    }
+
+    @Test
     void utilitiesHexRoundTrip() {
         byte[] raw = {(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef};
         String hex = ChatXdkUtilities.bytesToHex(raw);

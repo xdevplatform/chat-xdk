@@ -596,6 +596,27 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    /**
+     * Build the signed action for a group admin change: promoting or demoting
+     * admins, removing members, declining join requests, or turning the invite
+     * link on or off.
+     *
+     * <p>Fields an action does not use are rejected. Removing members does not
+     * rotate the conversation key: follow up with
+     * {@link #prepareConversationKeyChange} for the remaining members. The SDK
+     * generates the action's message id; read it back from the result.
+     */
+    public ActionSignature prepareGroupAdminChange(GroupAdminChangeParams parameters) throws Exception {
+        throwIfDisposed();
+        try (Memory j = FfiStrings.utf8(buildPrepareGroupAdminChangeJson(parameters))) {
+            String resultJson = FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_prepare_group_admin_change(handle, j));
+            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
     private PreparedConversationChange callPrepare(String paramsJson, ParamsJsonFn fn) throws Exception {
         try (Memory j = FfiStrings.utf8(paramsJson)) {
             String resultJson = FfiStrings.consume(fn.apply(handle, j));
@@ -1083,6 +1104,23 @@ public final class Chat implements AutoCloseable {
         n.put("conversation_id", p.conversationId);
         n.put("setting", p.setting.wireName);
         n.put("ttl_msec", p.ttlMsec);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupAdminChangeJson(GroupAdminChangeParams p) throws Exception {
+        if (p.action == null) {
+            throw new IllegalArgumentException("action is null: pass a GroupAdminAction value");
+        }
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("action", p.action.wireName);
+        if (p.userIds != null) {
+            n.set("user_ids", ChatJson.MAPPER.valueToTree(p.userIds));
+        }
+        n.put("invite_url", p.inviteUrl);
+        n.put("expires_at_msec", p.expiresAtMsec);
+        n.put("affiliate_id", p.affiliateId);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
