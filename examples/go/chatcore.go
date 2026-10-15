@@ -242,6 +242,19 @@ func (c *ChatCore) PrepareSettingsChange(conversationID string, setting chatxdk.
 	})
 }
 
+// PrepareAdminChange signs a group admin action under the session identity.
+// userIDs is for the roster actions and inviteURL for
+// chatxdk.AdminActionEnableInviteLink; leave the other empty. Returns the
+// action signature to submit alongside the group change request.
+func (c *ChatCore) PrepareAdminChange(groupID string, action chatxdk.GroupAdminAction, userIDs []string, inviteURL string) (*chatxdk.ActionSignature, error) {
+	return c.chat.PrepareGroupAdminChange(chatxdk.GroupAdminChangeParams{
+		ConversationID: groupID,
+		Action:         action,
+		UserIDs:        userIDs,
+		InviteURL:      inviteURL,
+	})
+}
+
 // EncryptAddReaction encrypts + signs a reaction add targeting a raw event.
 // conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptAddReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {

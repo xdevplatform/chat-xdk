@@ -131,6 +131,20 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void PrepareAdminChange_Signs_The_Action()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("12345");
+        var sig = core.PrepareAdminChange("g123", GroupAdminAction.RejectJoinRequests, userIds: new[] { "6789" });
+        Assert.False(string.IsNullOrEmpty(sig.EncodedMessageEventDetail));
+        Assert.False(string.IsNullOrEmpty(sig.Signature));
+        Assert.Equal(
+            $"GroupChangeEvent.GroupJoinReject,{sig.MessageId},12345,g123,6789",
+            sig.SignaturePayload);
+    }
+
+    [Fact]
     public void DecryptBatch_Empty_Is_Safe()
     {
         var v = LoadVectors();

@@ -147,6 +147,20 @@ class TestChatCore(unittest.TestCase):
             f"{sig['message_id']},12345,12345:12345,6789:12345",
         )
 
+    def test_prepare_admin_change_signs_the_action(self):
+        core = self._loaded_core()
+        core.set_identity("12345")
+        sig = core.prepare_admin_change(
+            group_id="g123", action="remove_members", user_ids=["6789"]
+        )
+        self.assertTrue(sig["encoded_message_event_detail"])
+        self.assertTrue(sig["signature"])
+        self.assertEqual(
+            sig["signature_payload"],
+            "GroupChangeEvent.GroupMemberRemoveChange,"
+            f"{sig['message_id']},12345,g123,6789",
+        )
+
     def test_decrypt_batch_empty_is_safe(self):
         # Drives the real decrypt_events entry point (batch path) — an empty
         # batch yields no messages and no errors.

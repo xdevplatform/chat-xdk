@@ -163,6 +163,24 @@ public sealed class ChatCore : IDisposable
             TtlMsec = ttlMsec,
         });
 
+    /// <summary>
+    /// Sign a group admin action under the session identity.
+    /// <paramref name="userIds"/> is for the roster actions and
+    /// <paramref name="inviteUrl"/> for
+    /// <see cref="GroupAdminAction.EnableInviteLink"/>. Returns the action
+    /// signature to submit alongside the group change request.
+    /// </summary>
+    public ActionSignature PrepareAdminChange(
+        string groupId,
+        GroupAdminAction action,
+        IReadOnlyList<string>? userIds = null,
+        string? inviteUrl = null) =>
+        _chat.PrepareGroupAdminChange(new GroupAdminChangeParams(groupId, action)
+        {
+            UserIds = userIds,
+            InviteUrl = inviteUrl,
+        });
+
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
     /// (the conversation id and target sequence id are derived from it).</summary>
     public SendBody EncryptReaction(

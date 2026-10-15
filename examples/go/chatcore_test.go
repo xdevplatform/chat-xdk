@@ -174,6 +174,22 @@ func TestPrepareSettingsChangeSignsTheSetting(t *testing.T) {
 	}
 }
 
+func TestPrepareAdminChangeSignsTheAction(t *testing.T) {
+	core, _ := loadedCore(t)
+	defer core.Close()
+	sig, err := core.PrepareAdminChange("g123", chatxdk.AdminActionRemoveAdmins, []string{"6789"}, "")
+	if err != nil {
+		t.Fatalf("PrepareAdminChange: %v", err)
+	}
+	if sig.EncodedMessageEventDetail == "" || sig.Signature == "" {
+		t.Errorf("incomplete action signature: %+v", sig)
+	}
+	if !strings.HasPrefix(sig.SignaturePayload, "GroupChangeEvent.GroupAdminRemoveChange,") ||
+		!strings.HasSuffix(sig.SignaturePayload, ",g123,6789") {
+		t.Errorf("unexpected signature payload %q", sig.SignaturePayload)
+	}
+}
+
 func TestDecryptBatchEmptyIsSafe(t *testing.T) {
 	core, _ := loadedCore(t)
 	defer core.Close()

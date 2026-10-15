@@ -19,9 +19,10 @@ use chat_xdk_core::signatures::ActionSignature;
 use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, ConversationSetting,
     ConversationSettingsParams, DecryptEventsResult, EncryptForwardParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event, GroupCreateParams,
-    GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event, GroupAdminAction,
+    GroupAdminChangeParams, GroupCreateParams, GroupMembersChangeParams,
+    PreparedConversationChange, PublicKeyInput, PublicKeyRegistrationPayload, PublicKeys,
+    QuickReply, SigningKeyEntry,
 };
 use serde_json::{json, Value};
 
@@ -249,6 +250,18 @@ impl ChatCore {
                 conversation_id,
                 setting,
             ))
+    }
+
+    /// Sign a group admin action (admins, member removal, join requests, or
+    /// the invite link) under the session identity. Returns the action
+    /// signature to submit alongside the group change request.
+    pub fn prepare_admin_change(
+        &self,
+        group_id: &str,
+        action: GroupAdminAction,
+    ) -> Result<ActionSignature, SdkError> {
+        self.inner
+            .prepare_group_admin_change(&GroupAdminChangeParams::new(group_id, action))
     }
 
     /// Encrypt + sign a reaction add/remove targeting a raw event: the SDK

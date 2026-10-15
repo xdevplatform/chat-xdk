@@ -308,6 +308,29 @@ class ChatCore:
             conversation_id, setting, ttl_msec=ttl_msec
         )
 
+    def prepare_admin_change(
+        self,
+        *,
+        group_id: str,
+        action: str,
+        user_ids: list[str] | None = None,
+        invite_url: str | None = None,
+        expires_at_msec: int | None = None,
+    ) -> dict[str, str]:
+        """Sign a group admin action under the ``set_identity`` identity.
+
+        ``action`` is a name such as ``"add_admins"`` or ``"remove_members"``
+        (pass ``user_ids``) or ``"enable_invite_link"`` (pass ``invite_url``).
+        Returns the action signature to submit alongside the group change.
+        """
+        return self.chat.prepare_group_admin_change(
+            group_id,
+            action,
+            user_ids=user_ids,
+            invite_url=invite_url,
+            expires_at_msec=expires_at_msec,
+        )
+
     def encrypt_reaction(
         self,
         *,

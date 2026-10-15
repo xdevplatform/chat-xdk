@@ -217,6 +217,20 @@ public final class ChatCore implements AutoCloseable {
         return chat.prepareConversationSettingsChange(params);
     }
 
+    /**
+     * Sign a group admin action under the session identity. {@code userIds}
+     * (nullable) is for the roster actions and {@code inviteUrl} (nullable)
+     * for {@link GroupAdminAction#ENABLE_INVITE_LINK}. Returns the action
+     * signature to submit alongside the group change request.
+     */
+    public ActionSignature prepareAdminChange(
+            String groupId, GroupAdminAction action, List<String> userIds, String inviteUrl) throws Exception {
+        GroupAdminChangeParams params = new GroupAdminChangeParams(groupId, action);
+        params.userIds = userIds;
+        params.inviteUrl = inviteUrl;
+        return chat.prepareGroupAdminChange(params);
+    }
+
     /** Encrypt + sign a reaction add/remove targeting a raw event
      * (the conversation id and target sequence id are derived from it). */
     public SendBody encryptReaction(
