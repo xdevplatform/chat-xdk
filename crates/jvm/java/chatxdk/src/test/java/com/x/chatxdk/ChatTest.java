@@ -467,6 +467,64 @@ class ChatTest {
     }
 
     @Test
+    void prepareConversationSettingsChangeSignsMessageDuration() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            ConversationSettingsParams p =
+                    new ConversationSettingsParams("222-111", ConversationSetting.MESSAGE_DURATION);
+            p.ttlMsec = 86400000L;
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareConversationSettingsChange(p);
+            assertFalse(sig.encodedMessageEventDetail.isEmpty());
+            assertFalse(sig.signature.isEmpty());
+            assertEquals(
+                    "ConversationMetadataChangeEvent.MessageDurationChange," + sig.messageId
+                            + ",111,111:222,86400000",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
+    void prepareConversationSettingsChangeMuteSignsForSelfConversation() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            ConversationSettingsParams p = new ConversationSettingsParams("222-111", ConversationSetting.MUTE);
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareConversationSettingsChange(p);
+            assertEquals(
+                    "ConversationMetadataChangeEvent.MuteConversation," + sig.messageId
+                            + ",111,111:111,111:222",
+                    sig.signaturePayload);
+        }
+    }
+
+    @Test
+    void prepareConversationSettingsChangeRejectsBadInput() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            ConversationSettingsParams noTtl =
+                    new ConversationSettingsParams("g1", ConversationSetting.MESSAGE_DURATION);
+            noTtl.senderId = "111";
+            noTtl.signingKeyVersion = "1";
+            ChatXdkException e1 = assertThrows(
+                    ChatXdkException.class, () -> chat.prepareConversationSettingsChange(noTtl));
+            assertTrue(e1.getMessage().contains("ttl_msec is required"), e1.getMessage());
+
+            ConversationSettingsParams strayTtl = new ConversationSettingsParams("g1", ConversationSetting.UNMUTE);
+            strayTtl.ttlMsec = 1000L;
+            strayTtl.senderId = "111";
+            strayTtl.signingKeyVersion = "1";
+            ChatXdkException e2 = assertThrows(
+                    ChatXdkException.class, () -> chat.prepareConversationSettingsChange(strayTtl));
+            assertTrue(e2.getMessage().contains("ttl_msec only applies"), e2.getMessage());
+
+            IllegalArgumentException e3 = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> chat.prepareConversationSettingsChange(new ConversationSettingsParams("g1", null)));
+            assertTrue(e3.getMessage().contains("pass a ConversationSetting"), e3.getMessage());
+        }
+    }
+
+    @Test
     void utilitiesHexRoundTrip() {
         byte[] raw = {(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef};
         String hex = ChatXdkUtilities.bytesToHex(raw);
