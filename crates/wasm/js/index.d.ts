@@ -198,6 +198,37 @@ export interface PreparedConversationChange {
 export type EntityTuple = [number, number, string];
 
 /**
+ * A quick reply: either a request offering selectable options or a response
+ * selecting one. This is the same shape as the quick reply on decrypted text
+ * content, so a received value can be passed back to encryptMessage /
+ * encryptReply unchanged.
+ */
+export type QuickReply =
+  | { request: { options: QuickReplyOptionsRequest } }
+  | { response: { options: QuickReplyOptionsResponse } };
+
+/** The options offered by a quick-reply request. */
+export interface QuickReplyOptionsRequest {
+  id?: string | null;
+  options?: QuickReplyOption[] | null;
+}
+
+/** The option selected in a quick-reply response. */
+export interface QuickReplyOptionsResponse {
+  requestId?: string | null;
+  metadata?: string | null;
+  selectedOptionId?: string | null;
+}
+
+/** A single selectable quick-reply option. */
+export interface QuickReplyOption {
+  id?: string | null;
+  label?: string | null;
+  metadata?: string | null;
+  description?: string | null;
+}
+
+/**
  * Parameters for encryptMessage.
  */
 export interface EncryptMessageParams {
@@ -221,6 +252,8 @@ export interface EncryptMessageParams {
   entities?: EntityTuple[] | null;
   /** Optional attachments (posts, URLs, media, etc.) to include in the message. */
   attachments?: AttachmentDescriptor[] | null;
+  /** Optional quick reply: a request offering options, or a response selecting one. */
+  quickReply?: QuickReply | null;
   /** Whether to send a push notification. Omitted defaults to true. */
   shouldNotify?: boolean | null;
   /** Optional TTL in milliseconds for disappearing messages. */
@@ -285,6 +318,8 @@ export interface EncryptReplyParams {
   replyToEntities?: EntityTuple[] | null;
   /** Attachments from the original message (for the reply preview); derived from replyToEvent when omitted. */
   replyToAttachments?: AttachmentDescriptor[] | null;
+  /** Optional quick reply: a request offering options, or a response selecting one. */
+  quickReply?: QuickReply | null;
   /** Whether to send a push notification. Omitted defaults to true. */
   shouldNotify?: boolean | null;
   /** Optional TTL in milliseconds for disappearing messages. */

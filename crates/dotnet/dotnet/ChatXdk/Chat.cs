@@ -982,6 +982,7 @@ namespace ChatXdk
                 ["conversation_key_version"] = p.ConversationKeyVersion,
                 ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
                 ["attachments"] = p.Attachments,
+                ["quick_reply"] = p.QuickReply,
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };
@@ -1008,6 +1009,7 @@ namespace ChatXdk
                 ["attachments"] = p.Attachments,
                 ["reply_to_entities"] = p.ReplyToEntities != null ? SerialiseEntities(p.ReplyToEntities) : null,
                 ["reply_to_attachments"] = p.ReplyToAttachments,
+                ["quick_reply"] = p.QuickReply,
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };

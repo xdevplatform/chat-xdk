@@ -346,7 +346,8 @@ struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle,
  * session identity), `conversation_key` (base64 raw 32-byte key) /
  * `conversation_key_version` (unset resolves from the opt-in key cache),
  * `entities` (`[[start,end,"type"],...]`), `attachments`
- * (`[{"attachment_type",...},...]`), `should_notify`, and `ttl_msec`.
+ * (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
+ * of decrypted text content), `should_notify`, and `ttl_msec`.
  *
  * Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
  */

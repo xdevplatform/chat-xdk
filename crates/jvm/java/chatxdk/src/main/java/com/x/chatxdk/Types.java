@@ -502,6 +502,13 @@ public final class Types {
         /** Optional attachments. */
         public List<AttachmentDescriptor> attachments;
 
+        /**
+         * Optional quick reply, in the same JSON shape as the {@code quick_reply}
+         * of decrypted text content: a request offering options, or a response
+         * selecting one.
+         */
+        public JsonNode quickReply;
+
         /** Whether to send a push notification. Defaults to true. */
         public Boolean shouldNotify;
 
@@ -587,6 +594,13 @@ public final class Types {
 
         /** Attachments of the quoted message (for the preview); derived from {@link #replyToEvent} when null. */
         public List<AttachmentDescriptor> replyToAttachments;
+
+        /**
+         * Optional quick reply, in the same JSON shape as the {@code quick_reply}
+         * of decrypted text content: a request offering options, or a response
+         * selecting one.
+         */
+        public JsonNode quickReply;
 
         /** Whether to send a push notification. Defaults to true. */
         public Boolean shouldNotify;

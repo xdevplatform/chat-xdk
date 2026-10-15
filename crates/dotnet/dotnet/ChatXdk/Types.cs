@@ -499,6 +499,12 @@ namespace ChatXdk
         public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
         /// <summary>Optional media, URL, or post attachments.</summary>
         public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
+        /// <summary>
+        /// Optional quick reply, in the same JSON shape as the <c>quick_reply</c>
+        /// of decrypted text content: a request offering options, or a response
+        /// selecting one.
+        /// </summary>
+        public JsonElement? QuickReply { get; init; }
         /// <summary>Whether to send a push notification. Defaults to true.</summary>
         public bool? ShouldNotify { get; init; }
         /// <summary>Time-to-live for disappearing messages in milliseconds.</summary>
@@ -571,6 +577,12 @@ namespace ChatXdk
         public IReadOnlyList<EntityDescriptor>? ReplyToEntities { get; init; }
         /// <summary>Attachments of the quoted message (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public IReadOnlyList<AttachmentDescriptor>? ReplyToAttachments { get; init; }
+        /// <summary>
+        /// Optional quick reply, in the same JSON shape as the <c>quick_reply</c>
+        /// of decrypted text content: a request offering options, or a response
+        /// selecting one.
+        /// </summary>
+        public JsonElement? QuickReply { get; init; }
         /// <summary>Whether to send a push notification. Defaults to true.</summary>
         public bool? ShouldNotify { get; init; }
         /// <summary>Time-to-live for disappearing messages in milliseconds.</summary>

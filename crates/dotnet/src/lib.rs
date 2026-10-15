@@ -23,7 +23,7 @@ use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
     EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, SigningKeyEntry,
+    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
 };
 
 // FFI result type
@@ -228,6 +228,8 @@ struct FfiEncryptMessageParams {
     #[serde(default)]
     attachments: Option<serde_json::Value>,
     #[serde(default)]
+    quick_reply: Option<serde_json::Value>,
+    #[serde(default)]
     should_notify: Option<bool>,
     #[serde(default)]
     ttl_msec: Option<i64>,
@@ -261,6 +263,8 @@ struct FfiEncryptReplyParams {
     entities: Option<Vec<(i32, i32, String)>>,
     #[serde(default)]
     attachments: Option<serde_json::Value>,
+    #[serde(default)]
+    quick_reply: Option<serde_json::Value>,
     #[serde(default)]
     reply_to_entities: Option<Vec<(i32, i32, String)>>,
     #[serde(default)]
@@ -398,6 +402,12 @@ fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<EntityDescript
 /// a required media field is rejected rather than silently defaulted.
 fn parse_attachments(value: serde_json::Value) -> Result<Vec<AttachmentDescriptor>, FfiResult> {
     serde_json::from_value(value).map_err(|e| err_result(&format!("Invalid attachments: {}", e)))
+}
+
+/// Parse a quick reply via the core serde type; the JSON shape is the
+/// `quick_reply` of decrypted text content.
+fn parse_quick_reply(value: serde_json::Value) -> Result<QuickReply, FfiResult> {
+    serde_json::from_value(value).map_err(|e| err_result(&format!("Invalid quick reply: {}", e)))
 }
 
 // Lifecycle
@@ -1236,7 +1246,8 @@ pub extern "C" fn chat_xdk_decrypt_event(
 /// from the session identity) and `conversation_key` (base64 raw 32-byte
 /// key) / `conversation_key_version` (absent resolves from the opt-in key
 /// cache), plus optional `entities` (`[[start,end,"type"],...]`),
-/// `attachments` (`[{"attachment_type",...},...]`), `should_notify`, and
+/// `attachments` (`[{"attachment_type",...},...]`), `quick_reply` (the
+/// `quick_reply` shape of decrypted text content), `should_notify`, and
 /// `ttl_msec`.
 ///
 /// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
@@ -1262,6 +1273,10 @@ pub extern "C" fn chat_xdk_encrypt_message(
             Ok(a) => a,
             Err(e) => return e,
         };
+        let quick_reply = match p.quick_reply.take().map(parse_quick_reply).transpose() {
+            Ok(q) => q,
+            Err(e) => return e,
+        };
 
         let mut params = EncryptMessageParams::new(p.conversation_id, p.text);
         params.sender_id = p.sender_id;
@@ -1270,6 +1285,7 @@ pub extern "C" fn chat_xdk_encrypt_message(
         params.conversation_key_version = p.conversation_key_version;
         params.entities = p.entities.map(entity_tuples_to_descs);
         params.attachments = attachments;
+        params.quick_reply = quick_reply;
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
 
@@ -1317,6 +1333,10 @@ pub extern "C" fn chat_xdk_encrypt_reply(
             Ok(a) => a,
             Err(e) => return e,
         };
+        let quick_reply = match p.quick_reply.take().map(parse_quick_reply).transpose() {
+            Ok(q) => q,
+            Err(e) => return e,
+        };
         let reply_to_attachments = match p
             .reply_to_attachments
             .take()
@@ -1345,6 +1365,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.attachments = attachments;
         params.reply_to_entities = p.reply_to_entities.map(entity_tuples_to_descs);
         params.reply_to_attachments = reply_to_attachments;
+        params.quick_reply = quick_reply;
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
 

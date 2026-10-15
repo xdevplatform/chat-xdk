@@ -35,7 +35,7 @@ use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
     EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams,
+    GroupMembersChangeParams, MessageDeleteParams, QuickReply,
 };
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
@@ -101,6 +101,28 @@ fn parse_attachment_descs(
         // is rejected rather than silently defaulted.
         serde_json::from_str(&json_str).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid attachments: {}", e))
+        })
+    })
+}
+
+/// Convert a quick-reply dict into a [`QuickReply`].
+///
+/// The dict takes the same shape as the `quick_reply` of decrypted text
+/// content: `{"request": {"options": {...}}}` or
+/// `{"response": {"options": {...}}}`.
+fn parse_quick_reply(dict: Py<PyAny>) -> PyResult<QuickReply> {
+    Python::attach(|py| {
+        let json_str: String = py
+            .import("json")?
+            .call_method1("dumps", (dict,))?
+            .extract()
+            .map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Quick reply is not JSON-serializable",
+                )
+            })?;
+        serde_json::from_str(&json_str).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid quick reply: {}", e))
         })
     })
 }
@@ -767,10 +789,12 @@ impl Chat {
     ///     conversation_key_version: The current conversation key version (from KeyChange event).
     ///     entities: Optional list of (start, end, entity_type) tuples for rich-text.
     ///     attachments: Optional list of attachment dicts (each with "attachment_type" key).
+    ///     quick_reply: Optional quick-reply dict, in the same shape as the
+    ///         ``quick_reply`` of decrypted text content.
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn encrypt_message(
         &self,
         conversation_id: &str,
@@ -781,6 +805,7 @@ impl Chat {
         conversation_key_version: Option<String>,
         entities: Option<Vec<(i32, i32, String)>>,
         attachments: Option<Vec<HashMap<String, Py<PyAny>>>>,
+        quick_reply: Option<Py<PyAny>>,
         should_notify: Option<bool>,
         ttl_msec: Option<i64>,
     ) -> PyResult<SendPayload> {
@@ -791,6 +816,7 @@ impl Chat {
         params.conversation_key_version = conversation_key_version;
         params.entities = entities.map(parse_entity_descs);
         params.attachments = attachments.map(parse_attachment_descs).transpose()?;
+        params.quick_reply = quick_reply.map(parse_quick_reply).transpose()?;
         params.should_notify = should_notify;
         params.ttl_msec = ttl_msec;
         let payload = self.inner.encrypt_message(params).map_err(to_py_err)?;
@@ -843,10 +869,12 @@ impl Chat {
     ///     entities: Optional list of (start, end, entity_type) tuples for
     ///         rich-text in the reply text.
     ///     attachments: Optional list of attachment dicts (each with "attachment_type" key).
+    ///     quick_reply: Optional quick-reply dict, in the same shape as the
+    ///         ``quick_reply`` of decrypted text content.
     ///     should_notify: Whether to send a push notification (default: True).
     ///     ttl_msec: Optional TTL in milliseconds for disappearing messages.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn encrypt_reply(
         &self,
         conversation_id: &str,
@@ -865,6 +893,7 @@ impl Chat {
         conversation_key_version: Option<String>,
         entities: Option<Vec<(i32, i32, String)>>,
         attachments: Option<Vec<HashMap<String, Py<PyAny>>>>,
+        quick_reply: Option<Py<PyAny>>,
         should_notify: Option<bool>,
         ttl_msec: Option<i64>,
     ) -> PyResult<SendPayload> {
@@ -885,6 +914,7 @@ impl Chat {
         params.conversation_key_version = conversation_key_version;
         params.entities = entities.map(parse_entity_descs);
         params.attachments = attachments.map(parse_attachment_descs).transpose()?;
+        params.quick_reply = quick_reply.map(parse_quick_reply).transpose()?;
         params.should_notify = should_notify;
         params.ttl_msec = ttl_msec;
         let payload = self.inner.encrypt_reply(params).map_err(to_py_err)?;

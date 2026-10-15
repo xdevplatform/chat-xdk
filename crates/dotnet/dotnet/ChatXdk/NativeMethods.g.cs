@@ -291,7 +291,8 @@ namespace ChatXdk
         ///  from the session identity) and `conversation_key` (base64 raw 32-byte
         ///  key) / `conversation_key_version` (absent resolves from the opt-in key
         ///  cache), plus optional `entities` (`[[start,end,"type"],...]`),
-        ///  `attachments` (`[{"attachment_type",...},...]`), `should_notify`, and
+        ///  `attachments` (`[{"attachment_type",...},...]`), `quick_reply` (the
+        ///  `quick_reply` shape of decrypted text content), `should_notify`, and
         ///  `ttl_msec`.
         ///
         ///  Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
