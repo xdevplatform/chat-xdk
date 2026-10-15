@@ -3058,3 +3058,50 @@ func TestEncryptMessageRejectsInvalidQuickReply(t *testing.T) {
 		t.Fatalf("expected an invalid quick reply error, got %v", err)
 	}
 }
+
+func TestEncryptForwardRoundTrip(t *testing.T) {
+	v := loadVectors(t)
+	chat := quickReplyChat(t, v)
+	defer chat.Close()
+
+	payload, err := chat.EncryptForward(EncryptForwardParams{
+		ConversationID:         v.EventConversationID,
+		ForwardedText:          "see @alice",
+		ForwardedEntities:      []EntityTuple{NewEntity(4, 10, "mention")},
+		Text:                   "fyi",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptForward failed: %v", err)
+	}
+	text := decryptOwnText(t, chat, v, payload)
+	if text.Text != "fyi" {
+		t.Errorf("comment = %q, want %q", text.Text, "fyi")
+	}
+	var forwarded struct {
+		MessageText string            `json:"message_text"`
+		Entities    []json.RawMessage `json:"entities"`
+	}
+	if err := json.Unmarshal(text.ForwardedMessage, &forwarded); err != nil {
+		t.Fatalf("forwarded_message: %v (%s)", err, text.ForwardedMessage)
+	}
+	if forwarded.MessageText != "see @alice" || len(forwarded.Entities) != 1 {
+		t.Errorf("unexpected forwarded_message %s", text.ForwardedMessage)
+	}
+}
+
+func TestEncryptForwardRejectsNothingToForward(t *testing.T) {
+	v := loadVectors(t)
+	chat := quickReplyChat(t, v)
+	defer chat.Close()
+
+	_, err := chat.EncryptForward(EncryptForwardParams{
+		ConversationID:         v.EventConversationID,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	})
+	if err == nil || !strings.Contains(err.Error(), "nothing to forward") {
+		t.Fatalf("expected a nothing-to-forward error, got %v", err)
+	}
+}

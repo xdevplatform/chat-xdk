@@ -180,6 +180,33 @@ type EncryptMessageParams struct {
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }
 
+// EncryptForwardParams are the parameters for EncryptForward.
+//
+// ConversationID and ForwardedText are required: ForwardedText is the full
+// text of the message being forwarded (empty only when it has attachments but
+// no text) and ForwardedEntities its rich-text entities. Text is an optional
+// comment sent with the forward, and Entities index into it. Media is
+// encrypted under its conversation's key, so the original's attachments do
+// not carry over: re-encrypt them with this conversation's key
+// (EncryptStream), upload them, and pass the new descriptors in Attachments.
+//
+// The identity and key fields are optional overrides, as on
+// EncryptMessageParams.
+type EncryptForwardParams struct {
+	ConversationID         string                 `json:"conversation_id"`
+	ForwardedText          string                 `json:"forwarded_text"`
+	ForwardedEntities      []EntityTuple          `json:"forwarded_entities,omitempty"`
+	Text                   string                 `json:"text,omitempty"` // empty = no comment
+	Entities               []EntityTuple          `json:"entities,omitempty"`
+	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
+	SenderID               string                 `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string                 `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
+	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
+	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
+}
+
 // EntityTuple represents a text entity: [start, end, type].
 type EntityTuple [3]interface{}
 

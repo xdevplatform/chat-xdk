@@ -250,6 +250,12 @@ func ffiEncryptMessage(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_encrypt_message(h, c))
 }
 
+func ffiEncryptForward(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_encrypt_forward(h, c))
+}
+
 func ffiEncryptReply(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
