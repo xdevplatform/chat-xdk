@@ -739,7 +739,7 @@ banner/favicon preview images), and post descriptors — see
 [AttachmentDescriptor (send side)](#attachmentdescriptor-send-side).
 The `quick_reply` parameter attaches a quick-reply request (selectable
 options) or response (the selected option) — see
-[QuickReply (send side)](#quickreply-send-side).
+[QuickReply](#quickreply).
 **Temporary restriction:** `encrypt_message` and `encrypt_reply` reject
 attachment lists that current first-party clients cannot render — multiple
 attachments are allowed only when every one is image/gif/video media
@@ -1629,59 +1629,96 @@ displayTitle, bannerImage, faviconImage)`, `Types.AttachmentDescriptor
 fields (`URLAttachmentImageDescriptor`); JS and Python pass the plain
 object/dict shape above.
 
-### QuickReply (send side)
+### QuickReply
 
-The optional `quick_reply` of `EncryptMessageParams` / `EncryptReplyParams`.
-A **request** offers selectable options; a **response** reports the option
-the user picked. The input is the same shape each binding returns as the
-quick reply of decrypted text content, so a received value can be passed
-back to `encrypt_message` / `encrypt_reply` unchanged. Omitting it sends no
-quick reply.
+The optional `quick_reply` of `EncryptMessageParams` / `EncryptReplyParams`,
+and the `quick_reply` (`quickReply` in JS) of decrypted text content. A
+**request** offers selectable options; a **response** reports the option the
+user picked. Every binding uses one typed shape for both directions, so a
+received value can be passed back to `encrypt_message` / `encrypt_reply`
+unchanged. Omitting it sends no quick reply. A value with neither `request`
+nor `response`, or with both, fails with an "Invalid quick reply" error.
 
-```typescript
-// JS/WASM (inner keys are camelCase)
-type QuickReply =
-  | { request: { options: { id?: string; options?: QuickReplyOption[] } } }
-  | { response: { options: { requestId?: string; metadata?: string; selectedOptionId?: string } } };
+| Type | Fields |
+|------|--------|
+| `QuickReply` | exactly one of `request: QuickReplyRequest`, `response: QuickReplyResponse` |
+| `QuickReplyRequest` | `options: QuickReplyOptionsRequest` |
+| `QuickReplyResponse` | `options: QuickReplyOptionsResponse` |
+| `QuickReplyOptionsRequest` | `id?`, `options?: QuickReplyOption[]` |
+| `QuickReplyOptionsResponse` | `request_id?`, `metadata?`, `selected_option_id?` |
+| `QuickReplyOption` | `id?`, `label?`, `metadata?`, `description?` |
 
-interface QuickReplyOption {
-  id?: string;
-  label?: string;
-  metadata?: string;
-  description?: string;
-}
-```
+Each binding names these types the same way, in its own idiom:
 
-Python, Go, .NET, and JVM use the same structure with snake_case keys
-(`request_id`, `selected_option_id`): a `dict` in Python, a
-`json.RawMessage` in Go, a `JsonElement` in .NET, and a Jackson `JsonNode`
-in JVM. Rust takes the typed `QuickReply` enum. A value matching neither
-variant fails with an "Invalid quick reply" error.
+| Binding | Shape | Field casing |
+|---------|-------|--------------|
+| Rust | `QuickReply::Request { request }` / `QuickReply::Response { response }` enum | snake_case |
+| JS/WASM | `{ request: QuickReplyRequest } \| { response: QuickReplyResponse }` union | camelCase (`requestId`, `selectedOptionId`) |
+| Python | `QuickReply` `TypedDict` (and the nested `TypedDict`s), exported from `chat_xdk` | snake_case keys |
+| Go | `*chatxdk.QuickReply` struct with `Request` / `Response` pointer fields; `TextContent.QuickReply` decodes into the same type | Go field names, snake_case JSON |
+| .NET | `QuickReply` class with `Request` / `Response` properties; decrypted JSON deserializes with `JsonSerializer.Deserialize<QuickReply>` | PascalCase properties, snake_case JSON |
+| JVM | `Types.QuickReply` with `request` / `response` fields and `QuickReply.request(...)` / `QuickReply.response(...)` factories; decrypted JSON converts with `ObjectMapper.treeToValue(node, QuickReply.class)` | camelCase fields, snake_case JSON |
 
 ```python
+from chat_xdk import QuickReply, QuickReplyOption
+
 # Ask a question with two options...
-chat.encrypt_message(conversation_id, "Continue?", quick_reply={
-    "request": {"options": {"id": "qr-1", "options": [
-        {"id": "yes", "label": "Yes", "metadata": "m-yes"},
-        {"id": "no", "label": "No", "metadata": "m-no"},
+chat.encrypt_message(conversation_id, "Continue?", quick_reply=QuickReply(
+    request={"options": {"id": "qr-1", "options": [
+        QuickReplyOption(id="yes", label="Yes", metadata="m-yes"),
+        QuickReplyOption(id="no", label="No", metadata="m-no"),
     ]}},
-})
+))
 
 # ...and answer it.
-chat.encrypt_message(conversation_id, "Yes", quick_reply={
-    "response": {"options": {
+chat.encrypt_message(conversation_id, "Yes", quick_reply=QuickReply(
+    response={"options": {
         "request_id": "qr-1", "metadata": "m-yes", "selected_option_id": "yes",
     }},
-})
+))
+```
+
+```typescript
+chat.encryptMessage({
+  conversationId,
+  text: 'Yes',
+  quickReply: { response: { options: { requestId: 'qr-1', metadata: 'm-yes', selectedOptionId: 'yes' } } },
+});
 ```
 
 ```go
+str := func(s string) *string { return &s }
 p := chatxdk.EncryptMessageParams{
     ConversationID: conversationID,
     Text:           "Yes",
-    QuickReply: json.RawMessage(`{"response":{"options":` +
-        `{"request_id":"qr-1","metadata":"m-yes","selected_option_id":"yes"}}}`),
+    QuickReply: &chatxdk.QuickReply{Response: &chatxdk.QuickReplyResponse{
+        Options: chatxdk.QuickReplyOptionsResponse{
+            RequestID: str("qr-1"), Metadata: str("m-yes"), SelectedOptionID: str("yes"),
+        },
+    }},
 }
+```
+
+```csharp
+var p = new EncryptMessageParams(conversationId, "Yes")
+{
+    QuickReply = new QuickReply
+    {
+        Response = new QuickReplyResponse
+        {
+            Options = new QuickReplyOptionsResponse { RequestId = "qr-1", Metadata = "m-yes", SelectedOptionId = "yes" },
+        },
+    },
+};
+```
+
+```java
+QuickReplyOptionsResponse selected = new QuickReplyOptionsResponse();
+selected.requestId = "qr-1";
+selected.metadata = "m-yes";
+selected.selectedOptionId = "yes";
+EncryptMessageParams p = new EncryptMessageParams(conversationId, "Yes");
+p.quickReply = QuickReply.response(selected);
 ```
 
 ### KeyChangeEvent
