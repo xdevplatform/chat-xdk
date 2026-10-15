@@ -421,7 +421,7 @@ See [API.md](API.md) for the complete method reference.
 | `SendPayload` | Encrypted content + signature + metadata ready for the X API |
 | `PublicKeys` | Identity + signing public keys (base64) |
 | `PublicKeyRegistrationPayload` | Registration payload for the X API |
-| `EntityDescriptor` | Rich-text entity descriptor (URL, mention, hashtag) with byte offsets; used by `EncryptMessageParams` and `EncryptReplyParams` |
+| `EntityDescriptor` | Rich-text entity descriptor (URL, mention, hashtag) with byte offsets; used by `EncryptMessageParams`, `EncryptReplyParams`, and `EncryptForwardParams` |
 
 #### `error.rs` — Error Hierarchy
 
