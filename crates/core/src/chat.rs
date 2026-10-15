@@ -367,13 +367,16 @@ impl Chat {
     ) -> Result<Vec<u8>, SdkError> {
         self.inner.encrypt_stream(plaintext, conversation_key)
     }
-    /// Decrypt a stream.
+    /// Decrypt an encrypted media file; see [`crate::ChatCore::decrypt_stream`].
     pub fn decrypt_stream(
         &self,
         encrypted: &[u8],
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &std::collections::HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        self.inner.decrypt_stream(encrypted, conversation_key)
+        self.inner
+            .decrypt_stream(encrypted, event_b64, conversation_keys, media_hash_key)
     }
 
     /// Create an incremental stream encryptor for large payloads.
@@ -384,12 +387,16 @@ impl Chat {
         self.inner.stream_encryptor(conversation_key)
     }
 
-    /// Create an incremental stream decryptor for large payloads.
+    /// Create an incremental decryptor for an encrypted media file; see
+    /// [`crate::ChatCore::stream_decryptor`].
     pub fn stream_decryptor(
         &self,
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &std::collections::HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<crate::crypto::encryption::StreamDecryptor, SdkError> {
-        self.inner.stream_decryptor(conversation_key)
+        self.inner
+            .stream_decryptor(event_b64, conversation_keys, media_hash_key)
     }
 
     /// Encrypt a UTF-8 string using XSalsa20-Poly1305 and return base64.
@@ -1377,6 +1384,43 @@ mod tests {
 
     // Stream encrypt/decrypt
 
+    /// A conversation-key message under key version "1" with one media
+    /// attachment named `media_hash_key`, and the key map that opens it.
+    fn media_message(
+        ckey: &XChatConversationKey,
+        media_hash_key: &str,
+    ) -> (
+        String,
+        std::collections::HashMap<String, XChatConversationKey>,
+    ) {
+        use crate::thrift::event::{MessageCreateEvent, MessageEvent, MessageEventDetail};
+        use crate::thrift::product::{MediaAttachment, MessageAttachment};
+        let media = Box::new(MessageAttachment::Media(Box::new(MediaAttachment {
+            media_hash_key: Some(media_hash_key.to_string()),
+            ..Default::default()
+        })));
+        let content =
+            crate::pipeline::build_message_content("media", None, Some(vec![media])).unwrap();
+        let event = MessageEvent {
+            message_id: Some("m-1".to_string()),
+            sender_id: Some("1".to_string()),
+            conversation_id: Some("1:2".to_string()),
+            detail: Some(MessageEventDetail::MessageCreateEvent(MessageCreateEvent {
+                contents: Some(crate::crypto::encryption::encrypt_message(ckey, &content).unwrap()),
+                conversation_key_version: Some("1".to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let event_b64 = crate::protocol::serialization::base64_encode(
+            &crate::pipeline::serialize_thrift(&event).unwrap(),
+        );
+        (
+            event_b64,
+            [("1".to_string(), ckey.clone())].into_iter().collect(),
+        )
+    }
+
     #[tokio::test]
     async fn test_stream_encrypt_decrypt_roundtrip() {
         let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
@@ -1384,6 +1428,7 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey, "hash-1");
         let plaintext =
             b"Hello stream! This is some media content that could be an image or video.";
 
@@ -1391,7 +1436,9 @@ mod tests {
         assert_ne!(encrypted, plaintext);
         assert!(encrypted.len() > plaintext.len()); // overhead from nonce, tag, header
 
-        let decrypted = chat.decrypt_stream(&encrypted, &ckey).unwrap();
+        let decrypted = chat
+            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
@@ -1402,12 +1449,23 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey, "hash-1");
         // > 1024 bytes to test multi-chunk streaming
         let plaintext: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
 
         let encrypted = chat.encrypt_stream(&plaintext, &ckey).unwrap();
-        let decrypted = chat.decrypt_stream(&encrypted, &ckey).unwrap();
+        let decrypted = chat
+            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .unwrap();
         assert_eq!(decrypted, plaintext);
+
+        let mut decryptor = chat.stream_decryptor(&event, &keys, "hash-1").unwrap();
+        let mut incremental = Vec::new();
+        for chunk in encrypted.chunks(700) {
+            incremental.extend(decryptor.push(chunk).unwrap());
+        }
+        incremental.extend(decryptor.finish().unwrap());
+        assert_eq!(incremental, plaintext);
     }
 
     #[tokio::test]
@@ -1418,10 +1476,11 @@ mod tests {
 
         let ckey1 = chat.inner.generate_conversation_key().unwrap();
         let ckey2 = chat.inner.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey2, "hash-1");
         let plaintext = b"secret media content";
 
         let encrypted = chat.encrypt_stream(plaintext, &ckey1).unwrap();
-        let result = chat.decrypt_stream(&encrypted, &ckey2);
+        let result = chat.decrypt_stream(&encrypted, &event, &keys, "hash-1");
         assert!(result.is_err());
     }
 

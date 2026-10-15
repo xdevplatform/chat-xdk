@@ -10,7 +10,6 @@ use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{KeypairPurpose, XChatConversationKey, XChatKeyPair, XChatPrivateKey};
 use crate::crypto::message_keys;
 use crate::error::{CryptoError, SdkError};
-use crate::keys::attachment_keys::AttachmentKeyStore;
 use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
@@ -70,10 +69,6 @@ pub struct ChatCore {
     /// Populated only by [`Self::set_signing_keys`] — never from event
     /// contents.
     signing_key_cache: std::sync::RwLock<Vec<SigningKeyEntry>>,
-    /// Attachment keys of decrypted messages that use message keys, tried by
-    /// the stream decrypt methods when the conversation key they are given
-    /// does not open the media.
-    attachment_keys: std::sync::RwLock<AttachmentKeyStore>,
 }
 
 /// A cached conversation key pinned to its verified version.
@@ -108,7 +103,6 @@ impl ChatCore {
             cache_keys: std::sync::atomic::AtomicBool::new(false),
             conversation_key_cache: std::sync::RwLock::new(HashMap::new()),
             signing_key_cache: std::sync::RwLock::new(Vec::new()),
-            attachment_keys: std::sync::RwLock::new(AttachmentKeyStore::default()),
         }
     }
 
@@ -463,10 +457,6 @@ impl ChatCore {
     /// Clear keys from memory.
     pub fn lock(&self) {
         self.keypair_manager.clear();
-        self.attachment_keys
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
     }
 
     // Conversation Keys
@@ -1654,8 +1644,8 @@ impl ChatCore {
 
                 self.reject_if_unverified(&sig_result, "Message")?;
 
-                let (plaintext, conversation_key, message_key) = if is_unencrypted {
-                    (contents.clone(), None, None)
+                let plaintext = if is_unencrypted {
+                    contents.clone()
                 } else {
                     let version = mce.conversation_key_version.as_deref().unwrap_or("");
                     // The caller-supplied map wins; the opt-in key cache
@@ -1682,25 +1672,10 @@ impl ChatCore {
                             })?,
                     };
                     let message_key = Self::message_key_for(parsed, &ckey)?;
-                    let plaintext =
-                        decrypt_message_bytes(message_key.as_ref().unwrap_or(&ckey), contents)?;
-                    (plaintext, Some(ckey), message_key)
+                    decrypt_message_bytes(message_key.as_ref().unwrap_or(&ckey), contents)?
                 };
 
                 let parsed_content = parse_message_content(&plaintext)?;
-
-                if let (Some(ckey), Some(message_key), Some(message_id)) = (
-                    conversation_key.as_ref(),
-                    message_key.as_ref(),
-                    parsed.message_id.as_deref(),
-                ) {
-                    self.remember_attachment_keys(
-                        ckey,
-                        message_key,
-                        message_id,
-                        &parsed_content.raw_attachments,
-                    );
-                }
 
                 // A preview that embeds its raw source event is always
                 // validated; without one it passes through unvalidated.
@@ -1709,13 +1684,7 @@ impl ChatCore {
                     .as_ref()
                     .filter(|p| p.raw_event_message_create.is_some())
                     .map(|p| {
-                        self.validate_reply_preview(
-                            parsed,
-                            p,
-                            conversation_keys,
-                            all_signing_keys,
-                            conversation_key.as_ref(),
-                        )
+                        self.validate_reply_preview(parsed, p, conversation_keys, all_signing_keys)
                     });
 
                 Event::Message(Box::new(Message {
@@ -2162,39 +2131,6 @@ impl ChatCore {
         )?))
     }
 
-    /// File the attachment keys of a decrypted message-key message under its
-    /// conversation key, so the stream decrypt methods can open its media.
-    /// A URL card's banner and favicon share the card's key.
-    #[allow(clippy::vec_box)]
-    fn remember_attachment_keys(
-        &self,
-        conversation_key: &XChatConversationKey,
-        message_key: &XChatConversationKey,
-        message_id: &str,
-        attachments: &[Box<ThriftMessageAttachment>],
-    ) {
-        let mut store = self
-            .attachment_keys
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        for (index, attachment) in attachments.iter().enumerate() {
-            let stored_id = match &**attachment {
-                ThriftMessageAttachment::Media(media) => media.attachment_id.as_deref(),
-                ThriftMessageAttachment::Url(url)
-                    if url.banner_image_media_hash_key.is_some()
-                        || url.favicon_image_media_hash_key.is_some() =>
-                {
-                    url.attachment_id.as_deref()
-                }
-                _ => continue,
-            };
-            let attachment_id = message_keys::resolve_attachment_id(stored_id, message_id, index);
-            if let Ok(key) = message_keys::derive_attachment_key(message_key, &attachment_id) {
-                store.insert(conversation_key, key);
-            }
-        }
-    }
-
     /// Whether a raw event is a `MessageCreateEvent` encrypted under a
     /// message key.
     fn uses_message_key(raw: &MessageEvent) -> bool {
@@ -2206,40 +2142,14 @@ impl ChatCore {
     }
 
     /// The key that opens a raw `MessageCreateEvent`'s contents: its message
-    /// key when it uses one, otherwise its conversation key (see
-    /// [`Self::raw_event_conversation_key`]). `None` when the contents are
-    /// plaintext.
-    fn raw_event_contents_key(
-        &self,
-        raw: &MessageEvent,
-        outer_key: Option<&XChatConversationKey>,
-        outer_version: Option<&str>,
-        key_changes: &[MessageEvent],
-        extra_keys: &HashMap<String, XChatConversationKey>,
-    ) -> Result<Option<XChatConversationKey>, SdkError> {
-        let Some(conversation_key) = self.raw_event_conversation_key(
-            raw,
-            outer_key,
-            outer_version,
-            key_changes,
-            extra_keys,
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(
-            Self::message_key_for(raw, &conversation_key)?.unwrap_or(conversation_key),
-        ))
-    }
-
-    /// The conversation key for a raw `MessageCreateEvent`'s key version,
-    /// from `extra_keys`, the outer message's key, the key cache, or the
-    /// supplied key-change events, in that order. `None` when the contents
-    /// are plaintext.
+    /// key when it uses one, otherwise the conversation key for its key
+    /// version, from `extra_keys`, the outer message's key, the key cache, or
+    /// the supplied key-change events, in that order. `None` when the
+    /// contents are plaintext.
     ///
     /// A wrong key cannot yield wrong plaintext — the cipher authenticates —
     /// so key-change events are usable here without their own verification.
-    fn raw_event_conversation_key(
+    fn raw_event_contents_key(
         &self,
         raw: &MessageEvent,
         outer_key: Option<&XChatConversationKey>,
@@ -2288,7 +2198,9 @@ impl ChatCore {
                     version
                 )))
             })?;
-        Ok(Some(conversation_key))
+        Ok(Some(
+            Self::message_key_for(raw, &conversation_key)?.unwrap_or(conversation_key),
+        ))
     }
 
     /// Decrypt a raw `MessageCreateEvent`'s contents with `key`, or return
@@ -2527,18 +2439,12 @@ impl ChatCore {
     /// event embedded in it: verify the raw event's signature, decrypt its
     /// contents, and check every claim the preview makes against the
     /// decrypted original.
-    ///
-    /// When the preview is valid and the original uses a message key, the
-    /// original's attachment keys are filed under `outer_key`, the reply's
-    /// conversation key, and under the original's own conversation key when
-    /// it is known, so its quoted media can be decrypted with either.
     fn validate_reply_preview(
         &self,
         outer: &MessageEvent,
         preview: &crate::thrift::product::ReplyingToPreview,
         conversation_keys: &HashMap<String, XChatConversationKey>,
         all_signing_keys: &[SigningKeyEntry],
-        outer_key: Option<&XChatConversationKey>,
     ) -> ReplyPreviewValidation {
         let Some(raw) = preview.raw_event_message_create.as_ref() else {
             return ReplyPreviewValidation::Invalid;
@@ -2698,23 +2604,6 @@ impl ChatCore {
                 }
             }
         }
-        if let (Some(message_key), Some(message_id)) =
-            (original_message_key.as_ref(), raw.message_id.as_deref())
-        {
-            let attachments = original.attachments.as_deref().unwrap_or(&[]);
-            let own_key = self
-                .raw_event_conversation_key(raw, None, None, &embedded_ckces, conversation_keys)
-                .ok()
-                .flatten();
-            for conversation_key in outer_key.into_iter().chain(own_key.as_ref()) {
-                self.remember_attachment_keys(
-                    conversation_key,
-                    message_key,
-                    message_id,
-                    attachments,
-                );
-            }
-        }
         ReplyPreviewValidation::Valid
     }
 
@@ -2732,27 +2621,34 @@ impl ChatCore {
         Ok(output)
     }
 
-    /// Decrypt a stream.
+    /// Decrypt an encrypted media file.
     ///
-    /// `conversation_key` is the key of the message the media belongs to.
-    /// Media of a message that uses a message key is encrypted under a key
-    /// derived for each attachment; those keys are recorded when this
-    /// instance decrypts the message, and tried here after the conversation
-    /// key itself.
+    /// `event_b64` is the event of the message that carries the media and
+    /// `conversation_keys` its conversation's key map, as passed to
+    /// [`Self::decrypt_event`]. `media_hash_key` names the media: a media
+    /// attachment, a link card's banner or favicon, or media the message
+    /// quotes from another message in its reply preview. The SDK finds that
+    /// attachment in the event and derives its key from the key for the
+    /// message's version.
+    ///
+    /// Errors say what to pass instead when `conversation_keys` lacks the
+    /// message's key version, the event is not an encrypted message with
+    /// media, `media_hash_key` is not in it, or `encrypted` is not the
+    /// complete encrypted file. Signatures are not checked here; use the
+    /// `verified` flag from [`Self::decrypt_event`].
     pub fn decrypt_stream(
         &self,
         encrypted: &[u8],
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut reader = Cursor::new(encrypted);
-        let mut output: Vec<u8> = Vec::new();
-        crate::crypto::encryption::decrypt_stream_with_fallback_keys(
-            conversation_key,
-            &self.attachment_keys_for(conversation_key),
-            &mut reader,
-            &mut output,
-        )?;
-        Ok(output)
+        let key = media::media_key(event_b64, conversation_keys, media_hash_key)?;
+        Ok(crate::crypto::encryption::decrypt_media(
+            &key,
+            media_hash_key,
+            encrypted,
+        )?)
     }
 
     /// Create an incremental stream encryptor for large payloads.
@@ -2765,30 +2661,21 @@ impl ChatCore {
         )?)
     }
 
-    /// Create an incremental stream decryptor for large payloads.
-    ///
-    /// Picks the media's key like [`Self::decrypt_stream`].
+    /// Create an incremental decryptor for an encrypted media file too large
+    /// to hold in memory. Takes the arguments of [`Self::decrypt_stream`]
+    /// apart from the bytes, which are fed to the decryptor; its errors say
+    /// which media failed and what to pass.
     pub fn stream_decryptor(
         &self,
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<crate::crypto::encryption::StreamDecryptor, SdkError> {
-        Ok(
-            crate::crypto::encryption::StreamDecryptor::with_fallback_keys(
-                conversation_key,
-                &self.attachment_keys_for(conversation_key),
-            )?,
-        )
-    }
-
-    /// Attachment keys recorded under `conversation_key`, newest first.
-    fn attachment_keys_for(
-        &self,
-        conversation_key: &XChatConversationKey,
-    ) -> Vec<XChatConversationKey> {
-        self.attachment_keys
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys_for(conversation_key)
+        let key = media::media_key(event_b64, conversation_keys, media_hash_key)?;
+        Ok(crate::crypto::encryption::StreamDecryptor::for_media(
+            &key,
+            media_hash_key,
+        )?)
     }
 
     /// Encrypt a UTF-8 string using XSalsa20-Poly1305 and return base64.
@@ -3586,10 +3473,6 @@ pub(crate) struct ParsedMessageContent {
     /// The wire-level reply preview, kept alongside the mapped content so the
     /// decrypt path can validate it against its embedded raw source event.
     pub(crate) raw_reply_preview: Option<crate::thrift::product::ReplyingToPreview>,
-    /// The wire-level attachments in wire order, whose positions name the
-    /// attachments that carry no id of their own.
-    #[allow(clippy::vec_box)]
-    pub(crate) raw_attachments: Vec<Box<ThriftMessageAttachment>>,
 }
 
 fn media_type_name(media_type: &ThriftMediaType) -> Option<String> {
@@ -3735,7 +3618,6 @@ pub(crate) fn parse_message_content(data: &[u8]) -> Result<ParsedMessageContent,
     let mut attachments: Vec<AttachmentInfo> = Vec::new();
     let mut media_hashes: Vec<MediaHashReference> = Vec::new();
     let mut raw_reply_preview: Option<crate::thrift::product::ReplyingToPreview> = None;
-    let mut raw_attachments: Vec<Box<ThriftMessageAttachment>> = Vec::new();
 
     let content = match holder.contents {
         Some(c) => match *c {
@@ -3745,7 +3627,6 @@ pub(crate) fn parse_message_content(data: &[u8]) -> Result<ParsedMessageContent,
                 attachments = parsed_attachments;
                 media_hashes = parsed_hashes;
                 raw_reply_preview = msg.replying_to_preview.as_deref().cloned();
-                raw_attachments = msg.attachments.clone().unwrap_or_default();
                 MessageContent::Text {
                     text: msg.message_text.clone().unwrap_or_default(),
                     entities: map_rich_text_entities_boxed(msg.entities.as_deref()),
@@ -3794,7 +3675,6 @@ pub(crate) fn parse_message_content(data: &[u8]) -> Result<ParsedMessageContent,
         attachments,
         media_hashes,
         raw_reply_preview,
-        raw_attachments,
     })
 }
 
@@ -4230,6 +4110,8 @@ pub(crate) fn convert_settings_change(
     }
 }
 
+mod media;
+
 // Tests
 
 #[cfg(test)]
@@ -4240,6 +4122,9 @@ mod signature_version_tests;
 
 #[cfg(test)]
 mod message_key_tests;
+
+#[cfg(test)]
+mod media_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7481,16 +7366,40 @@ mod tests {
 
     // Stream encryption tests
 
+    /// A conversation-key message under key version "1" with one media
+    /// attachment named `media_hash_key`, and the key map that opens it.
+    fn media_message(
+        ckey: &XChatConversationKey,
+        media_hash_key: &str,
+    ) -> (String, HashMap<String, XChatConversationKey>) {
+        let media = Box::new(ThriftMessageAttachment::Media(Box::new(
+            crate::thrift::product::MediaAttachment {
+                media_hash_key: Some(media_hash_key.to_string()),
+                ..Default::default()
+            },
+        )));
+        let content =
+            crate::pipeline::build_message_content("media", None, Some(vec![media])).unwrap();
+        let encrypted = crate::crypto::encryption::encrypt_message(ckey, &content).unwrap();
+        (
+            build_test_message_event(&encrypted, Some("1")),
+            [("1".to_string(), ckey.clone())].into_iter().collect(),
+        )
+    }
+
     #[test]
     fn encrypt_decrypt_stream_roundtrip() {
         let core = ChatCore::new();
         let ckey = core.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey, "hash-1");
 
         let plaintext = b"stream data for media encryption test";
         let encrypted = core.encrypt_stream(plaintext, &ckey).unwrap();
         assert_ne!(&encrypted[..], plaintext);
 
-        let decrypted = core.decrypt_stream(&encrypted, &ckey).unwrap();
+        let decrypted = core
+            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
 
@@ -7498,9 +7407,12 @@ mod tests {
     fn encrypt_decrypt_stream_empty() {
         let core = ChatCore::new();
         let ckey = core.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey, "hash-1");
 
         let encrypted = core.encrypt_stream(b"", &ckey).unwrap();
-        let decrypted = core.decrypt_stream(&encrypted, &ckey).unwrap();
+        let decrypted = core
+            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .unwrap();
         assert!(decrypted.is_empty());
     }
 

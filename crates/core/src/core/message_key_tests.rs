@@ -1,12 +1,11 @@
-//! Per-message and per-attachment keys, and reply previews that carry
-//! message keys.
+//! Per-message keys, and reply previews that carry message keys.
 
 use super::test_support::{
-    decrypt_message, frame, key, keys, message_event, sent_event, Party, CONVERSATION,
-    SIGNING_KEY_VERSION,
+    decrypt_message, frame, hex_key, holder, key, keys, known_answer_media_message, media,
+    message_event, message_key, sent_event, Party, CONVERSATION, KAT_CONVERSATION_KEY,
+    KAT_KEY_SENDER, SIGNING_KEY_VERSION,
 };
 use super::*;
-use crate::crypto::encryption::encrypt_stream;
 use crate::pipeline::{build_message_content, serialize_thrift};
 use crate::protocol::serialization::base64_encode;
 use crate::thrift::event::{
@@ -16,28 +15,8 @@ use crate::thrift::event::{
 use crate::thrift::product::{
     MediaAttachment as ThriftMedia, MessageAttachment as ThriftAttachment, MessageContents,
     MessageEdit, MessageEntryContents as Contents, PaymentReceiptAttachment,
-    ReplyingToPreview as ThriftPreview, UrlAttachment as ThriftUrl,
-    UrlAttachmentImage as ThriftUrlImage,
+    ReplyingToPreview as ThriftPreview,
 };
-
-fn hex_key(hex_str: &str) -> XChatConversationKey {
-    XChatConversationKey::from_bytes(hex::decode(hex_str).unwrap()).unwrap()
-}
-
-fn message_key(
-    conversation_key: &XChatConversationKey,
-    sender_id: &str,
-    message_id: &str,
-) -> XChatConversationKey {
-    message_keys::derive_message_key(conversation_key, sender_id, message_id).unwrap()
-}
-
-fn holder(contents: MessageContents) -> Vec<u8> {
-    serialize_thrift(&MessageEntryHolder::new(Some(Box::new(Contents::Message(
-        Box::new(contents),
-    )))))
-    .unwrap()
-}
 
 fn edit_holder(message_sequence_id: &str, text: &str, message_id: Option<&str>) -> Vec<u8> {
     serialize_thrift(&MessageEntryHolder::new(Some(Box::new(
@@ -49,21 +28,6 @@ fn edit_holder(message_sequence_id: &str, text: &str, message_id: Option<&str>) 
         ))),
     ))))
     .unwrap()
-}
-
-fn media(hash: &str, attachment_id: Option<&str>) -> Box<ThriftAttachment> {
-    Box::new(ThriftAttachment::Media(Box::new(ThriftMedia {
-        media_hash_key: Some(hash.to_string()),
-        filename: Some(format!("{}.jpg", hash)),
-        attachment_id: attachment_id.map(str::to_string),
-        ..Default::default()
-    })))
-}
-
-fn encrypt_media(key: &XChatConversationKey, plaintext: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    encrypt_stream(key, Cursor::new(plaintext), &mut out).unwrap();
-    out
 }
 
 // Signatures of message-key messages.
@@ -123,37 +87,7 @@ fn changing_the_contents_encryption_version_of_a_v10_message_fails_verification(
     assert!(err.to_string().contains("verification failed"), "{}", err);
 }
 
-// Per-message keys and attachment keys.
-
-const KAT_CONVERSATION_KEY: &str =
-    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-const KAT_KEY_SENDER: &str = "1876543210987654321";
-const KAT_KEY_MESSAGE_ID: &str = "9d8c7b6a-5f4e-4d3c-8b2a-190807060504";
-const KAT_MESSAGE_KEY: &str = "4d443b9a862e9584ccd0aee2753162aa7c5c1dbcb5f967610155f65ae41d8084";
-const KAT_FIRST_ATTACHMENT_KEY: &str =
-    "1ef86545f91f8a3078e276949f7555df2ca584e9c6509b261a558a2e618a1b4b";
-const KAT_SECOND_ATTACHMENT_KEY: &str =
-    "8a7bc01f2ff35c661140da68606b2370cecc13810f245d791aeb8ba6b40d4ea8";
-
-/// A v10 message-key message from the known-answer sender carrying two
-/// media attachments without ids, encrypted under the known message key.
-fn known_answer_media_message(author: &Party) -> ThriftEvent {
-    let contents = holder(MessageContents {
-        message_text: Some("two photos".to_string()),
-        attachments: Some(vec![media("photo-a", None), media("photo-b", None)]),
-        ..Default::default()
-    });
-    message_event(
-        author,
-        KAT_KEY_MESSAGE_ID,
-        "100",
-        "7",
-        Some(1),
-        10,
-        &hex_key(KAT_MESSAGE_KEY),
-        &contents,
-    )
-}
+// Per-message keys.
 
 #[test]
 fn a_message_key_message_decrypts_with_the_known_message_key() {
@@ -168,167 +102,6 @@ fn a_message_key_message_decrypts_with_the_known_message_key() {
     assert!(message.verified);
     assert_eq!(message.text(), Some("two photos"));
     assert_eq!(message.attachments.len(), 2);
-}
-
-#[test]
-fn media_without_ids_open_with_the_known_attachment_keys() {
-    let author = Party::new(KAT_KEY_SENDER);
-    let ckey = hex_key(KAT_CONVERSATION_KEY);
-    let receiver = ChatCore::new();
-    let first = encrypt_media(&hex_key(KAT_FIRST_ATTACHMENT_KEY), &[1u8; 3000]);
-    let second = encrypt_media(&hex_key(KAT_SECOND_ATTACHMENT_KEY), &[2u8; 10]);
-
-    // Unknown until the message is decrypted.
-    assert!(receiver.decrypt_stream(&first, &ckey).is_err());
-
-    decrypt_message(
-        &receiver,
-        &known_answer_media_message(&author),
-        &keys("7", &ckey),
-        std::slice::from_ref(&author.entry),
-    )
-    .unwrap();
-
-    assert_eq!(
-        receiver.decrypt_stream(&first, &ckey).unwrap(),
-        vec![1u8; 3000]
-    );
-    assert_eq!(
-        receiver.decrypt_stream(&second, &ckey).unwrap(),
-        vec![2u8; 10]
-    );
-
-    let mut decryptor = receiver.stream_decryptor(&ckey).unwrap();
-    let mut plaintext = Vec::new();
-    for chunk in first.chunks(500) {
-        plaintext.extend(decryptor.push(chunk).unwrap());
-    }
-    plaintext.extend(decryptor.finish().unwrap());
-    assert_eq!(plaintext, vec![1u8; 3000]);
-
-    // Media keys belong to the conversation key that decrypted the message.
-    assert!(receiver.decrypt_stream(&first, &key(1)).is_err());
-
-    receiver.lock();
-    assert!(receiver.decrypt_stream(&first, &ckey).is_err());
-}
-
-#[test]
-fn a_set_attachment_id_names_the_key_even_when_empty() {
-    let author = Party::new("1001");
-    let ckey = key(6);
-    let message_id = "m-ids";
-    let msg_key = message_key(&ckey, "1001", message_id);
-    let contents = holder(MessageContents {
-        attachments: Some(vec![media("a", Some("att-9")), media("b", Some(""))]),
-        ..Default::default()
-    });
-    let event = message_event(
-        &author,
-        message_id,
-        "100",
-        "7",
-        Some(1),
-        10,
-        &msg_key,
-        &contents,
-    );
-    let receiver = ChatCore::new();
-    decrypt_message(
-        &receiver,
-        &event,
-        &keys("7", &ckey),
-        std::slice::from_ref(&author.entry),
-    )
-    .unwrap();
-
-    let named = encrypt_media(
-        &message_keys::derive_attachment_key(&msg_key, "att-9").unwrap(),
-        b"named",
-    );
-    let empty = encrypt_media(
-        &message_keys::derive_attachment_key(&msg_key, "").unwrap(),
-        b"empty",
-    );
-    let by_position = encrypt_media(
-        &message_keys::derive_attachment_key(&msg_key, "m-ids#1").unwrap(),
-        b"position",
-    );
-    assert_eq!(receiver.decrypt_stream(&named, &ckey).unwrap(), b"named");
-    assert_eq!(receiver.decrypt_stream(&empty, &ckey).unwrap(), b"empty");
-    assert!(receiver.decrypt_stream(&by_position, &ckey).is_err());
-}
-
-#[test]
-fn a_url_cards_images_share_the_cards_key() {
-    let author = Party::new("1001");
-    let ckey = key(6);
-    let message_id = "m-card";
-    let msg_key = message_key(&ckey, "1001", message_id);
-    let image = |hash: &str| {
-        Some(Box::new(ThriftUrlImage {
-            media_hash_key: Some(hash.to_string()),
-            ..Default::default()
-        }))
-    };
-    let card = Box::new(ThriftAttachment::Url(Box::new(ThriftUrl {
-        url: Some("https://example.com".to_string()),
-        banner_image_media_hash_key: image("banner"),
-        favicon_image_media_hash_key: image("favicon"),
-        ..Default::default()
-    })));
-    let contents = holder(MessageContents {
-        attachments: Some(vec![media("photo", None), card]),
-        ..Default::default()
-    });
-    let event = message_event(
-        &author,
-        message_id,
-        "100",
-        "7",
-        Some(1),
-        10,
-        &msg_key,
-        &contents,
-    );
-    let receiver = ChatCore::new();
-    decrypt_message(
-        &receiver,
-        &event,
-        &keys("7", &ckey),
-        std::slice::from_ref(&author.entry),
-    )
-    .unwrap();
-
-    let card_key = message_keys::derive_attachment_key(&msg_key, "m-card#1").unwrap();
-    for image in [b"banner".as_slice(), b"favicon".as_slice()] {
-        let encrypted = encrypt_media(&card_key, image);
-        assert_eq!(receiver.decrypt_stream(&encrypted, &ckey).unwrap(), image);
-    }
-}
-
-#[test]
-fn media_of_a_conversation_key_message_still_opens_with_the_conversation_key() {
-    let author = Party::new("1001");
-    let ckey = key(6);
-    let contents = holder(MessageContents {
-        attachments: Some(vec![media("photo", None)]),
-        ..Default::default()
-    });
-    let event = message_event(&author, "m-legacy", "100", "7", None, 7, &ckey, &contents);
-    let receiver = ChatCore::new();
-    decrypt_message(
-        &receiver,
-        &event,
-        &keys("7", &ckey),
-        std::slice::from_ref(&author.entry),
-    )
-    .unwrap();
-    let encrypted = encrypt_media(&ckey, b"photo");
-    assert_eq!(
-        receiver.decrypt_stream(&encrypted, &ckey).unwrap(),
-        b"photo"
-    );
 }
 
 #[test]
@@ -743,59 +516,6 @@ fn an_edit_of_a_conversation_key_original_needs_no_message_id() {
         message.reply_preview_validation,
         Some(ReplyPreviewValidation::Valid)
     );
-}
-
-#[test]
-fn quoted_media_opens_with_the_replys_conversation_key() {
-    let f = ReplyFixture::new();
-    let (reply, reply_keys) = rotated_reply(&f, {
-        let mut preview = f.preview("Hello there");
-        preview.attachments = Some(vec![media("photo", None)]);
-        preview
-    });
-    let receiver = ChatCore::new();
-    let message = decrypt_message(&receiver, &reply, &reply_keys, &f.signing_keys()).unwrap();
-    assert_eq!(
-        message.reply_preview_validation,
-        Some(ReplyPreviewValidation::Valid)
-    );
-
-    let photo_key = message_keys::derive_attachment_key(&f.original_key, "orig-1").unwrap();
-    let encrypted = encrypt_media(&photo_key, b"photo");
-    assert_eq!(
-        receiver
-            .decrypt_stream(&encrypted, &reply_keys["8"])
-            .unwrap(),
-        b"photo"
-    );
-}
-
-#[test]
-fn quoted_media_also_opens_with_the_originals_own_conversation_key() {
-    let f = ReplyFixture::new();
-    let (reply, mut receiver_keys) = rotated_reply(&f, {
-        let mut preview = f.preview("Hello there");
-        preview.attachments = Some(vec![media("photo", None)]);
-        preview
-    });
-    receiver_keys.insert("7".to_string(), f.ckey.clone());
-    let receiver = ChatCore::new();
-    let message = decrypt_message(&receiver, &reply, &receiver_keys, &f.signing_keys()).unwrap();
-    assert_eq!(
-        message.reply_preview_validation,
-        Some(ReplyPreviewValidation::Valid)
-    );
-
-    let photo_key = message_keys::derive_attachment_key(&f.original_key, "orig-1").unwrap();
-    let encrypted = encrypt_media(&photo_key, b"photo");
-    for conversation_key in [&receiver_keys["8"], &f.ckey] {
-        assert_eq!(
-            receiver
-                .decrypt_stream(&encrypted, conversation_key)
-                .unwrap(),
-            b"photo"
-        );
-    }
 }
 
 #[test]

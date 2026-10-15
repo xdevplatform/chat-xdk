@@ -267,14 +267,11 @@ pub fn encrypt_stream<R: Read, W: Write>(
 /// Input may be split across `push` calls at any byte boundary; frames are
 /// reassembled internally.
 pub struct StreamDecryptor {
-    /// Stream key bytes, used to initialize `pull` at the first frame. Held
-    /// as a wiped-on-drop array because `crypto_secretstream::Key` does not
-    /// zeroize itself.
+    /// Stream key bytes, used to initialize `pull` once the header is
+    /// complete. Held as a wiped-on-drop array because
+    /// `crypto_secretstream::Key` does not zeroize itself.
     key: zeroize::Zeroizing<[u8; 32]>,
-    /// Keys tried in order when `key` cannot open the first frame; the
-    /// stream then stays on whichever key opened it.
-    fallback_keys: Vec<zeroize::Zeroizing<[u8; 32]>>,
-    /// Underlying secretstream puller; `None` until the first frame opens.
+    /// Underlying secretstream puller; `None` until the header is consumed.
     pull: Option<crypto_secretstream::PullStream>,
     /// Header bytes accumulated until the 24-byte header is complete.
     header: Vec<u8>,
@@ -284,57 +281,81 @@ pub struct StreamDecryptor {
     saw_chunk: bool,
     /// Whether the final frame has been decrypted.
     saw_final: bool,
+    /// Media hash key of the file being decrypted, named in errors.
+    media_hash_key: Option<String>,
+}
+
+/// Ways a stream fails to decrypt.
+#[derive(Clone, Copy)]
+enum StreamFault {
+    /// A frame followed by more data failed to authenticate.
+    BadFrame,
+    /// The last frame failed to authenticate, so it may also be cut short.
+    BadLastFrame,
+    /// Data follows the final frame.
+    TrailingData,
+    /// The input ended inside the header.
+    TruncatedHeader,
+    /// The input ended before the final frame.
+    Truncated,
 }
 
 impl StreamDecryptor {
     /// Create a decryptor for one stream.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
-        Self::with_fallback_keys(key, &[])
-    }
-
-    /// Create a decryptor that opens the stream with `key`, or with the
-    /// first of `fallback_keys` that authenticates the first frame.
-    pub(crate) fn with_fallback_keys(
-        key: &XChatConversationKey,
-        fallback_keys: &[XChatConversationKey],
-    ) -> Result<Self, CryptoError> {
         Ok(Self {
             key: secretstream_key_bytes(key)?,
-            fallback_keys: fallback_keys
-                .iter()
-                .map(secretstream_key_bytes)
-                .collect::<Result<_, _>>()?,
             pull: None,
             header: Vec::new(),
             buf: Vec::new(),
             saw_chunk: false,
             saw_final: false,
+            media_hash_key: None,
         })
     }
 
-    /// Decrypt one frame in place. The first frame picks the key: the
-    /// primary key if it authenticates the frame, otherwise the first
-    /// fallback key that does.
-    fn pull_frame(&mut self, frame: &mut Vec<u8>) -> Result<crypto_secretstream::Tag, CryptoError> {
-        let pull_failed = || CryptoError::DecryptionFailed("secretstream pull failed".into());
-        if let Some(pull) = self.pull.as_mut() {
-            return pull.pull(frame, &[]).map_err(|_| pull_failed());
-        }
-        let mut hdr = [0u8; SECRETSTREAM_HEADER_SIZE];
-        hdr.copy_from_slice(&self.header);
-        for key in std::iter::once(&self.key).chain(self.fallback_keys.iter()) {
-            let mut pull = crypto_secretstream::PullStream::init(
-                crypto_secretstream::Header::from(hdr),
-                &crypto_secretstream::Key::from(**key),
+    /// Create a decryptor for the media file named by `media_hash_key`,
+    /// whose errors name that media and say what to pass instead.
+    pub(crate) fn for_media(
+        key: &XChatConversationKey,
+        media_hash_key: &str,
+    ) -> Result<Self, CryptoError> {
+        let mut decryptor = Self::new(key)?;
+        decryptor.media_hash_key = Some(media_hash_key.to_string());
+        Ok(decryptor)
+    }
+
+    fn fault(&self, fault: StreamFault) -> CryptoError {
+        let Some(hash) = self.media_hash_key.as_deref() else {
+            return CryptoError::DecryptionFailed(
+                match fault {
+                    StreamFault::BadFrame | StreamFault::BadLastFrame => "secretstream pull failed",
+                    StreamFault::TrailingData => "data after final stream frame",
+                    StreamFault::TruncatedHeader => "stream ended before header was complete",
+                    StreamFault::Truncated => "stream truncated: ended before final frame",
+                }
+                .into(),
             );
-            let mut attempt = frame.clone();
-            if let Ok(tag) = pull.pull(&mut attempt, &[]) {
-                *frame = attempt;
-                self.pull = Some(pull);
-                return Ok(tag);
-            }
-        }
-        Err(pull_failed())
+        };
+        CryptoError::DecryptionFailed(match fault {
+            StreamFault::BadFrame => format!(
+                "the bytes are not the encrypted file of media_hash_key '{hash}', or they are \
+                 corrupted: pass the bytes downloaded for that media hash key"
+            ),
+            StreamFault::BadLastFrame => format!(
+                "the bytes are not the complete encrypted file of media_hash_key '{hash}': they \
+                 are truncated, corrupted, or another file; pass the complete bytes downloaded \
+                 for that media hash key"
+            ),
+            StreamFault::TrailingData => format!(
+                "the bytes continue past the end of the encrypted file of media_hash_key \
+                 '{hash}': pass only the bytes downloaded for that media hash key"
+            ),
+            StreamFault::TruncatedHeader | StreamFault::Truncated => format!(
+                "the bytes of media_hash_key '{hash}' are truncated: pass the complete bytes \
+                 downloaded for that media hash key"
+            ),
+        })
     }
 
     /// Decrypt a ciphertext chunk, returning the plaintext recoverable so far.
@@ -343,14 +364,12 @@ impl StreamDecryptor {
     /// returned bytes may be empty until enough input has arrived.
     pub fn push(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if self.saw_final {
-            return Err(CryptoError::DecryptionFailed(
-                "data after final stream frame".into(),
-            ));
+            return Err(self.fault(StreamFault::TrailingData));
         }
         let mut input = ciphertext;
 
         // Consume the header before any frame can be pulled.
-        if self.header.len() < SECRETSTREAM_HEADER_SIZE {
+        if self.pull.is_none() {
             let need = SECRETSTREAM_HEADER_SIZE - self.header.len();
             let take = need.min(input.len());
             self.header.extend_from_slice(&input[..take]);
@@ -358,6 +377,12 @@ impl StreamDecryptor {
             if self.header.len() < SECRETSTREAM_HEADER_SIZE {
                 return Ok(Vec::new());
             }
+            let mut hdr = [0u8; SECRETSTREAM_HEADER_SIZE];
+            hdr.copy_from_slice(&self.header);
+            self.pull = Some(crypto_secretstream::PullStream::init(
+                crypto_secretstream::Header::from(hdr),
+                &crypto_secretstream::Key::from(*self.key),
+            ));
         }
 
         self.buf.extend_from_slice(input);
@@ -367,13 +392,14 @@ impl StreamDecryptor {
         let mut out = Vec::new();
         while self.buf.len() > ENCRYPTED_CHUNK_SIZE {
             let mut frame: Vec<u8> = self.buf.drain(..ENCRYPTED_CHUNK_SIZE).collect();
-            let tag = self.pull_frame(&mut frame)?;
+            let pull = self.pull.as_mut().expect("pull initialized above");
+            let Ok(tag) = pull.pull(&mut frame, &[]) else {
+                return Err(self.fault(StreamFault::BadFrame));
+            };
             self.saw_chunk = true;
             out.extend_from_slice(&frame);
             if tag == crypto_secretstream::Tag::Final {
-                return Err(CryptoError::DecryptionFailed(
-                    "data after final stream frame".into(),
-                ));
+                return Err(self.fault(StreamFault::TrailingData));
             }
         }
         Ok(out)
@@ -385,16 +411,16 @@ impl StreamDecryptor {
     /// detects truncation. A stream of only the 24-byte header decrypts to
     /// empty output.
     pub fn finish(mut self) -> Result<Vec<u8>, CryptoError> {
-        if self.header.len() < SECRETSTREAM_HEADER_SIZE {
-            return Err(CryptoError::DecryptionFailed(
-                "stream ended before header was complete".into(),
-            ));
-        }
+        let Some(pull) = self.pull.as_mut() else {
+            return Err(self.fault(StreamFault::TruncatedHeader));
+        };
 
         let mut out = Vec::new();
         if !self.buf.is_empty() {
             let mut frame = std::mem::take(&mut self.buf);
-            let tag = self.pull_frame(&mut frame)?;
+            let Ok(tag) = pull.pull(&mut frame, &[]) else {
+                return Err(self.fault(StreamFault::BadLastFrame));
+            };
             self.saw_chunk = true;
             out.extend_from_slice(&frame);
             if tag == crypto_secretstream::Tag::Final {
@@ -403,12 +429,26 @@ impl StreamDecryptor {
         }
 
         if self.saw_chunk && !self.saw_final {
-            return Err(CryptoError::DecryptionFailed(
-                "stream truncated: ended before final frame".into(),
-            ));
+            return Err(self.fault(StreamFault::Truncated));
         }
         Ok(out)
     }
+}
+
+/// Decrypt the whole encrypted media file named by `media_hash_key` (see
+/// [`StreamDecryptor::for_media`]).
+pub(crate) fn decrypt_media(
+    key: &XChatConversationKey,
+    media_hash_key: &str,
+    encrypted: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let mut decryptor = StreamDecryptor::for_media(key, media_hash_key)?;
+    let mut plaintext = Vec::with_capacity(encrypted.len());
+    for chunk in encrypted.chunks(ENCRYPTED_CHUNK_SIZE) {
+        plaintext.extend_from_slice(&decryptor.push(chunk)?);
+    }
+    plaintext.extend_from_slice(&decryptor.finish()?);
+    Ok(plaintext)
 }
 
 /// Decrypt all of `reader` into `writer`, rejecting truncated streams.
@@ -417,22 +457,10 @@ impl StreamDecryptor {
 /// size. A non-empty stream that ends before its final frame is rejected.
 pub fn decrypt_stream<R: Read, W: Write>(
     key: &XChatConversationKey,
-    reader: R,
-    writer: W,
-) -> Result<(), CryptoError> {
-    decrypt_stream_with_fallback_keys(key, &[], reader, writer)
-}
-
-/// [`decrypt_stream`] that falls back to the first of `fallback_keys` that
-/// opens the stream when `key` does not (see
-/// [`StreamDecryptor::with_fallback_keys`]).
-pub(crate) fn decrypt_stream_with_fallback_keys<R: Read, W: Write>(
-    key: &XChatConversationKey,
-    fallback_keys: &[XChatConversationKey],
     mut reader: R,
     mut writer: W,
 ) -> Result<(), CryptoError> {
-    let mut dec = StreamDecryptor::with_fallback_keys(key, fallback_keys)?;
+    let mut dec = StreamDecryptor::new(key)?;
     let mut chunk = vec![0u8; ENCRYPTED_CHUNK_SIZE];
     loop {
         let n = read_full(&mut reader, &mut chunk).map_err(read_err)?;
@@ -1024,85 +1052,96 @@ mod tests {
         assert!(dec.finish().is_err());
     }
 
-    fn incremental_decrypt_with_fallbacks(
-        key: &XChatConversationKey,
-        fallbacks: &[XChatConversationKey],
-        ciphertext: &[u8],
-        step: usize,
-    ) -> Result<Vec<u8>, CryptoError> {
-        let mut dec = StreamDecryptor::with_fallback_keys(key, fallbacks)?;
-        let mut out = Vec::new();
-        for chunk in ciphertext.chunks(step.max(1)) {
-            out.extend_from_slice(&dec.push(chunk)?);
-        }
-        out.extend_from_slice(&dec.finish()?);
-        Ok(out)
+    fn encrypted_media(key: &XChatConversationKey, len: usize) -> (Vec<u8>, Vec<u8>) {
+        let plaintext: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let mut encrypted = Vec::new();
+        encrypt_stream(key, Cursor::new(&plaintext), &mut encrypted).unwrap();
+        (plaintext, encrypted)
     }
 
     #[test]
-    fn test_stream_opens_with_the_fallback_key_that_encrypted_it() {
-        let primary = XChatConversationKey::from_bytes(vec![0x01u8; 32]).unwrap();
-        let other = XChatConversationKey::from_bytes(vec![0x02u8; 32]).unwrap();
-        let actual = XChatConversationKey::from_bytes(vec![0x03u8; 32]).unwrap();
-        let fallbacks = [other.clone(), actual.clone()];
-        for len in [1usize, 1024, 1025, 5000] {
-            let plaintext = vec![0x5Au8; len];
-            let mut ciphertext = Vec::new();
-            encrypt_stream(&actual, Cursor::new(&plaintext), &mut ciphertext).unwrap();
+    fn test_decrypt_media_round_trips() {
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        for len in [0usize, 1, 1024, 1025, 5000] {
+            let (plaintext, encrypted) = encrypted_media(&key, len);
+            assert_eq!(
+                decrypt_media(&key, "h", &encrypted).unwrap(),
+                plaintext,
+                "len={len}"
+            );
+        }
+    }
 
-            let mut whole = Vec::new();
-            decrypt_stream_with_fallback_keys(
-                &primary,
-                &fallbacks,
-                Cursor::new(&ciphertext),
-                &mut whole,
-            )
+    #[test]
+    fn test_media_errors_name_the_media_and_what_to_pass() {
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        let other = XChatConversationKey::from_bytes(vec![0x43u8; 32]).unwrap();
+        let (_, encrypted) = encrypted_media(&key, 3000);
+        let error = |key: &XChatConversationKey, bytes: &[u8]| {
+            decrypt_media(key, "photo-1", bytes)
+                .unwrap_err()
+                .to_string()
+        };
+
+        let wrong_file = error(&other, &encrypted);
+        assert!(
+            wrong_file.contains("not the encrypted file of media_hash_key 'photo-1'"),
+            "{wrong_file}"
+        );
+        assert!(
+            wrong_file.contains("pass the bytes downloaded for that media hash key"),
+            "{wrong_file}"
+        );
+
+        let cut_at_frame = error(
+            &key,
+            &encrypted[..SECRETSTREAM_HEADER_SIZE + ENCRYPTED_CHUNK_SIZE],
+        );
+        assert!(
+            cut_at_frame.contains("media_hash_key 'photo-1' are truncated"),
+            "{cut_at_frame}"
+        );
+        let cut_in_header = error(&key, &encrypted[..10]);
+        assert!(cut_in_header.contains("are truncated"), "{cut_in_header}");
+        let empty = error(&key, &[]);
+        assert!(empty.contains("are truncated"), "{empty}");
+
+        let cut_in_frame = error(&key, &encrypted[..encrypted.len() - 5]);
+        assert!(
+            cut_in_frame.contains("not the complete encrypted file of media_hash_key 'photo-1'"),
+            "{cut_in_frame}"
+        );
+
+        let (_, one_frame) = encrypted_media(&key, DECRYPTED_CHUNK_SIZE);
+        let mut trailing = one_frame.clone();
+        trailing.extend_from_slice(&[0u8; 100]);
+        let trailing = error(&key, &trailing);
+        assert!(trailing.contains("continue past the end"), "{trailing}");
+    }
+
+    #[test]
+    fn test_incremental_media_decryptor_reports_the_same_errors() {
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        let other = XChatConversationKey::from_bytes(vec![0x43u8; 32]).unwrap();
+        let (plaintext, encrypted) = encrypted_media(&key, 3000);
+
+        let mut decryptor = StreamDecryptor::for_media(&key, "photo-1").unwrap();
+        let mut out = Vec::new();
+        for chunk in encrypted.chunks(333) {
+            out.extend(decryptor.push(chunk).unwrap());
+        }
+        out.extend(decryptor.finish().unwrap());
+        assert_eq!(out, plaintext);
+
+        let mut decryptor = StreamDecryptor::for_media(&other, "photo-1").unwrap();
+        let err = decryptor.push(&encrypted).unwrap_err().to_string();
+        assert!(err.contains("media_hash_key 'photo-1'"), "{err}");
+
+        let mut decryptor = StreamDecryptor::for_media(&key, "photo-1").unwrap();
+        decryptor
+            .push(&encrypted[..SECRETSTREAM_HEADER_SIZE + 2 * ENCRYPTED_CHUNK_SIZE])
             .unwrap();
-            assert_eq!(whole, plaintext, "len={len}");
-
-            for step in [1usize, 24, 1041, 4096] {
-                let decrypted =
-                    incremental_decrypt_with_fallbacks(&primary, &fallbacks, &ciphertext, step)
-                        .unwrap();
-                assert_eq!(decrypted, plaintext, "len={len} step={step}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_stream_prefers_the_primary_key() {
-        let primary = XChatConversationKey::from_bytes(vec![0x01u8; 32]).unwrap();
-        let fallback = XChatConversationKey::from_bytes(vec![0x02u8; 32]).unwrap();
-        let plaintext = vec![0x33u8; 3000];
-        let mut ciphertext = Vec::new();
-        encrypt_stream(&primary, Cursor::new(&plaintext), &mut ciphertext).unwrap();
-        let decrypted =
-            incremental_decrypt_with_fallbacks(&primary, &[fallback], &ciphertext, 512).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn test_stream_fails_when_no_key_opens_it() {
-        let primary = XChatConversationKey::from_bytes(vec![0x01u8; 32]).unwrap();
-        let fallback = XChatConversationKey::from_bytes(vec![0x02u8; 32]).unwrap();
-        let actual = XChatConversationKey::from_bytes(vec![0x03u8; 32]).unwrap();
-        let mut ciphertext = Vec::new();
-        encrypt_stream(&actual, Cursor::new(vec![0u8; 2000]), &mut ciphertext).unwrap();
-
-        let mut out = Vec::new();
-        let err = decrypt_stream_with_fallback_keys(
-            &primary,
-            std::slice::from_ref(&fallback),
-            Cursor::new(&ciphertext),
-            &mut out,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("secretstream pull failed"),
-            "{err}"
-        );
-        assert!(
-            incremental_decrypt_with_fallbacks(&primary, &[fallback], &ciphertext, 100).is_err()
-        );
+        let err = decryptor.finish().unwrap_err().to_string();
+        assert!(err.contains("are truncated"), "{err}");
     }
 }
