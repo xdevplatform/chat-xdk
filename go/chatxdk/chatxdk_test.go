@@ -2881,3 +2881,180 @@ func TestEncryptReactionByTargetEvent(t *testing.T) {
 		t.Error("expected an error without a reaction target")
 	}
 }
+
+// frameSendPayload frames a SendPayload as the base64 MessageEvent envelope
+// DecryptEvent consumes: string header fields, the payload's
+// MessageCreateEvent in the detail union, and its encoded signature.
+func frameSendPayload(t *testing.T, p *SendPayload, senderID, conversationID string) string {
+	t.Helper()
+	mce, err := base64.StdEncoding.DecodeString(p.EncryptedContent)
+	if err != nil {
+		t.Fatalf("decode encrypted_content: %v", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(p.EncodedEventSignature)
+	if err != nil {
+		t.Fatalf("decode encoded_event_signature: %v", err)
+	}
+	var buf bytes.Buffer
+	str := func(id uint16, s string) {
+		buf.WriteByte(11)
+		_ = binary.Write(&buf, binary.BigEndian, id)
+		_ = binary.Write(&buf, binary.BigEndian, uint32(len(s)))
+		buf.WriteString(s)
+	}
+	str(1, "1")
+	str(2, p.MessageID)
+	str(3, senderID)
+	str(4, conversationID)
+	str(6, "1700000000000")
+	buf.Write([]byte{12, 0, 7, 12, 0, 1})
+	buf.Write(mce)
+	buf.WriteByte(0)
+	buf.Write([]byte{12, 0, 9})
+	buf.Write(sig)
+	buf.WriteByte(0)
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+// canonicalJSON re-marshals a JSON document so key order does not affect
+// comparisons.
+func canonicalJSON(t *testing.T, raw []byte) string {
+	t.Helper()
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(out)
+}
+
+const (
+	quickReplyRequestJSON  = `{"request":{"options":{"id":"qr-1","options":[{"id":"yes","label":"Yes","metadata":"m-yes","description":"Confirm"},{"id":"no","label":"No","metadata":"m-no","description":"Decline"}]}}}`
+	quickReplyResponseJSON = `{"response":{"options":{"request_id":"qr-1","metadata":"m-yes","selected_option_id":"yes"}}}`
+)
+
+func decryptOwnText(t *testing.T, chat *Chat, v sdkVectors, p *SendPayload) *TextContent {
+	t.Helper()
+	event, err := chat.DecryptEvent(
+		frameSendPayload(t, p, v.EventSenderID, v.EventConversationID),
+		map[string][]byte{v.EventConversationKeyVersion: v.conversationKey(t)},
+		v.eventSigningKeys(),
+	)
+	if err != nil {
+		t.Fatalf("DecryptEvent failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || !msg.Verified || msg.Content.TextContent == nil {
+		t.Fatalf("expected a verified text message, got %+v", event)
+	}
+	return msg.Content.TextContent
+}
+
+func quickReplyChat(t *testing.T, v sdkVectors) *Chat {
+	t.Helper()
+	chat := New()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	return chat
+}
+
+func TestEncryptMessageQuickReplyRoundTrip(t *testing.T) {
+	v := loadVectors(t)
+	chat := quickReplyChat(t, v)
+	defer chat.Close()
+
+	for _, qr := range []string{quickReplyRequestJSON, quickReplyResponseJSON} {
+		payload, err := chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         v.EventConversationID,
+			Text:                   "Continue?",
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			QuickReply:             json.RawMessage(qr),
+		})
+		if err != nil {
+			t.Fatalf("EncryptMessage failed: %v", err)
+		}
+		text := decryptOwnText(t, chat, v, payload)
+		if got, want := canonicalJSON(t, text.QuickReply), canonicalJSON(t, []byte(qr)); got != want {
+			t.Errorf("quick reply mismatch:\n got  %s\n want %s", got, want)
+		}
+		// A received quick reply can be sent back unchanged.
+		resent, err := chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         v.EventConversationID,
+			Text:                   "again",
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			QuickReply:             text.QuickReply,
+		})
+		if err != nil {
+			t.Fatalf("EncryptMessage (resend) failed: %v", err)
+		}
+		again := decryptOwnText(t, chat, v, resent)
+		if got, want := canonicalJSON(t, again.QuickReply), canonicalJSON(t, []byte(qr)); got != want {
+			t.Errorf("resent quick reply mismatch:\n got  %s\n want %s", got, want)
+		}
+	}
+
+	plain, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "no quick reply",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage failed: %v", err)
+	}
+	if qr := decryptOwnText(t, chat, v, plain).QuickReply; qr != nil {
+		t.Errorf("expected no quick reply, got %s", qr)
+	}
+}
+
+func TestEncryptReplyQuickReplyRoundTrip(t *testing.T) {
+	v := loadVectors(t)
+	chat := quickReplyChat(t, v)
+	defer chat.Close()
+
+	senderID := int64(1111)
+	originalText := "Continue?"
+	payload, err := chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "Yes",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToSequenceID:      "seq-orig",
+		ReplyToSenderID:        &senderID,
+		ReplyToText:            &originalText,
+		QuickReply:             json.RawMessage(quickReplyResponseJSON),
+	})
+	if err != nil {
+		t.Fatalf("EncryptReply failed: %v", err)
+	}
+	text := decryptOwnText(t, chat, v, payload)
+	if got, want := canonicalJSON(t, text.QuickReply), canonicalJSON(t, []byte(quickReplyResponseJSON)); got != want {
+		t.Errorf("quick reply mismatch:\n got  %s\n want %s", got, want)
+	}
+}
+
+func TestEncryptMessageRejectsInvalidQuickReply(t *testing.T) {
+	v := loadVectors(t)
+	chat := quickReplyChat(t, v)
+	defer chat.Close()
+
+	_, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "bad",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		QuickReply:             json.RawMessage(`{"neither":{}}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "Invalid quick reply") {
+		t.Fatalf("expected an invalid quick reply error, got %v", err)
+	}
+}

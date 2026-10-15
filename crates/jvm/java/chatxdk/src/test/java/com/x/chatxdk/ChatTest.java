@@ -1142,4 +1142,128 @@ class ChatTest {
             assertThrows(ChatXdkException.class, () -> chat.prepareGroupCreate(p));
         }
     }
+
+    // Quick replies
+
+    private static final String QUICK_REPLY_REQUEST_JSON =
+            "{\"request\":{\"options\":{\"id\":\"qr-1\",\"options\":["
+                    + "{\"id\":\"yes\",\"label\":\"Yes\",\"metadata\":\"m-yes\",\"description\":\"Confirm\"},"
+                    + "{\"id\":\"no\",\"label\":\"No\",\"metadata\":\"m-no\",\"description\":\"Decline\"}]}}}";
+
+    private static final String QUICK_REPLY_RESPONSE_JSON =
+            "{\"response\":{\"options\":{\"request_id\":\"qr-1\",\"metadata\":\"m-yes\",\"selected_option_id\":\"yes\"}}}";
+
+    private static void writeThriftString(ByteArrayOutputStream out, int id, String value) {
+        byte[] data = value.getBytes(StandardCharsets.UTF_8);
+        out.write(11);
+        out.write(id >> 8);
+        out.write(id);
+        out.write(data.length >> 24);
+        out.write(data.length >> 16);
+        out.write(data.length >> 8);
+        out.write(data.length);
+        out.writeBytes(data);
+    }
+
+    /**
+     * Frame a SendPayload as the base64 MessageEvent envelope decryptEvent
+     * consumes: string header fields, the payload's MessageCreateEvent in the
+     * detail union, and its encoded signature.
+     */
+    private static String frameSendPayload(SendPayload p, String senderId, String conversationId) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeThriftString(out, 1, "1");
+        writeThriftString(out, 2, p.messageId);
+        writeThriftString(out, 3, senderId);
+        writeThriftString(out, 4, conversationId);
+        writeThriftString(out, 6, "1700000000000");
+        out.writeBytes(new byte[] {12, 0, 7, 12, 0, 1});
+        out.writeBytes(Base64.getDecoder().decode(p.encryptedContent));
+        out.writeBytes(new byte[] {0, 12, 0, 9});
+        out.writeBytes(Base64.getDecoder().decode(p.encodedEventSignature));
+        out.write(0);
+        return Base64.getEncoder().encodeToString(out.toByteArray());
+    }
+
+    private static Chat quickReplyChat(JsonNode v) throws Exception {
+        Chat chat = new Chat();
+        chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+        chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+        return chat;
+    }
+
+    private static JsonNode decryptOwnContent(Chat chat, JsonNode v, SendPayload payload) throws Exception {
+        JsonNode event = chat.decryptEvent(
+                frameSendPayload(payload, v.get("event_sender_id").asText(), v.get("event_conversation_id").asText()),
+                java.util.Map.of(v.get("event_conversation_key_version").asText(), b64(v, "conversation_key_b64")),
+                eventSigningKeys(v));
+        assertTrue(event.get("verified").asBoolean(), event.toString());
+        return event.get("content");
+    }
+
+    private static EncryptMessageParams quickReplyMessage(JsonNode v, String text, JsonNode quickReply) {
+        EncryptMessageParams p = new EncryptMessageParams(v.get("event_conversation_id").asText(), text);
+        p.conversationKey = b64(v, "conversation_key_b64");
+        p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+        p.quickReply = quickReply;
+        return p;
+    }
+
+    @Test
+    void encryptMessageQuickReplyRoundTripsThroughDecrypt() throws Exception {
+        JsonNode v = loadVectors();
+        ObjectMapper mapper = new ObjectMapper();
+        try (Chat chat = quickReplyChat(v)) {
+            for (String json : new String[] {QUICK_REPLY_REQUEST_JSON, QUICK_REPLY_RESPONSE_JSON}) {
+                JsonNode expected = mapper.readTree(json);
+                JsonNode content = decryptOwnContent(chat, v,
+                        chat.encryptMessage(quickReplyMessage(v, "Continue?", expected)));
+                assertEquals("Continue?", content.get("text").asText());
+                assertEquals(expected, content.get("quick_reply"));
+
+                // A received quick reply can be sent back unchanged.
+                JsonNode resent = decryptOwnContent(chat, v,
+                        chat.encryptMessage(quickReplyMessage(v, "again", content.get("quick_reply"))));
+                assertEquals(expected, resent.get("quick_reply"));
+            }
+        }
+    }
+
+    @Test
+    void encryptMessageWithoutQuickReplyDecryptsWithoutOne() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            JsonNode content = decryptOwnContent(chat, v, chat.encryptMessage(quickReplyMessage(v, "plain", null)));
+            JsonNode quickReply = content.get("quick_reply");
+            assertTrue(quickReply == null || quickReply.isNull(), content.toString());
+        }
+    }
+
+    @Test
+    void encryptReplyQuickReplyRoundTripsThroughDecrypt() throws Exception {
+        JsonNode v = loadVectors();
+        JsonNode expected = new ObjectMapper().readTree(QUICK_REPLY_RESPONSE_JSON);
+        try (Chat chat = quickReplyChat(v)) {
+            EncryptReplyParams p = new EncryptReplyParams(v.get("event_conversation_id").asText(), "Yes", null);
+            p.conversationKey = b64(v, "conversation_key_b64");
+            p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+            p.replyToSequenceId = "seq-orig";
+            p.replyToSenderId = Long.parseLong(v.get("event_sender_id").asText());
+            p.replyToText = "Continue?";
+            p.quickReply = expected;
+            JsonNode content = decryptOwnContent(chat, v, chat.encryptReply(p));
+            assertEquals(expected, content.get("quick_reply"));
+        }
+    }
+
+    @Test
+    void encryptMessageInvalidQuickReplyThrows() throws Exception {
+        JsonNode v = loadVectors();
+        JsonNode invalid = new ObjectMapper().readTree("{\"neither\":{}}");
+        try (Chat chat = quickReplyChat(v)) {
+            ChatXdkException ex = assertThrows(ChatXdkException.class,
+                    () -> chat.encryptMessage(quickReplyMessage(v, "bad", invalid)));
+            assertTrue(ex.getMessage().contains("Invalid quick reply"), ex.getMessage());
+        }
+    }
 }

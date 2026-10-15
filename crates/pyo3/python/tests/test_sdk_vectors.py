@@ -27,6 +27,49 @@ def _fixture_signing_keys(v: dict) -> list[dict]:
     }]
 
 
+def _thrift_string_field(field_id: int, value: str) -> bytes:
+    data = value.encode("utf-8")
+    return bytes([11]) + field_id.to_bytes(2, "big") + len(data).to_bytes(4, "big") + data
+
+
+def _frame_send_payload(payload, sender_id: str, conversation_id: str) -> str:
+    """Frame a SendPayload as the base64 MessageEvent envelope decrypt_event
+    consumes: string header fields, the payload's MessageCreateEvent in the
+    detail union, and its encoded signature."""
+    mce = base64.b64decode(payload.encrypted_content)
+    signature = base64.b64decode(payload.encoded_event_signature)
+    envelope = (
+        _thrift_string_field(1, "1")
+        + _thrift_string_field(2, payload.message_id)
+        + _thrift_string_field(3, sender_id)
+        + _thrift_string_field(4, conversation_id)
+        + _thrift_string_field(6, "1700000000000")
+        + b"\x0c\x00\x07" + b"\x0c\x00\x01" + mce + b"\x00"
+        + b"\x0c\x00\x09" + signature
+        + b"\x00"
+    )
+    return base64.b64encode(envelope).decode("ascii")
+
+
+QUICK_REPLY_REQUEST = {
+    "request": {
+        "options": {
+            "id": "qr-1",
+            "options": [
+                {"id": "yes", "label": "Yes", "metadata": "m-yes", "description": "Confirm"},
+                {"id": "no", "label": "No", "metadata": "m-no", "description": "Decline"},
+            ],
+        }
+    }
+}
+
+QUICK_REPLY_RESPONSE = {
+    "response": {
+        "options": {"request_id": "qr-1", "metadata": "m-yes", "selected_option_id": "yes"}
+    }
+}
+
+
 class TestPythonSdkVectors(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -276,3 +319,75 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(payload.encrypted_content)
         self.assertTrue(payload.encoded_event_signature)
 
+    def _decrypt_own(self, chat, v, payload) -> dict:
+        event = chat.decrypt_event(
+            _frame_send_payload(payload, v["event_sender_id"], v["event_conversation_id"]),
+            {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])},
+            _fixture_signing_keys(v),
+        )
+        self.assertTrue(event["verified"])
+        return event["content"]
+
+    def _identity_chat(self, v):
+        from chat_xdk import Chat
+
+        chat = Chat()
+        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
+        return chat
+
+    def test_encrypt_message_quick_reply_round_trips(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        key = base64.b64decode(v["conversation_key_b64"])
+        key_version = v["event_conversation_key_version"]
+
+        for quick_reply in (QUICK_REPLY_REQUEST, QUICK_REPLY_RESPONSE):
+            payload = chat.encrypt_message(
+                v["event_conversation_id"],
+                "Continue?",
+                conversation_key=key,
+                conversation_key_version=key_version,
+                quick_reply=quick_reply,
+            )
+            content = self._decrypt_own(chat, v, payload)
+            self.assertEqual(content["text"], "Continue?")
+            self.assertEqual(content["quick_reply"], quick_reply)
+
+        plain = chat.encrypt_message(
+            v["event_conversation_id"],
+            "no quick reply",
+            conversation_key=key,
+            conversation_key_version=key_version,
+        )
+        self.assertNotIn("quick_reply", self._decrypt_own(chat, v, plain))
+
+    def test_encrypt_reply_quick_reply_round_trips(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+
+        payload = chat.encrypt_reply(
+            v["event_conversation_id"],
+            "Yes",
+            reply_to_sequence_id="seq-orig",
+            reply_to_sender_id=int(v["event_sender_id"]),
+            reply_to_text="Continue?",
+            conversation_key=base64.b64decode(v["conversation_key_b64"]),
+            conversation_key_version=v["event_conversation_key_version"],
+            quick_reply=QUICK_REPLY_RESPONSE,
+        )
+        content = self._decrypt_own(chat, v, payload)
+        self.assertEqual(content["quick_reply"], QUICK_REPLY_RESPONSE)
+
+    def test_encrypt_message_rejects_invalid_quick_reply(self):
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+
+        with self.assertRaisesRegex(ValueError, "Invalid quick reply"):
+            chat.encrypt_message(
+                v["event_conversation_id"],
+                "bad",
+                conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                conversation_key_version=v["event_conversation_key_version"],
+                quick_reply={"neither": {}},
+            )

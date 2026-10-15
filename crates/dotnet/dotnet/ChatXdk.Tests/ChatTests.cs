@@ -1442,5 +1442,153 @@ namespace ChatXdk.Tests
                 () => chat.DecryptEvents(Array.Empty<string>(), malformed));
             Assert.Contains("Invalid signing keys JSON", ex.Message);
         }
+
+        // Quick replies
+
+        private const string QuickReplyRequestJson =
+            "{\"request\":{\"options\":{\"id\":\"qr-1\",\"options\":[" +
+            "{\"id\":\"yes\",\"label\":\"Yes\",\"metadata\":\"m-yes\",\"description\":\"Confirm\"}," +
+            "{\"id\":\"no\",\"label\":\"No\",\"metadata\":\"m-no\",\"description\":\"Decline\"}]}}}";
+
+        private const string QuickReplyResponseJson =
+            "{\"response\":{\"options\":{\"request_id\":\"qr-1\",\"metadata\":\"m-yes\",\"selected_option_id\":\"yes\"}}}";
+
+        /// <summary>
+        /// Frame a SendPayload as the base64 MessageEvent envelope DecryptEvent
+        /// consumes: string header fields, the payload's MessageCreateEvent in
+        /// the detail union, and its encoded signature.
+        /// </summary>
+        private static string FrameSendPayload(SendPayload p, string senderId, string conversationId)
+        {
+            using var ms = new MemoryStream();
+            void Str(short id, string value)
+            {
+                var data = System.Text.Encoding.UTF8.GetBytes(value);
+                ms.WriteByte(11);
+                ms.WriteByte((byte)(id >> 8));
+                ms.WriteByte((byte)id);
+                ms.Write(new[] { (byte)(data.Length >> 24), (byte)(data.Length >> 16), (byte)(data.Length >> 8), (byte)data.Length });
+                ms.Write(data);
+            }
+            Str(1, "1");
+            Str(2, p.MessageId);
+            Str(3, senderId);
+            Str(4, conversationId);
+            Str(6, "1700000000000");
+            ms.Write(new byte[] { 12, 0, 7, 12, 0, 1 });
+            ms.Write(Convert.FromBase64String(p.EncryptedContent));
+            ms.Write(new byte[] { 0, 12, 0, 9 });
+            ms.Write(Convert.FromBase64String(p.EncodedEventSignature));
+            ms.WriteByte(0);
+            return Convert.ToBase64String(ms.ToArray());
+        }
+
+        private static Chat QuickReplyChat(SdkVectors v)
+        {
+            var chat = new Chat();
+            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            return chat;
+        }
+
+        private static JsonElement DecryptOwnContent(Chat chat, SdkVectors v, SendPayload payload)
+        {
+            var evt = chat.DecryptEvent(
+                FrameSendPayload(payload, v.EventSenderId, v.EventConversationId),
+                new Dictionary<string, byte[]>
+                {
+                    [v.EventConversationKeyVersion] = Convert.FromBase64String(v.ConversationKeyB64),
+                },
+                EventSigningKeys(v));
+            Assert.True(evt.GetProperty("verified").GetBoolean());
+            return evt.GetProperty("content");
+        }
+
+        private static void AssertJsonEqual(string expected, JsonElement actual) =>
+            Assert.True(
+                System.Text.Json.Nodes.JsonNode.DeepEquals(
+                    System.Text.Json.Nodes.JsonNode.Parse(expected),
+                    System.Text.Json.Nodes.JsonNode.Parse(actual.GetRawText())),
+                $"expected {expected}, got {actual.GetRawText()}");
+
+        [Theory]
+        [InlineData(QuickReplyRequestJson)]
+        [InlineData(QuickReplyResponseJson)]
+        public void EncryptMessage_QuickReply_RoundTripsThroughDecrypt(string quickReplyJson)
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+
+            var content = DecryptOwnContent(chat, v, chat.EncryptMessage(
+                new EncryptMessageParams(v.EventConversationId, "Continue?")
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    QuickReply = JsonDocument.Parse(quickReplyJson).RootElement,
+                }));
+            Assert.Equal("Continue?", content.GetProperty("text").GetString());
+            AssertJsonEqual(quickReplyJson, content.GetProperty("quick_reply"));
+
+            // A received quick reply can be sent back unchanged.
+            var resent = DecryptOwnContent(chat, v, chat.EncryptMessage(
+                new EncryptMessageParams(v.EventConversationId, "again")
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    QuickReply = content.GetProperty("quick_reply"),
+                }));
+            AssertJsonEqual(quickReplyJson, resent.GetProperty("quick_reply"));
+        }
+
+        [Fact]
+        public void EncryptMessage_WithoutQuickReply_DecryptsWithoutOne()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+
+            var content = DecryptOwnContent(chat, v, chat.EncryptMessage(
+                new EncryptMessageParams(v.EventConversationId, "plain")
+                {
+                    ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                }));
+            Assert.False(content.TryGetProperty("quick_reply", out _));
+        }
+
+        [Fact]
+        public void EncryptReply_QuickReply_RoundTripsThroughDecrypt()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+
+            var content = DecryptOwnContent(chat, v, chat.EncryptReply(
+                new EncryptReplyParams(v.EventConversationId, "Yes", null)
+                {
+                    ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    ReplyToSequenceId = "seq-orig",
+                    ReplyToSenderId = long.Parse(v.EventSenderId),
+                    ReplyToText = "Continue?",
+                    QuickReply = JsonDocument.Parse(QuickReplyResponseJson).RootElement,
+                }));
+            AssertJsonEqual(QuickReplyResponseJson, content.GetProperty("quick_reply"));
+        }
+
+        [Fact]
+        public void EncryptMessage_InvalidQuickReply_Throws()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
+                new EncryptMessageParams(v.EventConversationId, "bad")
+                {
+                    ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    QuickReply = JsonDocument.Parse("{\"neither\":{}}").RootElement,
+                }));
+            Assert.Contains("Invalid quick reply", ex.Message);
+        }
     }
 }
