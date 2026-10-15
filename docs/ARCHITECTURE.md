@@ -412,8 +412,11 @@ Holds:
 - `keypair_manager: KeypairManager` — in-memory key state
 - `reject_unverified: bool` — signature verification policy (defaults to `true`)
 - `conversation_key_high_water: RwLock<HashMap<String, u64>>` — per-conversation monotonic high-water mark of verified key versions, backing the anti-downgrade guarantee on `latest_version`
+- `owner_user_id: RwLock<Option<String>>` — the session identity's user id, set by `set_identity`
 
-`decrypt_stream` / `stream_decryptor` use none of this state: `core/media.rs`
+`encrypt_stream` / `stream_encryptor` read only the session identity, the
+sender their media keys derive from. `decrypt_stream` / `stream_decryptor`
+use none of this state: `core/media.rs`
 finds the attachment a media hash key names in the given message event and
 derives its key from the given key map (see
 [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
@@ -517,10 +520,13 @@ Developer                          SDK
     │                               │     extract_conversation_keys / decrypt_events)
     │                               │  2. Build rich-text entities (if provided)
     │                               │  3. Serialize text + entities as Thrift MessageEntryHolder
-    │                               │  4. Encrypt with XSalsa20-Poly1305
-    │                               │  5. Wrap in MessageCreateEvent
+    │                               │  4. Derive the message key from the conversation key,
+    │                               │     sender id, and message id (the caller's message_id
+    │                               │     or a fresh UUID); encrypt with XSalsa20-Poly1305
+    │                               │  5. Wrap in MessageCreateEvent with
+    │                               │     contents_encryption_version 1
     │                               │  6. Sign the comma-separated component payload
-    │                               │     (MessageCreateEvent,ids…,contents_b64), version "7"
+    │                               │     (MessageCreateEvent,ids…,contents_b64,1), version "10"
     │                               │  7. Build MessageEventSignature
     │  SendPayload                  │
     │◀──────────────────────────────│

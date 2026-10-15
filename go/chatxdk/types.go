@@ -29,10 +29,10 @@ type PublicKeyRegistrationPayload struct {
 
 // SendPayload contains the encrypted message ready to send to the X API.
 type SendPayload struct {
-	// MessageID is the SDK-generated message id (UUID) embedded in the signed
-	// event. Send it as the message's message_id, keep it to dedup and to anchor
-	// replies, and reuse the same encrypted payload on retries so an id is never
-	// minted twice.
+	// MessageID is the message id (UUID) embedded in the signed event: the
+	// MessageID passed in, or one the SDK generated. Send it as the message's
+	// message_id, keep it to dedup and to anchor replies, and reuse the same
+	// encrypted payload on retries so an id is never minted twice.
 	MessageID              string        `json:"message_id"`
 	EncryptedContent       string        `json:"encrypted_content"`
 	Signature              string        `json:"signature"`

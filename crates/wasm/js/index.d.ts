@@ -44,9 +44,10 @@ export interface PublicKeyRegistrationPayload {
  */
 export interface SendPayload {
   /**
-   * SDK-generated message id (UUID) embedded in the signed event. Send it as
-   * the message's `messageId`, keep it to dedup and to anchor replies, and
-   * reuse the same encrypted payload on retries so an id is never minted twice.
+   * Message id (UUID) embedded in the signed event: the `messageId` passed
+   * in, or one the SDK generated. Send it as the message's `messageId`, keep
+   * it to dedup and to anchor replies, and reuse the same encrypted payload
+   * on retries so an id is never minted twice.
    */
   messageId: string;
   /** Base64-encoded Thrift MessageCreateEvent. */
@@ -938,8 +939,8 @@ interface ChatCrypto {
   /**
    * Encrypt a media file for an outgoing message.
    *
-   * `conversationKey` is the key the message is encrypted with, `messageId`
-   * the message's id from `newMessageId()`, and `attachmentIndex` the file's
+   * `conversationKey` is the conversation key the message is sent under,
+   * `messageId` the message's id from `newMessageId()`, and `attachmentIndex` the file's
    * position in the message's `attachments`; a link card's banner and favicon
    * both take the card's position. Requires `setIdentity`. Throws when the
    * identity is missing or the key, message id, or position is invalid.

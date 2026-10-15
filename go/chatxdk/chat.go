@@ -599,8 +599,8 @@ func (c *Chat) NewMessageID() (string, error) {
 }
 
 // EncryptStream encrypts a media file for an outgoing message.
-// conversationKey is the raw 32-byte key the message is encrypted with,
-// messageID the message's id from NewMessageID, and attachmentIndex the
+// conversationKey is the raw 32-byte conversation key the message is sent
+// under, messageID the message's id from NewMessageID, and attachmentIndex the
 // file's position in the message's Attachments; a link card's banner and
 // favicon both take the card's position. Requires SetIdentity. Raw bytes
 // in, raw bytes out; the FFI transports base64 internally.

@@ -703,7 +703,7 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(conversation_id, text, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, message_id=None, entities=None, attachments=None, quick_reply=None, should_notify=None, ttl_msec=None) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
 | 27 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, reply_to_entities=None, reply_to_attachments=None, …encrypt_message keyword optionals…) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(…same args as encrypt_add_reaction…) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
@@ -721,13 +721,28 @@ idiom): `conversation_id` and `text`. Everything else is an optional override:
   (`Uint8Array` in JS, `bytes` in Python, `[]byte` in Go, `byte[]` in
   JVM/.NET) from `prepare_conversation_key_change()` /
   `decrypt_conversation_key()`.
+- `message_id` — the id from `new_message_id()` that the message's media was
+  encrypted with. Required when `attachments` include media (a media
+  attachment, or a URL card with a banner or favicon image); otherwise the SDK
+  generates one. It must be a lowercase hyphenated UUID, exactly as
+  `new_message_id()` returned it.
 - `entities`, `attachments`, `quick_reply`, `should_notify` (defaults to true), `ttl_msec`.
 
 An omitted value and its explicit equivalent produce byte-identical signed
 output for the same logical inputs (Rust: `params.with_identity(…)` /
 `params.with_conversation_key(…)`).
-The SDK generates the `message_id` itself and returns it on the `SendPayload`
-(see below); callers never pass one in.
+The message id comes back on the `SendPayload` (see below), whether the
+caller passed it or the SDK generated it.
+
+**Messages are sent under per-message keys.** Every encrypted send —
+message, reply, reaction, edit — encrypts its contents under a key derived
+from the conversation key, the sender id, and the message id, marks the
+`MessageCreateEvent` with `contents_encryption_version` 1, and signs at
+signature version 10, which covers that field (see
+[CRYPTO.md — Message Keys](CRYPTO.md#message-keys)). The sender id must be
+the sender's numeric user id and the conversation key version an integer, as
+the key-change event carries it; anything else is rejected, since recipients
+derive the key from the numeric id and look the key up by the version.
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
 while **JS, Python, and Go** take positional `[start, end, type]` tuples
@@ -863,18 +878,33 @@ reaction = chat.encrypt_add_reaction(original_event_b64, "👍")
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 32 | **encrypt_stream** | `(&[u8], &Key) → Vec<u8>` | `(Uint8Array, Uint8Array) → Uint8Array` | `(bytes, bytes) → bytes` | `EncryptStream(plaintext, conversationKey []byte) ([]byte, error)` | `encryptStream(byte[], byte[])` → `byte[]` | `EncryptStream(byte[], byte[])` → `byte[]` |
-| 33 | **decrypt_stream** | `(encrypted: &[u8], event_b64: &str, conversation_keys: &HashMap<String, Key>, media_hash_key: &str) → Vec<u8>` | `decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string) → Uint8Array` | `decrypt_stream(encrypted: bytes, event_b64: str, conversation_keys: dict[str, bytes], media_hash_key: str) → bytes` | `DecryptStream(encrypted []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error)` | `decryptStream(byte[] encrypted, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)` → `byte[]` | `DecryptStream(byte[] encrypted, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)` → `byte[]` |
-| 34 | **stream_encryptor** | `(&Key) → StreamEncryptor` | `streamEncryptor(Uint8Array) → StreamEncryptor` | `stream_encryptor(bytes) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error)` | `streamEncryptor(byte[]) → StreamEncryptor` | `StreamEncryptor(byte[]) → StreamEncryptor` |
-| 35 | **stream_decryptor** | `(event_b64: &str, conversation_keys: &HashMap<String, Key>, media_hash_key: &str) → StreamDecryptor` | `streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string) → StreamDecryptor` | `stream_decryptor(event_b64: str, conversation_keys: dict[str, bytes], media_hash_key: str) → StreamDecryptor` | `StreamDecryptor(eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) (*StreamDecryptor, error)` | `streamDecryptor(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) → StreamDecryptor` | `StreamDecryptor(string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey) → StreamDecryptor` |
+| 32 | **new_message_id** | `new_message_id() → String` | `newMessageId() → string` | `new_message_id() → str` | `NewMessageID() (string, error)` | `newMessageId()` → `String` | `NewMessageId()` → `string` |
+| 33 | **encrypt_stream** | `(plaintext: &[u8], conversation_key: &Key, message_id: &str, attachment_index: i64) → Vec<u8>` | `encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array, messageId: string, attachmentIndex: number) → Uint8Array` | `encrypt_stream(plaintext: bytes, conversation_key: bytes, message_id: str, attachment_index: int) → bytes` | `EncryptStream(plaintext, conversationKey []byte, messageID string, attachmentIndex int) ([]byte, error)` | `encryptStream(byte[] plaintext, byte[] conversationKey, String messageId, int attachmentIndex)` → `byte[]` | `EncryptStream(byte[] plaintext, byte[] conversationKey, string messageId, int attachmentIndex)` → `byte[]` |
+| 34 | **decrypt_stream** | `(encrypted: &[u8], event_b64: &str, conversation_keys: &HashMap<String, Key>, media_hash_key: &str) → Vec<u8>` | `decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string) → Uint8Array` | `decrypt_stream(encrypted: bytes, event_b64: str, conversation_keys: dict[str, bytes], media_hash_key: str) → bytes` | `DecryptStream(encrypted []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error)` | `decryptStream(byte[] encrypted, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)` → `byte[]` | `DecryptStream(byte[] encrypted, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)` → `byte[]` |
+| 35 | **stream_encryptor** | `(conversation_key: &Key, message_id: &str, attachment_index: i64) → StreamEncryptor` | `streamEncryptor(conversationKey: Uint8Array, messageId: string, attachmentIndex: number) → StreamEncryptor` | `stream_encryptor(conversation_key: bytes, message_id: str, attachment_index: int) → StreamEncryptor` | `StreamEncryptor(conversationKey []byte, messageID string, attachmentIndex int) (*StreamEncryptor, error)` | `streamEncryptor(byte[] conversationKey, String messageId, int attachmentIndex) → StreamEncryptor` | `StreamEncryptor(byte[] conversationKey, string messageId, int attachmentIndex) → StreamEncryptor` |
+| 36 | **stream_decryptor** | `(event_b64: &str, conversation_keys: &HashMap<String, Key>, media_hash_key: &str) → StreamDecryptor` | `streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string) → StreamDecryptor` | `stream_decryptor(event_b64: str, conversation_keys: dict[str, bytes], media_hash_key: str) → StreamDecryptor` | `StreamDecryptor(eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) (*StreamDecryptor, error)` | `streamDecryptor(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) → StreamDecryptor` | `StreamDecryptor(string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey) → StreamDecryptor` |
 
-Methods 32/34 encrypt with the **decrypted** conversation key (raw bytes) of the conversation the media is sent to.
+Media is encrypted for the message that carries it, so a message with media takes its id first. Method 32 returns a fresh message id; methods 33/35 encrypt one file with the **decrypted** conversation key (raw bytes) the message is sent under, that message id, and the file's position in the message's `attachments` (a link card's banner and favicon both take the card's position), under the session identity set by `set_identity`. Upload the encrypted files, then encrypt the message with the same conversation key, `message_id`, and attachment order, sent as the same identity: for a message with media, `encrypt_message` and `encrypt_reply` reject a `sender_id` other than the session identity's. Recipients derive each file's key from the conversation key, the sender, the message id, and the position, so a file encrypted for another message, position, or sender does not decrypt. Methods 33/35 raise an error naming the value when the session identity is not set or is not a numeric user id, the key is not 32 bytes, the message id is not a lowercase hyphenated UUID, or the position is outside 0–9.
 
-Methods 33/35 decrypt one media file. Pass the base64 event of the message that carries the media and the conversation's key map — the same two arguments `decrypt_event` takes — plus the media's `media_hash_key` from the decrypted message: one of its media attachments, a link card's banner or favicon (both listed in `media_hashes`), or media quoted in its reply preview. The SDK finds that attachment in the event, picks the key for the message's version from the map, and derives the file's key: newer clients encrypt each attachment under its own key derived from the message, and older messages encrypt media under the conversation key (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)). Everything comes from these arguments, so any instance can decrypt any media at any time, before or after the message itself. Signatures are not checked here; use the `verified` flag from `decrypt_event`.
+```js
+const messageId = chat.newMessageId();
+const encrypted = chat.encryptStream(photoBytes, conversationKey, messageId, 0);
+const mediaHashKey = await uploadMedia(encrypted);
+const payload = chat.encryptMessage({
+  conversationId,
+  text: "a photo",
+  conversationKey,
+  conversationKeyVersion,
+  messageId,
+  attachments: [{ attachment_type: "media", media_hash_key: mediaHashKey, width, height, filesize_bytes: encrypted.length, filename: "photo.jpg", media_type: 1 }],
+});
+```
 
-Methods 32/33 process the whole payload in memory. Methods 34/35 return an incremental object for large payloads: feed chunks with `push`, then call `finish` once. `finish` errors if the stream ended before its final frame (truncation detection), so output from `push` must not be treated as complete until `finish` succeeds. The native bindings (Go, JVM, .NET) free the object via `Close`/`close`/`Dispose`. In JS/WASM, `finish()` consumes and frees the object; call `free()` only when abandoning a stream without finishing it (calling it after `finish()` throws).
+Methods 34/36 decrypt one media file. Pass the base64 event of the message that carries the media and the conversation's key map — the same two arguments `decrypt_event` takes — plus the media's `media_hash_key` from the decrypted message: one of its media attachments, a link card's banner or favicon (both listed in `media_hashes`), or media quoted in its reply preview. The SDK finds that attachment in the event, picks the key for the message's version from the map, and derives the file's key: newer clients encrypt each attachment under its own key derived from the message, and older messages encrypt media under the conversation key (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)). Everything comes from these arguments, so any instance can decrypt any media at any time, before or after the message itself. Signatures are not checked here; use the `verified` flag from `decrypt_event`.
 
-Methods 33/35 raise an error that says what to pass instead when:
+Methods 33/34 process the whole payload in memory. Methods 35/36 return an incremental object for large payloads: feed chunks with `push`, then call `finish` once. `finish` errors if the stream ended before its final frame (truncation detection), so output from `push` must not be treated as complete until `finish` succeeds. The native bindings (Go, JVM, .NET) free the object via `Close`/`close`/`Dispose`. In JS/WASM, `finish()` consumes and frees the object; call `free()` only when abandoning a stream without finishing it (calling it after `finish()` throws).
+
+Methods 34/36 raise an error that says what to pass instead when:
 
 - the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
 - `media_hash_key` is not in the message (the error lists the media hash keys that are) or is empty;
@@ -896,8 +926,8 @@ for (const { mediaHashKey } of message.mediaHashes ?? []) {
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 36 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
-| 37 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
+| 37 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
+| 38 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
 
 Encrypt/decrypt arbitrary UTF-8 strings using XSalsa20-Poly1305 with a conversation key. Use for encrypted metadata fields like `group_name`, `group_avatar_url`, and `group_description` returned by the XChat API.
 
@@ -920,10 +950,10 @@ group_name = chat.decrypt(conversation["group_name"], conv_key)
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 38 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
-| 39 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
-| 40 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
-| 41 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
+| 39 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
+| 40 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
+| 41 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
+| 42 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
 
 Conversation-key changes, group creates, and group member-adds are signed by the
 one-call prepare methods (`prepare_conversation_key_change`,
@@ -938,13 +968,13 @@ Common helpers exported as module-level functions (Rust crate root / JS module /
 
 | # | Function | Rust | JS | Python | Go | JVM | .NET |
 |---|----------|------|-----|--------|-----|------|------|
-| 42 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
-| 43 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
-| 44 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
-| 45 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
-| 46 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
-| 47 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
-| 48 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
+| 43 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
+| 44 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
+| 45 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
+| 46 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
+| 47 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
+| 48 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
+| 49 | **encrypted_stream_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedStreamSize(plaintextSize: number) → number` | `encrypted_stream_size(plaintext_size: int) → int` | `EncryptedStreamSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedStreamSize(long)` → `long` | `ChatXdkUtilities.EncryptedStreamSize(ulong)` → `ulong` |
 
 `encrypted_stream_size` returns the exact byte length that `encrypt_stream`
 or `stream_encryptor` will produce, without encrypting or requiring a key:
@@ -1536,19 +1566,19 @@ For reactions and edits, `targetMessageId` is the message **sequenceId**.
 
 Returned by `encrypt_message()` and all `encrypt_*()` methods.
 
-The `message_id` is generated by the SDK (a UUID) and embedded in the signed
-event. Send it as the message's `message_id`, keep it to dedup and to anchor
-replies, and reuse the same encrypted payload on retries so an id is never
-minted twice.
+The `message_id` (a UUID) is embedded in the signed event: the `message_id`
+the caller passed, or one the SDK generated. Send it as the message's
+`message_id`, keep it to dedup and to anchor replies, and reuse the same
+encrypted payload on retries so an id is never minted twice.
 
 ```rust
 // Rust
 pub struct SendPayload {
-    pub message_id: String,              // SDK-generated UUID, also embedded in the signed event
+    pub message_id: String,              // UUID, also embedded in the signed event
     pub encrypted_content: String,       // Base64-encoded Thrift MessageCreateEvent
     pub signature: String,               // Base64-encoded ECDSA signature
     pub encoded_event_signature: String, // Base64-encoded Thrift MessageEventSignature
-    pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" }
+    pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "10" }
     pub conversation_key_version: String,
     pub should_notify: bool,
 }
@@ -1645,13 +1675,15 @@ messages must be embedded by the sender. To make every client render a full
 clickable preview card, hydrate the card yourself:
 
 1. Fetch/render your preview image (e.g. the page's OpenGraph image).
-2. Encrypt it with `encryptStream`/`streamEncryptor` using the conversation key.
+2. Take the message's id from `newMessageId()` and encrypt the image with
+   `encryptStream`/`streamEncryptor` for that id at the card's position (the
+   banner and the favicon both use it).
 3. Upload the ciphertext to the conversation's media store
    (`POST /2/chat/media/upload/initialize` → `append` → `finalize`) and keep
    the returned `media_hash_key`.
 4. Reference it as `banner_image` (plus a `display_title`) on the `url`
    attachment, with the encrypted blob's size as `filesize_bytes` and the
-   image's `filename`.
+   image's `filename`, and send the message with the same `message_id`.
 
 Receivers see the image hashes on the decrypted message (`AttachmentInfo`
 `bannerImageMediaHashKey` and `media_hashes` entries with source

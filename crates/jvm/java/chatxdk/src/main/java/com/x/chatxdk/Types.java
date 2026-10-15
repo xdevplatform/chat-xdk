@@ -93,9 +93,10 @@ public final class Types {
      */
     public static final class SendPayload {
         /**
-         * SDK-generated message id (UUID) embedded in the signed event. Send it as
-         * the message's {@code message_id}, keep it to dedup and to anchor replies,
-         * and reuse the same encrypted payload on retries so an id is never minted twice.
+         * Message id (UUID) embedded in the signed event: the {@code messageId} passed
+         * in, or one the SDK generated. Send it as the message's {@code message_id},
+         * keep it to dedup and to anchor replies, and reuse the same encrypted payload
+         * on retries so an id is never minted twice.
          */
         @JsonProperty("message_id")
         public String messageId = "";

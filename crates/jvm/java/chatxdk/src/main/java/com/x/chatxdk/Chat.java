@@ -738,7 +738,7 @@ public final class Chat implements AutoCloseable {
      * Encrypt a media file for an outgoing message. Requires {@link #setIdentity}.
      *
      * @param plaintext Raw bytes to encrypt.
-     * @param conversationKey Raw 32-byte conversation key the message is encrypted with.
+     * @param conversationKey Raw 32-byte conversation key the message is sent under.
      * @param messageId The message's id, from {@link #newMessageId}.
      * @param attachmentIndex The file's position in the message's attachments; a link card's
      *     banner and favicon both take the card's position.

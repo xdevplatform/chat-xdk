@@ -1041,9 +1041,10 @@ pub struct EventMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct SendPayload {
-    /// The generated message id (UUID) embedded in the signed event. Send it as
-    /// the message's `message_id`, keep it to dedup and to anchor replies, and
-    /// reuse the same encrypted payload on retries so an id is never minted twice.
+    /// The message id (UUID) embedded in the signed event: the `message_id`
+    /// passed in, or one the SDK generated. Send it as the message's
+    /// `message_id`, keep it to dedup and to anchor replies, and reuse the
+    /// same encrypted payload on retries so an id is never minted twice.
     pub message_id: String,
 
     /// Base64-encoded encrypted content.

@@ -79,9 +79,10 @@ namespace ChatXdk
     public sealed class SendPayload
     {
         /// <summary>
-        /// SDK-generated message id (UUID) embedded in the signed event. Send it as
-        /// the message's <c>message_id</c>, keep it to dedup and to anchor replies,
-        /// and reuse the same encrypted payload on retries so an id is never minted twice.
+        /// Message id (UUID) embedded in the signed event: the <c>MessageId</c> passed
+        /// in, or one the SDK generated. Send it as the message's <c>message_id</c>,
+        /// keep it to dedup and to anchor replies, and reuse the same encrypted payload
+        /// on retries so an id is never minted twice.
         /// </summary>
         [JsonPropertyName("message_id")]
         public string MessageId { get; init; } = "";

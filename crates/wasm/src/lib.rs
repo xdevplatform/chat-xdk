@@ -621,7 +621,7 @@ impl Chat {
 
     /// Encrypt a media file for an outgoing message.
     ///
-    /// `conversationKey` is the key the message is encrypted with,
+    /// `conversationKey` is the conversation key the message is sent under,
     /// `messageId` the message's id from `newMessageId()`, and
     /// `attachmentIndex` the file's position in the message's `attachments`;
     /// a link card's banner and favicon both take the card's position.

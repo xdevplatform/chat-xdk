@@ -846,7 +846,7 @@ namespace ChatXdk
         /// Encrypt a media file for an outgoing message. Requires <see cref="SetIdentity"/>.
         /// </summary>
         /// <param name="plaintext">Raw bytes to encrypt.</param>
-        /// <param name="conversationKey">Raw 32-byte conversation key the message is encrypted with.</param>
+        /// <param name="conversationKey">Raw 32-byte conversation key the message is sent under.</param>
         /// <param name="messageId">The message's id, from <see cref="NewMessageId"/>.</param>
         /// <param name="attachmentIndex">
         /// The file's position in the message's attachments; a link card's banner and favicon

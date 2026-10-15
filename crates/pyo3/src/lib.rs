@@ -365,9 +365,10 @@ pub struct SignatureInfo {
 #[pyclass]
 #[derive(Clone)]
 pub struct SendPayload {
-    /// SDK-generated message id (UUID) embedded in the signed event. Send it as
-    /// the message's ``message_id``, keep it to dedup and to anchor replies, and
-    /// reuse the same encrypted payload on retries so an id is never minted twice.
+    /// Message id (UUID) embedded in the signed event: the ``message_id`` passed
+    /// in, or one the SDK generated. Send it as the message's ``message_id``,
+    /// keep it to dedup and to anchor replies, and reuse the same encrypted
+    /// payload on retries so an id is never minted twice.
     #[pyo3(get)]
     pub message_id: String,
     /// Base64-encoded encrypted message content.
@@ -1147,7 +1148,7 @@ impl Chat {
     /// Args:
     ///     plaintext: Raw bytes to encrypt.
     ///     conversation_key: Raw 32-byte conversation key (``bytes``) the
-    ///         message is encrypted with.
+    ///         message is sent under.
     ///     message_id: The message's id, from ``new_message_id()``.
     ///     attachment_index: The file's position in the message's
     ///         ``attachments``; a link card's banner and favicon both take the
