@@ -93,13 +93,20 @@ public final class Types {
      */
     public static final class SendPayload {
         /**
-         * Message id (UUID) embedded in the signed event: the {@code messageId} passed
-         * in, or one the SDK generated. Send it as the message's {@code message_id},
-         * keep it to dedup and to anchor replies, and reuse the same encrypted payload
-         * on retries so an id is never minted twice.
+         * Message id (UUID) the SDK generated and embedded in the signed event. Send it as
+         * the message's {@code message_id}, keep it to dedup and to anchor replies, and reuse
+         * the same encrypted payload on retries so an id is never minted twice.
          */
         @JsonProperty("message_id")
         public String messageId = "";
+
+        /**
+         * The outgoing message as a base64 event: what recipients receive, without the fields
+         * the server assigns. Pass it to {@link Chat#encryptFile} or {@link Chat#fileEncryptor}
+         * to encrypt the message's files, or to {@link Chat#decryptEvent} to read the message back.
+         */
+        @JsonProperty("event_b64")
+        public String eventB64 = "";
 
         /** Base64-encoded ciphertext of the encrypted message event. */
         @JsonProperty("encrypted_content")
@@ -401,8 +408,9 @@ public final class Types {
         /**
          * Create a URL card attachment with encrypted preview images. Supplying a display
          * title plus a banner image makes receiving clients render a full clickable preview
-         * card: encrypt the image with {@link Chat#encryptStream}, upload it to the
-         * conversation's media store, and reference the returned media hash key.
+         * card: start the image's upload to the conversation's media store, reference the
+         * media hash key it returns, then encrypt the image with {@link Chat#encryptFile} and
+         * the message's {@link SendPayload#eventB64} and finish the upload.
          */
         public static AttachmentDescriptor urlCard(
                 String url,
@@ -594,16 +602,14 @@ public final class Types {
         /** Version of the conversation key; resolves from the key cache when null. */
         public String conversationKeyVersion;
 
-        /**
-         * Id of the message, from {@link Chat#newMessageId}; generated when null. Required when
-         * {@link #attachments} include media, whose keys derive from this id.
-         */
-        public String messageId;
-
         /** Optional rich-text entities (URLs, mentions, hashtags, etc.). */
         public List<EntityDescriptor> entities;
 
-        /** Optional attachments. */
+        /**
+         * Optional attachments: posts, links, and files (media, and link-card images). Each file
+         * names the media hash key its upload started with; encrypt the files afterwards with
+         * {@link Chat#encryptFile} or {@link Chat#fileEncryptor}.
+         */
         public List<AttachmentDescriptor> attachments;
 
         /** Optional quick reply: a request offering options, or a response selecting one. */
@@ -674,12 +680,6 @@ public final class Types {
         /** Version of the conversation key; resolves from the key cache when null. */
         public String conversationKeyVersion;
 
-        /**
-         * Id of the reply, from {@link Chat#newMessageId}; generated when null. Required when
-         * {@link #attachments} include media, whose keys derive from this id.
-         */
-        public String messageId;
-
         /** Sequence ID of the message being replied to; derived from {@link #replyToEvent} when null. */
         public String replyToSequenceId;
 
@@ -692,7 +692,7 @@ public final class Types {
         /** Optional rich-text entities for the reply body. */
         public List<EntityDescriptor> entities;
 
-        /** Optional attachments for the reply body. */
+        /** Optional attachments for the reply body, as in {@link EncryptMessageParams#attachments}. */
         public List<AttachmentDescriptor> attachments;
 
         /** Rich-text entities of the quoted message (for the preview); derived from {@link #replyToEvent} when null. */
@@ -964,6 +964,194 @@ public final class Types {
             this.conversationId = conversationId;
             this.memberIds = memberIds;
             this.adminIds = adminIds;
+        }
+    }
+
+    /** Parameters for {@link Chat#decryptEvent}. */
+    public static final class DecryptEventParams {
+        /** The base64 event, as delivered. */
+        public final String eventB64;
+
+        /**
+         * Version &#8594; raw 32-byte conversation key, from {@link Chat#decryptEvents} or
+         * {@link Chat#extractConversationKeys}. Events without message contents need no keys; an
+         * empty map also falls back to the opt-in key cache ({@link Chat#setCacheKeys}).
+         */
+        public final Map<String, byte[]> conversationKeys;
+
+        /**
+         * Signing keys to verify the event with; null or empty uses the keys stored via
+         * {@link Chat#setSigningKeys}. The SDK picks the sender's key for the version the event
+         * carries.
+         */
+        public List<SigningKeyEntry> signingKeys;
+
+        /**
+         * Create params with the required fields; {@link #signingKeys} defaults to null.
+         *
+         * @param eventB64 The base64 event, as delivered.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         */
+        public DecryptEventParams(String eventB64, Map<String, byte[]> conversationKeys) {
+            this.eventB64 = eventB64;
+            this.conversationKeys = conversationKeys;
+        }
+    }
+
+    /** Parameters for {@link Chat#decryptEvents}. */
+    public static final class DecryptEventsParams {
+        /**
+         * The base64 events, as delivered. Their key changes supply the conversation keys the
+         * messages among them are decrypted with.
+         */
+        public final List<String> events;
+
+        /**
+         * Signing keys of all participants; null or empty uses the keys stored via
+         * {@link Chat#setSigningKeys}.
+         */
+        public List<SigningKeyEntry> signingKeys;
+
+        /**
+         * Create params with the required fields; {@link #signingKeys} defaults to null.
+         *
+         * @param events The base64 events, as delivered.
+         */
+        public DecryptEventsParams(List<String> events) {
+            this.events = events;
+        }
+    }
+
+    /** Parameters for {@link Chat#encryptFile}. */
+    public static final class EncryptFileParams {
+        /** The file to encrypt. */
+        public final byte[] file;
+
+        /**
+         * The {@link SendPayload#eventB64} of the payload that {@link Chat#encryptMessage} or
+         * {@link Chat#encryptReply} returned for the message carrying the file.
+         */
+        public final String eventB64;
+
+        /** Version &#8594; raw 32-byte conversation key; it must hold the key the message was encrypted under. */
+        public final Map<String, byte[]> conversationKeys;
+
+        /** The media hash key the file's upload started with, as listed in the message's attachments. */
+        public final String mediaHashKey;
+
+        /**
+         * Create params with the required fields.
+         *
+         * @param file The file to encrypt.
+         * @param eventB64 The {@link SendPayload#eventB64} of the message carrying the file.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         * @param mediaHashKey The media hash key the file's upload started with.
+         */
+        public EncryptFileParams(
+                byte[] file, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+            this.file = file;
+            this.eventB64 = eventB64;
+            this.conversationKeys = conversationKeys;
+            this.mediaHashKey = mediaHashKey;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#fileEncryptor}: those of {@link EncryptFileParams} apart from the
+     * file, which is fed to the encryptor.
+     */
+    public static final class FileEncryptorParams {
+        /** The {@link SendPayload#eventB64} of the message carrying the file. */
+        public final String eventB64;
+
+        /** Version &#8594; raw 32-byte conversation key; it must hold the key the message was encrypted under. */
+        public final Map<String, byte[]> conversationKeys;
+
+        /** The media hash key the file's upload started with, as listed in the message's attachments. */
+        public final String mediaHashKey;
+
+        /**
+         * Create params with the required fields.
+         *
+         * @param eventB64 The {@link SendPayload#eventB64} of the message carrying the file.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         * @param mediaHashKey The media hash key the file's upload started with.
+         */
+        public FileEncryptorParams(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+            this.eventB64 = eventB64;
+            this.conversationKeys = conversationKeys;
+            this.mediaHashKey = mediaHashKey;
+        }
+    }
+
+    /** Parameters for {@link Chat#decryptFile}. */
+    public static final class DecryptFileParams {
+        /** The encrypted file, as downloaded. */
+        public final byte[] encrypted;
+
+        /** The base64 event of the message that carries the file, as passed to {@link Chat#decryptEvent}. */
+        public final String eventB64;
+
+        /**
+         * The conversation's key map, as passed to {@link Chat#decryptEvent}; it must hold the key
+         * for the message's version.
+         */
+        public final Map<String, byte[]> conversationKeys;
+
+        /**
+         * The file's media hash key from the decrypted message: a media attachment, a link card's
+         * banner or favicon, or media quoted in its reply preview.
+         */
+        public final String mediaHashKey;
+
+        /**
+         * Create params with the required fields.
+         *
+         * @param encrypted The encrypted file, as downloaded.
+         * @param eventB64 The base64 event of the message that carries the file.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         * @param mediaHashKey The file's media hash key from the decrypted message.
+         */
+        public DecryptFileParams(
+                byte[] encrypted, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+            this.encrypted = encrypted;
+            this.eventB64 = eventB64;
+            this.conversationKeys = conversationKeys;
+            this.mediaHashKey = mediaHashKey;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#fileDecryptor}: those of {@link DecryptFileParams} apart from the
+     * encrypted file, which is fed to the decryptor.
+     */
+    public static final class FileDecryptorParams {
+        /** The base64 event of the message that carries the file, as passed to {@link Chat#decryptEvent}. */
+        public final String eventB64;
+
+        /**
+         * The conversation's key map, as passed to {@link Chat#decryptEvent}; it must hold the key
+         * for the message's version.
+         */
+        public final Map<String, byte[]> conversationKeys;
+
+        /**
+         * The file's media hash key from the decrypted message: a media attachment, a link card's
+         * banner or favicon, or media quoted in its reply preview.
+         */
+        public final String mediaHashKey;
+
+        /**
+         * Create params with the required fields.
+         *
+         * @param eventB64 The base64 event of the message that carries the file.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         * @param mediaHashKey The file's media hash key from the decrypted message.
+         */
+        public FileDecryptorParams(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+            this.eventB64 = eventB64;
+            this.conversationKeys = conversationKeys;
+            this.mediaHashKey = mediaHashKey;
         }
     }
 

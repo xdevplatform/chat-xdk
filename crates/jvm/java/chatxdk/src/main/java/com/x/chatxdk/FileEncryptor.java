@@ -9,21 +9,18 @@ import java.lang.ref.Reference;
 import java.util.Base64;
 
 /**
- * Incremental stream decryptor for large payloads.
+ * Incremental encryptor for one file of an outgoing message.
  *
- * <p>Feed ciphertext with {@link #push}; call {@link #finish} once at end of
- * input. {@link #finish} throws if the stream ended before its final frame
- * (truncation), so do not treat plaintext from {@link #push} as complete until
- * {@link #finish} succeeds. Always {@link #close} the instance to release native
- * resources.
+ * <p>Feed the file with {@link #push}; call {@link #finish} once to emit the
+ * final frame. Always {@link #close} the instance to release native resources.
  *
  * <p>Not thread-safe: do not share one instance across threads without external
  * synchronization.
  */
-public final class StreamDecryptor implements AutoCloseable {
+public final class FileEncryptor implements AutoCloseable {
 
     /**
-     * Frees a native stream-decryptor handle (which holds live secretstream key
+     * Frees a native file-encryptor handle (which holds live secretstream key
      * state). Registered with the shared cleaner; the cleaner runs a registered
      * action at most once, so an explicit {@code close()} and the GC backstop
      * can never double-free.
@@ -43,7 +40,7 @@ public final class StreamDecryptor implements AutoCloseable {
 
         @Override
         public void run() {
-            ChatNative.INSTANCE.chat_xdk_stream_decryptor_free(handle);
+            ChatNative.INSTANCE.chat_xdk_file_encryptor_free(handle);
         }
     }
 
@@ -51,44 +48,40 @@ public final class StreamDecryptor implements AutoCloseable {
     private boolean closed;
     private final Cleaner.Cleanable cleanable;
 
-    private StreamDecryptor(Pointer handle) {
+    private FileEncryptor(Pointer handle) {
         this.handle = handle;
         this.cleanable = Chat.CLEANER.register(this, new FreeHandle(handle));
     }
 
-    static StreamDecryptor create(
-            Pointer chatHandle, String eventB64, String conversationKeysJson, String mediaHashKey) {
-        try (Memory ev = FfiStrings.utf8(eventB64);
-                Memory cj = FfiStrings.utf8(conversationKeysJson);
-                Memory hash = FfiStrings.utf8(mediaHashKey)) {
+    static FileEncryptor create(Pointer chatHandle, String paramsJson) {
+        try (Memory params = FfiStrings.utf8(paramsJson)) {
             PointerByReference out = new PointerByReference();
-            FfiStrings.consume(
-                    ChatNative.INSTANCE.chat_xdk_stream_decryptor_new(chatHandle, ev, cj, hash, out));
-            return new StreamDecryptor(out.getValue());
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_file_encryptor_new(chatHandle, params, out));
+            return new FileEncryptor(out.getValue());
         }
     }
 
     /**
-     * Decrypt a ciphertext chunk, returning plaintext available so far (may be
-     * empty until enough input has arrived).
+     * Encrypt a chunk of the file, returning the encrypted bytes available so
+     * far (may be empty for small inputs).
      */
-    public byte[] push(byte[] ciphertext) {
+    public byte[] push(byte[] plaintext) {
         throwIfClosed();
-        try (Memory ct = FfiStrings.utf8(Base64.getEncoder().encodeToString(ciphertext))) {
+        try (Memory pt = FfiStrings.utf8(Base64.getEncoder().encodeToString(plaintext))) {
             String resultB64 =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_stream_decryptor_push(handle, ct));
+                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_file_encryptor_push(handle, pt));
             return Base64.getDecoder().decode(resultB64);
         } finally {
             Reference.reachabilityFence(this);
         }
     }
 
-    /** Decrypt the final frame and consume the decryptor. */
+    /** Emit the final frame and consume the encryptor. */
     public byte[] finish() {
         throwIfClosed();
         try {
             String resultB64 =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_stream_decryptor_finish(handle));
+                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_file_encryptor_finish(handle));
             return Base64.getDecoder().decode(resultB64);
         } finally {
             Reference.reachabilityFence(this);
@@ -97,7 +90,7 @@ public final class StreamDecryptor implements AutoCloseable {
 
     private void throwIfClosed() {
         if (closed) {
-            throw new IllegalStateException("StreamDecryptor is closed");
+            throw new IllegalStateException("FileEncryptor is closed");
         }
     }
 

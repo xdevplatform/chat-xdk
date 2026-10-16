@@ -14,13 +14,16 @@ public final class ChatXdkUtilities {
 
     private ChatXdkUtilities() {}
 
-    /** Return the exact ciphertext size produced by stream encryption. */
-    public static long encryptedStreamSize(long plaintextSize) {
+    /**
+     * Return the exact size of a file once encrypted: the size its upload declares before the
+     * file is encrypted.
+     */
+    public static long encryptedFileSize(long plaintextSize) {
         if (plaintextSize < 0) {
             throw new IllegalArgumentException("Plaintext size must be non-negative");
         }
         String value = FfiStrings.consume(
-                ChatNative.INSTANCE.chat_xdk_encrypted_stream_size(plaintextSize));
+                ChatNative.INSTANCE.chat_xdk_encrypted_file_size(plaintextSize));
         try {
             return Long.parseLong(value);
         } catch (NumberFormatException e) {
