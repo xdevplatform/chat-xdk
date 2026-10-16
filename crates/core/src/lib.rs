@@ -5,20 +5,24 @@
 //! ## Quick Start
 //!
 //! ```rust,ignore
-//! use chat_xdk_core::{Chat, Event, EncryptMessageParams};
+//! use chat_xdk_core::{
+//!     Chat, DecryptEventParams, DecryptEventsParams, EncryptFileParams, EncryptMessageParams,
+//!     Event,
+//! };
 //!
 //! // Create client
 //! let chat = Chat::new(juicebox_config);
 //!
 //! // On startup: unlock keys and set the session identity once.
 //! chat.unlock(b"2580").await?;
-//! chat.set_identity("user-1", signing_key_version);
+//! chat.set_identity("1876543210", signing_key_version);
 //! chat.set_cache_keys(true);
 //! chat.set_signing_keys(signing_keys);
 //!
-//! // Handle webhook events (keys and signatures resolve from the session).
-//! let result = chat.decrypt_events(&events, &[]);
-//! let event = chat.decrypt_event(event_b64, &Default::default(), &[])?;
+//! // Handle webhook events (signatures verify with the stored signing keys).
+//! let result = chat.decrypt_events(DecryptEventsParams::new(events));
+//! let keys = result.conversation_keys.keys.clone();
+//! let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys.clone()))?;
 //! match event {
 //!     Event::Message(msg) => println!("{}", msg.text().unwrap_or("")),
 //!     Event::KeyChange(kc) => { /* key cached automatically */ }
@@ -30,6 +34,15 @@
 //! // conversation key resolve from the session and cache.
 //! let payload = chat.encrypt_message(EncryptMessageParams::new("conv-1", "Hello!"))?;
 //! // POST payload to X API
+//!
+//! // A message with a file: start the upload to get its media hash key, list
+//! // it in the attachments, then encrypt the file from the payload's event.
+//! let encrypted = chat.encrypt_file(EncryptFileParams::new(
+//!     photo,
+//!     payload.event_b64.clone(),
+//!     keys,
+//!     media_hash_key,
+//! ))?;
 //! ```
 //!
 //! ## Core API
@@ -43,6 +56,8 @@
 //! | [`Chat::unlock`] | Load keys on startup |
 //! | [`Chat::decrypt_event`] | Decrypt webhook events → [`Event`] |
 //! | [`Chat::encrypt_message`] | Encrypt text → [`SendPayload`] |
+//! | [`Chat::encrypt_file`] | Encrypt a file for an outgoing message |
+//! | [`Chat::decrypt_file`] | Decrypt a file from the message that carries it |
 //!
 //! ## Event Types
 //!
@@ -73,7 +88,7 @@
 //! - **Key Generation**: EC P-256 identity and signing keypairs
 //! - **Key Storage**: PIN-protected storage via Juicebox SDK (requires `juicebox` feature)
 //! - **Encryption**: XSalsa20-Poly1305 for messages,
-//!   `crypto_secretstream_xchacha20poly1305` for media streams, ECIES for
+//!   `crypto_secretstream_xchacha20poly1305` for files, ECIES for
 //!   conversation-key exchange
 //! - **Signing**: ECDSA signatures
 //! - **Protocol**: Thrift message parsing/serialization
@@ -133,10 +148,12 @@ pub mod keys;
 #[cfg(feature = "juicebox")]
 pub use chat::Chat;
 pub use core::ChatCore;
-pub use crypto::encryption::{StreamDecryptor, StreamEncryptor};
+pub use crypto::encryption::{FileDecryptor, FileEncryptor};
 pub use params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
+    EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams,
 };
 pub use types::*;
 

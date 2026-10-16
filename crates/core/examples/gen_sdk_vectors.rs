@@ -384,8 +384,10 @@ fn main() {
         identity_public_key: B64.encode(identity_kp.public.encoded()),
         identity_public_key_signature: B64.encode(&identity_binding_signature),
     }];
-    let cached =
-        replier.decrypt_events(&[&event_key_change_message_key_b64], &fixture_signing_keys);
+    let cached = replier.decrypt_events(
+        chat_xdk_core::DecryptEventsParams::new(vec![event_key_change_message_key_b64.clone()])
+            .with_signing_keys(fixture_signing_keys.to_vec()),
+    );
     assert!(cached.errors.is_empty(), "{:?}", cached.errors);
     let reply_message_key = replier
         .encrypt_reply(

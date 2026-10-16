@@ -1,4 +1,6 @@
-//! The key of an encrypted media file, found from the message that carries it.
+//! The key of an encrypted media file, found from the message that carries
+//! it: an incoming message for decryption, or an outgoing message for
+//! encryption.
 //!
 //! A message names each media file by its media hash key: a media attachment,
 //! a link card's banner or favicon, or media quoted from another message in a
@@ -73,6 +75,60 @@ pub(super) fn media_key(
          those, or the event of the message that carries this media",
         media_hash_key,
         known.join(", ")
+    )))
+}
+
+/// The key a file is encrypted under for the outgoing message `event_b64`:
+/// the key of the message's own attachment that `media_hash_key` names.
+/// Media a reply quotes belongs to the quoted message, whose sender uploaded
+/// it, so it is never encrypted again.
+pub(super) fn outgoing_media_key(
+    event_b64: &str,
+    conversation_keys: &HashMap<String, XChatConversationKey>,
+    media_hash_key: &str,
+) -> Result<XChatConversationKey, SdkError> {
+    if media_hash_key.is_empty() {
+        return Err(invalid_input(
+            "media_hash_key is empty: pass the media hash key the file's upload started with, \
+             as listed in the message's attachments",
+        ));
+    }
+    let event = ChatCore::parse_event_b64(event_b64)?;
+    let Some(MessageEventDetail::MessageCreateEvent(create)) = &event.detail else {
+        return Err(invalid_input(
+            "the event is not a message: pass the event_b64 of the payload that encrypt_message \
+             or encrypt_reply returned",
+        ));
+    };
+    let message = open_message(&event, create, conversation_keys, None, "the message")?;
+    if let Some(key) = message.attachment_key(media_hash_key)? {
+        return Ok(key);
+    }
+
+    let quoted = message
+        .contents
+        .replying_to_preview
+        .as_deref()
+        .map(|preview| media_hash_keys(preview.attachments.as_deref()))
+        .unwrap_or_default();
+    if quoted.iter().any(|quoted| quoted == media_hash_key) {
+        return Err(invalid_input(format!(
+            "media_hash_key '{media_hash_key}' is media the reply quotes: its file belongs to the \
+             quoted message and was uploaded with it, so there is nothing to encrypt"
+        )));
+    }
+    let own = media_hash_keys(message.contents.attachments.as_deref());
+    if own.is_empty() {
+        return Err(invalid_input(
+            "the message has no files: list each file's media hash key in the message's \
+             attachments, then encrypt the file with the payload that returns",
+        ));
+    }
+    Err(invalid_input(format!(
+        "media_hash_key '{}' is not one of the message's files, whose media hash keys are {}: \
+         pass one of those, or list this file in the message's attachments",
+        media_hash_key,
+        own.join(", ")
     )))
 }
 

@@ -33,7 +33,12 @@ fn open(
     media_hash_key: &str,
     encrypted: &[u8],
 ) -> Result<Vec<u8>, SdkError> {
-    ChatCore::new().decrypt_stream(encrypted, &frame(event), conversation_keys, media_hash_key)
+    ChatCore::new().decrypt_file(DecryptFileParams::new(
+        encrypted.to_vec(),
+        frame(event),
+        conversation_keys.clone(),
+        media_hash_key,
+    ))
 }
 
 fn open_incrementally(
@@ -43,8 +48,11 @@ fn open_incrementally(
     encrypted: &[u8],
     step: usize,
 ) -> Result<Vec<u8>, SdkError> {
-    let mut decryptor =
-        ChatCore::new().stream_decryptor(&frame(event), conversation_keys, media_hash_key)?;
+    let mut decryptor = ChatCore::new().file_decryptor(FileDecryptorParams::new(
+        frame(event),
+        conversation_keys.clone(),
+        media_hash_key,
+    ))?;
     let mut plaintext = Vec::new();
     for chunk in encrypted.chunks(step) {
         plaintext.extend(decryptor.push(chunk)?);
@@ -682,7 +690,12 @@ fn truncated_bytes_say_to_pass_the_complete_download() {
 #[test]
 fn an_event_that_is_not_base64_is_rejected() {
     let err = ChatCore::new()
-        .decrypt_stream(b"bytes", "not base64!", &HashMap::new(), "photo")
+        .decrypt_file(DecryptFileParams::new(
+            b"bytes".to_vec(),
+            "not base64!",
+            HashMap::new(),
+            "photo",
+        ))
         .unwrap_err();
     assert!(!err.to_string().is_empty());
 }

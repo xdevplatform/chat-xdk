@@ -11,6 +11,7 @@ use crate::error::CryptoError;
 
 const MESSAGE_KEY_SALT: &str = "xchat-message-key";
 const ATTACHMENT_KEY_SALT: &str = "xchat-attachment-key";
+const MEDIA_MESSAGE_ID_SALT: &str = "chat-xdk-media-message-id";
 const KEY_LENGTH: usize = 32;
 
 /// The `contents_encryption_version` of the messages this SDK sends.
@@ -63,6 +64,41 @@ pub(crate) fn resolve_attachment_id(
         None if index == 0 => message_id.to_string(),
         None => format!("{}#{}", message_id, index),
     }
+}
+
+/// The id of an outgoing message with files, derived from what identifies
+/// the message: the conversation key and its version, the sender, the
+/// conversation, and the media hash keys of its files in order. Every upload
+/// has its own media hash key, so the id is unique to the message; building
+/// the same message again gives the same id, which keeps its uploaded files
+/// valid.
+pub(crate) fn derive_media_message_id(
+    conversation_key: &XChatConversationKey,
+    conversation_key_version: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    media_hash_keys: &[&str],
+) -> Result<String, CryptoError> {
+    // Length-prefixed fields: no two distinct inputs share an encoding.
+    let mut info = Vec::new();
+    for field in [conversation_key_version, sender_id, conversation_id]
+        .into_iter()
+        .chain(media_hash_keys.iter().copied())
+    {
+        info.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        info.extend_from_slice(field.as_bytes());
+    }
+    let okm = zeroize::Zeroizing::new(hkdf_with_info(
+        conversation_key.encoded(),
+        MEDIA_MESSAGE_ID_SALT,
+        &info,
+        16,
+    )?);
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&okm);
+    Ok(uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .to_string())
 }
 
 fn derive(
@@ -167,5 +203,58 @@ mod tests {
         assert_eq!(resolve_attachment_id(Some("att-9"), "m", 0), "att-9");
         assert_eq!(resolve_attachment_id(Some("att-9"), "m", 3), "att-9");
         assert_eq!(resolve_attachment_id(Some(""), "m", 1), "");
+    }
+
+    fn media_message_id(
+        ckey: &XChatConversationKey,
+        version: &str,
+        sender: &str,
+        conversation: &str,
+        media_hash_keys: &[&str],
+    ) -> String {
+        derive_media_message_id(ckey, version, sender, conversation, media_hash_keys).unwrap()
+    }
+
+    #[test]
+    fn media_message_id_matches_known_answer() {
+        let ckey = key("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        assert_eq!(
+            media_message_id(&ckey, "7", "1001", "1001:1002", &["hash-a", "hash-b"]),
+            "906c3ace-dc0c-486c-b242-e0ae974b3c10"
+        );
+    }
+
+    #[test]
+    fn media_message_id_is_a_lowercase_v4_uuid() {
+        let ckey = XChatConversationKey::from_bytes(vec![3u8; 32]).unwrap();
+        let id = media_message_id(&ckey, "7", "1001", "1001:1002", &["hash-a"]);
+        let parsed = uuid::Uuid::try_parse(&id).unwrap();
+        assert_eq!(parsed.get_version_num(), 4);
+        assert_eq!(parsed.get_variant(), uuid::Variant::RFC4122);
+        assert_eq!(parsed.hyphenated().to_string(), id);
+    }
+
+    #[test]
+    fn media_message_id_changes_with_every_input() {
+        let ckey = XChatConversationKey::from_bytes(vec![3u8; 32]).unwrap();
+        let other_key = XChatConversationKey::from_bytes(vec![4u8; 32]).unwrap();
+        let base = media_message_id(&ckey, "7", "1001", "1001:1002", &["a", "b"]);
+        assert_eq!(
+            base,
+            media_message_id(&ckey, "7", "1001", "1001:1002", &["a", "b"])
+        );
+        let variants = [
+            media_message_id(&other_key, "7", "1001", "1001:1002", &["a", "b"]),
+            media_message_id(&ckey, "8", "1001", "1001:1002", &["a", "b"]),
+            media_message_id(&ckey, "7", "1002", "1001:1002", &["a", "b"]),
+            media_message_id(&ckey, "7", "1001", "1001:1003", &["a", "b"]),
+            media_message_id(&ckey, "7", "1001", "1001:1002", &["b", "a"]),
+            media_message_id(&ckey, "7", "1001", "1001:1002", &["a"]),
+            media_message_id(&ckey, "7", "1001", "1001:1002", &["ab"]),
+            media_message_id(&ckey, "7", "1001", "1001:1002", &["a", "b", "c"]),
+        ];
+        for (i, variant) in variants.iter().enumerate() {
+            assert_ne!(&base, variant, "variant {i}");
+        }
     }
 }

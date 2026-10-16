@@ -1,5 +1,5 @@
 //! Sending: contents under the message's own key, signed at the message
-//! signature version, and media encrypted for its message and position.
+//! signature version, and files encrypted from the sent message.
 
 use super::test_support::{
     decrypt_message, frame, key, keys, sent_event, Party, CONVERSATION, SIGNING_KEY_VERSION,
@@ -12,6 +12,7 @@ use crate::thrift::event::{
 use crate::thrift::product::{
     MessageAttachment as ThriftAttachment, MessageEntryContents as Contents,
 };
+use crate::utils::encrypted_file_size;
 
 const AUTHOR: &str = "1001";
 const KEY_VERSION: &str = "7";
@@ -26,6 +27,15 @@ fn author() -> Party {
 fn message_params(text: &str, ckey: &XChatConversationKey) -> EncryptMessageParams {
     EncryptMessageParams::new(CONVERSATION, text)
         .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
+}
+
+/// `params` with `attachments`, or with none when the list is empty.
+fn with_attachments(
+    mut params: EncryptMessageParams,
+    attachments: Vec<AttachmentDescriptor>,
+) -> EncryptMessageParams {
+    params.attachments = (!attachments.is_empty()).then_some(attachments);
+    params
 }
 
 fn image(media_hash_key: &str) -> AttachmentDescriptor {
@@ -47,6 +57,15 @@ fn card_image(media_hash_key: &str) -> UrlAttachmentImageDescriptor {
         filename: format!("{media_hash_key}.png"),
         width: None,
         height: None,
+    }
+}
+
+fn link_card(banner: Option<&str>, favicon: Option<&str>) -> AttachmentDescriptor {
+    AttachmentDescriptor::Url {
+        url: "https://example.com".to_string(),
+        display_title: Some("Example".to_string()),
+        banner_image: banner.map(card_image),
+        favicon_image: favicon.map(card_image),
     }
 }
 
@@ -90,18 +109,34 @@ fn attachment_ids(attachments: &[Box<ThriftAttachment>]) -> Vec<Option<String>> 
         .collect()
 }
 
-fn open_media(
+/// `file` encrypted for the attachment `media_hash_key` names in the sent
+/// message `payload`, by a session with no identity.
+fn encrypt_file(
+    payload: &SendPayload,
+    ckey: &XChatConversationKey,
+    media_hash_key: &str,
+    file: &[u8],
+) -> Result<Vec<u8>, SdkError> {
+    ChatCore::new().encrypt_file(EncryptFileParams::new(
+        file.to_vec(),
+        payload.event_b64.clone(),
+        keys(KEY_VERSION, ckey),
+        media_hash_key,
+    ))
+}
+
+fn open_file(
     event: &ThriftEvent,
     ckey: &XChatConversationKey,
     media_hash_key: &str,
     encrypted: &[u8],
 ) -> Result<Vec<u8>, SdkError> {
-    ChatCore::new().decrypt_stream(
-        encrypted,
-        &frame(event),
-        &keys(KEY_VERSION, ckey),
+    ChatCore::new().decrypt_file(DecryptFileParams::new(
+        encrypted.to_vec(),
+        frame(event),
+        keys(KEY_VERSION, ckey),
         media_hash_key,
-    )
+    ))
 }
 
 fn error_text<T>(result: Result<T, SdkError>) -> String {
@@ -109,6 +144,12 @@ fn error_text<T>(result: Result<T, SdkError>) -> String {
         Ok(_) => panic!("expected an error"),
         Err(err) => err.to_string(),
     }
+}
+
+fn assert_lowercase_v4_uuid(id: &str) {
+    let uuid = uuid::Uuid::parse_str(id).unwrap();
+    assert_eq!(uuid.get_version_num(), 4, "{id}");
+    assert_eq!(uuid.to_string(), id);
 }
 
 // Messages, replies, reactions, and edits.
@@ -195,9 +236,8 @@ fn the_signature_covers_the_contents_encryption_version() {
 
     let receive = |event: &ThriftEvent| {
         ChatCore::new().decrypt_event(
-            &frame(event),
-            &keys(KEY_VERSION, &ckey),
-            std::slice::from_ref(&author.entry),
+            DecryptEventParams::new(frame(event), keys(KEY_VERSION, &ckey))
+                .with_signing_keys(vec![author.entry.clone()]),
         )
     };
     for version in [None, Some(0), Some(2)] {
@@ -220,70 +260,254 @@ fn the_signature_covers_the_contents_encryption_version() {
 }
 
 #[test]
-fn a_message_id_from_the_caller_is_the_one_sent() {
+fn event_b64_is_the_sent_message_as_recipients_receive_it() {
     let author = author();
     let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    let payload = author
+    let original = author
         .core
-        .encrypt_message(message_params("chosen id", &ckey).with_message_id(message_id.clone()))
+        .encrypt_message(with_attachments(
+            message_params("original", &ckey),
+            vec![image("photo")],
+        ))
         .unwrap();
-    assert_eq!(payload.message_id, message_id);
-    let message = decrypt_message(
-        &ChatCore::new(),
-        &delivered(&payload, "100"),
-        &keys(KEY_VERSION, &ckey),
-        std::slice::from_ref(&author.entry),
-    )
-    .unwrap();
-    assert!(message.verified);
-    assert_eq!(message.meta.id.as_deref(), Some(message_id.as_str()));
-}
+    let original_event = frame(&delivered(&original, "100"));
+    let reply = EncryptReplyParams::new(CONVERSATION, "reply", original_event.clone())
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    let reaction = EncryptReactionParams::new(original_event.clone(), "👍")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    let edit = EncryptEditParams::new(original_event, "edited")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    let hyphenated = EncryptMessageParams::new("1491585161162473473-2", "hyphenated")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
 
-#[test]
-fn new_message_id_returns_a_fresh_lowercase_uuid() {
-    let core = ChatCore::new();
-    let first = core.new_message_id();
-    let second = core.new_message_id();
-    assert_ne!(first, second);
-    for id in [&first, &second] {
-        assert_eq!(id.len(), 36);
-        assert_eq!(id.to_lowercase(), *id);
-        crate::pipeline::validate_message_id(id).unwrap();
+    let sends = [
+        ("message", original),
+        ("reply", author.core.encrypt_reply(reply).unwrap()),
+        (
+            "reaction add",
+            author.core.encrypt_add_reaction(&reaction).unwrap(),
+        ),
+        (
+            "reaction remove",
+            author.core.encrypt_remove_reaction(&reaction).unwrap(),
+        ),
+        ("edit", author.core.encrypt_edit(&edit).unwrap()),
+        (
+            "hyphenated conversation id",
+            author.core.encrypt_message(hyphenated).unwrap(),
+        ),
+    ];
+    for (what, payload) in sends {
+        let event = ChatCore::parse_event_b64(&payload.event_b64).unwrap();
+        assert_eq!(event, sent_event(&payload, AUTHOR, CONVERSATION), "{what}");
+
+        let Event::Message(message) = ChatCore::new()
+            .decrypt_event(
+                DecryptEventParams::new(payload.event_b64.clone(), keys(KEY_VERSION, &ckey))
+                    .with_signing_keys(vec![author.entry.clone()]),
+            )
+            .unwrap()
+        else {
+            panic!("{what} is not a message");
+        };
+        assert!(message.verified, "{what}");
+        assert_eq!(
+            message.meta.id.as_deref(),
+            Some(payload.message_id.as_str()),
+            "{what}"
+        );
+        assert_eq!(message.meta.sequence_id, None, "{what}");
     }
 }
 
-// Media.
+// Message ids.
 
 #[test]
-fn media_encrypted_for_its_position_opens_from_the_sent_message() {
+fn a_message_without_files_takes_a_random_id() {
     let author = author();
     let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    let files: Vec<Vec<u8>> = (0..3u8).map(|i| vec![i; 3000 + usize::from(i)]).collect();
-    let encrypted: Vec<Vec<u8>> = files
-        .iter()
-        .zip(0..)
-        .map(|(file, index)| {
+    let without_files = [
+        Vec::new(),
+        vec![link_card(None, None)],
+        vec![AttachmentDescriptor::Post {
+            rest_id: Some("1234".to_string()),
+            post_url: None,
+        }],
+    ];
+    for attachments in without_files {
+        let send = || {
             author
                 .core
-                .encrypt_stream(file, &ckey, &message_id, index)
+                .encrypt_message(with_attachments(
+                    message_params("same text", &ckey),
+                    attachments.clone(),
+                ))
                 .unwrap()
-        })
-        .collect();
+                .message_id
+        };
+        let (first, second) = (send(), send());
+        assert_ne!(first, second, "{attachments:?}");
+        assert_lowercase_v4_uuid(&first);
+        assert_lowercase_v4_uuid(&second);
+    }
+}
 
-    let mut params = message_params("three photos", &ckey).with_message_id(message_id.clone());
-    params.attachments = Some(vec![image("photo-0"), image("photo-1"), image("photo-2")]);
-    let payload = author.core.encrypt_message(params).unwrap();
+#[test]
+fn a_message_with_files_takes_the_id_its_files_derive() {
+    let author = author();
+    let ckey = key(3);
+    let send = |params: EncryptMessageParams, files: &[&str]| {
+        let attachments = files.iter().map(|hash| image(hash)).collect();
+        author
+            .core
+            .encrypt_message(with_attachments(params, attachments))
+            .unwrap()
+            .message_id
+    };
+    let id = send(message_params("two photos", &ckey), &["photo-a", "photo-b"]);
+    assert_lowercase_v4_uuid(&id);
+    assert_eq!(
+        id,
+        message_keys::derive_media_message_id(
+            &ckey,
+            KEY_VERSION,
+            AUTHOR,
+            CONVERSATION,
+            &["photo-a", "photo-b"]
+        )
+        .unwrap()
+    );
+
+    let same = [
+        (
+            "the same message",
+            send(message_params("two photos", &ckey), &["photo-a", "photo-b"]),
+        ),
+        (
+            "other text",
+            send(message_params("other text", &ckey), &["photo-a", "photo-b"]),
+        ),
+        (
+            "the hyphenated conversation id",
+            send(
+                EncryptMessageParams::new("1491585161162473473-2", "two photos")
+                    .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+                &["photo-a", "photo-b"],
+            ),
+        ),
+    ];
+    for (what, other) in same {
+        assert_eq!(other, id, "{what}");
+    }
+
+    let different = [
+        (
+            "files in another order",
+            send(message_params("two photos", &ckey), &["photo-b", "photo-a"]),
+        ),
+        (
+            "fewer files",
+            send(message_params("two photos", &ckey), &["photo-a"]),
+        ),
+        (
+            "another sender",
+            send(
+                message_params("two photos", &ckey).with_identity("1002", SIGNING_KEY_VERSION),
+                &["photo-a", "photo-b"],
+            ),
+        ),
+        (
+            "another conversation",
+            send(
+                EncryptMessageParams::new("g1234", "two photos")
+                    .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+                &["photo-a", "photo-b"],
+            ),
+        ),
+        (
+            "another conversation key",
+            send(
+                message_params("two photos", &key(4)),
+                &["photo-a", "photo-b"],
+            ),
+        ),
+        (
+            "another conversation key version",
+            send(
+                EncryptMessageParams::new(CONVERSATION, "two photos")
+                    .with_conversation_key(ckey.to_bytes(), "8"),
+                &["photo-a", "photo-b"],
+            ),
+        ),
+    ];
+    for (what, other) in different {
+        assert_ne!(other, id, "{what}");
+    }
+}
+
+#[test]
+fn a_reply_with_files_takes_the_id_its_files_derive() {
+    let author = author();
+    let ckey = key(3);
+    let original = author
+        .core
+        .encrypt_message(message_params("original", &ckey))
+        .unwrap();
+    let original_event = frame(&delivered(&original, "100"));
+    let send = |text: &str| {
+        let mut params = EncryptReplyParams::new(CONVERSATION, text, original_event.clone())
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        params.attachments = Some(vec![image("reply-photo")]);
+        author.core.encrypt_reply(params).unwrap().message_id
+    };
+    let id = send("a photo");
+    assert_eq!(id, send("another caption"));
+    assert_eq!(
+        id,
+        message_keys::derive_media_message_id(
+            &ckey,
+            KEY_VERSION,
+            AUTHOR,
+            CONVERSATION,
+            &["reply-photo"]
+        )
+        .unwrap()
+    );
+}
+
+// Files.
+
+#[test]
+fn files_encrypted_from_the_payload_open_from_the_sent_message() {
+    let author = author();
+    let ckey = key(3);
+    let files: Vec<Vec<u8>> = (0..3u8).map(|i| vec![i; 3000 + usize::from(i)]).collect();
+    let payload = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("three photos", &ckey),
+            vec![image("photo-0"), image("photo-1"), image("photo-2")],
+        ))
+        .unwrap();
     let event = delivered(&payload, "100");
-    for (index, (file, encrypted)) in files.iter().zip(&encrypted).enumerate() {
-        let opened = open_media(&event, &ckey, &format!("photo-{index}"), encrypted).unwrap();
-        assert_eq!(&opened, file, "photo {index}");
+    for (index, file) in files.iter().enumerate() {
+        let media_hash_key = format!("photo-{index}");
+        let encrypted = encrypt_file(&payload, &ckey, &media_hash_key, file).unwrap();
+        assert_eq!(
+            Some(encrypted.len() as u64),
+            encrypted_file_size(file.len() as u64)
+        );
+        assert_eq!(
+            &open_file(&event, &ckey, &media_hash_key, &encrypted).unwrap(),
+            file,
+            "photo {index}"
+        );
     }
 
     let Contents::Message(message) = sent_contents(&payload, &ckey) else {
         panic!("expected a message");
     };
+    let message_id = &payload.message_id;
     assert_eq!(
         attachment_ids(message.attachments.as_deref().unwrap()),
         vec![
@@ -295,58 +519,98 @@ fn media_encrypted_for_its_position_opens_from_the_sent_message() {
 }
 
 #[test]
-fn the_incremental_encryptor_takes_the_same_message_and_position() {
+fn the_file_encryptor_and_decryptor_match_the_one_shot_calls() {
     let author = author();
     let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    let file: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
-    let mut encryptor = author.core.stream_encryptor(&ckey, &message_id, 1).unwrap();
+    let file: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let payload = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("two photos", &ckey),
+            vec![image("first"), image("second")],
+        ))
+        .unwrap();
+    let mut encryptor = ChatCore::new()
+        .file_encryptor(FileEncryptorParams::new(
+            payload.event_b64.clone(),
+            keys(KEY_VERSION, &ckey),
+            "second",
+        ))
+        .unwrap();
     let mut encrypted = Vec::new();
-    for chunk in file.chunks(4096) {
+    for chunk in file.chunks(4093) {
         encrypted.extend(encryptor.push(chunk).unwrap());
     }
     encrypted.extend(encryptor.finish().unwrap());
+    assert_eq!(
+        Some(encrypted.len() as u64),
+        encrypted_file_size(file.len() as u64)
+    );
 
-    let mut params = message_params("two photos", &ckey).with_message_id(message_id);
-    params.attachments = Some(vec![image("first"), image("second")]);
-    let payload = author.core.encrypt_message(params).unwrap();
     let event = delivered(&payload, "100");
     assert_eq!(
-        open_media(&event, &ckey, "second", &encrypted).unwrap(),
+        open_file(&event, &ckey, "second", &encrypted).unwrap(),
         file
     );
-    assert!(open_media(&event, &ckey, "first", &encrypted).is_err());
+    assert!(open_file(&event, &ckey, "first", &encrypted).is_err());
+    let one_shot = encrypt_file(&payload, &ckey, "second", &file).unwrap();
+    assert_eq!(open_file(&event, &ckey, "second", &one_shot).unwrap(), file);
+
+    let mut decryptor = ChatCore::new()
+        .file_decryptor(FileDecryptorParams::new(
+            frame(&event),
+            keys(KEY_VERSION, &ckey),
+            "second",
+        ))
+        .unwrap();
+    let mut opened = Vec::new();
+    for chunk in encrypted.chunks(1000) {
+        opened.extend(decryptor.push(chunk).unwrap());
+    }
+    opened.extend(decryptor.finish().unwrap());
+    assert_eq!(opened, file);
 }
 
 #[test]
-fn a_link_cards_banner_and_favicon_take_the_cards_position() {
+fn an_empty_file_encrypts_and_opens() {
     let author = author();
     let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    let banner = author
+    let payload = author
         .core
-        .encrypt_stream(b"banner bytes", &ckey, &message_id, 0)
+        .encrypt_message(with_attachments(
+            message_params("empty", &ckey),
+            vec![image("empty")],
+        ))
         .unwrap();
-    let favicon = author
-        .core
-        .encrypt_stream(b"favicon bytes", &ckey, &message_id, 0)
-        .unwrap();
+    let encrypted = encrypt_file(&payload, &ckey, "empty", b"").unwrap();
+    assert_eq!(Some(encrypted.len() as u64), encrypted_file_size(0));
+    assert!(
+        open_file(&delivered(&payload, "100"), &ckey, "empty", &encrypted)
+            .unwrap()
+            .is_empty()
+    );
+}
 
-    let mut params = message_params("a link", &ckey).with_message_id(message_id.clone());
-    params.attachments = Some(vec![AttachmentDescriptor::Url {
-        url: "https://example.com".to_string(),
-        display_title: Some("Example".to_string()),
-        banner_image: Some(card_image("banner")),
-        favicon_image: Some(card_image("favicon")),
-    }]);
-    let payload = author.core.encrypt_message(params).unwrap();
+#[test]
+fn a_link_cards_banner_and_favicon_take_the_cards_key() {
+    let author = author();
+    let ckey = key(3);
+    let payload = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("a link", &ckey),
+            vec![link_card(Some("banner"), Some("favicon"))],
+        ))
+        .unwrap();
+    let banner = encrypt_file(&payload, &ckey, "banner", b"banner bytes").unwrap();
+    let favicon = encrypt_file(&payload, &ckey, "favicon", b"favicon bytes").unwrap();
     let event = delivered(&payload, "100");
     assert_eq!(
-        open_media(&event, &ckey, "banner", &banner).unwrap(),
+        open_file(&event, &ckey, "banner", &banner).unwrap(),
         b"banner bytes"
     );
     assert_eq!(
-        open_media(&event, &ckey, "favicon", &favicon).unwrap(),
+        open_file(&event, &ckey, "favicon", &favicon).unwrap(),
         b"favicon bytes"
     );
 
@@ -355,46 +619,51 @@ fn a_link_cards_banner_and_favicon_take_the_cards_position() {
     };
     assert_eq!(
         attachment_ids(message.attachments.as_deref().unwrap()),
-        vec![Some(message_id)]
+        vec![Some(payload.message_id.clone())]
     );
 }
 
 #[test]
-fn a_reply_sends_its_own_media_and_quotes_the_originals_with_their_ids() {
+fn a_reply_encrypts_its_own_files_and_quotes_the_originals() {
     let author = author();
     let ckey = key(3);
-    let original_id = author.core.new_message_id();
-    let original_photo = author
+    let original = author
         .core
-        .encrypt_stream(b"original photo", &ckey, &original_id, 0)
+        .encrypt_message(with_attachments(
+            message_params("a photo", &ckey),
+            vec![image("original-photo")],
+        ))
         .unwrap();
-    let mut params = message_params("a photo", &ckey).with_message_id(original_id.clone());
-    params.attachments = Some(vec![image("original-photo")]);
-    let original = author.core.encrypt_message(params).unwrap();
+    let original_photo =
+        encrypt_file(&original, &ckey, "original-photo", b"original photo").unwrap();
 
-    let reply_id = author.core.new_message_id();
-    let reply_photo = author
-        .core
-        .encrypt_stream(b"reply photo", &ckey, &reply_id, 0)
-        .unwrap();
     let mut params = EncryptReplyParams::new(
         CONVERSATION,
         "and mine",
         frame(&delivered(&original, "100")),
     )
-    .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
-    .with_message_id(reply_id.clone());
+    .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
     params.attachments = Some(vec![image("reply-photo")]);
     let reply = author.core.encrypt_reply(params).unwrap();
-    assert_eq!(reply.message_id, reply_id);
+    let reply_photo = encrypt_file(&reply, &ckey, "reply-photo", b"reply photo").unwrap();
+    let err = error_text(encrypt_file(
+        &reply,
+        &ckey,
+        "original-photo",
+        b"original photo",
+    ));
+    assert!(
+        err.contains("media_hash_key 'original-photo' is media the reply quotes"),
+        "{err}"
+    );
 
     let event = delivered(&reply, "200");
     assert_eq!(
-        open_media(&event, &ckey, "reply-photo", &reply_photo).unwrap(),
+        open_file(&event, &ckey, "reply-photo", &reply_photo).unwrap(),
         b"reply photo"
     );
     assert_eq!(
-        open_media(&event, &ckey, "original-photo", &original_photo).unwrap(),
+        open_file(&event, &ckey, "original-photo", &original_photo).unwrap(),
         b"original photo"
     );
 
@@ -403,12 +672,12 @@ fn a_reply_sends_its_own_media_and_quotes_the_originals_with_their_ids() {
     };
     assert_eq!(
         attachment_ids(message.attachments.as_deref().unwrap()),
-        vec![Some(reply_id)]
+        vec![Some(reply.message_id.clone())]
     );
     let preview = message.replying_to_preview.unwrap();
     assert_eq!(
         attachment_ids(preview.attachments.as_deref().unwrap()),
-        vec![Some(original_id)]
+        vec![Some(original.message_id.clone())]
     );
     let validated = decrypt_message(
         &ChatCore::new(),
@@ -424,214 +693,324 @@ fn a_reply_sends_its_own_media_and_quotes_the_originals_with_their_ids() {
 }
 
 #[test]
-fn media_encrypted_for_another_position_or_message_does_not_open() {
+fn a_rebuilt_message_keeps_its_encrypted_files_valid() {
     let author = author();
     let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    let other_id = author.core.new_message_id();
-    let at_one = author
-        .core
-        .encrypt_stream(b"photo", &ckey, &message_id, 1)
-        .unwrap();
-    let for_other = author
-        .core
-        .encrypt_stream(b"photo", &ckey, &other_id, 0)
-        .unwrap();
+    let build = |party: &Party, text: &str| {
+        party
+            .core
+            .encrypt_message(with_attachments(
+                message_params(text, &ckey),
+                vec![image("photo-a"), image("photo-b")],
+            ))
+            .unwrap()
+    };
+    let draft = build(&author, "draft");
+    let photo_b = encrypt_file(&draft, &ckey, "photo-b", b"photo b").unwrap();
 
-    let mut params = message_params("a photo", &ckey).with_message_id(message_id);
-    params.attachments = Some(vec![image("photo")]);
-    let event = delivered(&author.core.encrypt_message(params).unwrap(), "100");
-    assert!(open_media(&event, &ckey, "photo", &at_one).is_err());
-    assert!(open_media(&event, &ckey, "photo", &for_other).is_err());
+    // Another session of the same sender, with other signing keys.
+    let restarted = Party::new(AUTHOR);
+    restarted.core.set_identity(AUTHOR, "2");
+    for (what, rebuilt) in [
+        ("rebuilt", build(&author, "final text")),
+        (
+            "rebuilt in another session",
+            build(&restarted, "final text"),
+        ),
+    ] {
+        assert_eq!(rebuilt.message_id, draft.message_id, "{what}");
+        assert_eq!(
+            open_file(&delivered(&rebuilt, "100"), &ckey, "photo-b", &photo_b).unwrap(),
+            b"photo b",
+            "{what}"
+        );
+    }
 }
 
-// Invalid input.
-
 #[test]
-fn a_message_with_media_must_carry_its_message_id() {
+fn a_file_encrypted_for_another_attachment_or_message_does_not_open() {
     let author = author();
     let ckey = key(3);
-    let media_attachments = [
-        image("photo"),
-        AttachmentDescriptor::Url {
-            url: "https://example.com".to_string(),
-            display_title: None,
-            banner_image: Some(card_image("banner")),
-            favicon_image: None,
-        },
-        AttachmentDescriptor::Url {
-            url: "https://example.com".to_string(),
-            display_title: None,
-            banner_image: None,
-            favicon_image: Some(card_image("favicon")),
-        },
-    ];
-    for attachment in media_attachments {
-        let mut params = message_params("media", &ckey);
-        params.attachments = Some(vec![attachment.clone()]);
-        let err = author.core.encrypt_message(params).unwrap_err();
-        assert!(matches!(err, SdkError::InvalidState(_)), "{err}");
-        assert!(err.to_string().contains("message_id is not set"), "{err}");
+    let payload = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("two photos", &ckey),
+            vec![image("photo-a"), image("photo-b")],
+        ))
+        .unwrap();
+    let other = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("another photo", &ckey),
+            vec![image("photo-c")],
+        ))
+        .unwrap();
+    let event = delivered(&payload, "100");
+    let for_a = encrypt_file(&payload, &ckey, "photo-a", b"photo").unwrap();
+    let for_other = encrypt_file(&other, &ckey, "photo-c", b"photo").unwrap();
+    assert!(open_file(&event, &ckey, "photo-b", &for_a).is_err());
+    assert!(open_file(&event, &ckey, "photo-a", &for_other).is_err());
+    assert!(open_file(&delivered(&other, "101"), &ckey, "photo-c", &for_a).is_err());
+}
 
-        let mut params = EncryptReplyParams::new(CONVERSATION, "media", "")
+#[test]
+fn file_encryption_errors_say_what_to_pass() {
+    let author = author();
+    let ckey = key(3);
+    let with_photo = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("a photo", &ckey),
+            vec![image("photo")],
+        ))
+        .unwrap();
+    let without_files = author
+        .core
+        .encrypt_message(message_params("text", &ckey))
+        .unwrap();
+    let photo_event = frame(&delivered(&with_photo, "100"));
+    let reaction = author
+        .core
+        .encrypt_add_reaction(
+            &EncryptReactionParams::new(photo_event.clone(), "👍")
+                .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+        )
+        .unwrap();
+    let edit = author
+        .core
+        .encrypt_edit(
+            &EncryptEditParams::new(photo_event, "edited")
+                .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+        )
+        .unwrap();
+    let not_a_message = frame(&ThriftEvent {
+        message_id: Some(with_photo.message_id.clone()),
+        sender_id: Some(AUTHOR.to_string()),
+        ..Default::default()
+    });
+
+    let ok_keys = keys(KEY_VERSION, &ckey);
+    let cases = [
+        (
+            with_photo.event_b64.clone(),
+            ok_keys.clone(),
+            "",
+            "media_hash_key is empty".to_string(),
+        ),
+        (
+            with_photo.event_b64.clone(),
+            ok_keys.clone(),
+            "other",
+            "media_hash_key 'other' is not one of the message's files, whose media hash keys are \
+             photo"
+                .to_string(),
+        ),
+        (
+            without_files.event_b64.clone(),
+            ok_keys.clone(),
+            "photo",
+            "the message has no files".to_string(),
+        ),
+        (
+            reaction.event_b64.clone(),
+            ok_keys.clone(),
+            "photo",
+            "is a reaction".to_string(),
+        ),
+        (
+            edit.event_b64.clone(),
+            ok_keys.clone(),
+            "photo",
+            "is an edit".to_string(),
+        ),
+        (
+            not_a_message,
+            ok_keys.clone(),
+            "photo",
+            "the event is not a message".to_string(),
+        ),
+        (
+            with_photo.event_b64.clone(),
+            keys(KEY_VERSION, &key(4)),
+            "photo",
+            format!("the key for version '{KEY_VERSION}' in conversation_keys does not decrypt"),
+        ),
+        (
+            with_photo.event_b64.clone(),
+            keys("8", &ckey),
+            "photo",
+            format!("conversation_keys has no key for version '{KEY_VERSION}'"),
+        ),
+        (
+            "not base64!".to_string(),
+            ok_keys.clone(),
+            "photo",
+            "Base64 error".to_string(),
+        ),
+    ];
+    let core = ChatCore::new();
+    for (event_b64, conversation_keys, media_hash_key, expected) in cases {
+        let err = error_text(core.encrypt_file(EncryptFileParams::new(
+            b"photo".to_vec(),
+            event_b64.clone(),
+            conversation_keys.clone(),
+            media_hash_key,
+        )));
+        assert!(err.contains(&expected), "{err:?} lacks {expected:?}");
+        let err = error_text(core.file_encryptor(FileEncryptorParams::new(
+            event_b64,
+            conversation_keys,
+            media_hash_key,
+        )));
+        assert!(err.contains(&expected), "{err:?} lacks {expected:?}");
+    }
+}
+
+#[test]
+fn each_file_needs_its_own_media_hash_key() {
+    let author = author();
+    let ckey = key(3);
+    let cases = [
+        (vec![image("")], "an attachment's media_hash_key is empty"),
+        (
+            vec![link_card(Some(""), None)],
+            "an attachment's media_hash_key is empty",
+        ),
+        (
+            vec![image("photo"), image("photo")],
+            "media_hash_key 'photo' is in more than one attachment",
+        ),
+    ];
+    for (attachments, expected) in cases {
+        let err = error_text(author.core.encrypt_message(with_attachments(
+            message_params("files", &ckey),
+            attachments.clone(),
+        )));
+        assert!(err.contains(expected), "{err}");
+
+        let mut params = EncryptReplyParams::new(CONVERSATION, "files", "")
             .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
         params.reply_to_sequence_id = Some("100".to_string());
-        params.attachments = Some(vec![attachment]);
+        params.attachments = Some(attachments);
         let err = error_text(author.core.encrypt_reply(params));
-        assert!(err.contains("message_id is not set"), "{err}");
+        assert!(err.contains(expected), "{err}");
     }
 
-    let no_media = [
-        AttachmentDescriptor::Url {
-            url: "https://example.com".to_string(),
-            display_title: Some("Example".to_string()),
-            banner_image: None,
-            favicon_image: None,
-        },
-        AttachmentDescriptor::Post {
-            rest_id: Some("1234".to_string()),
-            post_url: None,
-        },
-    ];
-    for attachment in no_media {
-        let mut params = message_params("no media", &ckey);
-        params.attachments = Some(vec![attachment]);
-        author.core.encrypt_message(params).unwrap();
-    }
+    let shared = author
+        .core
+        .encrypt_message(with_attachments(
+            message_params("a link", &ckey),
+            vec![link_card(Some("image"), Some("image"))],
+        ))
+        .unwrap();
+    let encrypted = encrypt_file(&shared, &ckey, "image", b"image").unwrap();
+    assert_eq!(
+        open_file(&delivered(&shared, "100"), &ckey, "image", &encrypted).unwrap(),
+        b"image"
+    );
 }
 
-#[test]
-fn a_message_with_media_is_sent_as_the_session_identity() {
-    let author = author();
-    let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    let with_photo = |sender_id: &str| {
-        let mut params = message_params("a photo", &ckey)
-            .with_message_id(message_id.clone())
-            .with_identity(sender_id, SIGNING_KEY_VERSION);
-        params.attachments = Some(vec![image("photo")]);
-        params
-    };
-    let expected = format!("sender_id '1002' is not the session identity '{AUTHOR}'");
+// Identity.
 
-    let err = error_text(author.core.encrypt_message(with_photo("1002")));
-    assert!(err.contains(&expected), "{err}");
-    let mut reply = EncryptReplyParams::new(CONVERSATION, "a photo", "")
-        .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
-        .with_message_id(message_id.clone())
-        .with_identity("1002", SIGNING_KEY_VERSION);
+#[test]
+fn a_send_takes_its_identity_from_the_params_then_the_session() {
+    let ckey = key(3);
+    let sends = |text: &str| {
+        [
+            message_params(text, &ckey),
+            with_attachments(message_params(text, &ckey), vec![image("photo")]),
+        ]
+    };
+
+    let anonymous = Party::new(AUTHOR);
+    for params in sends("no identity") {
+        let err = error_text(anonymous.core.encrypt_message(params));
+        assert!(
+            err.contains("sender_id is not set: pass it explicitly or call set_identity() first"),
+            "{err}"
+        );
+    }
+    let mut reply = EncryptReplyParams::new(CONVERSATION, "no identity", "")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
     reply.reply_to_sequence_id = Some("100".to_string());
     reply.attachments = Some(vec![image("photo")]);
-    let err = error_text(author.core.encrypt_reply(reply));
-    assert!(err.contains(&expected), "{err}");
-
-    author.core.encrypt_message(with_photo(AUTHOR)).unwrap();
-    author
-        .core
-        .encrypt_message(message_params("no media", &ckey).with_identity("1002", "1"))
-        .unwrap();
-
-    let without_identity = Party::new(AUTHOR);
-    let err = error_text(without_identity.core.encrypt_message(with_photo(AUTHOR)));
+    let err = error_text(anonymous.core.encrypt_reply(reply));
     assert!(err.contains("call set_identity() first"), "{err}");
-}
 
-#[test]
-fn a_message_id_must_be_a_lowercase_hyphenated_uuid() {
     let author = author();
-    let ckey = key(3);
-    let valid = author.core.new_message_id();
-    let invalid = [
-        valid.to_uppercase(),
-        format!("{{{valid}}}"),
-        format!("urn:uuid:{valid}"),
-        valid.replace('-', ""),
-        format!("{valid} "),
-        valid[..35].to_string(),
-        format!("{},{}", &valid[..8], &valid[9..]),
-        "msg-1".to_string(),
+    let as_other = SigningKeyEntry {
+        user_id: "1002".to_string(),
+        public_key_version: "2".to_string(),
+        ..author.entry.clone()
+    };
+    let cases = [
+        (
+            &anonymous,
+            Some((AUTHOR, SIGNING_KEY_VERSION)),
+            &anonymous.entry,
+        ),
+        (&author, None, &author.entry),
+        (&author, Some(("1002", "2")), &as_other),
     ];
-    for message_id in invalid {
-        let expected = format!("Invalid message_id '{message_id}'");
-        let err =
-            error_text(author.core.encrypt_message(
-                message_params("text", &ckey).with_message_id(message_id.clone()),
-            ));
-        assert!(err.contains(&expected), "{err}");
-
-        let mut params = EncryptReplyParams::new(CONVERSATION, "reply", "")
-            .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
-            .with_message_id(message_id.clone());
-        params.reply_to_sequence_id = Some("100".to_string());
-        let err = error_text(author.core.encrypt_reply(params));
-        assert!(err.contains(&expected), "{err}");
-
-        let err = error_text(author.core.encrypt_stream(b"photo", &ckey, &message_id, 0));
-        assert!(err.contains(&expected), "{err}");
-        let err = error_text(author.core.stream_encryptor(&ckey, &message_id, 0));
-        assert!(err.contains(&expected), "{err}");
+    for (party, identity, signing_key) in cases {
+        for params in sends("identity") {
+            let params = match identity {
+                Some((sender_id, version)) => params.with_identity(sender_id, version),
+                None => params,
+            };
+            let has_file = params.attachments.is_some();
+            let payload = party.core.encrypt_message(params).unwrap();
+            let event = ChatCore::parse_event_b64(&payload.event_b64).unwrap();
+            assert_eq!(event.sender_id, Some(signing_key.user_id.clone()));
+            assert_eq!(
+                payload.signature_info.public_key_version,
+                signing_key.public_key_version
+            );
+            let message = decrypt_message(
+                &ChatCore::new(),
+                &event,
+                &keys(KEY_VERSION, &ckey),
+                std::slice::from_ref(signing_key),
+            )
+            .unwrap();
+            assert!(message.verified, "{identity:?}");
+            if has_file {
+                let encrypted = encrypt_file(&payload, &ckey, "photo", b"photo").unwrap();
+                let opened = ChatCore::new()
+                    .decrypt_file(DecryptFileParams::new(
+                        encrypted,
+                        frame(&event),
+                        keys(KEY_VERSION, &ckey),
+                        "photo",
+                    ))
+                    .unwrap();
+                assert_eq!(opened, b"photo", "{identity:?}");
+            }
+        }
     }
-}
-
-#[test]
-fn media_encryption_rejects_a_position_no_message_has() {
-    let author = author();
-    let ckey = key(3);
-    let message_id = author.core.new_message_id();
-    for index in [-1, 10, i64::MIN, i64::MAX] {
-        let err = error_text(
-            author
-                .core
-                .encrypt_stream(b"photo", &ckey, &message_id, index),
-        );
-        assert!(
-            err.contains(&format!("Invalid attachment_index {index}")),
-            "{err}"
-        );
-        let err = error_text(author.core.stream_encryptor(&ckey, &message_id, index));
-        assert!(
-            err.contains(&format!("Invalid attachment_index {index}")),
-            "{err}"
-        );
-    }
-    author
-        .core
-        .encrypt_stream(b"photo", &ckey, &message_id, 9)
-        .unwrap();
-}
-
-#[test]
-fn media_encryption_needs_a_numeric_session_identity() {
-    let ckey = key(3);
-    let core = ChatCore::new();
-    let message_id = core.new_message_id();
-    let err = error_text(core.encrypt_stream(b"photo", &ckey, &message_id, 0));
-    assert!(err.contains("call set_identity() first"), "{err}");
-
-    core.set_identity("me", SIGNING_KEY_VERSION);
-    let err = error_text(core.encrypt_stream(b"photo", &ckey, &message_id, 0));
-    assert!(err.contains("Invalid sender_id 'me'"), "{err}");
 }
 
 #[test]
 fn a_send_needs_a_numeric_sender_and_an_integer_key_version() {
     let author = author();
     let ckey = key(3);
-    let err = error_text(
-        author
-            .core
-            .encrypt_message(message_params("text", &ckey).with_identity("me", "1")),
-    );
-    assert!(err.contains("Invalid sender_id 'me'"), "{err}");
+    for attachments in [Vec::new(), vec![image("photo")]] {
+        let err = error_text(author.core.encrypt_message(with_attachments(
+            message_params("text", &ckey).with_identity("me", "1"),
+            attachments.clone(),
+        )));
+        assert!(err.contains("Invalid sender_id 'me'"), "{err}");
 
-    let err = error_text(
-        author.core.encrypt_message(
-            EncryptMessageParams::new(CONVERSATION, "text")
-                .with_conversation_key(ckey.to_bytes(), "v7"),
-        ),
-    );
-    assert!(
-        err.contains("Invalid conversation_key_version 'v7'"),
-        "{err}"
-    );
+        let err = error_text(
+            author.core.encrypt_message(with_attachments(
+                EncryptMessageParams::new(CONVERSATION, "text")
+                    .with_conversation_key(ckey.to_bytes(), "v7"),
+                attachments,
+            )),
+        );
+        assert!(
+            err.contains("Invalid conversation_key_version 'v7'"),
+            "{err}"
+        );
+    }
 }

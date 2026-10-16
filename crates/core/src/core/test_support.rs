@@ -247,7 +247,7 @@ pub(super) fn decrypt_message(
     conversation_keys: &HashMap<String, XChatConversationKey>,
     signing_keys: &[SigningKeyEntry],
 ) -> Result<Box<Message>, SdkError> {
-    match receiver.decrypt_event(&frame(event), conversation_keys, signing_keys)? {
+    match receiver.decrypt_event_with(&frame(event), conversation_keys, signing_keys)? {
         Event::Message(message) => Ok(message),
         other => panic!("expected a message, got {:?}", other),
     }

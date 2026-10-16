@@ -5,7 +5,7 @@
 //! ## Quick Start
 //!
 //! ```rust,ignore
-//! use chat_xdk_core::{Chat, EncryptMessageParams};
+//! use chat_xdk_core::{Chat, DecryptEventsParams, EncryptMessageParams, EncryptReplyParams};
 //!
 //! // Create, unlock, and set the session identity once
 //! let chat = Chat::new(juicebox_config);
@@ -15,7 +15,7 @@
 //! chat.set_signing_keys(signing_keys);
 //!
 //! // Decrypt incoming events; verified conversation keys are cached
-//! let result = chat.decrypt_events(&events, &[]);
+//! let result = chat.decrypt_events(DecryptEventsParams::new(events));
 //!
 //! // Send messages. The SDK generates the message id and returns it in the
 //! // payload (payload.message_id); sender, signing-key version, and the
@@ -37,6 +37,8 @@
 //! | [`Chat::unlock`] | Load keys on startup |
 //! | [`Chat::decrypt_event`] | Decrypt webhook events |
 //! | [`Chat::encrypt_message`] | Encrypt outgoing messages |
+//! | [`Chat::encrypt_file`] | Encrypt a file for an outgoing message |
+//! | [`Chat::decrypt_file`] | Decrypt a file from the message that carries it |
 //!
 //! ### Level 2: Advanced API (when you need more control)
 //!
@@ -64,8 +66,10 @@ use crate::error::{JuiceboxError, KeyError, SdkError};
 use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, RegisterResult};
 #[cfg(feature = "juicebox")]
 use crate::params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
+    EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -100,8 +104,8 @@ use zeroize::Zeroize;
 /// chat.set_cache_keys(true);
 /// chat.set_signing_keys(signing_keys);
 ///
-/// // Handle incoming webhook (keys resolve from the session stores)
-/// let event = chat.decrypt_event(event_b64, &Default::default(), &[])?;
+/// // Handle incoming webhook (signatures verify with the stored signing keys)
+/// let event = chat.decrypt_event(DecryptEventParams::new(event_b64, conversation_keys))?;
 /// if let Event::Message(msg) = event {
 ///     println!("{}: {}", msg.meta.sender_id.unwrap_or_default(), msg.text().unwrap_or(""));
 /// }
@@ -299,31 +303,18 @@ impl Chat {
         self.inner.extract_conversation_keys(events)
     }
 
-    /// Decrypt a raw webhook event payload.
-    pub fn decrypt_event(
-        &self,
-        event_b64: &str,
-        conversation_keys: &std::collections::HashMap<String, XChatConversationKey>,
-        signing_keys: &[SigningKeyEntry],
-    ) -> Result<Event, SdkError> {
-        self.inner
-            .decrypt_event(event_b64, conversation_keys, signing_keys)
+    /// Decrypt a raw webhook event payload; see
+    /// [`crate::ChatCore::decrypt_event`].
+    pub fn decrypt_event(&self, params: DecryptEventParams) -> Result<Event, SdkError> {
+        self.inner.decrypt_event(params)
     }
 
-    /// Decrypt multiple events in batch.
-    pub fn decrypt_events(
-        &self,
-        events: &[&str],
-        signing_keys: &[SigningKeyEntry],
-    ) -> DecryptEventsResult {
-        self.inner.decrypt_events(events, signing_keys)
+    /// Decrypt multiple events in batch; see
+    /// [`crate::ChatCore::decrypt_events`].
+    pub fn decrypt_events(&self, params: DecryptEventsParams) -> DecryptEventsResult {
+        self.inner.decrypt_events(params)
     }
 
-    /// A fresh message id for a message with media; see
-    /// [`crate::ChatCore::new_message_id`].
-    pub fn new_message_id(&self) -> String {
-        self.inner.new_message_id()
-    }
     /// Encrypt a text message.
     pub fn encrypt_message(&self, params: EncryptMessageParams) -> Result<SendPayload, SdkError> {
         self.inner.encrypt_message(params)
@@ -364,52 +355,33 @@ impl Chat {
     ) -> Result<XChatConversationKey, SdkError> {
         self.inner.decrypt_conversation_key(encrypted_key_b64)
     }
-    /// Encrypt a media file for an outgoing message; see
-    /// [`crate::ChatCore::encrypt_stream`].
-    pub fn encrypt_stream(
-        &self,
-        plaintext: &[u8],
-        conversation_key: &XChatConversationKey,
-        message_id: &str,
-        attachment_index: i64,
-    ) -> Result<Vec<u8>, SdkError> {
-        self.inner
-            .encrypt_stream(plaintext, conversation_key, message_id, attachment_index)
-    }
-    /// Decrypt an encrypted media file; see [`crate::ChatCore::decrypt_stream`].
-    pub fn decrypt_stream(
-        &self,
-        encrypted: &[u8],
-        event_b64: &str,
-        conversation_keys: &std::collections::HashMap<String, XChatConversationKey>,
-        media_hash_key: &str,
-    ) -> Result<Vec<u8>, SdkError> {
-        self.inner
-            .decrypt_stream(encrypted, event_b64, conversation_keys, media_hash_key)
+    /// Encrypt a file for an outgoing message; see
+    /// [`crate::ChatCore::encrypt_file`].
+    pub fn encrypt_file(&self, params: EncryptFileParams) -> Result<Vec<u8>, SdkError> {
+        self.inner.encrypt_file(params)
     }
 
-    /// Create an incremental encryptor for a media file; see
-    /// [`crate::ChatCore::stream_encryptor`].
-    pub fn stream_encryptor(
+    /// Create an incremental encryptor for a file; see
+    /// [`crate::ChatCore::file_encryptor`].
+    pub fn file_encryptor(
         &self,
-        conversation_key: &XChatConversationKey,
-        message_id: &str,
-        attachment_index: i64,
-    ) -> Result<crate::crypto::encryption::StreamEncryptor, SdkError> {
-        self.inner
-            .stream_encryptor(conversation_key, message_id, attachment_index)
+        params: FileEncryptorParams,
+    ) -> Result<crate::FileEncryptor, SdkError> {
+        self.inner.file_encryptor(params)
     }
 
-    /// Create an incremental decryptor for an encrypted media file; see
-    /// [`crate::ChatCore::stream_decryptor`].
-    pub fn stream_decryptor(
+    /// Decrypt a file; see [`crate::ChatCore::decrypt_file`].
+    pub fn decrypt_file(&self, params: DecryptFileParams) -> Result<Vec<u8>, SdkError> {
+        self.inner.decrypt_file(params)
+    }
+
+    /// Create an incremental decryptor for a file; see
+    /// [`crate::ChatCore::file_decryptor`].
+    pub fn file_decryptor(
         &self,
-        event_b64: &str,
-        conversation_keys: &std::collections::HashMap<String, XChatConversationKey>,
-        media_hash_key: &str,
-    ) -> Result<crate::crypto::encryption::StreamDecryptor, SdkError> {
-        self.inner
-            .stream_decryptor(event_b64, conversation_keys, media_hash_key)
+        params: FileDecryptorParams,
+    ) -> Result<crate::FileDecryptor, SdkError> {
+        self.inner.file_decryptor(params)
     }
 
     /// Encrypt a UTF-8 string using XSalsa20-Poly1305 and return base64.
@@ -942,10 +914,8 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         chat.set_identity("4201", "s1");
-        let message_id = chat.new_message_id();
         let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
-            .with_conversation_key(ckey.to_bytes(), "1")
-            .with_message_id(message_id.clone());
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-99".into());
         params.reply_to_sender_id = Some(12345);
         params.reply_to_text = Some("Original".into());
@@ -963,7 +933,6 @@ mod tests {
         let payload = chat.encrypt_reply(params).unwrap();
         assert!(!payload.encrypted_content.is_empty());
         assert!(!payload.should_notify);
-        assert_eq!(payload.message_id, message_id);
     }
 
     #[tokio::test]
@@ -1398,7 +1367,7 @@ mod tests {
         assert!(payload.should_notify);
     }
 
-    // Stream encrypt/decrypt
+    // File encrypt/decrypt
 
     /// An unlocked `Chat` with the session identity of user 1000.
     async fn sending_chat() -> Chat {
@@ -1409,22 +1378,19 @@ mod tests {
         chat
     }
 
-    /// The delivered event of a message `chat` sends under key version "1"
-    /// with `message_id`, whose only attachment is the media
-    /// `media_hash_key`, and the key map that opens it.
-    fn sent_media_message(
+    /// The outgoing event of a message `chat` sends under key version "1"
+    /// whose only attachment is the file `media_hash_key`, and the key map
+    /// that opens it.
+    fn sent_file_message(
         chat: &Chat,
         ckey: &XChatConversationKey,
-        message_id: &str,
         media_hash_key: &str,
     ) -> (
         String,
         std::collections::HashMap<String, XChatConversationKey>,
     ) {
-        use crate::thrift::event::{MessageCreateEvent, MessageEvent, MessageEventSignature};
-        let mut params = EncryptMessageParams::new("1000:2000", "media")
-            .with_conversation_key(ckey.to_bytes(), "1")
-            .with_message_id(message_id);
+        let mut params = EncryptMessageParams::new("1000:2000", "a file")
+            .with_conversation_key(ckey.to_bytes(), "1");
         params.attachments = Some(vec![crate::AttachmentDescriptor::Media {
             media_hash_key: media_hash_key.to_string(),
             width: 4,
@@ -1435,85 +1401,80 @@ mod tests {
             duration_millis: None,
         }]);
         let payload = chat.encrypt_message(params).unwrap();
-        let bytes =
-            crate::protocol::serialization::base64_decode(&payload.encrypted_content).unwrap();
-        let mut raw =
-            thrift::protocol::TBinaryInputProtocol::new(std::io::Cursor::new(bytes), true);
-        let mut protocol = crate::protocol::safe_reader::BoundedProtocol::new(&mut raw);
-        let create =
-            <MessageCreateEvent as thrift::protocol::TSerializable>::read_from_in_protocol(
-                &mut protocol,
-            )
-            .unwrap();
-        let event = MessageEvent {
-            message_id: Some(payload.message_id.clone()),
-            sender_id: Some("1000".to_string()),
-            conversation_id: Some("1000:2000".to_string()),
-            detail: Some(crate::thrift::event::MessageEventDetail::MessageCreateEvent(create)),
-            message_event_signature: Some(MessageEventSignature {
-                signature: Some(payload.signature.clone()),
-                public_key_version: Some(payload.signature_info.public_key_version.clone()),
-                signature_version: Some(payload.signature_info.signature_version.clone()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
         (
-            crate::protocol::serialization::base64_encode(
-                &crate::pipeline::serialize_thrift(&event).unwrap(),
-            ),
+            payload.event_b64,
             [("1".to_string(), ckey.clone())].into_iter().collect(),
         )
     }
 
     #[tokio::test]
-    async fn test_stream_encrypt_decrypt_roundtrip() {
+    async fn test_file_encrypt_decrypt_roundtrip() {
         let chat = sending_chat().await;
         let ckey = chat.inner.generate_conversation_key().unwrap();
-        let message_id = chat.new_message_id();
-        let plaintext =
-            b"Hello stream! This is some media content that could be an image or video.";
+        let plaintext = b"Hello file! This is some media content that could be an image or video.";
+        let (event, keys) = sent_file_message(&chat, &ckey, "hash-1");
 
         let encrypted = chat
-            .encrypt_stream(plaintext, &ckey, &message_id, 0)
+            .encrypt_file(EncryptFileParams::new(
+                plaintext.to_vec(),
+                event.clone(),
+                keys.clone(),
+                "hash-1",
+            ))
             .unwrap();
         assert_ne!(encrypted, plaintext);
         assert!(encrypted.len() > plaintext.len()); // overhead from nonce, tag, header
 
-        let (event, keys) = sent_media_message(&chat, &ckey, &message_id, "hash-1");
         let decrypted = chat
-            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[tokio::test]
-    async fn test_stream_encrypt_decrypt_large() {
+    async fn test_file_encrypt_decrypt_large() {
         let chat = sending_chat().await;
         let ckey = chat.inner.generate_conversation_key().unwrap();
-        let message_id = chat.new_message_id();
-        // > 1024 bytes to test multi-chunk streaming
+        // > 1024 bytes to test multi-chunk processing
         let plaintext: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        let (event, keys) = sent_file_message(&chat, &ckey, "hash-1");
 
         let encrypted = chat
-            .encrypt_stream(&plaintext, &ckey, &message_id, 0)
+            .encrypt_file(EncryptFileParams::new(
+                plaintext.clone(),
+                event.clone(),
+                keys.clone(),
+                "hash-1",
+            ))
             .unwrap();
-        let mut encryptor = chat.stream_encryptor(&ckey, &message_id, 0).unwrap();
+        let mut encryptor = chat
+            .file_encryptor(FileEncryptorParams::new(
+                event.clone(),
+                keys.clone(),
+                "hash-1",
+            ))
+            .unwrap();
         let mut incremental_encrypted = Vec::new();
         for chunk in plaintext.chunks(700) {
             incremental_encrypted.extend(encryptor.push(chunk).unwrap());
         }
         incremental_encrypted.extend(encryptor.finish().unwrap());
 
-        let (event, keys) = sent_media_message(&chat, &ckey, &message_id, "hash-1");
         for encrypted in [&encrypted, &incremental_encrypted] {
             let decrypted = chat
-                .decrypt_stream(encrypted, &event, &keys, "hash-1")
+                .decrypt_file(DecryptFileParams::new(
+                    encrypted.clone(),
+                    event.clone(),
+                    keys.clone(),
+                    "hash-1",
+                ))
                 .unwrap();
             assert_eq!(decrypted, plaintext);
         }
 
-        let mut decryptor = chat.stream_decryptor(&event, &keys, "hash-1").unwrap();
+        let mut decryptor = chat
+            .file_decryptor(FileDecryptorParams::new(event, keys, "hash-1"))
+            .unwrap();
         let mut incremental = Vec::new();
         for chunk in encrypted.chunks(700) {
             incremental.extend(decryptor.push(chunk).unwrap());
@@ -1523,19 +1484,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stream_wrong_key_fails() {
+    async fn test_file_wrong_key_fails() {
         let chat = sending_chat().await;
         let ckey1 = chat.inner.generate_conversation_key().unwrap();
         let ckey2 = chat.inner.generate_conversation_key().unwrap();
-        let message_id = chat.new_message_id();
-        let plaintext = b"secret media content";
+        let (event, keys) = sent_file_message(&chat, &ckey1, "hash-1");
+        let wrong_keys: std::collections::HashMap<_, _> =
+            [("1".to_string(), ckey2)].into_iter().collect();
 
+        assert!(chat
+            .encrypt_file(EncryptFileParams::new(
+                b"secret media content".to_vec(),
+                event.clone(),
+                wrong_keys.clone(),
+                "hash-1",
+            ))
+            .is_err());
         let encrypted = chat
-            .encrypt_stream(plaintext, &ckey1, &message_id, 0)
+            .encrypt_file(EncryptFileParams::new(
+                b"secret media content".to_vec(),
+                event.clone(),
+                keys,
+                "hash-1",
+            ))
             .unwrap();
-        let (event, keys) = sent_media_message(&chat, &ckey2, &message_id, "hash-1");
-        let result = chat.decrypt_stream(&encrypted, &event, &keys, "hash-1");
-        assert!(result.is_err());
+        assert!(chat
+            .decrypt_file(DecryptFileParams::new(
+                encrypted, event, wrong_keys, "hash-1"
+            ))
+            .is_err());
     }
 
     // internal signature builders, exercised through the prepare methods

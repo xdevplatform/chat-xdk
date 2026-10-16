@@ -210,7 +210,8 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     let signature_version = MESSAGE_SIGNATURE_VERSION.to_string();
     // The payload comes from the builder verification uses, so what is signed
     // is exactly what recipients rebuild from the delivered event.
-    let signed = MessageEvent {
+    let detail = MessageEventDetail::MessageCreateEvent(event);
+    let mut outgoing = MessageEvent {
         message_id: Some(params.message_id.to_string()),
         sender_id: Some(params.sender_id.to_string()),
         conversation_id: Some(conversation_id.into_owned()),
@@ -223,14 +224,10 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         )),
         ..Default::default()
     };
-    let payload = crate::core::build_event_signature_payload(
-        &signed,
-        &MessageEventDetail::MessageCreateEvent(event),
-        None,
-    )
-    .ok_or_else(|| {
-        SdkError::Parse("Signature payload contains comma-separated component".into())
-    })?;
+    let payload =
+        crate::core::build_event_signature_payload(&outgoing, &detail, None).ok_or_else(|| {
+            SdkError::Parse("Signature payload contains comma-separated component".into())
+        })?;
 
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
     let signature_b64 = STANDARD_NO_PAD.encode(&signature);
@@ -243,9 +240,13 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     );
     let signature_bytes = serialize_thrift(&signature_struct)?;
     let encoded_event_signature = base64_encode(&signature_bytes);
+    outgoing.detail = Some(detail);
+    outgoing.message_event_signature = Some(signature_struct);
+    let event_b64 = base64_encode(&serialize_thrift(&outgoing)?);
 
     Ok(SendPayload {
         message_id: params.message_id.to_string(),
+        event_b64,
         encrypted_content: base64_encode(&event_bytes),
         signature: signature_b64,
         encoded_event_signature,
@@ -290,51 +291,6 @@ fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
              its key-change event carries"
         )))
     }
-}
-
-/// Check a caller-supplied message id: it must be a UUID in the lowercase
-/// hyphenated form the SDK generates. The id goes into the message and
-/// attachment keys and into the signature, so two spellings of one UUID
-/// would yield media no recipient can decrypt.
-pub(crate) fn validate_message_id(message_id: &str) -> Result<(), SdkError> {
-    let canonical = uuid::Uuid::try_parse(message_id)
-        .ok()
-        .map(|id| id.hyphenated().to_string());
-    if canonical.as_deref() == Some(message_id) {
-        Ok(())
-    } else {
-        Err(SdkError::InvalidState(format!(
-            "Invalid message_id '{message_id}': pass the id new_message_id() returned, unchanged"
-        )))
-    }
-}
-
-/// The key an outgoing message's attachment at `attachment_index` is
-/// encrypted under: derived from the message key for `sender_id` and
-/// `message_id`, and the attachment id recipients resolve for that position.
-/// A link card's banner and favicon both use the card's position.
-pub(crate) fn outgoing_attachment_key(
-    conversation_key: &XChatConversationKey,
-    sender_id: &str,
-    message_id: &str,
-    attachment_index: i64,
-) -> Result<XChatConversationKey, SdkError> {
-    validate_sender_id(sender_id)?;
-    validate_message_id(message_id)?;
-    let index = usize::try_from(attachment_index)
-        .ok()
-        .filter(|index| *index < MAX_ATTACHMENTS_PER_MESSAGE)
-        .ok_or_else(|| {
-            SdkError::InvalidState(format!(
-                "Invalid attachment_index {attachment_index}: pass the attachment's position in \
-                 the message's attachments, below {MAX_ATTACHMENTS_PER_MESSAGE}"
-            ))
-        })?;
-    let message_key = message_keys::derive_message_key(conversation_key, sender_id, message_id)?;
-    Ok(message_keys::derive_attachment_key(
-        &message_key,
-        &message_keys::resolve_attachment_id(None, message_id, index),
-    )?)
 }
 
 // Content builders
@@ -608,18 +564,57 @@ pub fn build_message_attachments(
     attachments
 }
 
-/// Whether any descriptor references encrypted media: a media attachment, or
-/// a URL card with a banner or favicon image.
-pub(crate) fn has_encrypted_media(descs: &[AttachmentDescriptor]) -> bool {
-    descs.iter().any(|desc| match desc {
-        AttachmentDescriptor::Media { .. } => true,
-        AttachmentDescriptor::Url {
-            banner_image,
-            favicon_image,
-            ..
-        } => banner_image.is_some() || favicon_image.is_some(),
-        AttachmentDescriptor::Post { .. } => false,
-    })
+/// The media hash keys of the files the descriptors reference, in order: a
+/// media attachment's, and a URL card's banner then favicon.
+pub(crate) fn file_media_hash_keys(descs: &[AttachmentDescriptor]) -> Vec<&str> {
+    descs
+        .iter()
+        .flat_map(|desc| match desc {
+            AttachmentDescriptor::Media { media_hash_key, .. } => vec![media_hash_key.as_str()],
+            AttachmentDescriptor::Url {
+                banner_image,
+                favicon_image,
+                ..
+            } => [banner_image, favicon_image]
+                .into_iter()
+                .flatten()
+                .map(|image| image.media_hash_key.as_str())
+                .collect(),
+            AttachmentDescriptor::Post { .. } => Vec::new(),
+        })
+        .collect()
+}
+
+/// Check that every file the descriptors reference has a media hash key and
+/// that no two attachments reference the same one. A file is uploaded once,
+/// under its media hash key, encrypted under the key of the one attachment
+/// that references it.
+pub(crate) fn validate_file_media_hash_keys(
+    descs: &[AttachmentDescriptor],
+) -> Result<(), SdkError> {
+    let mut seen = std::collections::HashSet::new();
+    for desc in descs {
+        let mut own = file_media_hash_keys(std::slice::from_ref(desc));
+        // A card's banner and favicon share the card's key, so they may
+        // share one upload.
+        own.dedup();
+        for media_hash_key in own {
+            if media_hash_key.is_empty() {
+                return Err(SdkError::InvalidState(
+                    "an attachment's media_hash_key is empty: pass the media hash key the \
+                     file's upload started with"
+                        .into(),
+                ));
+            }
+            if !seen.insert(media_hash_key) {
+                return Err(SdkError::InvalidState(format!(
+                    "media_hash_key '{media_hash_key}' is in more than one attachment: upload \
+                     the file once for each attachment"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Convert a [`UrlAttachmentImageDescriptor`] into a Thrift `UrlAttachmentImage`.

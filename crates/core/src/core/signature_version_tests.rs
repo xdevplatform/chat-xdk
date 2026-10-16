@@ -292,7 +292,7 @@ fn group_change_verified(event: &ThriftEvent, signer: &Party) -> bool {
     let mut core = ChatCore::new();
     core.set_reject_unverified(false);
     match core
-        .decrypt_event(
+        .decrypt_event_with(
             &frame(event),
             &HashMap::new(),
             std::slice::from_ref(&signer.entry),
@@ -508,7 +508,7 @@ fn key_change_verified(event: &ThriftEvent, signer: &Party, ckey: &XChatConversa
     let mut core = ChatCore::new();
     core.set_reject_unverified(false);
     match core
-        .decrypt_event(
+        .decrypt_event_with(
             &frame(event),
             &keys("2", ckey),
             std::slice::from_ref(&signer.entry),

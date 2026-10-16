@@ -162,7 +162,7 @@ fn read_full<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> 
 /// message tag and the last chunk carries the final tag. Framing is identical
 /// regardless of how the input is split across `push` calls. Empty input (no
 /// non-empty `push`) produces only the 24-byte header.
-pub struct StreamEncryptor {
+pub struct FileEncryptor {
     /// Underlying secretstream pusher.
     push: crypto_secretstream::PushStream,
     /// Header bytes, emitted ahead of the first frame.
@@ -175,14 +175,14 @@ pub struct StreamEncryptor {
 
 // `buf` holds up to one chunk of caller plaintext; wipe it when the
 // encryptor is dropped (including after `finish`, which empties it first).
-impl Drop for StreamEncryptor {
+impl Drop for FileEncryptor {
     fn drop(&mut self) {
         use zeroize::Zeroize;
         self.buf.zeroize();
     }
 }
 
-impl StreamEncryptor {
+impl FileEncryptor {
     /// Create an encryptor for one stream.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
         let cs_key = crypto_secretstream::Key::from(*secretstream_key_bytes(key)?);
@@ -238,7 +238,7 @@ pub fn encrypt_stream<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
 ) -> Result<(), CryptoError> {
-    let mut enc = StreamEncryptor::new(key)?;
+    let mut enc = FileEncryptor::new(key)?;
     let mut chunk = vec![0u8; DECRYPTED_CHUNK_SIZE];
     loop {
         let n = read_full(&mut reader, &mut chunk)
@@ -266,7 +266,7 @@ pub fn encrypt_stream<R: Read, W: Write>(
 ///
 /// Input may be split across `push` calls at any byte boundary; frames are
 /// reassembled internally.
-pub struct StreamDecryptor {
+pub struct FileDecryptor {
     /// Stream key bytes, used to initialize `pull` once the header is
     /// complete. Held as a wiped-on-drop array because
     /// `crypto_secretstream::Key` does not zeroize itself.
@@ -300,7 +300,7 @@ enum StreamFault {
     Truncated,
 }
 
-impl StreamDecryptor {
+impl FileDecryptor {
     /// Create a decryptor for one stream.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
         Ok(Self {
@@ -436,13 +436,13 @@ impl StreamDecryptor {
 }
 
 /// Decrypt the whole encrypted media file named by `media_hash_key` (see
-/// [`StreamDecryptor::for_media`]).
+/// [`FileDecryptor::for_media`]).
 pub(crate) fn decrypt_media(
     key: &XChatConversationKey,
     media_hash_key: &str,
     encrypted: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let mut decryptor = StreamDecryptor::for_media(key, media_hash_key)?;
+    let mut decryptor = FileDecryptor::for_media(key, media_hash_key)?;
     let mut plaintext = Vec::with_capacity(encrypted.len());
     for chunk in encrypted.chunks(ENCRYPTED_CHUNK_SIZE) {
         plaintext.extend_from_slice(&decryptor.push(chunk)?);
@@ -460,7 +460,7 @@ pub fn decrypt_stream<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
 ) -> Result<(), CryptoError> {
-    let mut dec = StreamDecryptor::new(key)?;
+    let mut dec = FileDecryptor::new(key)?;
     let mut chunk = vec![0u8; ENCRYPTED_CHUNK_SIZE];
     loop {
         let n = read_full(&mut reader, &mut chunk).map_err(read_err)?;
@@ -939,10 +939,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Encrypt `plaintext` through `StreamEncryptor`, feeding it in `step`-byte
+    /// Encrypt `plaintext` through `FileEncryptor`, feeding it in `step`-byte
     /// pushes.
     fn incremental_encrypt(key: &XChatConversationKey, plaintext: &[u8], step: usize) -> Vec<u8> {
-        let mut enc = StreamEncryptor::new(key).unwrap();
+        let mut enc = FileEncryptor::new(key).unwrap();
         let mut out = Vec::new();
         for chunk in plaintext.chunks(step.max(1)) {
             out.extend_from_slice(&enc.push(chunk).unwrap());
@@ -951,14 +951,14 @@ mod tests {
         out
     }
 
-    /// Decrypt `ciphertext` through `StreamDecryptor`, feeding it in `step`-byte
+    /// Decrypt `ciphertext` through `FileDecryptor`, feeding it in `step`-byte
     /// pushes.
     fn incremental_decrypt(
         key: &XChatConversationKey,
         ciphertext: &[u8],
         step: usize,
     ) -> Result<Vec<u8>, CryptoError> {
-        let mut dec = StreamDecryptor::new(key)?;
+        let mut dec = FileDecryptor::new(key)?;
         let mut out = Vec::new();
         for chunk in ciphertext.chunks(step.max(1)) {
             out.extend_from_slice(&dec.push(chunk)?);
@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn test_incremental_empty_stream() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
-        let enc = StreamEncryptor::new(&key).unwrap();
+        let enc = FileEncryptor::new(&key).unwrap();
         let header_only = enc.finish().unwrap();
         assert_eq!(header_only.len(), SECRETSTREAM_HEADER_SIZE);
 
@@ -1048,7 +1048,7 @@ mod tests {
     #[test]
     fn test_incremental_decrypt_finish_without_header_errors() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
-        let dec = StreamDecryptor::new(&key).unwrap();
+        let dec = FileDecryptor::new(&key).unwrap();
         assert!(dec.finish().is_err());
     }
 
@@ -1125,7 +1125,7 @@ mod tests {
         let other = XChatConversationKey::from_bytes(vec![0x43u8; 32]).unwrap();
         let (plaintext, encrypted) = encrypted_media(&key, 3000);
 
-        let mut decryptor = StreamDecryptor::for_media(&key, "photo-1").unwrap();
+        let mut decryptor = FileDecryptor::for_media(&key, "photo-1").unwrap();
         let mut out = Vec::new();
         for chunk in encrypted.chunks(333) {
             out.extend(decryptor.push(chunk).unwrap());
@@ -1133,11 +1133,11 @@ mod tests {
         out.extend(decryptor.finish().unwrap());
         assert_eq!(out, plaintext);
 
-        let mut decryptor = StreamDecryptor::for_media(&other, "photo-1").unwrap();
+        let mut decryptor = FileDecryptor::for_media(&other, "photo-1").unwrap();
         let err = decryptor.push(&encrypted).unwrap_err().to_string();
         assert!(err.contains("media_hash_key 'photo-1'"), "{err}");
 
-        let mut decryptor = StreamDecryptor::for_media(&key, "photo-1").unwrap();
+        let mut decryptor = FileDecryptor::for_media(&key, "photo-1").unwrap();
         decryptor
             .push(&encrypted[..SECRETSTREAM_HEADER_SIZE + 2 * ENCRYPTED_CHUNK_SIZE])
             .unwrap();

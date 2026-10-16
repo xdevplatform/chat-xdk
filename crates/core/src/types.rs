@@ -1041,11 +1041,17 @@ pub struct EventMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct SendPayload {
-    /// The message id (UUID) embedded in the signed event: the `message_id`
-    /// passed in, or one the SDK generated. Send it as the message's
-    /// `message_id`, keep it to dedup and to anchor replies, and reuse the
-    /// same encrypted payload on retries so an id is never minted twice.
+    /// The message id (UUID) the SDK generated and embedded in the signed
+    /// event. Send it as the message's `message_id`, keep it to dedup and to
+    /// anchor replies, and reuse the same encrypted payload on retries so an
+    /// id is never minted twice.
     pub message_id: String,
+
+    /// The outgoing message as a base64 event: what recipients receive,
+    /// without the fields the server assigns. Pass it to `encrypt_file` or
+    /// `file_encryptor` to encrypt the message's files, or to
+    /// `decrypt_event` to read the message back.
+    pub event_b64: String,
 
     /// Base64-encoded encrypted content.
     pub encrypted_content: String,
@@ -1552,6 +1558,7 @@ mod tests {
     fn test_send_payload_serde() {
         let payload = SendPayload {
             message_id: "mid".to_string(),
+            event_b64: "ev".to_string(),
             encrypted_content: "enc".to_string(),
             signature: "sig".to_string(),
             encoded_event_signature: "esig".to_string(),
@@ -1564,6 +1571,7 @@ mod tests {
         };
         let json = serde_json::to_string(&payload).unwrap();
         let decoded: SendPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.event_b64, "ev");
         assert_eq!(decoded.encrypted_content, "enc");
         assert_eq!(decoded.signature_info.signature_version, "4");
     }
