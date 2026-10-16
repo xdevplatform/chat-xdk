@@ -17,14 +17,14 @@
 //! await chat.unlock("2580");
 //!
 //! // Batch decrypt — handles key extraction + signing key matching
-//! const result = chat.decryptEvents(rawEvents, signingKeys);
+//! const result = chat.decryptEvents({ events: rawEvents, signingKeys });
 //! for (const dm of result.messages) {
 //!   console.log(dm.event.type, dm.event.content?.text);
 //! }
 //!
 //! // Single event with cached keys
-//! const cachedKeys = result.conversationKeys.keys;
-//! const event = chat.decryptEvent(newEventB64, cachedKeys, senderKeys);
+//! const conversationKeys = result.conversationKeys.keys;
+//! const event = chat.decryptEvent({ eventB64: newEventB64, conversationKeys, signingKeys });
 //! ```
 
 use std::collections::HashMap;
@@ -41,9 +41,10 @@ use chat_xdk_core::js::{
 
 // Utility Functions (free functions, not methods)
 
-/// Return the exact ciphertext size produced by stream encryption.
-#[wasm_bindgen(js_name = encryptedStreamSize)]
-pub fn encrypted_stream_size(plaintext_size: f64) -> Result<f64, JsError> {
+/// Return the exact size of a file once encrypted: the size its upload
+/// declares before the file is encrypted.
+#[wasm_bindgen(js_name = encryptedFileSize)]
+pub fn encrypted_file_size(plaintext_size: f64) -> Result<f64, JsError> {
     const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
     if !plaintext_size.is_finite()
@@ -56,11 +57,11 @@ pub fn encrypted_stream_size(plaintext_size: f64) -> Result<f64, JsError> {
         ));
     }
 
-    let encrypted_size = chat_xdk_core::utils::encrypted_stream_size(plaintext_size as u64)
-        .ok_or_else(|| JsError::new("Encrypted stream size overflow"))?;
+    let encrypted_size = chat_xdk_core::utils::encrypted_file_size(plaintext_size as u64)
+        .ok_or_else(|| JsError::new("Encrypted file size overflow"))?;
     if encrypted_size > MAX_SAFE_INTEGER as u64 {
         return Err(JsError::new(
-            "Encrypted stream size exceeds Number.MAX_SAFE_INTEGER",
+            "Encrypted file size exceeds Number.MAX_SAFE_INTEGER",
         ));
     }
     Ok(encrypted_size as f64)
@@ -330,22 +331,23 @@ impl Chat {
     /// 2. For each message, finds the correct signing key by matching userId + version
     /// 3. Decrypts the message using the appropriate conversation key
     ///
-    /// `signingKeys` is an array of `{ userId, publicKeyVersion, publicKey,
-    /// identityPublicKey, identityPublicKeySignature }` objects for ALL
-    /// participants in the conversation (pass the X API response through).
-    /// Omitting it falls back to the keys stored via `setSigningKeys`.
+    /// Takes a single params object: `events`, the raw base64 events, and
+    /// optional `signingKeys`, an array of `{ userId, publicKeyVersion,
+    /// publicKey, identityPublicKey, identityPublicKeySignature }` objects for
+    /// ALL participants in the conversation (pass the X API response
+    /// through). Omitting `signingKeys` falls back to the keys stored via
+    /// `setSigningKeys`.
     ///
     /// Returns `{ messages, conversationKeys, errors }`.
     #[wasm_bindgen(js_name = decryptEvents)]
-    pub fn decrypt_events(
-        &self,
-        events: Vec<String>,
-        signing_keys: JsValue,
-    ) -> Result<JsValue, JsError> {
-        let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
-        let signing_keys = js_to_signing_keys(signing_keys)?;
+    pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsDecryptEventsParams = from_js_params("decryptEvents", params)?;
+        let mut core_params = chat_xdk_core::DecryptEventsParams::new(p.events);
+        core_params.signing_keys = p
+            .signing_keys
+            .map(|keys| keys.into_iter().map(Into::into).collect());
 
-        let result = self.inner.decrypt_events(&refs, &signing_keys);
+        let result = self.inner.decrypt_events(core_params);
 
         // Build JS result object
         let obj = js_sys::Object::new();
@@ -408,32 +410,33 @@ impl Chat {
 
     /// Decrypt a raw webhook event payload.
     ///
-    /// `conversationKeys` is a plain `version → key bytes` map — the `.keys`
-    /// property of the object returned by `extractConversationKeys` (passing
-    /// the whole result object yields an empty map and every decrypt fails
-    /// with "no matching key found"). Omitting it falls back to the opt-in
-    /// key cache (`setCacheKeys(true)`).
-    /// `signingKeys` is an array of `{ userId, publicKeyVersion, publicKey,
-    /// identityPublicKey, identityPublicKeySignature }` objects; entries are
-    /// filtered to the event's sender and the SDK picks the matching version
-    /// automatically. Omitting it falls back to the keys stored via
-    /// `setSigningKeys`. Under the default reject-unverified policy no
-    /// signing keys from either source makes every signed event throw; only
-    /// after `setRejectUnverified(false)` are such events returned with
-    /// `verified: false`.
+    /// Takes a single params object: `eventB64`, the base64 event;
+    /// `conversationKeys`, a plain `version → key bytes` map — the `.keys`
+    /// property of the object returned by `decryptEvents` or
+    /// `extractConversationKeys`, or `{}` for events without message
+    /// contents (an empty map also falls back to the opt-in key cache); and
+    /// optional `signingKeys`, an array of `{ userId, publicKeyVersion,
+    /// publicKey, identityPublicKey, identityPublicKeySignature }` objects.
+    /// Signing keys are filtered to the event's sender and the SDK picks the
+    /// matching version automatically; omitting them falls back to the keys
+    /// stored via `setSigningKeys`. Under the default reject-unverified
+    /// policy no signing keys from either source makes every signed event
+    /// throw; only after `setRejectUnverified(false)` are such events
+    /// returned with `verified: false`.
     #[wasm_bindgen(js_name = decryptEvent)]
-    pub fn decrypt_event(
-        &self,
-        event_b64: &str,
-        conversation_keys: JsValue,
-        signing_keys: JsValue,
-    ) -> Result<JsValue, JsError> {
-        let conv_keys = js_to_conv_keys(conversation_keys)?;
-        let signing_keys = js_to_signing_keys(signing_keys)?;
+    pub fn decrypt_event(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsDecryptEventParams = from_js_params("decryptEvent", params)?;
+        let mut core_params = chat_xdk_core::DecryptEventParams::new(
+            p.event_b64,
+            js_to_conv_keys("decryptEvent", p.conversation_keys)?,
+        );
+        core_params.signing_keys = p
+            .signing_keys
+            .map(|keys| keys.into_iter().map(Into::into).collect());
 
         let event = self
             .inner
-            .decrypt_event(event_b64, &conv_keys, &signing_keys)
+            .decrypt_event(core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
 
         // Convert to camelCase JS type
@@ -457,15 +460,14 @@ impl Chat {
     /// `signingKeyVersion` (resolved from the session identity set via
     /// `setIdentity` when omitted), `conversationKey` (Uint8Array) /
     /// `conversationKeyVersion` (resolved from the opt-in key cache when
-    /// omitted), `messageId`, `entities` (array of `[start, end, "type"]`
-    /// tuples), `attachments` (array of attachment objects), `quickReply` (the
-    /// same shape decrypted text content carries), `shouldNotify`, and
-    /// `ttlMsec`.
+    /// omitted), `entities` (array of `[start, end, "type"]` tuples),
+    /// `attachments` (array of attachment objects), `quickReply` (the same
+    /// shape decrypted text content carries), `shouldNotify`, and `ttlMsec`.
     ///
     /// The message id comes back as `messageId` on the result. A message with
-    /// media takes its id from `newMessageId()` first, since its media is
-    /// encrypted with that id, and passes it as `messageId`; otherwise the SDK
-    /// generates one.
+    /// files takes an id derived from its files, so building it again gives
+    /// the same id; encrypt each file afterwards with `encryptFile` or
+    /// `fileEncryptor` and the result's `eventB64`.
     #[wasm_bindgen(js_name = encryptMessage)]
     pub fn encrypt_message(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsEncryptMessageParams = from_js_params("encryptMessage", params)?;
@@ -474,7 +476,6 @@ impl Chat {
         core_params.signing_key_version = p.signing_key_version;
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
-        core_params.message_id = p.message_id;
         core_params.entities = p.entities.map(entity_tuples_to_descs);
         core_params.attachments = p.attachments;
         core_params.quick_reply = p.quick_reply.map(Into::into);
@@ -497,8 +498,8 @@ impl Chat {
     /// `replyToCkces` (base64 raw key-change events needed to decrypt the
     /// original), and explicit `replyToSequenceId`, `replyToSenderId`,
     /// `replyToText`, `replyToEntities`, `replyToAttachments` overrides for
-    /// callers that no longer hold the raw event. A reply with media passes
-    /// the id its media was encrypted with as `messageId`.
+    /// callers that no longer hold the raw event. The reply's id and files
+    /// work as in `encryptMessage`.
     #[wasm_bindgen(js_name = encryptReply)]
     pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsEncryptReplyParams = from_js_params("encryptReply", params)?;
@@ -513,7 +514,6 @@ impl Chat {
         core_params.signing_key_version = p.signing_key_version;
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
-        core_params.message_id = p.message_id;
         core_params.reply_to_sequence_id = p.reply_to_sequence_id;
         core_params.reply_to_sender_id = p.reply_to_sender_id.map(sender_id_to_i64).transpose()?;
         core_params.reply_to_text = p.reply_to_text;
@@ -610,103 +610,88 @@ impl Chat {
         to_js_value(&js_signature)
     }
 
-    /// A fresh message id for a message with media. Media keys derive from
-    /// the message id, so take the id first, pass it to `encryptStream` or
-    /// `streamEncryptor` for every file, then as `messageId` to
-    /// `encryptMessage` or `encryptReply`.
-    #[wasm_bindgen(js_name = newMessageId)]
-    pub fn new_message_id(&self) -> String {
-        self.inner.new_message_id()
-    }
-
-    /// Encrypt a media file for an outgoing message.
+    /// Encrypt a file of an outgoing message, after the message is built.
     ///
-    /// `conversationKey` is the conversation key the message is sent under,
-    /// `messageId` the message's id from `newMessageId()`, and
-    /// `attachmentIndex` the file's position in the message's `attachments`;
-    /// a link card's banner and favicon both take the card's position.
-    /// Requires `setIdentity`.
-    #[wasm_bindgen(js_name = encryptStream)]
-    pub fn encrypt_stream(
-        &self,
-        plaintext: Vec<u8>,
-        conversation_key: Vec<u8>,
-        message_id: &str,
-        attachment_index: f64,
-    ) -> Result<Vec<u8>, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
+    /// Takes a single params object: `file` (Uint8Array); `eventB64`, the
+    /// `eventB64` of the payload `encryptMessage` or `encryptReply` returned
+    /// for the message carrying the file; `conversationKeys`, the
+    /// conversation's `version → key bytes` map, which must hold the key the
+    /// message was encrypted under; and `mediaHashKey`, the media hash key
+    /// the file's upload started with, as listed in the message's
+    /// attachments. The SDK finds that attachment and encrypts the file under
+    /// its key. Upload the result under the same media hash key; its size is
+    /// `encryptedFileSize(file.length)`. Errors say what to pass instead.
+    #[wasm_bindgen(js_name = encryptFile)]
+    pub fn encrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsError> {
+        let p: JsEncryptFileParams = from_js_params("encryptFile", params)?;
+        let core_params = chat_xdk_core::EncryptFileParams::new(
+            js_to_bytes("encryptFile", "file", &p.file)?,
+            p.event_b64,
+            js_to_conv_keys("encryptFile", p.conversation_keys)?,
+            p.media_hash_key,
+        );
         self.inner
-            .encrypt_stream(
-                &plaintext,
-                &ckey,
-                message_id,
-                attachment_index_from_js(attachment_index)?,
-            )
+            .encrypt_file(core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
-    /// Decrypt an encrypted media file, as downloaded.
+    /// Create an incremental encryptor for a file too large to hold in
+    /// memory. Takes the params of `encryptFile` apart from `file`, which is
+    /// fed to the encryptor.
+    #[wasm_bindgen(js_name = fileEncryptor)]
+    pub fn file_encryptor(&self, params: JsValue) -> Result<FileEncryptor, JsError> {
+        let p: JsFileParams = from_js_params("fileEncryptor", params)?;
+        let core_params = chat_xdk_core::FileEncryptorParams::new(
+            p.event_b64,
+            js_to_conv_keys("fileEncryptor", p.conversation_keys)?,
+            p.media_hash_key,
+        );
+        let inner = self
+            .inner
+            .file_encryptor(core_params)
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        Ok(FileEncryptor { inner })
+    }
+
+    /// Decrypt an encrypted file, as downloaded.
     ///
-    /// `eventB64` is the event of the message that carries the media and
-    /// `conversationKeys` the conversation's `version → key bytes` map, as
-    /// passed to `decryptEvent`; the map must hold the key for the message's
-    /// version. `mediaHashKey` names the media: one of the message's media
-    /// attachments, a link card's banner or favicon, or media quoted in its
-    /// reply preview. Errors say what to pass instead.
-    #[wasm_bindgen(js_name = decryptStream)]
-    pub fn decrypt_stream(
-        &self,
-        encrypted: Vec<u8>,
-        event_b64: &str,
-        conversation_keys: JsValue,
-        media_hash_key: &str,
-    ) -> Result<Vec<u8>, JsError> {
-        let conv_keys = js_to_media_conv_keys(conversation_keys)?;
+    /// Takes a single params object: `encrypted` (Uint8Array); `eventB64`,
+    /// the event of the message that carries the file, and
+    /// `conversationKeys`, the conversation's key map, as passed to
+    /// `decryptEvent` (the map must hold the key for the message's version);
+    /// and `mediaHashKey`, the file's media hash key from the decrypted
+    /// message: a media attachment, a link card's banner or favicon, or media
+    /// quoted in its reply preview. Errors say what to pass instead.
+    #[wasm_bindgen(js_name = decryptFile)]
+    pub fn decrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsError> {
+        let p: JsDecryptFileParams = from_js_params("decryptFile", params)?;
+        let core_params = chat_xdk_core::DecryptFileParams::new(
+            js_to_bytes("decryptFile", "encrypted", &p.encrypted)?,
+            p.event_b64,
+            js_to_conv_keys("decryptFile", p.conversation_keys)?,
+            p.media_hash_key,
+        );
         self.inner
-            .decrypt_stream(&encrypted, event_b64, &conv_keys, media_hash_key)
+            .decrypt_file(core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
-    /// Create an incremental encryptor for a media file too large to hold in
-    /// memory. Takes the arguments of `encryptStream` apart from the bytes,
-    /// which are fed to the encryptor.
-    #[wasm_bindgen(js_name = streamEncryptor)]
-    pub fn stream_encryptor(
-        &self,
-        conversation_key: Vec<u8>,
-        message_id: &str,
-        attachment_index: f64,
-    ) -> Result<StreamEncryptor, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
+    /// Create an incremental decryptor for an encrypted file too large to
+    /// hold in memory. Takes the params of `decryptFile` apart from
+    /// `encrypted`, which is fed to the decryptor.
+    #[wasm_bindgen(js_name = fileDecryptor)]
+    pub fn file_decryptor(&self, params: JsValue) -> Result<FileDecryptor, JsError> {
+        let p: JsFileParams = from_js_params("fileDecryptor", params)?;
+        let core_params = chat_xdk_core::FileDecryptorParams::new(
+            p.event_b64,
+            js_to_conv_keys("fileDecryptor", p.conversation_keys)?,
+            p.media_hash_key,
+        );
         let inner = self
             .inner
-            .stream_encryptor(
-                &ckey,
-                message_id,
-                attachment_index_from_js(attachment_index)?,
-            )
+            .file_decryptor(core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
-        Ok(StreamEncryptor { inner })
-    }
-
-    /// Create an incremental decryptor for an encrypted media file too large
-    /// to hold in memory. Takes the arguments of `decryptStream` apart from
-    /// the bytes, which are fed to the decryptor.
-    #[wasm_bindgen(js_name = streamDecryptor)]
-    pub fn stream_decryptor(
-        &self,
-        event_b64: &str,
-        conversation_keys: JsValue,
-        media_hash_key: &str,
-    ) -> Result<StreamDecryptor, JsError> {
-        let conv_keys = js_to_media_conv_keys(conversation_keys)?;
-        let inner = self
-            .inner
-            .stream_decryptor(event_b64, &conv_keys, media_hash_key)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
-        Ok(StreamDecryptor { inner })
+        Ok(FileDecryptor { inner })
     }
 
     /// Encrypt a UTF-8 string and return base64 ciphertext.
@@ -929,17 +914,18 @@ fn prepared_change_to_js(
     Ok(obj.into())
 }
 
-/// Incremental stream encryptor for large payloads.
+/// Incremental encryptor for one file of an outgoing message.
 ///
-/// Feed plaintext with `push`; call `finish` once to emit the final frame.
+/// Feed the file with `push`; call `finish` once to emit the final frame.
 #[wasm_bindgen]
-pub struct StreamEncryptor {
-    inner: chat_xdk_core::StreamEncryptor,
+pub struct FileEncryptor {
+    inner: chat_xdk_core::FileEncryptor,
 }
 
 #[wasm_bindgen]
-impl StreamEncryptor {
-    /// Encrypt a plaintext chunk, returning ciphertext available so far.
+impl FileEncryptor {
+    /// Encrypt a chunk of the file, returning the encrypted bytes available
+    /// so far.
     #[wasm_bindgen]
     pub fn push(&mut self, plaintext: Vec<u8>) -> Result<Vec<u8>, JsError> {
         self.inner
@@ -956,19 +942,20 @@ impl StreamEncryptor {
     }
 }
 
-/// Incremental stream decryptor for large payloads.
+/// Incremental decryptor for one encrypted file.
 ///
-/// Feed ciphertext with `push`; call `finish` once at end of input. `finish`
-/// throws if the stream ended before its final frame (truncation), so callers
-/// must not treat plaintext as complete until `finish` succeeds.
+/// Feed the encrypted bytes with `push`; call `finish` once at end of input.
+/// `finish` throws if the file ended before its final frame (truncation), so
+/// callers must not treat the bytes as complete until `finish` succeeds.
 #[wasm_bindgen]
-pub struct StreamDecryptor {
-    inner: chat_xdk_core::StreamDecryptor,
+pub struct FileDecryptor {
+    inner: chat_xdk_core::FileDecryptor,
 }
 
 #[wasm_bindgen]
-impl StreamDecryptor {
-    /// Decrypt a ciphertext chunk, returning plaintext available so far.
+impl FileDecryptor {
+    /// Decrypt a chunk of the encrypted file, returning the bytes available
+    /// so far.
     #[wasm_bindgen]
     pub fn push(&mut self, ciphertext: Vec<u8>) -> Result<Vec<u8>, JsError> {
         self.inner
@@ -995,40 +982,20 @@ fn now_millis() -> String {
     (js_sys::Date::now() as u64).to_string()
 }
 
-/// Parse a JS object `{ [version: string]: Uint8Array }` into a key map.
-fn js_to_conv_keys(js: JsValue) -> Result<HashMap<String, XChatConversationKey>, JsError> {
+/// Parse a params object's `conversationKeys`, a plain object mapping key
+/// version to the raw 32-byte key (`Uint8Array`). Anything else, including a
+/// missing map or an entry that is not a 32-byte `Uint8Array`, is an error.
+fn js_to_conv_keys(
+    method: &str,
+    js: JsValue,
+) -> Result<HashMap<String, XChatConversationKey>, JsError> {
+    if !js.is_object() || js_sys::Array::is_array(&js) {
+        return Err(JsError::new(&format!(
+            "Invalid {method} params: conversationKeys must be an object mapping key version to \
+             key bytes (the `keys` map of decryptEvents or extractConversationKeys)"
+        )));
+    }
     let mut result = HashMap::new();
-    if js.is_undefined() || js.is_null() {
-        return Ok(result);
-    }
-    let obj = js_sys::Object::from(js);
-    let entries = js_sys::Object::entries(&obj);
-    for i in 0..entries.length() {
-        let pair = js_sys::Array::from(&entries.get(i));
-        let version = match pair.get(0).as_string() {
-            Some(v) => v,
-            None => continue,
-        };
-        let val = pair.get(1);
-        let bytes = if val.is_instance_of::<js_sys::Uint8Array>() {
-            js_sys::Uint8Array::from(val).to_vec()
-        } else {
-            continue;
-        };
-        if let Some(key) = XChatConversationKey::from_bytes(bytes) {
-            result.insert(version, key);
-        }
-    }
-    Ok(result)
-}
-
-/// Parse the `conversationKeys` map of a media call. Absent/null is an empty
-/// map; an entry that is not a 32-byte `Uint8Array` is an error.
-fn js_to_media_conv_keys(js: JsValue) -> Result<HashMap<String, XChatConversationKey>, JsError> {
-    let mut result = HashMap::new();
-    if js.is_undefined() || js.is_null() {
-        return Ok(result);
-    }
     let entries = js_sys::Object::entries(&js_sys::Object::from(js));
     for i in 0..entries.length() {
         let pair = js_sys::Array::from(&entries.get(i));
@@ -1040,7 +1007,7 @@ fn js_to_media_conv_keys(js: JsValue) -> Result<HashMap<String, XChatConversatio
             .ok_or_else(|| {
                 JsError::new(&format!(
                     "the key for version '{}' in the conversation key map is not 32 bytes: pass \
-                     the raw 32-byte conversation keys (the `keys` map of \
+                     the raw 32-byte conversation keys (the `keys` map of decryptEvents or \
                      extractConversationKeys)",
                     version
                 ))
@@ -1048,6 +1015,17 @@ fn js_to_media_conv_keys(js: JsValue) -> Result<HashMap<String, XChatConversatio
         result.insert(version, key);
     }
     Ok(result)
+}
+
+/// Copy a params object's `Uint8Array` field in one step.
+fn js_to_bytes(method: &str, field: &str, js: &JsValue) -> Result<Vec<u8>, JsError> {
+    js.dyn_ref::<js_sys::Uint8Array>()
+        .map(js_sys::Uint8Array::to_vec)
+        .ok_or_else(|| {
+            JsError::new(&format!(
+                "Invalid {method} params: {field} must be a Uint8Array"
+            ))
+        })
 }
 
 /// Parse a JS `signingKeys` array into core entries. Absent/null yields an
@@ -1084,21 +1062,6 @@ fn from_js_params<T: serde::de::DeserializeOwned>(
 enum JsSenderId {
     Num(f64),
     Str(String),
-}
-
-/// An attachment position passed as a JS number. Fractions and numbers
-/// beyond the safe-integer range are rejected here; the core checks the
-/// range a message allows.
-fn attachment_index_from_js(index: f64) -> Result<i64, JsError> {
-    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-    if index.is_finite() && index.fract() == 0.0 && index.abs() <= MAX_SAFE_INTEGER {
-        Ok(index as i64)
-    } else {
-        Err(JsError::new(&format!(
-            "Invalid attachmentIndex {index}: pass the attachment's position in the message's \
-             attachments as an integer"
-        )))
-    }
 }
 
 /// Parse a [`JsSenderId`] into the exact `i64` the reply preview signs,
@@ -1157,7 +1120,6 @@ struct JsEncryptMessageParams {
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
-    message_id: Option<String>,
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
@@ -1177,7 +1139,6 @@ struct JsEncryptReplyParams {
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
-    message_id: Option<String>,
     reply_to_sequence_id: Option<String>,
     reply_to_sender_id: Option<JsSenderId>,
     reply_to_text: Option<String>,
@@ -1311,6 +1272,57 @@ struct JsGroupCreateParams {
     title: Option<String>,
     avatar_url: Option<String>,
     ttl_msec: Option<f64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsDecryptEventParams {
+    event_b64: String,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    conversation_keys: JsValue,
+    signing_keys: Option<Vec<JsSigningKeyEntry>>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsDecryptEventsParams {
+    events: Vec<String>,
+    signing_keys: Option<Vec<JsSigningKeyEntry>>,
+}
+
+// Byte fields stay JS values so they are copied in one step rather than
+// element by element.
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsEncryptFileParams {
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    file: JsValue,
+    event_b64: String,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    conversation_keys: JsValue,
+    media_hash_key: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsDecryptFileParams {
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    encrypted: JsValue,
+    event_b64: String,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    conversation_keys: JsValue,
+    media_hash_key: String,
+}
+
+/// The params of `fileEncryptor` and `fileDecryptor`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsFileParams {
+    event_b64: String,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    conversation_keys: JsValue,
+    media_hash_key: String,
 }
 
 fn to_js_value<T: serde::Serialize>(value: &T) -> Result<JsValue, JsError> {

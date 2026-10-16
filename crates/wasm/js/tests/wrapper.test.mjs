@@ -11,10 +11,9 @@ import init, { Chat, bytesToBase64 } from "../pkg/chat_xdk_wasm.js";
 import {
   ChatWithJuicebox,
   createChat,
-  encryptedStreamSize,
+  encryptedFileSize,
   guessesRemaining,
 } from "../index.js";
-import { frameSendPayload } from "./frame.mjs";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
@@ -167,10 +166,10 @@ async function delegationTests() {
       identityPublicKeySignature: v.identity_public_key_signature_b64,
     },
   ];
-  const batch = chat.decryptEvents(
-    [v.event_key_change_b64, v.event_message_b64, v.event_garbage_b64],
+  const batch = chat.decryptEvents({
+    events: [v.event_key_change_b64, v.event_message_b64, v.event_garbage_b64],
     signingKeys,
-  );
+  });
   assert.deepEqual(Object.keys(batch.errors), ["2"]);
   assert.equal(batch.conversationKeys.latestVersion, v.event_conversation_key_version);
   const verifiedMessages = batch.messages.filter((m) => m.event.type === "message");
@@ -178,10 +177,13 @@ async function delegationTests() {
   assert.equal(verifiedMessages[0].event.content.text, v.event_message_text);
   assert.equal(verifiedMessages[0].event.verified, true);
 
-  const single = chat.decryptEvent(v.event_message_b64, batch.conversationKeys.keys, signingKeys);
+  const conversationKeys = batch.conversationKeys.keys;
+  const single = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys, signingKeys });
   assert.equal(single.content.text, v.event_message_text);
   assert.equal(single.verified, true);
-  assert.throws(() => chat.decryptEvent(v.event_garbage_b64, {}, signingKeys));
+  assert.throws(() =>
+    chat.decryptEvent({ eventB64: v.event_garbage_b64, conversationKeys: {}, signingKeys }),
+  );
 
   const bundle = chat.extractConversationKeys([v.event_key_change_b64]);
   assert.deepEqual(
@@ -191,10 +193,10 @@ async function delegationTests() {
 
   // setRejectUnverified is behavioral: with no signing keys the signed
   // message throws under the default policy and passes unverified once
-  // disabled (also covers the wrapper's `signingKeys ?? []` defaults).
-  assert.throws(() => chat.decryptEvent(v.event_message_b64, batch.conversationKeys.keys));
+  // disabled.
+  assert.throws(() => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys }));
   chat.setRejectUnverified(false);
-  const unverified = chat.decryptEvent(v.event_message_b64, batch.conversationKeys.keys);
+  const unverified = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys });
   assert.equal(unverified.verified, false);
   assert.equal(unverified.content.text, v.event_message_text);
   chat.setRejectUnverified(true);
@@ -202,7 +204,7 @@ async function delegationTests() {
   // setSigningKeys delegation is behavioral too: with the store armed, the
   // same omitted-signingKeys decrypt now verifies.
   chat.setSigningKeys(signingKeys);
-  const viaStore = chat.decryptEvent(v.event_message_b64, batch.conversationKeys.keys);
+  const viaStore = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys });
   assert.equal(viaStore.verified, true);
   chat.setSigningKeys([]);
 
@@ -211,7 +213,7 @@ async function delegationTests() {
   // cache enabled) back an encryptMessage with no explicit identity or key.
   chat.setIdentity(v.event_sender_id, v.event_signing_key_version);
   chat.setCacheKeys(true);
-  chat.decryptEvents([v.event_key_change_b64], signingKeys);
+  chat.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
   const sessionPayload = chat.encryptMessage({
     conversationId: v.event_conversation_id,
     text: "hello from the session",
@@ -305,18 +307,11 @@ async function delegationTests() {
   });
   assert.ok(removeReaction.encryptedContent.length > 0);
 
-  // Generic + stream crypto delegations (roundtrips prove every argument):
-  // two files encrypted for one message id at positions 0 and 1 open from
-  // the message sent under that id.
+  // Generic + file crypto delegations (roundtrips prove every field): two
+  // files encrypted from the message's eventB64 open from the same event.
   const ct = chat.encrypt("wrapper text", convKey);
   assert.equal(chat.decrypt(ct, convKey), "wrapper text");
   const mediaKeys = { [v.event_conversation_key_version]: convKey };
-  const messageId = chat.newMessageId();
-  const streamCt = chat.encryptStream(b64ToBytes(v.plaintext_b64), convKey, messageId, 0);
-  const enc = chat.streamEncryptor(convKey, messageId, 1);
-  const piece = enc.push(b64ToBytes(v.plaintext_b64));
-  const finalPiece = enc.finish();
-  const streamed = new Uint8Array([...piece, ...finalPiece]);
   const photo = (mediaHashKey) => ({
     attachment_type: "media",
     media_hash_key: mediaHashKey,
@@ -331,16 +326,36 @@ async function delegationTests() {
     text: "wrapper photos",
     conversationKey: convKey,
     conversationKeyVersion: v.event_conversation_key_version,
-    messageId,
     attachments: [photo("first"), photo("second")],
   });
-  assert.equal(mediaPayload.messageId, messageId);
-  const mediaEvent = frameSendPayload(mediaPayload, v.event_sender_id, v.event_conversation_id);
+  const fileCt = chat.encryptFile({
+    file: b64ToBytes(v.plaintext_b64),
+    eventB64: mediaPayload.eventB64,
+    conversationKeys: mediaKeys,
+    mediaHashKey: "first",
+  });
+  const enc = chat.fileEncryptor({
+    eventB64: mediaPayload.eventB64,
+    conversationKeys: mediaKeys,
+    mediaHashKey: "second",
+  });
+  const piece = enc.push(b64ToBytes(v.plaintext_b64));
+  const finalPiece = enc.finish();
+  const streamed = new Uint8Array([...piece, ...finalPiece]);
   assert.deepEqual(
-    chat.decryptStream(streamCt, mediaEvent, mediaKeys, "first"),
+    chat.decryptFile({
+      encrypted: fileCt,
+      eventB64: mediaPayload.eventB64,
+      conversationKeys: mediaKeys,
+      mediaHashKey: "first",
+    }),
     b64ToBytes(v.plaintext_b64),
   );
-  const dec = chat.streamDecryptor(mediaEvent, mediaKeys, "second");
+  const dec = chat.fileDecryptor({
+    eventB64: mediaPayload.eventB64,
+    conversationKeys: mediaKeys,
+    mediaHashKey: "second",
+  });
   const out = new Uint8Array([...dec.push(streamed), ...dec.finish()]);
   assert.deepEqual(out, b64ToBytes(v.plaintext_b64));
 
@@ -700,7 +715,7 @@ async function realJuiceboxSingletonTests() {
 
 async function main() {
   await delegationTests();
-  assert.equal(encryptedStreamSize(5000), 5109);
+  assert.equal(encryptedFileSize(5000), 5109);
   await guessBudgetTests();
   await firstBootTests();
   await guessesRemainingTests();

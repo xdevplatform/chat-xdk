@@ -9,9 +9,8 @@ import init, {
   hexToBytes,
   detectMimeType,
   detectImageDimensions,
-  encryptedStreamSize,
+  encryptedFileSize,
 } from "../../pkg/chat_xdk_wasm.js";
-import { frameSendPayload } from "./frame.mjs";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
@@ -49,11 +48,11 @@ async function main() {
   // matches Node's own base64 encoding
   assert.equal(b64, Buffer.from(someBytes).toString("base64"));
 
-  assert.equal(encryptedStreamSize(0), 24);
-  assert.equal(encryptedStreamSize(1), 42);
-  assert.equal(encryptedStreamSize(1024), 1065);
-  assert.equal(encryptedStreamSize(1025), 1083);
-  assert.throws(() => encryptedStreamSize(-1), /non-negative safe integer/);
+  assert.equal(encryptedFileSize(0), 24);
+  assert.equal(encryptedFileSize(1), 42);
+  assert.equal(encryptedFileSize(1024), 1065);
+  assert.equal(encryptedFileSize(1025), 1083);
+  assert.throws(() => encryptedFileSize(-1), /non-negative safe integer/);
 
   // hex roundtrip
   const hex = bytesToHex(someBytes);
@@ -233,7 +232,7 @@ async function main() {
 
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // 3. encrypt/decrypt (generic string) + encryptStream/decryptStream
+  // 3. encrypt/decrypt (generic string) + encryptFile/decryptFile
   const text = "group name \u{1F510} \u00e9\u00e8";
   const ciphertextB64 = chat.encrypt(text, convKey);
   assert.equal(typeof ciphertextB64, "string");
@@ -241,47 +240,75 @@ async function main() {
   // randomized ciphertext
   assert.notEqual(chat.encrypt(text, convKey), chat.encrypt(text, convKey));
 
-  // Media is encrypted for the message that carries it: a sender with a
-  // session identity takes the message id first, encrypts the file with it,
-  // and sends the message under that id. The media then decrypts through the
-  // sent message's event.
+  // A message with files is built first; each file is then encrypted from
+  // the returned eventB64 and the media hash key its attachment names, and
+  // decrypts through the sent message's event.
   const sender = new Chat();
   sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
   sender.setIdentity("111", "1");
-  const messageId = sender.newMessageId();
   const mediaHashKey = "photo";
   const mediaKeys = { "1": convKey };
-
-  const plaintext = b64ToBytes(v.plaintext_b64);
-  const streamCt1 = sender.encryptStream(plaintext, convKey, messageId, 0);
-  const streamCt2 = sender.encryptStream(plaintext, convKey, messageId, 0);
-  assert.notDeepEqual(streamCt1, streamCt2); // randomized nonces
-  const mediaEvent = frameSendPayload(
+  const photoAttachment = (hash) => ({
+    attachment_type: "media",
+    media_hash_key: hash,
+    width: 4,
+    height: 3,
+    filesize_bytes: 64,
+    filename: `${hash}.jpg`,
+    media_type: 1,
+  });
+  const sendPhotos = (text, hashes) =>
     sender.encryptMessage({
       conversationId: "conv-1",
-      text: "a photo",
+      text,
       conversationKey: convKey,
       conversationKeyVersion: "1",
-      messageId,
-      attachments: [
-        {
-          attachment_type: "media",
-          media_hash_key: mediaHashKey,
-          width: 4,
-          height: 3,
-          filesize_bytes: 64,
-          filename: "photo.jpg",
-          media_type: 1,
-        },
-      ],
-    }),
-    "111",
-    "conv-1",
-  );
-  assert.deepEqual(chat.decryptStream(streamCt1, mediaEvent, mediaKeys, mediaHashKey), plaintext);
+      attachments: hashes.map(photoAttachment),
+    });
+  const photoPayload = sendPhotos("a photo", [mediaHashKey]);
+  const mediaEvent = photoPayload.eventB64;
+  const fileParams = { eventB64: mediaEvent, conversationKeys: mediaKeys, mediaHashKey };
 
-  // 3b. Incremental streams: chunked encryptor/decryptor roundtrip over a
-  // multi-frame payload, and a truncated stream fails at finish (missing
+  const plaintext = b64ToBytes(v.plaintext_b64);
+  // A session with no identity encrypts the file.
+  const fileCt1 = new Chat().encryptFile({ ...fileParams, file: plaintext });
+  const fileCt2 = sender.encryptFile({ ...fileParams, file: plaintext });
+  assert.notDeepEqual(fileCt1, fileCt2); // randomized nonces
+  assert.equal(fileCt1.length, encryptedFileSize(plaintext.length));
+  assert.deepEqual(chat.decryptFile({ ...fileParams, encrypted: fileCt1 }), plaintext);
+
+  // A message with files takes the id its files derive: building it again
+  // gives the same id, so files already encrypted stay valid.
+  assert.equal(sendPhotos("another caption", [mediaHashKey]).messageId, photoPayload.messageId);
+  assert.notEqual(sendPhotos("a photo", ["other"]).messageId, photoPayload.messageId);
+  assert.match(photoPayload.messageId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  // Each file needs its own media hash key.
+  assert.throws(
+    () => sendPhotos("twice", [mediaHashKey, mediaHashKey]),
+    /media_hash_key 'photo' is in more than one attachment/,
+  );
+
+  // File errors say what to pass instead.
+  assert.throws(
+    () => sender.encryptFile({ ...fileParams, file: plaintext, mediaHashKey: "other" }),
+    /is not one of the message's files/,
+  );
+  assert.throws(
+    () => sender.encryptFile({ ...fileParams, file: [1, 2, 3] }),
+    /Invalid encryptFile params: file must be a Uint8Array/,
+  );
+  assert.throws(
+    () => sender.encryptFile({ ...fileParams, file: plaintext, conversationKeys: { "1": new Uint8Array(3) } }),
+    /the key for version '1' in the conversation key map is not 32 bytes/,
+  );
+  assert.throws(
+    () => sender.encryptFile({ eventB64: mediaEvent, conversationKeys: mediaKeys, file: plaintext }),
+    /Invalid encryptFile params.*missing field `mediaHashKey`/,
+  );
+
+  // 3b. Incremental files: chunked encryptor/decryptor roundtrip over a
+  // multi-frame payload, and a truncated file fails at finish (missing
   // final frame).
   {
     const concat = (pieces) => {
@@ -294,15 +321,16 @@ async function main() {
       return out;
     };
     const bigPlain = new Uint8Array(5000).fill(0xab);
-    const enc = sender.streamEncryptor(convKey, messageId, 0);
+    const enc = sender.fileEncryptor(fileParams);
     const ctPieces = [];
     for (let i = 0; i < bigPlain.length; i += 700) {
       ctPieces.push(enc.push(bigPlain.subarray(i, i + 700)));
     }
     ctPieces.push(enc.finish());
     const ciphertext = concat(ctPieces);
+    assert.equal(ciphertext.length, encryptedFileSize(bigPlain.length));
 
-    const dec = chat.streamDecryptor(mediaEvent, mediaKeys, mediaHashKey);
+    const dec = chat.fileDecryptor(fileParams);
     const ptPieces = [];
     for (let i = 0; i < ciphertext.length; i += 333) {
       ptPieces.push(dec.push(ciphertext.subarray(i, i + 333)));
@@ -310,7 +338,7 @@ async function main() {
     ptPieces.push(dec.finish());
     assert.deepEqual(concat(ptPieces), bigPlain);
 
-    const truncated = chat.streamDecryptor(mediaEvent, mediaKeys, mediaHashKey);
+    const truncated = chat.fileDecryptor(fileParams);
     truncated.push(ciphertext.subarray(0, ciphertext.length - 4));
     assert.throws(() => truncated.finish(), /truncated/);
   }
@@ -351,8 +379,8 @@ async function main() {
   assert.equal(replyPayload.signatureInfo.signatureVersion, "10");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
-  // Own sends decrypt through their framed events, verified against the
-  // fixture signing key registered to sender 111.
+  // Own sends decrypt through their eventB64, verified against the fixture
+  // signing key registered to sender 111.
   const ownSigningKeys = [
     {
       userId: "111",
@@ -363,8 +391,14 @@ async function main() {
     },
   ];
   const decryptOwn = (sent) => {
-    const event = chat.decryptEvent(frameSendPayload(sent, "111", "conv-1"), { "1": convKey }, ownSigningKeys);
+    const event = chat.decryptEvent({
+      eventB64: sent.eventB64,
+      conversationKeys: { "1": convKey },
+      signingKeys: ownSigningKeys,
+    });
     assert.equal(event.verified, true);
+    assert.equal(event.id, sent.messageId);
+    assert.equal(event.sequenceId, null);
     return event.content;
   };
 
@@ -591,13 +625,11 @@ async function main() {
 
   // 4g. A URL card attachment carries encrypted banner/favicon image
   // references (media hash keys) for clickable preview cards.
-  const urlCardMessageId = sender.newMessageId();
   const urlCardPayload = sender.encryptMessage({
     conversationId: "conv-1",
     conversationKey: convKey,
     text: "check this out",
     conversationKeyVersion: "1",
-    messageId: urlCardMessageId,
     attachments: [
       {
         attachment_type: "url",
@@ -620,7 +652,20 @@ async function main() {
   });
   assert.ok(urlCardPayload.encryptedContent.length > 0);
   assert.ok(urlCardPayload.signature.length > 0);
-  assert.equal(urlCardPayload.messageId, urlCardMessageId);
+  assert.deepEqual(
+    chat.decryptFile({
+      encrypted: sender.encryptFile({
+        file: plaintext,
+        eventB64: urlCardPayload.eventB64,
+        conversationKeys: mediaKeys,
+        mediaHashKey: "favicon-hash",
+      }),
+      eventB64: urlCardPayload.eventB64,
+      conversationKeys: mediaKeys,
+      mediaHashKey: "favicon-hash",
+    }),
+    plaintext,
+  );
 
   // 4h. A banner image missing any of its required fields is rejected.
   // media_hash_key, filesize_bytes, and filename are all mandatory: receiving
@@ -683,12 +728,27 @@ async function main() {
     { userId: "111", publicKeyVersion: "1", publicKey: v.signing_public_b64 },
   ];
   assert.throws(
-    () => chat.decryptEvents(["AAAA"], malformedSigningKeys),
-    /Invalid signingKeys/i,
+    () => chat.decryptEvents({ events: ["AAAA"], signingKeys: malformedSigningKeys }),
+    /Invalid decryptEvents params.*missing field `identityPublicKey`/,
   );
   assert.throws(
-    () => chat.decryptEvent("AAAA", {}, malformedSigningKeys),
-    /Invalid signingKeys/i,
+    () => chat.decryptEvent({ eventB64: "AAAA", conversationKeys: {}, signingKeys: malformedSigningKeys }),
+    /Invalid decryptEvent params.*missing field `identityPublicKey`/,
+  );
+
+  // 5b. decryptEvent takes the key map as given: it is required, and an
+  // entry that is not a 32-byte key is an error.
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64 }),
+    /Invalid decryptEvent params.*missing field `conversationKeys`/,
+  );
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys: null }),
+    /conversationKeys must be an object/,
+  );
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys: bundle }),
+    /the key for version 'keys' in the conversation key map is not 32 bytes/,
   );
 
   // 6. Juicebox guess-budget parity with the native bindings: the config's
