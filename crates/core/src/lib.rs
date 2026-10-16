@@ -153,7 +153,7 @@ pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams,
+    GroupMembersChangeParams, MarkConversationReadParams, MessageDeleteParams,
 };
 pub use types::*;
 
@@ -224,7 +224,7 @@ pub mod prelude {
     pub use crate::params::{
         ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
         EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-        MessageDeleteParams,
+        MarkConversationReadParams, MessageDeleteParams,
     };
 
     // Types (always available)

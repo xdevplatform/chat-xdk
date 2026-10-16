@@ -69,7 +69,7 @@ use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams,
+    GroupMembersChangeParams, MarkConversationReadParams, MessageDeleteParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -347,6 +347,13 @@ impl Chat {
         params: &MessageDeleteParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         self.inner.prepare_message_delete(params)
+    }
+    /// Build the signed action for marking a conversation read.
+    pub fn prepare_mark_conversation_read(
+        &self,
+        params: &MarkConversationReadParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        self.inner.prepare_mark_conversation_read(params)
     }
     /// Decrypt an encrypted conversation key (ECIES).
     pub fn decrypt_conversation_key(

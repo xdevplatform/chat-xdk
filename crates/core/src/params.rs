@@ -593,6 +593,55 @@ impl MessageDeleteParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::prepare_mark_conversation_read`].
+///
+/// A read receipt is a signed plaintext event, not an encrypted message, so
+/// no conversation key is involved: the result is an action signature the
+/// caller submits alongside the mark-read request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarkConversationReadParams {
+    /// ID of the conversation being marked read.
+    pub conversation_id: String,
+    /// The `sequence_id` of the newest event read.
+    pub seen_until_sequence_id: String,
+    /// When the conversation was read, in milliseconds since the Unix epoch;
+    /// the current time when unset.
+    pub seen_at_msec: Option<i64>,
+    /// User ID of the sender signing the read receipt; resolves from the
+    /// session identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the read receipt; resolves
+    /// from the session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl MarkConversationReadParams {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(
+        conversation_id: impl Into<String>,
+        seen_until_sequence_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            seen_until_sequence_id: seen_until_sequence_id.into(),
+            seen_at_msec: None,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
 /// Parameters for [`crate::ChatCore::prepare_conversation_key_change`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConversationKeyChangeParams {
