@@ -34,7 +34,7 @@ public final class ChatCore implements AutoCloseable {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final Chat chat = new Chat();
-    private String signingKeyVersion = "1";
+    private String signingKeyVersion;
 
     public String signingKeyVersion() {
         return signingKeyVersion;
@@ -43,7 +43,8 @@ public final class ChatCore implements AutoCloseable {
     // -- Key management -----------------------------------------------------
 
     /** Import an existing base64 private-key blob (identity[+signing])
-     * together with the key version it was registered under. */
+     * together with the public_key_version the X API returned when it was
+     * registered. */
     public void loadKeys(String privateKeysB64, String signingKeyVersion) {
         chat.importKeys(Base64.getDecoder().decode(privateKeysB64), signingKeyVersion);
         this.signingKeyVersion = signingKeyVersion;
@@ -54,6 +55,10 @@ public final class ChatCore implements AutoCloseable {
      * signs as this user without passing a sender id per call.
      */
     public void setIdentity(String userId) {
+        if (signingKeyVersion == null || signingKeyVersion.isEmpty()) {
+            throw new IllegalStateException("signing key version unknown: pass loadKeys the "
+                    + "public_key_version the X API returned when the keys were registered");
+        }
         chat.setIdentity(userId, signingKeyVersion);
     }
 

@@ -30,6 +30,8 @@
       <h2>1. Keys</h2>
       <label for="privkeys">Private key blob (base64)</label>
       <textarea id="privkeys" rows="2" placeholder="paste an exported key blob, or generate one"></textarea>
+      <label for="keyversion">Key version (the public_key_version the X API returned when the key was registered)</label>
+      <input id="keyversion" placeholder="1765441245499" />
       <button id="btn-load">Load keys</button>
       <button id="btn-generate">Generate new identity</button>
       <div id="key-status" class="status"></div>

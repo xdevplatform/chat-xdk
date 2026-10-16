@@ -29,7 +29,8 @@ cp .env.example .env
 # First run with no keys prints a registration payload + a private blob:
 cargo run
 # Paste CHAT_PRIVATE_KEYS_B64 into .env, register the public key with the X API,
-# set X_ACCESS_TOKEN + CHAT_CONVERSATION_ID, then re-run.
+# set CHAT_SIGNING_KEY_VERSION to the public_key_version it returns, set
+# X_ACCESS_TOKEN + CHAT_CONVERSATION_ID, then re-run.
 cargo run
 ```
 

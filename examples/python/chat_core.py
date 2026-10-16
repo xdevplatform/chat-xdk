@@ -56,17 +56,19 @@ class ChatCore:
 
     def __init__(self, chat: Chat | None = None) -> None:
         self.chat = chat or Chat()
-        # The version the X API reports for our registered public key. Set after
-        # loading/generating keys; used as the signing key version when sending.
-        self.signing_key_version: str = "1"
+        # The version the X API reports for our registered public key. Set by
+        # load_keys / unlock; used as the signing key version when sending.
+        self.signing_key_version: str | None = None
 
     # -- Key management -----------------------------------------------------
 
-    def load_keys(self, private_keys_b64: str, signing_key_version: str = "1") -> None:
+    def load_keys(self, private_keys_b64: str, signing_key_version: str) -> None:
         """Import an existing private-key blob (identity[+signing]) and unlock.
 
         ``private_keys_b64`` is the base64 of 32 bytes (identity only) or 64
         bytes (identity + signing) — the same blob ``export_keys`` produces.
+        ``signing_key_version`` is the ``public_key_version`` the X API
+        returned when the keys were registered.
 
         This is the quickstart key-storage path. For production key storage see
         ``unlock`` / ``setup`` (Juicebox).
@@ -74,7 +76,7 @@ class ChatCore:
         self.chat.import_keys(_b64decode(private_keys_b64), version=signing_key_version)
         self.signing_key_version = signing_key_version
 
-    def unlock(self, juicebox_config_json: str, pin: str, signing_key_version: str = "1") -> None:
+    def unlock(self, juicebox_config_json: str, pin: str, signing_key_version: str) -> None:
         """Production key storage: recover the private keys from Juicebox.
 
         Use this instead of ``load_keys`` when keys are stored in Juicebox rather
@@ -92,6 +94,11 @@ class ChatCore:
         Every signed action after this resolves its sender and signing-key
         version from the session, so the encrypt calls stay short.
         """
+        if not self.signing_key_version:
+            raise ValueError(
+                "signing key version unknown: pass load_keys or unlock the "
+                "public_key_version the X API returned when the keys were registered"
+            )
         self.chat.set_identity(user_id, self.signing_key_version)
 
     def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None:
@@ -141,7 +148,6 @@ class ChatCore:
                 "identity_public_key_signature": payload.public_key.identity_public_key_signature,
                 "registration_method": payload.public_key.registration_method,
             },
-            "version": payload.version,
             "private_keys_b64": base64.b64encode(bytes(exported)).decode("ascii")
             if exported
             else "",

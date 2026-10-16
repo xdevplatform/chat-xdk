@@ -102,7 +102,7 @@ def _await_decrypted(
 def main() -> None:
     token = os.environ["X_ACCESS_TOKEN"]
     blob = os.environ["CHAT_PRIVATE_KEYS_B64"]
-    version = os.environ.get("CHAT_SIGNING_KEY_VERSION", "1")
+    version = os.environ["CHAT_SIGNING_KEY_VERSION"]
     conversation_id = os.environ["CHAT_CONVERSATION_ID"]
 
     core = ChatCore()

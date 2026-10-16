@@ -132,18 +132,14 @@ fn register(env: &HashMap<String, String>, force: bool) -> Result<(), String> {
     // body before the network POST is what makes a failed POST safe to retry
     // without wasting the daily registration budget.
     let resuming = blob_path.exists() && marker.get("body").is_some() && !force;
-    let (body, mut version) = if resuming {
+    let body = if resuming {
         let blob = fs::read_to_string(&blob_path).map_err(|e| e.to_string())?;
-        core.load_keys(blob.trim(), marker["version"].as_str().unwrap_or("1"))
+        core.load_keys_without_version(blob.trim())
             .map_err(|e| e.to_string())?;
         println!("Resuming the saved identity ({}).", blob_path.display());
-        (
-            marker["body"].clone(),
-            marker["version"].as_str().unwrap_or("1").to_string(),
-        )
+        marker["body"].clone()
     } else {
         let (payload, blob) = core.generate_and_register().map_err(|e| e.to_string())?;
-        let version = payload.version.clone().unwrap_or_else(|| "1".to_string());
         // Only public material goes into the body, so it is safe to persist and
         // re-send on a later run.
         let body = json!({
@@ -154,19 +150,17 @@ fn register(env: &HashMap<String, String>, force: bool) -> Result<(), String> {
                 "signing_public_key_signature": payload.public_key.signing_public_key_signature,
                 "registration_method": payload.public_key.registration_method,
             },
-            "version": version,
-            "generate_version": payload.generate_version,
         });
         save_blob(&blob_path, &blob)?;
         write_marker(
             &marker_path,
-            &json!({ "registered": false, "user_id": user_id, "version": version, "body": body }),
+            &json!({ "registered": false, "user_id": user_id, "body": body }),
         )?;
         println!(
             "Generated a new identity; private keys saved to {}.",
             blob_path.display()
         );
-        (body, version)
+        body
     };
 
     let our_public_key = body["public_key"]["public_key"].as_str().unwrap_or("");
@@ -174,27 +168,24 @@ fn register(env: &HashMap<String, String>, force: bool) -> Result<(), String> {
     // Reconcile: if our exact public key is already on the account, adopt it
     // rather than POSTing again (a prior POST may have applied after erroring).
     let existing = api.get_public_keys(&user_id)?;
-    if let Some(found) = existing
+    let version = if let Some(found) = existing
         .iter()
         .find(|k| k.identity_public_key == our_public_key)
     {
-        if !found.public_key_version.is_empty() {
-            version = found.public_key_version.clone();
-        }
-        println!(
-            "Public key already registered on the account (version {version}); skipping POST."
-        );
+        println!("Public key already registered on the account; skipping POST.");
+        found.public_key_version.clone()
     } else {
-        println!("Registering public key version {version} …");
+        println!("Registering the public key …");
         match api.add_user_public_key(&user_id, &body) {
             Ok(resp) => {
                 let data = match &resp["data"] {
                     Value::Array(a) => a.first().cloned().unwrap_or_else(|| json!({})),
                     other => other.clone(),
                 };
-                if let Some(v) = data["public_key_version"].as_str() {
-                    version = v.to_string();
-                }
+                data["public_key_version"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
             }
             Err(RegisterError::RateLimited { reset_epoch }) => {
                 let when = reset_epoch
@@ -214,10 +205,18 @@ fn register(env: &HashMap<String, String>, force: bool) -> Result<(), String> {
             }
             Err(e) => return Err(e.to_string()),
         }
+    };
+
+    if version.is_empty() {
+        return Err(
+            "The X API did not return a public_key_version for the key. Re-run to \
+             look it up on the account; the saved identity resumes."
+                .to_string(),
+        );
     }
 
     core.set_registered_version(&version);
-    core.set_identity(&user_id);
+    core.set_identity(&user_id).map_err(|e| e.to_string())?;
     write_marker(
         &marker_path,
         &json!({

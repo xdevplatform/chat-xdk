@@ -75,7 +75,6 @@ public static class Register
         // or Juicebox step safe to retry without wasting the daily budget.
         object bodyToPost;
         string ourPublicKey;
-        string version;
         var resuming = File.Exists(BlobPath)
             && marker.TryGetProperty("body", out _)
             && !force;
@@ -85,13 +84,11 @@ public static class Register
             var savedBody = marker.GetProperty("body");
             bodyToPost = savedBody;
             ourPublicKey = savedBody.GetProperty("public_key").GetProperty("public_key").GetString() ?? "";
-            version = marker.TryGetProperty("version", out var mv) ? mv.GetString() ?? "1" : "1";
             Console.WriteLine($"Resuming the saved identity ({BlobPath}).");
         }
         else
         {
             var payload = chat.GenerateKeypairs();
-            version = payload.Version ?? "1";
             ourPublicKey = payload.PublicKey.PublicKey;
             // Only public material goes into the body, so it is safe to persist
             // and re-send on a later run.
@@ -105,8 +102,6 @@ public static class Register
                     ["signing_public_key_signature"] = payload.PublicKey.SigningPublicKeySignature,
                     ["registration_method"] = payload.PublicKey.RegistrationMethod,
                 },
-                ["version"] = version,
-                ["generate_version"] = payload.GenerateVersion,
             };
             bodyToPost = body;
             var exported = chat.ExportKeys() ?? throw new InvalidOperationException("export_keys returned nothing — no identity to save");
@@ -115,7 +110,6 @@ public static class Register
             {
                 ["registered"] = false,
                 ["user_id"] = userId,
-                ["version"] = version,
                 ["body"] = body,
             });
             Console.WriteLine($"Generated a new identity; private keys saved to {BlobPath}.");
@@ -126,19 +120,20 @@ public static class Register
         var existing = await api.GetPublicKeysAsync(userId);
         var already = existing.FirstOrDefault(k =>
             k.TryGetProperty("public_key", out var pk) && pk.GetString() == ourPublicKey);
+        string? version = null;
         if (already.ValueKind == JsonValueKind.Object)
         {
             if (already.TryGetProperty("public_key_version", out var av))
-                version = av.ValueKind == JsonValueKind.String ? av.GetString() ?? version : av.ToString();
-            Console.WriteLine($"Public key already registered on the account (version {version}); skipping POST.");
+                version = av.ValueKind == JsonValueKind.String ? av.GetString() : av.ToString();
+            Console.WriteLine("Public key already registered on the account; skipping POST.");
         }
         else
         {
-            Console.WriteLine($"Registering public key version {version} …");
+            Console.WriteLine("Registering the public key …");
             try
             {
                 var resp = await api.AddUserPublicKeyAsync(userId, bodyToPost);
-                version = VersionFromResponse(resp) ?? version;
+                version = VersionFromResponse(resp);
             }
             catch (RateLimitedException limited)
             {
@@ -151,6 +146,15 @@ public static class Register
                 Environment.Exit(1);
                 return;
             }
+        }
+
+        if (string.IsNullOrEmpty(version))
+        {
+            Console.Error.WriteLine(
+                "The X API did not return a public_key_version for the key. Re-run to " +
+                "look it up on the account; the saved identity resumes.");
+            Environment.Exit(1);
+            return;
         }
 
         chat.SetIdentity(userId, version);

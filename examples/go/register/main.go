@@ -89,7 +89,6 @@ func register(force bool) error {
 	// body before the network POST is what makes a failed POST or Juicebox step
 	// safe to retry without wasting the daily registration budget.
 	var body map[string]any
-	var version string
 	savedBlob, blobErr := os.ReadFile(blobPath())
 	_, hasBody := marker["body"]
 	if blobErr == nil && hasBody && !force {
@@ -101,16 +100,11 @@ func register(force bool) error {
 			return err
 		}
 		body, _ = marker["body"].(map[string]any)
-		version = asString(marker["version"], "1")
 		fmt.Printf("Resuming the saved identity (%s).\n", blobPath())
 	} else {
 		payload, err := chat.GenerateKeypairs()
 		if err != nil {
 			return err
-		}
-		version = "1"
-		if payload.Version != nil {
-			version = *payload.Version
 		}
 		// Only public material goes into the body, so it is safe to persist and
 		// re-send on a later run.
@@ -122,8 +116,6 @@ func register(force bool) error {
 				"signing_public_key_signature":  payload.PublicKey.SigningPublicKeySignature,
 				"registration_method":           payload.PublicKey.RegistrationMethod,
 			},
-			"version":          version,
-			"generate_version": payload.GenerateVersion,
 		}
 		exported, err := chat.ExportKeys()
 		if err != nil {
@@ -132,7 +124,7 @@ func register(force bool) error {
 		if err := saveBlob(base64.StdEncoding.EncodeToString(exported)); err != nil {
 			return err
 		}
-		if err := writeMarker(map[string]any{"registered": false, "user_id": userID, "version": version, "body": body}); err != nil {
+		if err := writeMarker(map[string]any{"registered": false, "user_id": userID, "body": body}); err != nil {
 			return err
 		}
 		fmt.Printf("Generated a new identity; private keys saved to %s.\n", blobPath())
@@ -150,13 +142,12 @@ func register(force bool) error {
 	if err != nil {
 		return err
 	}
+	var version string
 	if v, found := findRegisteredVersion(existing, ourPublicKey); found {
-		if v != "" {
-			version = v
-		}
-		fmt.Printf("Public key already registered on the account (version %s); skipping POST.\n", version)
+		version = v
+		fmt.Println("Public key already registered on the account; skipping POST.")
 	} else {
-		fmt.Printf("Registering public key version %s …\n", version)
+		fmt.Println("Registering the public key …")
 		resp, err := api.AddUserPublicKey(userID, body)
 		var limited *rateLimitedError
 		if errors.As(err, &limited) {
@@ -169,9 +160,11 @@ func register(force bool) error {
 		if err != nil {
 			return err
 		}
-		if v := versionFromResponse(resp); v != "" {
-			version = v
-		}
+		version = versionFromResponse(resp)
+	}
+
+	if version == "" {
+		return errors.New("the X API did not return a public_key_version for the key; re-run to look it up on the account (the saved identity resumes)")
 	}
 
 	if err := chat.SetIdentity(userID, version); err != nil {
@@ -330,7 +323,7 @@ func (c *xChatClient) GetJuiceboxConfig(userID string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	return string(raw), asString(latest["public_key_version"], "1"), nil
+	return string(raw), asString(latest["public_key_version"], ""), nil
 }
 
 // AddUserPublicKey registers a public key: POST /2/users/{id}/public_keys.

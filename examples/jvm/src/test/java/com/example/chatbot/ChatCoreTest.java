@@ -62,6 +62,18 @@ class ChatCoreTest {
     }
 
     @Test
+    void setIdentityNeedsTheRegisteredVersion() throws Exception {
+        // Freshly generated keys have no registered version yet, so the bot
+        // cannot sign as itself until loadKeys provides one.
+        try (ChatCore core = new ChatCore()) {
+            core.generateAndRegister();
+            IllegalStateException err =
+                    assertThrows(IllegalStateException.class, () -> core.setIdentity("12345"));
+            assertTrue(err.getMessage().contains("signing key version unknown"), err.getMessage());
+        }
+    }
+
+    @Test
     void genericEncryptDecryptRoundtrip() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

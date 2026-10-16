@@ -50,7 +50,7 @@ function ensureWasm() {
 
 export class ChatCore {
   #chat;
-  signingKeyVersion = "1";
+  signingKeyVersion = null;
 
   constructor(chat) {
     this.#chat = chat;
@@ -69,8 +69,11 @@ export class ChatCore {
 
   // -- Key management -------------------------------------------------------
 
-  /** Import an existing base64 private-key blob (identity[+signing]). */
-  loadKeys(privateKeysB64, signingKeyVersion = "1") {
+  /**
+   * Import an existing base64 private-key blob (identity[+signing]) registered
+   * under signingKeyVersion, the public_key_version the X API returned.
+   */
+  loadKeys(privateKeysB64, signingKeyVersion) {
     const bytes = base64ToBytes(privateKeysB64);
     if (!bytes) throw new Error("invalid base64 private keys");
     this.#chat.importKeys(bytes, signingKeyVersion);
@@ -95,6 +98,12 @@ export class ChatCore {
    * resolves its sender id and signing-key version from it.
    */
   setIdentity(userId) {
+    if (!this.signingKeyVersion) {
+      throw new Error(
+        "signing key version unknown: pass loadKeys the public_key_version " +
+          "the X API returned when the keys were registered",
+      );
+    }
     this.#chat.setIdentity(userId, this.signingKeyVersion);
   }
 

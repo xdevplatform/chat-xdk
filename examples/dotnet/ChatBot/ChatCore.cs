@@ -20,13 +20,14 @@ namespace ChatBot;
 public sealed class ChatCore : IDisposable
 {
     private readonly Chat _chat = new();
-    public string SigningKeyVersion { get; private set; } = "1";
+    public string SigningKeyVersion { get; private set; } = "";
 
     // -- Key management -----------------------------------------------------
 
     /// <summary>Import an existing base64 private-key blob (identity[+signing])
-    /// together with the key version it was registered under.</summary>
-    public void LoadKeys(string privateKeysB64, string signingKeyVersion = "1")
+    /// together with the public_key_version the X API returned when it was
+    /// registered.</summary>
+    public void LoadKeys(string privateKeysB64, string signingKeyVersion)
     {
         _chat.ImportKeys(Convert.FromBase64String(privateKeysB64), signingKeyVersion);
         SigningKeyVersion = signingKeyVersion;
@@ -36,7 +37,14 @@ public sealed class ChatCore : IDisposable
     /// Set the session identity once; every encrypt/prepare call below then
     /// signs as this user without passing a sender id per call.
     /// </summary>
-    public void SetIdentity(string userId) => _chat.SetIdentity(userId, SigningKeyVersion);
+    public void SetIdentity(string userId)
+    {
+        if (string.IsNullOrEmpty(SigningKeyVersion))
+            throw new InvalidOperationException(
+                "signing key version unknown: pass LoadKeys the public_key_version the X API "
+                + "returned when the keys were registered");
+        _chat.SetIdentity(userId, SigningKeyVersion);
+    }
 
     /// <summary>Generate a fresh identity. Returns the registration payload to
     /// POST to the X API plus the exported private blob (base64) to persist.</summary>

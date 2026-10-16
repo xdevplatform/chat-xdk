@@ -28,10 +28,16 @@ public final class Main {
                 System.out.println(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(gen.registration().publicKey));
                 System.out.println("\n2) Save this in your .env so the bot reuses the identity:");
                 System.out.println("CHAT_PRIVATE_KEYS_B64=" + gen.privateKeysB64());
+                System.out.println("\n3) Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API returns.");
                 return;
             }
 
-            String version = envOr("CHAT_SIGNING_KEY_VERSION", "1");
+            String version = env("CHAT_SIGNING_KEY_VERSION");
+            if (version == null || version.isEmpty()) {
+                System.out.println("Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API "
+                        + "returned when the bot's public key was registered (Register prints it).");
+                System.exit(1);
+            }
             core.loadKeys(privateKeys, version);
 
             String accessToken = env("X_ACCESS_TOKEN");

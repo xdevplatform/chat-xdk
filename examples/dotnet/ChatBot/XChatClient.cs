@@ -46,10 +46,9 @@ public sealed class XChatClient
     /// Register a public key: POST /2/users/{id}/public_keys.
     ///
     /// <paramref name="body"/> is the registration object from
-    /// <c>GenerateKeypairs</c> in its snake_case wire form (<c>public_key</c>
-    /// object, <c>version</c>, <c>generate_version</c>). Throws
-    /// <see cref="RateLimitedException"/> on 429 so the caller can stop instead
-    /// of burning the strict daily budget.
+    /// <c>GenerateKeypairs</c> in its snake_case wire form (the
+    /// <c>public_key</c> object). Throws <see cref="RateLimitedException"/> on
+    /// 429 so the caller can stop instead of burning the strict daily budget.
     /// </summary>
     public async Task<JsonElement> AddUserPublicKeyAsync(string userId, object body)
     {
@@ -102,8 +101,8 @@ public sealed class XChatClient
 
     private static string VersionStr(JsonElement el) =>
         el.TryGetProperty("public_key_version", out var v)
-            ? v.ValueKind == JsonValueKind.String ? v.GetString() ?? "1" : v.ToString()
-            : "1";
+            ? v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.ToString()
+            : "";
 
     /// <summary>GET the raw (encrypted) events for a conversation.</summary>
     public async Task<JsonElement> GetEventsAsync(string conversationId, int maxResults = 50, string? paginationToken = null)

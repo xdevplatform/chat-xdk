@@ -97,6 +97,20 @@ func TestLoadKeysMatchesFixture(t *testing.T) {
 	}
 }
 
+// Freshly generated keys have no registered version yet, so the bot cannot
+// sign as itself until LoadKeys provides one.
+func TestSetIdentityNeedsTheRegisteredVersion(t *testing.T) {
+	core := NewChatCore()
+	defer core.Close()
+	if _, _, err := core.GenerateAndRegister(); err != nil {
+		t.Fatalf("GenerateAndRegister: %v", err)
+	}
+	err := core.SetIdentity("12345")
+	if err == nil || !strings.Contains(err.Error(), "signing key version unknown") {
+		t.Fatalf("SetIdentity without a version: got %v", err)
+	}
+}
+
 func TestGenericEncryptDecryptRoundtrip(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()

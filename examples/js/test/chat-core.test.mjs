@@ -44,6 +44,14 @@ test("loadKeys reproduces the fixture public keys", async () => {
   assert.equal(keys.signing, vectors.signing_public_b64);
 });
 
+test("setIdentity needs the registered version", async () => {
+  // Freshly generated keys have no registered version yet, so the bot cannot
+  // sign as itself until loadKeys provides one.
+  const core = await ChatCore.create();
+  core.generateAndRegister();
+  assert.throws(() => core.setIdentity("12345"), /signing key version unknown/);
+});
+
 test("generic encrypt -> decrypt round-trip returns the plaintext", async () => {
   const core = await loadedCore();
   const key = convKey();

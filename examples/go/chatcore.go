@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
 )
@@ -29,7 +30,7 @@ type ChatCore struct {
 func NewChatCore() *ChatCore {
 	chat := chatxdk.New()
 	chat.SetCacheKeys(true)
-	return &ChatCore{chat: chat, SigningKeyVersion: "1"}
+	return &ChatCore{chat: chat}
 }
 
 // Close releases native resources.
@@ -55,6 +56,10 @@ func (c *ChatCore) LoadKeys(privateKeysB64, signingKeyVersion string) error {
 // every encrypt/prepare call after this resolves its sender from the session
 // instead of taking it as an argument.
 func (c *ChatCore) SetIdentity(userID string) error {
+	if c.SigningKeyVersion == "" {
+		return errors.New("signing key version unknown: pass LoadKeys the public_key_version " +
+			"the X API returned when the keys were registered")
+	}
 	return c.chat.SetIdentity(userID, c.SigningKeyVersion)
 }
 
