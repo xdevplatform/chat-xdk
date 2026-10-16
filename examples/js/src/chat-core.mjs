@@ -7,7 +7,7 @@
  *
  *   - key management     -> loadKeys / generateAndRegister / setIdentity
  *   - conversation keys  -> prepareConversationKeyChange / setCacheKeys
- *   - message encryption -> encryptMessage / encryptReply / encryptReaction
+ *   - message encryption -> encryptReply / encryptReaction, then encryptMedia for files
  *   - event decryption   -> decryptBatch (decryptEvents) and decryptOne (decryptEvent)
  *
  * The session model: identity (setIdentity), signing keys (setSigningKeys),
@@ -20,6 +20,7 @@ import init, {
   Chat,
   base64ToBytes,
   bytesToBase64,
+  encryptedFileSize,
 } from "../../../crates/wasm/pkg/chat_xdk_wasm.js";
 
 // The WASM public API does not expose raw key import/export, so the local-blob
@@ -59,6 +60,11 @@ export class ChatCore {
   static async create() {
     await ensureWasm();
     return new ChatCore(new Chat());
+  }
+
+  /** The size of a file once encrypted: the size its upload declares. */
+  static encryptedFileSize(plaintextSize) {
+    return encryptedFileSize(plaintextSize);
   }
 
   // -- Key management -------------------------------------------------------
@@ -130,16 +136,16 @@ export class ChatCore {
 
   /** Batch path — used on initial conversation load (also feeds the key cache). */
   decryptBatch(eventsB64, signingKeys) {
-    return this.#chat.decryptEvents(eventsB64, signingKeys);
+    return this.#chat.decryptEvents({ events: eventsB64, signingKeys });
   }
 
   /**
    * Single-event path — used for each new event after the initial load.
-   * With the session set up, both key arguments can be omitted:
-   * conversation keys resolve from the cache and signing keys from the store.
+   * With the session set up, both key arguments can be omitted: an empty
+   * key map resolves from the cache and signing keys from the store.
    */
-  decryptOne(eventB64, conversationKeys, signingKeys) {
-    return this.#chat.decryptEvent(eventB64, conversationKeys, signingKeys);
+  decryptOne(eventB64, conversationKeys = {}, signingKeys) {
+    return this.#chat.decryptEvent({ eventB64, conversationKeys, signingKeys });
   }
 
   // -- Message encryption ---------------------------------------------------
@@ -150,10 +156,14 @@ export class ChatCore {
    * a *threaded* reply and derives the preview from the signed original;
    * without it this sends a fresh message. The conversation key pair is
    * optional once the cache is enabled. `entities` are `[start, end, type]`
-   * byte ranges; a message with media `attachments` passes the `messageId`
-   * its media was encrypted with (from `newMessageId`); `quickReply` offers
+   * byte ranges; `attachments` are attachment descriptors, each file naming
+   * the media hash key its upload started with; `quickReply` offers
    * selectable options or answers them; `ttlMsec` makes the message
    * disappear after the given lifetime.
+   *
+   * The result also carries `event_b64`, the outgoing message as an event:
+   * it is not sent, but `encryptMedia` takes it to encrypt the message's
+   * files.
    */
   encryptReply({
     conversationId,
@@ -163,7 +173,6 @@ export class ChatCore {
     replyToEvent,
     entities,
     attachments,
-    messageId,
     quickReply,
     ttlMsec,
   }) {
@@ -174,7 +183,6 @@ export class ChatCore {
       conversationKeyVersion,
       entities,
       attachments,
-      messageId,
       quickReply,
       ttlMsec,
     };
@@ -182,10 +190,11 @@ export class ChatCore {
       ? this.#chat.encryptReply({ ...params, replyToEvent })
       : this.#chat.encryptMessage(params);
     return {
-      // The message id: the caller's, or one the SDK generated.
+      // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
       encoded_message_create_event: payload.encryptedContent,
       encoded_message_event_signature: payload.encodedEventSignature,
+      event_b64: payload.eventB64,
     };
   }
 
@@ -266,30 +275,26 @@ export class ChatCore {
     });
   }
 
-  // -- Media streaming --------------------------------------------------------
+  // -- Media files ------------------------------------------------------------
 
   static MEDIA_CHUNK = 1024 * 1024;
 
-  /** A fresh id for a message with media, taken before its media is encrypted. */
-  newMessageId() {
-    return this.#chat.newMessageId();
-  }
-
   /**
-   * Encrypt a media blob with the incremental stream API.
+   * Encrypt a media file of an outgoing message with the incremental API.
    *
-   * The blob is encrypted for the message `messageId` (from `newMessageId`)
-   * at `attachmentIndex` in its attachments; send the message with the same
-   * id. Feeding fixed-size chunks through `push` keeps memory bounded no
-   * matter how large the file is (the WASM heap cannot hold large files
-   * whole); `finish` emits the final frame that seals the stream —
-   * decryption fails without it.
+   * `eventB64` is the `event_b64` that `encryptReply` returned for the
+   * message, and `mediaHashKey` the hash key the file's upload started
+   * with, as listed in the message's attachments; the SDK encrypts the file
+   * under that attachment's key. Feeding fixed-size chunks through `push`
+   * keeps memory bounded no matter how large the file is (the WASM heap
+   * cannot hold large files whole); `finish` emits the final frame that
+   * seals the file — decryption fails without it.
    */
-  encryptMedia(plaintext, conversationKey, messageId, attachmentIndex) {
-    const enc = this.#chat.streamEncryptor(conversationKey, messageId, attachmentIndex);
+  encryptMedia(plaintext, eventB64, conversationKeys, mediaHashKey) {
+    const enc = this.#chat.fileEncryptor({ eventB64, conversationKeys, mediaHashKey });
     const parts = [];
-    // A throw from push would otherwise leak the encryptor's live secretstream
-    // key state in WASM memory; free() reclaims it. finish() consumes the
+    // A throw from push would otherwise leak the encryptor's live key state
+    // in WASM memory; free() reclaims it. finish() consumes the
     // encryptor even when it fails, so it needs no explicit cleanup (and
     // free() after it would hit an already-null pointer).
     try {
@@ -305,18 +310,18 @@ export class ChatCore {
   }
 
   /**
-   * Decrypt a downloaded media blob with the incremental stream API.
+   * Decrypt a downloaded media file with the incremental API.
    *
    * `eventB64` is the raw event of the message that carries the media and
    * `conversationKeys` its conversation's key map, as passed to `decryptOne`;
    * the SDK finds `mediaHashKey` in the event and derives that file's key.
-   * `finish` throws if the stream was truncated, so plaintext from `push`
-   * must not be treated as complete until it succeeds.
+   * `finish` throws if the file was truncated, so bytes from `push` must not
+   * be treated as complete until it succeeds.
    */
   decryptMedia(ciphertext, eventB64, conversationKeys, mediaHashKey) {
-    const dec = this.#chat.streamDecryptor(eventB64, conversationKeys, mediaHashKey);
+    const dec = this.#chat.fileDecryptor({ eventB64, conversationKeys, mediaHashKey });
     const parts = [];
-    // As in encryptMedia: free() the decryptor if push throws mid-stream;
+    // As in encryptMedia: free() the decryptor if push throws mid-file;
     // finish() consumes it even when it fails.
     try {
       for (let offset = 0; offset < ciphertext.length; offset += ChatCore.MEDIA_CHUNK) {
