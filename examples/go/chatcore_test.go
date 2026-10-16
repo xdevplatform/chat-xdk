@@ -27,14 +27,17 @@ type vectors struct {
 	EventConversationKeyVersion   string `json:"event_conversation_key_version"`
 	EventSigningKeyVersion        string `json:"event_signing_key_version"`
 	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
-	// A message sent under a per-message key, with two media attachments.
+	// A message sent under a per-message key, with two media attachments
+	// encrypted by another client.
 	EventMessageKeyB64               string `json:"event_message_key_b64"`
-	MessageKeySenderID               string `json:"message_key_sender_id"`
-	MessageKeyMessageID              string `json:"message_key_message_id"`
 	MessageKeyConversationKeyHex     string `json:"message_key_conversation_key_hex"`
 	MessageKeyConversationKeyVersion string `json:"message_key_conversation_key_version"`
 	MediaFirstHashKey                string `json:"media_first_hash_key"`
+	MediaFirstEncryptedB64           string `json:"media_first_encrypted_b64"`
+	MediaFirstPlaintextB64           string `json:"media_first_plaintext_b64"`
 	MediaSecondHashKey               string `json:"media_second_hash_key"`
+	MediaSecondEncryptedB64          string `json:"media_second_encrypted_b64"`
+	MediaSecondPlaintextB64          string `json:"media_second_plaintext_b64"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -276,63 +279,29 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 	}
 }
 
-func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
-	// The chunked stream path the media flow uses: multi-chunk payload in,
-	// identical bytes out, and truncation is detected. Media is encrypted
-	// for its message and position, so encrypting as the fixture message's
-	// sender, under its message id and key, yields media that opens through
-	// that message: its first and second attachments.
+func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
+	// The message-first media flow: the message names the file by the media
+	// hash key its upload started with, the file is encrypted from the
+	// message's EventB64 in chunks, and it decrypts through that event. A
+	// truncated file is detected.
 	core, v := loadedCore(t)
 	defer core.Close()
-	if err := core.SetIdentity(v.MessageKeySenderID); err != nil {
-		t.Fatalf("SetIdentity: %v", err)
-	}
-	key, err := hex.DecodeString(v.MessageKeyConversationKeyHex)
-	if err != nil {
-		t.Fatalf("decode message_key_conversation_key_hex: %v", err)
-	}
-	keys := map[string][]byte{v.MessageKeyConversationKeyVersion: key}
+	key := v.conversationKey(t)
+	keys := map[string][]byte{"1": key}
 	plaintext := make([]byte, 300_000)
 	for i := range plaintext {
 		plaintext[i] = byte((i*31 + 7) % 256)
 	}
-
-	var ciphertext []byte
-	for index, mediaHashKey := range []string{v.MediaFirstHashKey, v.MediaSecondHashKey} {
-		ciphertext, err = core.EncryptMedia(plaintext, key, v.MessageKeyMessageID, index)
-		if err != nil {
-			t.Fatalf("EncryptMedia: %v", err)
-		}
-		if bytes.Equal(ciphertext[:len(plaintext)], plaintext) {
-			t.Fatal("ciphertext prefix equals plaintext")
-		}
-		decrypted, err := core.DecryptMedia(ciphertext, v.EventMessageKeyB64, keys, mediaHashKey)
-		if err != nil {
-			t.Fatalf("DecryptMedia: %v", err)
-		}
-		if !bytes.Equal(decrypted, plaintext) {
-			t.Error("media round-trip did not return the original bytes")
-		}
-	}
-
-	_, err = core.DecryptMedia(ciphertext[:len(ciphertext)-4], v.EventMessageKeyB64, keys, v.MediaSecondHashKey)
-	if err == nil || !strings.Contains(err.Error(), "truncated") {
-		t.Errorf("expected a truncation error, got %v", err)
-	}
-
-	messageID, err := core.NewMessageID()
-	if err != nil {
-		t.Fatalf("NewMessageID: %v", err)
-	}
 	mediaType := int32(5)
-	body, err := core.EncryptReply("6789:12345", "a photo", &ReplyOptions{
+	body, err := core.EncryptReply("1000:2000", "a photo", &ReplyOptions{
 		ConversationKey:        key,
-		ConversationKeyVersion: v.MessageKeyConversationKeyVersion,
-		MessageID:              messageID,
+		ConversationKeyVersion: "1",
 		Attachments: []chatxdk.AttachmentDescriptor{{
 			AttachmentType: "media",
 			MediaHashKey:   "photo",
-			FilesizeBytes:  int64(len(ciphertext)),
+			Width:          4,
+			Height:         3,
+			FilesizeBytes:  int64(len(plaintext)),
 			Filename:       "photo.bin",
 			MediaType:      &mediaType,
 		}},
@@ -340,8 +309,63 @@ func TestMediaStreamEncryptDecryptRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply (media): %v", err)
 	}
-	if body.MessageID != messageID {
-		t.Errorf("message id %q, want %q", body.MessageID, messageID)
+	if body.EventB64 == "" {
+		t.Fatal("empty event_b64")
+	}
+
+	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, keys, "photo")
+	if err != nil {
+		t.Fatalf("EncryptMedia: %v", err)
+	}
+	size, err := chatxdk.EncryptedFileSize(uint64(len(plaintext)))
+	if err != nil {
+		t.Fatalf("EncryptedFileSize: %v", err)
+	}
+	if uint64(len(ciphertext)) != size {
+		t.Errorf("encrypted size %d, want %d", len(ciphertext), size)
+	}
+	decrypted, err := core.DecryptMedia(ciphertext, body.EventB64, keys, "photo")
+	if err != nil {
+		t.Fatalf("DecryptMedia: %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Error("media round-trip did not return the original bytes")
+	}
+
+	_, err = core.DecryptMedia(ciphertext[:len(ciphertext)-4], body.EventB64, keys, "photo")
+	if err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("expected a truncation error, got %v", err)
+	}
+}
+
+func TestMediaFromTheFixtureMessageOpens(t *testing.T) {
+	// Media encrypted by another client opens through its message's event.
+	core, v := loadedCore(t)
+	defer core.Close()
+	key, err := hex.DecodeString(v.MessageKeyConversationKeyHex)
+	if err != nil {
+		t.Fatalf("decode message_key_conversation_key_hex: %v", err)
+	}
+	keys := map[string][]byte{v.MessageKeyConversationKeyVersion: key}
+	for _, media := range []struct{ hashKey, encryptedB64, plaintextB64 string }{
+		{v.MediaFirstHashKey, v.MediaFirstEncryptedB64, v.MediaFirstPlaintextB64},
+		{v.MediaSecondHashKey, v.MediaSecondEncryptedB64, v.MediaSecondPlaintextB64},
+	} {
+		encrypted, err := base64.StdEncoding.DecodeString(media.encryptedB64)
+		if err != nil {
+			t.Fatalf("decode %s: %v", media.hashKey, err)
+		}
+		want, err := base64.StdEncoding.DecodeString(media.plaintextB64)
+		if err != nil {
+			t.Fatalf("decode %s: %v", media.hashKey, err)
+		}
+		got, err := core.DecryptMedia(encrypted, v.EventMessageKeyB64, keys, media.hashKey)
+		if err != nil {
+			t.Fatalf("DecryptMedia %s: %v", media.hashKey, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s did not decrypt to the original bytes", media.hashKey)
+		}
 	}
 }
 

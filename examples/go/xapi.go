@@ -199,31 +199,39 @@ func (c *XChatClient) AddGroupMembers(conversationID string, body map[string]any
 // uploadChunk is the append segment size for the three-step media upload.
 const uploadChunk = 3 * 1024 * 1024
 
-// UploadMedia uploads an encrypted media blob; returns its media_hash_key.
+// StartMediaUpload starts an upload; returns its session id and media hash
+// key.
 //
-// Three-step flow: initialize (returns an upload session and the hash key),
-// append (3 MB segments), finalize. The media endpoints take the colon form
-// of the conversation id in the body.
-func (c *XChatClient) UploadMedia(conversationID string, ciphertext []byte) (string, error) {
-	conv := strings.ReplaceAll(conversationID, "-", ":")
+// totalBytes is the encrypted size, chatxdk.EncryptedFileSize of the
+// plaintext size. The media hash key names the file in the message's
+// attachments; encrypt the file once the message is built, then
+// FinishMediaUpload. The media endpoints take the colon form of the
+// conversation id in the body.
+func (c *XChatClient) StartMediaUpload(conversationID string, totalBytes uint64) (sessionID, mediaHashKey string, err error) {
 	var init struct {
 		Data struct {
 			SessionID    string `json:"session_id"`
 			MediaHashKey string `json:"media_hash_key"`
 		} `json:"data"`
 	}
-	err := c.do(http.MethodPost, "/2/chat/media/upload/initialize", map[string]any{
-		"conversation_id": conv,
-		"total_bytes":     len(ciphertext),
+	err = c.do(http.MethodPost, "/2/chat/media/upload/initialize", map[string]any{
+		"conversation_id": strings.ReplaceAll(conversationID, "-", ":"),
+		"total_bytes":     totalBytes,
 	}, &init)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	sessionID, mediaHashKey := init.Data.SessionID, init.Data.MediaHashKey
+	sessionID, mediaHashKey = init.Data.SessionID, init.Data.MediaHashKey
 	if sessionID == "" || mediaHashKey == "" {
-		return "", fmt.Errorf("media upload initialize failed: session_id=%q media_hash_key=%q", sessionID, mediaHashKey)
+		return "", "", fmt.Errorf("media upload initialize failed: session_id=%q media_hash_key=%q", sessionID, mediaHashKey)
 	}
+	return sessionID, mediaHashKey, nil
+}
 
+// FinishMediaUpload uploads the encrypted file in 3 MB segments, then
+// finalizes.
+func (c *XChatClient) FinishMediaUpload(conversationID, sessionID, mediaHashKey string, ciphertext []byte) error {
+	conv := strings.ReplaceAll(conversationID, "-", ":")
 	segment := 0
 	for offset := 0; offset < len(ciphertext); offset += uploadChunk {
 		end := min(offset+uploadChunk, len(ciphertext))
@@ -235,21 +243,17 @@ func (c *XChatClient) UploadMedia(conversationID string, ciphertext []byte) (str
 			"media":           base64.StdEncoding.EncodeToString(ciphertext[offset:end]),
 		}, nil)
 		if err != nil {
-			return "", err
+			return err
 		}
 		segment++
 	}
 
 	finalizePath := fmt.Sprintf("/2/chat/media/upload/%s/finalize", url.PathEscape(sessionID))
-	err = c.do(http.MethodPost, finalizePath, map[string]any{
+	return c.do(http.MethodPost, finalizePath, map[string]any{
 		"conversation_id": conv,
 		"media_hash_key":  mediaHashKey,
 		"num_parts":       fmt.Sprintf("%d", segment),
 	}, nil)
-	if err != nil {
-		return "", err
-	}
-	return mediaHashKey, nil
 }
 
 // DownloadMedia downloads an encrypted media blob as raw bytes.
@@ -282,6 +286,7 @@ func (c *XChatClient) DownloadMedia(conversationID, mediaHashKey string) ([]byte
 // -- Sending -------------------------------------------------------------------
 
 // SendMessage posts an encrypted message produced by ChatCore.EncryptReply.
+// Only the send fields go out; EventB64 stays local.
 func (c *XChatClient) SendMessage(conversationID string, body *SendBody) error {
 	path := fmt.Sprintf("/2/chat/conversations/%s/messages", url.PathEscape(apiConvID(conversationID)))
 	return c.do(http.MethodPost, path, body, nil)

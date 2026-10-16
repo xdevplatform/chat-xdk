@@ -7,7 +7,7 @@
 //   - key management     -> LoadKeys / GenerateAndRegister / SetIdentity / SetSigningKeys
 //   - conversation keys  -> PrepareConversationKeyChange / DecryptConversationKey
 //     (plus the SDK's opt-in key cache, enabled in NewChatCore)
-//   - message encryption -> EncryptReply
+//   - message encryption -> EncryptReply, then EncryptMedia for its files
 //   - event decryption   -> DecryptBatch (DecryptEvents) and DecryptOne (DecryptEvent)
 package main
 
@@ -108,7 +108,10 @@ func (c *ChatCore) DecryptConversationKey(encryptedKeyB64 string) ([]byte, error
 // encrypt calls), and decrypts every message. Passing nil signingKeys uses
 // the set stored via SetSigningKeys.
 func (c *ChatCore) DecryptBatch(eventsB64 []string, signingKeys []chatxdk.SigningKeyEntry) (*chatxdk.DecryptEventsResult, error) {
-	return c.chat.DecryptEvents(eventsB64, signingKeys)
+	return c.chat.DecryptEvents(chatxdk.DecryptEventsParams{
+		Events:      eventsB64,
+		SigningKeys: signingKeys,
+	})
 }
 
 // DecryptOne is the single-event path used for each new event after the
@@ -116,17 +119,25 @@ func (c *ChatCore) DecryptBatch(eventsB64 []string, signingKeys []chatxdk.Signin
 // key cache and signing keys from the set stored via SetSigningKeys;
 // explicit maps override both.
 func (c *ChatCore) DecryptOne(eventB64 string, conversationKeys map[string][]byte, signingKeys []chatxdk.SigningKeyEntry) (*chatxdk.Event, error) {
-	return c.chat.DecryptEvent(eventB64, conversationKeys, signingKeys)
+	return c.chat.DecryptEvent(chatxdk.DecryptEventParams{
+		EventB64:         eventB64,
+		ConversationKeys: conversationKeys,
+		SigningKeys:      signingKeys,
+	})
 }
 
 // -- Message encryption -----------------------------------------------------
 
-// SendBody holds the fields the X API expects for an encrypted message.
+// SendBody holds the fields the X API expects for an encrypted message, plus
+// the message's EventB64, which stays local.
 type SendBody struct {
 	MessageID                    string `json:"message_id"`
 	EncodedMessageCreateEvent    string `json:"encoded_message_create_event"`
 	EncodedMessageEventSignature string `json:"encoded_message_event_signature"`
 	ConversationToken            string `json:"conversation_token,omitempty"`
+	// EventB64 is the message as recipients receive it; encrypt the
+	// message's files from it with EncryptMedia.
+	EventB64 string `json:"-"`
 }
 
 // ReplyOptions are the optional send parameters for EncryptReply.
@@ -140,11 +151,10 @@ type ReplyOptions struct {
 	ReplyToCkces []string
 	// Entities are (start, end, type) byte ranges within the text.
 	Entities []chatxdk.EntityTuple
-	// Attachments are attachment descriptors (e.g. a media reference).
+	// Attachments are attachment descriptors. Each file names the media
+	// hash key its upload started with; encrypt the files afterwards with
+	// EncryptMedia and the returned body's EventB64.
 	Attachments []chatxdk.AttachmentDescriptor
-	// MessageID is the id from NewMessageID that the message's media was
-	// encrypted with; required when Attachments include media.
-	MessageID string
 	// QuickReply offers selectable options or answers them; a received
 	// TextContent.QuickReply can be passed back unchanged.
 	QuickReply *chatxdk.QuickReply
@@ -178,7 +188,6 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			Text:                   text,
 			ConversationKey:        opts.ConversationKey,
 			ConversationKeyVersion: opts.ConversationKeyVersion,
-			MessageID:              opts.MessageID,
 			Entities:               opts.Entities,
 			Attachments:            opts.Attachments,
 			QuickReply:             opts.QuickReply,
@@ -192,7 +201,6 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			ReplyToCkces:           opts.ReplyToCkces,
 			ConversationKey:        opts.ConversationKey,
 			ConversationKeyVersion: opts.ConversationKeyVersion,
-			MessageID:              opts.MessageID,
 			Entities:               opts.Entities,
 			Attachments:            opts.Attachments,
 			QuickReply:             opts.QuickReply,
@@ -203,10 +211,11 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 		return nil, err
 	}
 	return &SendBody{
-		// The message id: the caller's, or one the SDK generated.
+		// The SDK generates the message id and returns it in the payload.
 		MessageID:                    payload.MessageID,
 		EncodedMessageCreateEvent:    payload.EncryptedContent,
 		EncodedMessageEventSignature: payload.EncodedEventSignature,
+		EventB64:                     payload.EventB64,
 	}, nil
 }
 
@@ -243,6 +252,7 @@ func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conve
 		MessageID:                    payload.MessageID,
 		EncodedMessageCreateEvent:    payload.EncryptedContent,
 		EncodedMessageEventSignature: payload.EncodedEventSignature,
+		EventB64:                     payload.EventB64,
 	}, nil
 }
 
@@ -272,26 +282,26 @@ func (c *ChatCore) PrepareGroupMembersChange(publicKeys []chatxdk.PublicKeyInput
 	})
 }
 
-// -- Media streaming ----------------------------------------------------------
+// -- Media files ----------------------------------------------------------------
 
-// mediaChunk is the fixed chunk size fed through the incremental stream API.
+// mediaChunk is the fixed chunk size fed through the incremental file API.
 const mediaChunk = 1024 * 1024
 
-// NewMessageID returns a fresh id for a message with media, taken before its
-// media is encrypted.
-func (c *ChatCore) NewMessageID() (string, error) {
-	return c.chat.NewMessageID()
-}
-
-// EncryptMedia encrypts a media blob with the incremental stream API.
+// EncryptMedia encrypts a media file of an outgoing message with the
+// incremental file API.
 //
-// The blob is encrypted for the message messageID (from NewMessageID) at
-// attachmentIndex in its attachments; send the message with the same id.
-// Feeding fixed-size chunks through Push keeps memory bounded no matter how
-// large the file is; Finish emits the final frame that seals the stream
-// (decryption fails without it).
-func (c *ChatCore) EncryptMedia(plaintext, conversationKey []byte, messageID string, attachmentIndex int) ([]byte, error) {
-	enc, err := c.chat.StreamEncryptor(conversationKey, messageID, attachmentIndex)
+// eventB64 is the EventB64 of the body EncryptReply returned for the message,
+// and mediaHashKey the hash key the file's upload started with, as listed in
+// the message's attachments; the SDK encrypts the file under that
+// attachment's key. Feeding fixed-size chunks through Push keeps memory
+// bounded no matter how large the file is; Finish emits the final frame that
+// seals the file (decryption fails without it).
+func (c *ChatCore) EncryptMedia(plaintext []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
+	enc, err := c.chat.FileEncryptor(chatxdk.FileEncryptorParams{
+		EventB64:         eventB64,
+		ConversationKeys: conversationKeys,
+		MediaHashKey:     mediaHashKey,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -312,16 +322,20 @@ func (c *ChatCore) EncryptMedia(plaintext, conversationKey []byte, messageID str
 	return append(out, final...), nil
 }
 
-// DecryptMedia decrypts a downloaded media blob with the incremental stream
+// DecryptMedia decrypts a downloaded media file with the incremental file
 // API.
 //
 // eventB64 is the raw event of the message that carries the media and
 // conversationKeys its conversation's key map, as passed to DecryptOne; the
 // SDK finds mediaHashKey in the event and derives that file's key. Finish
-// errors if the stream was truncated, so plaintext from Push must not be
+// errors if the file was truncated, so plaintext from Push must not be
 // treated as complete until it succeeds.
 func (c *ChatCore) DecryptMedia(ciphertext []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
-	dec, err := c.chat.StreamDecryptor(eventB64, conversationKeys, mediaHashKey)
+	dec, err := c.chat.FileDecryptor(chatxdk.FileDecryptorParams{
+		EventB64:         eventB64,
+		ConversationKeys: conversationKeys,
+		MediaHashKey:     mediaHashKey,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -28,9 +28,10 @@ import (
 //
 // Optional extras:
 //
-//	CHATXDK_E2E_MEDIA=1   also stream-encrypts a media blob, uploads it,
-//	                      sends a message referencing it, then downloads and
-//	                      stream-decrypts it back to the original bytes
+//	CHATXDK_E2E_MEDIA=1   also starts a media upload, sends a message naming
+//	                      it, encrypts the file from that message, finishes the
+//	                      upload, then downloads and decrypts it back to the
+//	                      original bytes
 //	CHATXDK_E2E_GROUPS=1  also creates a group (two-signature create), sends a
 //	                      group message, and adds the 1:1 partner as a member
 func TestE2ELive(t *testing.T) {
@@ -298,7 +299,7 @@ func TestE2ELive(t *testing.T) {
 	}
 	t.Log("reaction remove sent")
 
-	// -- 5. Optional: media — stream-encrypt, upload, send, download, decrypt
+	// -- 5. Optional: media — start upload, build message, encrypt, finish, send
 	if os.Getenv("CHATXDK_E2E_MEDIA") == "1" {
 		// A deterministic multi-chunk payload, so the incremental encryptor
 		// emits several frames and any corruption is byte-attributable.
@@ -306,26 +307,20 @@ func TestE2ELive(t *testing.T) {
 		for i := range plaintext {
 			plaintext[i] = byte((i*31 + 7) % 256)
 		}
-		mediaMessageID, err := core.NewMessageID()
+		totalBytes, err := chatxdk.EncryptedFileSize(uint64(len(plaintext)))
 		if err != nil {
-			t.Fatalf("NewMessageID: %v", err)
+			t.Fatalf("EncryptedFileSize: %v", err)
 		}
-		ciphertext, err := core.EncryptMedia(plaintext, key, mediaMessageID, 0)
+		sessionID, mediaHashKey, err := api.StartMediaUpload(canonicalConv, totalBytes)
 		if err != nil {
-			t.Fatalf("EncryptMedia: %v", err)
+			t.Fatalf("StartMediaUpload: %v", err)
 		}
-		mediaHashKey, err := api.UploadMedia(canonicalConv, ciphertext)
-		if err != nil {
-			t.Fatalf("UploadMedia: %v", err)
-		}
-		t.Logf("encrypted media uploaded: %s (%d bytes)", mediaHashKey, len(ciphertext))
 
 		mediaText := fmt.Sprintf("chat-xdk e2e media [go] %d", time.Now().Unix())
 		mediaType := int32(5)
 		mediaBody, err := core.EncryptReply(canonicalConv, mediaText, &ReplyOptions{
 			ConversationKey:        key,
 			ConversationKeyVersion: kv,
-			MessageID:              mediaMessageID,
 			Attachments: []chatxdk.AttachmentDescriptor{{
 				AttachmentType: "media",
 				MediaHashKey:   mediaHashKey,
@@ -340,6 +335,14 @@ func TestE2ELive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EncryptReply (media): %v", err)
 		}
+		ciphertext, err := core.EncryptMedia(plaintext, mediaBody.EventB64, map[string][]byte{kv: key}, mediaHashKey)
+		if err != nil {
+			t.Fatalf("EncryptMedia: %v", err)
+		}
+		if err := api.FinishMediaUpload(canonicalConv, sessionID, mediaHashKey, ciphertext); err != nil {
+			t.Fatalf("FinishMediaUpload: %v", err)
+		}
+		t.Logf("encrypted media uploaded: %s (%d bytes)", mediaHashKey, len(ciphertext))
 		if err := api.SendMessage(canonicalConv, mediaBody); err != nil {
 			t.Fatalf("SendMessage (media): %v", err)
 		}
@@ -362,7 +365,7 @@ func TestE2ELive(t *testing.T) {
 		if !bytes.Equal(decryptedMedia, plaintext) {
 			t.Fatal("downloaded media did not decrypt to the original bytes")
 		}
-		t.Log("media downloaded + stream-decrypted to the original bytes")
+		t.Log("media downloaded + decrypted to the original bytes")
 	}
 
 	// -- 6. Optional: group create + message + member add --------------------
