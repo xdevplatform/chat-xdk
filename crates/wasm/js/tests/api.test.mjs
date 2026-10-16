@@ -514,6 +514,65 @@ async function main() {
     `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
   );
 
+  // 4c4. prepareMarkConversationRead signs the read point and its time with
+  // the signing key; 1:1 ids are signed in canonical colon form.
+  const readSig = chat.prepareMarkConversationRead({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "222-111",
+    seenUntilSequenceId: "2011626338877079553",
+    seenAtMsec: 1700000000123,
+  });
+  assert.ok(readSig.messageId.length > 0);
+  assert.ok(readSig.encodedMessageEventDetail.length > 0);
+  assert.equal(readSig.publicKeyVersion, "1");
+  assert.equal(
+    readSig.signaturePayload,
+    `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`,
+  );
+  assert.equal(
+    chat.verify(
+      v.signing_public_b64,
+      b64ToBytes(readSig.signature),
+      new TextEncoder().encode(readSig.signaturePayload),
+    ),
+    true,
+  );
+
+  // An omitted seenAtMsec signs the JavaScript clock's current time.
+  const beforeRead = Date.now();
+  const readNowSig = chat.prepareMarkConversationRead({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g999",
+    seenUntilSequenceId: "seq-1",
+  });
+  const afterRead = Date.now();
+  const readNowPrefix = `MarkConversationReadEvent,${readNowSig.messageId},111,g999,seq-1,`;
+  assert.ok(readNowSig.signaturePayload.startsWith(readNowPrefix));
+  const readNowAt = Number(readNowSig.signaturePayload.slice(readNowPrefix.length));
+  assert.ok(readNowAt >= beforeRead && readNowAt <= afterRead);
+
+  assert.throws(
+    () =>
+      chat.prepareMarkConversationRead({
+        senderId: "111",
+        signingKeyVersion: "1",
+        conversationId: "g999",
+      }),
+    /prepareMarkConversationRead params.*seenUntilSequenceId/,
+  );
+  assert.throws(
+    () =>
+      chat.prepareMarkConversationRead({
+        senderId: "111",
+        signingKeyVersion: "1",
+        conversationId: "g999",
+        seenUntilSequenceId: "",
+      }),
+    /seen_until_sequence_id is empty/,
+  );
+
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({

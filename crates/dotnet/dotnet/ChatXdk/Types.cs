@@ -127,7 +127,7 @@ namespace ChatXdk
 
     /// <summary>
     /// Signed action payload authenticating a conversation key change, member
-    /// add, or message delete.
+    /// add, message delete, or read receipt.
     /// </summary>
     public sealed class ActionSignature
     {
@@ -1103,6 +1103,35 @@ namespace ChatXdk
         /// <summary>Delete for every participant (true, own messages only) or only from the caller's view (false).</summary>
         public bool DeleteForAll { get; }
         /// <summary>User ID of the sender signing the delete; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareMarkConversationRead"/>.
+    /// A read receipt is a signed plaintext event, not an encrypted message, so
+    /// no conversation key is involved: the result is an action signature the
+    /// caller submits alongside the mark-read request.
+    /// </summary>
+    public sealed class MarkConversationReadParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="conversationId">ID of the conversation being marked read.</param>
+        /// <param name="seenUntilSequenceId">Sequence ID of the newest event read.</param>
+        public MarkConversationReadParams(string conversationId, string seenUntilSequenceId)
+        {
+            ConversationId = conversationId;
+            SeenUntilSequenceId = seenUntilSequenceId;
+        }
+
+        /// <summary>ID of the conversation being marked read.</summary>
+        public string ConversationId { get; }
+        /// <summary>Sequence ID of the newest event read.</summary>
+        public string SeenUntilSequenceId { get; }
+        /// <summary>When the conversation was read, in milliseconds since the Unix epoch; the current time when null.</summary>
+        public long? SeenAtMsec { get; init; }
+        /// <summary>User ID of the sender signing the read receipt; resolves from the session identity when null.</summary>
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }

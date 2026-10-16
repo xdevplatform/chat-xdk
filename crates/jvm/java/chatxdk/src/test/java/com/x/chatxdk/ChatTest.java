@@ -521,6 +521,59 @@ class ChatTest {
     }
 
     @Test
+    void prepareMarkConversationReadSignsCanonicalPayload() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            // A 1:1 id is signed in its canonical colon form, followed by the
+            // read point and its time.
+            MarkConversationReadParams p = new MarkConversationReadParams("222-111", "2011626338877079553");
+            p.seenAtMsec = 1700000000123L;
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ActionSignature sig = chat.prepareMarkConversationRead(p);
+            assertFalse(sig.messageId.isEmpty());
+            assertFalse(sig.encodedMessageEventDetail.isEmpty());
+            assertEquals("1", sig.publicKeyVersion);
+            assertEquals(
+                    "MarkConversationReadEvent," + sig.messageId
+                            + ",111,111:222,2011626338877079553,1700000000123",
+                    sig.signaturePayload);
+            assertTrue(chat.verify(
+                    chat.getPublicKeys().signing,
+                    Base64.getDecoder().decode(sig.signature),
+                    sig.signaturePayload.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    @Test
+    void prepareMarkConversationReadDefaultsToSessionIdentityAndNow() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity("111", "7");
+            long before = System.currentTimeMillis();
+            ActionSignature sig = chat.prepareMarkConversationRead(
+                    new MarkConversationReadParams("g999", "seq-1"));
+            long after = System.currentTimeMillis();
+
+            assertEquals("7", sig.publicKeyVersion);
+            String prefix = "MarkConversationReadEvent," + sig.messageId + ",111,g999,seq-1,";
+            assertTrue(sig.signaturePayload.startsWith(prefix), sig.signaturePayload);
+            long seenAt = Long.parseLong(sig.signaturePayload.substring(prefix.length()));
+            assertTrue(seenAt >= before && seenAt <= after, "seen_at " + seenAt);
+        }
+    }
+
+    @Test
+    void prepareMarkConversationReadRejectsEmptySeenUntil() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            MarkConversationReadParams p = new MarkConversationReadParams("g999", "");
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareMarkConversationRead(p));
+            assertTrue(e.getMessage().contains("seen_until_sequence_id is empty"), e.getMessage());
+        }
+    }
+
+    @Test
     void utilitiesHexRoundTrip() {
         byte[] raw = {(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef};
         String hex = ChatXdkUtilities.bytesToHex(raw);

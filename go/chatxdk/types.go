@@ -377,6 +377,24 @@ type MessageDeleteParams struct {
 	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
+// MarkConversationReadParams are the parameters for
+// PrepareMarkConversationRead.
+//
+// A read receipt is a signed plaintext event, not an encrypted message, so
+// no conversation key is involved. SenderID and SigningKeyVersion are
+// optional overrides: empty resolves from the session identity set via
+// SetIdentity.
+type MarkConversationReadParams struct {
+	ConversationID string `json:"conversation_id"`
+	// SeenUntilSequenceID is the sequence_id of the newest event read.
+	SeenUntilSequenceID string `json:"seen_until_sequence_id"`
+	// SeenAtMsec is when the conversation was read, in milliseconds since
+	// the Unix epoch; nil takes the current time.
+	SeenAtMsec        *int64 `json:"seen_at_msec,omitempty"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
 // DecryptEventParams are the parameters for DecryptEvent.
 type DecryptEventParams struct {
 	// EventB64 is the base64 event, as delivered.
@@ -448,8 +466,8 @@ type FileDecryptorParams struct {
 	MediaHashKey     string            `json:"media_hash_key"`
 }
 
-// ActionSignature authenticates a conversation key change, member add, or
-// message delete.
+// ActionSignature authenticates a conversation key change, member add,
+// message delete, or read receipt.
 type ActionSignature struct {
 	MessageID                 string `json:"message_id"`
 	EncodedMessageEventDetail string `json:"encoded_message_event_detail"`

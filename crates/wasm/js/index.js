@@ -493,6 +493,7 @@ export class ChatWithJuicebox {
   encryptRemoveReaction(params) { return this.#inner.encryptRemoveReaction(params); }
   encryptEdit(params) { return this.#inner.encryptEdit(params); }
   prepareMessageDelete(params) { return this.#inner.prepareMessageDelete(params); }
+  prepareMarkConversationRead(params) { return this.#inner.prepareMarkConversationRead(params); }
   encryptFile(params) { return this.#inner.encryptFile(params); }
   fileEncryptor(params) { return this.#inner.fileEncryptor(params); }
   decryptFile(params) { return this.#inner.decryptFile(params); }

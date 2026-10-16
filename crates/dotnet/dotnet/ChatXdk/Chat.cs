@@ -615,6 +615,24 @@ namespace ChatXdk
             return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
         }
 
+        /// <summary>
+        /// Build the signed action for marking a conversation read, ready to
+        /// submit alongside the mark-read request.
+        /// A read receipt is a signed plaintext event, not an encrypted message,
+        /// so no conversation key is involved. The SDK generates the action's
+        /// message id; read it back from the result.
+        /// </summary>
+        public ActionSignature PrepareMarkConversationRead(MarkConversationReadParams parameters)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(BuildPrepareMarkConversationReadJson(parameters));
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_mark_conversation_read(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+        }
+
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
         private PreparedConversationChange CallPrepareEndpoint(string paramsJson, ParamsJsonDelegate fn)
@@ -1069,6 +1087,19 @@ namespace ChatXdk
                 ["conversation_id"] = p.ConversationId,
                 ["sequence_ids"] = p.SequenceIds,
                 ["delete_for_all"] = p.DeleteForAll,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
+            };
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildPrepareMarkConversationReadJson(MarkConversationReadParams p)
+        {
+            var dict = new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["seen_until_sequence_id"] = p.SeenUntilSequenceId,
+                ["seen_at_msec"] = p.SeenAtMsec,
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };
