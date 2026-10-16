@@ -16,20 +16,20 @@
 typedef struct ChatHandle ChatHandle;
 
 /**
- * Opaque handle to an incremental stream decryptor.
+ * Opaque handle to an incremental file decryptor.
  *
- * Created by [`chat_xdk_stream_decryptor_new`], freed by
- * [`chat_xdk_stream_decryptor_free`].
+ * Created by [`chat_xdk_file_decryptor_new`], freed by
+ * [`chat_xdk_file_decryptor_free`].
  */
-typedef struct StreamDecryptorHandle StreamDecryptorHandle;
+typedef struct FileDecryptorHandle FileDecryptorHandle;
 
 /**
- * Opaque handle to an incremental stream encryptor.
+ * Opaque handle to an incremental file encryptor.
  *
- * Created by [`chat_xdk_stream_encryptor_new`], freed by
- * [`chat_xdk_stream_encryptor_free`].
+ * Created by [`chat_xdk_file_encryptor_new`], freed by
+ * [`chat_xdk_file_encryptor_free`].
  */
-typedef struct StreamEncryptorHandle StreamEncryptorHandle;
+typedef struct FileEncryptorHandle FileEncryptorHandle;
 
 /**
  * Result type returned by FFI functions.
@@ -55,9 +55,10 @@ extern "C" {
 struct FfiResult chat_xdk_bytes_to_base64(const uint8_t *data, uintptr_t data_len);
 
 /**
- * Return the exact ciphertext size produced by stream encryption.
+ * Return the exact size of a file once encrypted: the size its upload
+ * declares before the file is encrypted.
  */
-struct FfiResult chat_xdk_encrypted_stream_size(uint64_t plaintext_size);
+struct FfiResult chat_xdk_encrypted_file_size(uint64_t plaintext_size);
 
 /**
  * Decode base64 to bytes. On success, `data` holds base64 of the decoded bytes (FFI-safe).
@@ -257,13 +258,14 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
                                                     const char *events_json);
 
 /**
- * Batch decrypt. `signing_keys_json`: `[{"user_id","public_key_version","public_key",
- * "identity_public_key","identity_public_key_signature"},...]`; an empty
- * array falls back to the keys stored via `chat_xdk_set_signing_keys`.
+ * Batch decrypt.
+ *
+ * `params_json` — single JSON document: `events` (the base64 events) plus
+ * optional `signing_keys` (`[{"user_id","public_key_version","public_key",
+ * "identity_public_key","identity_public_key_signature"},...]`); absent or
+ * empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
  */
-struct FfiResult chat_xdk_decrypt_events(const struct ChatHandle *handle,
-                                         const char *events_json,
-                                         const char *signing_keys_json);
+struct FfiResult chat_xdk_decrypt_events(const struct ChatHandle *handle, const char *params_json);
 
 /**
  * Prepare a signed conversation-key change.
@@ -319,24 +321,19 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
 /**
  * Decrypt a webhook event.
  *
- * `event_b64`: Base64-encoded event from webhook.
- * `conversation_keys_json`: JSON object mapping version strings to base64-encoded
- *     raw conversation key bytes, from `extract_conversation_keys`. With "{}"
- *     the opt-in conversation-key cache (see `chat_xdk_set_cache_keys`) is
- *     consulted instead; pass "{}" for non-message events.
- * `signing_keys_json`: JSON array of `{"user_id","public_key_version","public_key",
- *     "identity_public_key","identity_public_key_signature"}`. An empty array
- *     falls back to the keys stored via `chat_xdk_set_signing_keys`; with
- *     nothing stored either, signed events fail decryption under the default
- *     reject-unverified policy (disable it via `chat_xdk_set_reject_unverified`
- *     to have them returned with `verified: false` instead).
+ * `params_json` — single JSON document: `event_b64` (the base64 event),
+ * `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
+ * `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
+ * for events without message contents, which also falls back to the opt-in
+ * key cache), plus optional `signing_keys` (as for
+ * `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
+ * events fail decryption under the default reject-unverified policy
+ * (disable it via `chat_xdk_set_reject_unverified` to have them returned
+ * with `verified: false` instead).
  *
  * Returns JSON representation of the decrypted Event.
  */
-struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle,
-                                        const char *event_b64,
-                                        const char *conversation_keys_json,
-                                        const char *signing_keys_json);
+struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle, const char *params_json);
 
 /**
  * Encrypt a message for the X API.
@@ -345,13 +342,15 @@ struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle,
  * optional `sender_id` / `signing_key_version` (unset resolves from the
  * session identity), `conversation_key` (base64 raw 32-byte key) /
  * `conversation_key_version` (unset resolves from the opt-in key cache),
- * `message_id` (from `chat_xdk_new_message_id`; required when the
- * attachments include media), `entities` (`[[start,end,"type"],...]`),
- * `attachments` (`[{"attachment_type",...},...]`), `quick_reply` (the
- * `quick_reply` shape of decrypted text content), `should_notify`, and
- * `ttl_msec`.
+ * `entities` (`[[start,end,"type"],...]`), `attachments`
+ * (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
+ * of decrypted text content), `should_notify`, and `ttl_msec`.
  *
- * Returns JSON `SendPayload`, whose `message_id` is the message's id.
+ * Returns JSON `SendPayload`, whose `message_id` is the message's id. A
+ * message with files takes an id derived from its files, so building it
+ * again gives the same id; encrypt each file afterwards with
+ * `chat_xdk_encrypt_file` or a file encryptor and the payload's
+ * `event_b64`.
  */
 struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const char *params_json);
 
@@ -367,7 +366,8 @@ struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const
  * `reply_to_entities`, and `reply_to_attachments` overrides remain for
  * callers that no longer hold the raw event.
  *
- * Returns JSON `SendPayload`, whose `message_id` is the reply's id.
+ * Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
+ * and files work as for `chat_xdk_encrypt_message`.
  */
 struct FfiResult chat_xdk_encrypt_reply(const struct ChatHandle *handle, const char *params_json);
 
@@ -436,98 +436,94 @@ struct FfiResult chat_xdk_decrypt(const struct ChatHandle *handle,
                                   const char *conversation_key_b64);
 
 /**
- * Decrypt an encrypted media file.
+ * Encrypt a file of an outgoing message, after the message is built.
  *
- * `encrypted_b64`: the encrypted bytes, base64. `event_b64`: the event of
- * the message that carries the media. `conversation_keys_json`: JSON object
- * `{"version": "base64_key"}` holding the key for the message's version.
- * `media_hash_key`: the media's hash key from the decrypted message.
+ * `params_json` — single JSON document: `file` (base64), `event_b64` (the
+ * `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
+ * `chat_xdk_encrypt_reply` returned for the message carrying the file),
+ * `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
+ * key the message was encrypted under), and `media_hash_key` (the media
+ * hash key the file's upload started with, as listed in the message's
+ * attachments). The SDK finds that attachment and encrypts the file under
+ * its key.
  *
- * Returns base64-encoded decrypted bytes.
+ * Returns the encrypted file, base64.
  */
-struct FfiResult chat_xdk_decrypt_stream(const struct ChatHandle *handle,
-                                         const char *encrypted_b64,
-                                         const char *event_b64,
-                                         const char *conversation_keys_json,
-                                         const char *media_hash_key);
+struct FfiResult chat_xdk_encrypt_file(const struct ChatHandle *handle, const char *params_json);
 
 /**
- * A fresh message id for a message with media.
+ * Decrypt an encrypted file.
+ *
+ * `params_json` — single JSON document: `encrypted` (base64, as
+ * downloaded), `event_b64` (the event of the message that carries the
+ * file), `conversation_keys` (`{"version": "base64 raw 32-byte key"}`
+ * holding the key for the message's version), and `media_hash_key` (the
+ * file's media hash key from the decrypted message).
+ *
+ * Returns the decrypted file, base64.
  */
-struct FfiResult chat_xdk_new_message_id(const struct ChatHandle *handle);
+struct FfiResult chat_xdk_decrypt_file(const struct ChatHandle *handle, const char *params_json);
 
 /**
- * Encrypt a media file for an outgoing message: base64 plaintext under the
- * key of the attachment at `attachment_index` of message `message_id`,
- * derived from the base64 conversation key and the session identity.
- * Returns base64.
- */
-struct FfiResult chat_xdk_encrypt_stream(const struct ChatHandle *handle,
-                                         const char *plaintext_b64,
-                                         const char *conversation_key_b64,
-                                         const char *message_id,
-                                         int64_t attachment_index);
-
-/**
- * Create an incremental encryptor for a media file, taking the arguments of
- * [`chat_xdk_encrypt_stream`] apart from the bytes.
+ * Create an incremental encryptor for a file too large to hold in memory.
+ * `params_json` takes the fields of [`chat_xdk_encrypt_file`] apart from
+ * `file`, which is fed to the encryptor.
  *
  * On success writes the new handle to `out_encryptor` and returns an empty
- * result; free the handle with [`chat_xdk_stream_encryptor_free`]. On
+ * result; free the handle with [`chat_xdk_file_encryptor_free`]. On
  * failure writes NULL and returns the error.
  */
-struct FfiResult chat_xdk_stream_encryptor_new(const struct ChatHandle *handle,
-                                               const char *conversation_key_b64,
-                                               const char *message_id,
-                                               int64_t attachment_index,
-                                               struct StreamEncryptorHandle **out_encryptor);
+struct FfiResult chat_xdk_file_encryptor_new(const struct ChatHandle *handle,
+                                             const char *params_json,
+                                             struct FileEncryptorHandle **out_encryptor);
 
 /**
- * Encrypt a base64 plaintext chunk; returns base64 ciphertext available so far.
+ * Encrypt a base64 chunk of the file; returns the base64 encrypted bytes
+ * available so far.
  */
-struct FfiResult chat_xdk_stream_encryptor_push(struct StreamEncryptorHandle *handle,
-                                                const char *plaintext_b64);
+struct FfiResult chat_xdk_file_encryptor_push(struct FileEncryptorHandle *handle,
+                                              const char *plaintext_b64);
 
 /**
  * Emit the final frame as base64. The handle must still be freed afterwards.
  */
-struct FfiResult chat_xdk_stream_encryptor_finish(struct StreamEncryptorHandle *handle);
+struct FfiResult chat_xdk_file_encryptor_finish(struct FileEncryptorHandle *handle);
 
 /**
- * Free a stream encryptor handle.
+ * Free a file encryptor handle.
  */
-void chat_xdk_stream_encryptor_free(struct StreamEncryptorHandle *handle);
+void chat_xdk_file_encryptor_free(struct FileEncryptorHandle *handle);
 
 /**
- * Create an incremental decryptor for an encrypted media file, taking the
- * arguments of [`chat_xdk_decrypt_stream`] apart from the bytes.
+ * Create an incremental decryptor for an encrypted file too large to hold
+ * in memory. `params_json` takes the fields of [`chat_xdk_decrypt_file`]
+ * apart from `encrypted`, which is fed to the decryptor.
  *
  * On success writes the new handle to `out_decryptor` and returns an empty
- * result; free the handle with [`chat_xdk_stream_decryptor_free`]. On
+ * result; free the handle with [`chat_xdk_file_decryptor_free`]. On
  * failure writes NULL and returns the error.
  */
-struct FfiResult chat_xdk_stream_decryptor_new(const struct ChatHandle *handle,
-                                               const char *event_b64,
-                                               const char *conversation_keys_json,
-                                               const char *media_hash_key,
-                                               struct StreamDecryptorHandle **out_decryptor);
+struct FfiResult chat_xdk_file_decryptor_new(const struct ChatHandle *handle,
+                                             const char *params_json,
+                                             struct FileDecryptorHandle **out_decryptor);
 
 /**
- * Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.
+ * Decrypt a base64 chunk of the encrypted file; returns the base64 bytes
+ * available so far.
  */
-struct FfiResult chat_xdk_stream_decryptor_push(struct StreamDecryptorHandle *handle,
-                                                const char *ciphertext_b64);
+struct FfiResult chat_xdk_file_decryptor_push(struct FileDecryptorHandle *handle,
+                                              const char *ciphertext_b64);
 
 /**
- * Decrypt the final frame as base64. Errors if the stream was truncated. The
+ * Decrypt the final frame as base64. Errors if the file was truncated. The
  * handle must still be freed afterwards.
  */
-struct FfiResult chat_xdk_stream_decryptor_finish(struct StreamDecryptorHandle *handle);
+struct FfiResult chat_xdk_file_decryptor_finish(struct FileDecryptorHandle *handle);
 
 /**
- * Free a stream decryptor handle.
+ * Free a file decryptor handle.
  */
-void chat_xdk_stream_decryptor_free(struct StreamDecryptorHandle *handle);
+void chat_xdk_file_decryptor_free(struct FileDecryptorHandle *handle);
 
 /**
  * Sign data with the signing key. Returns base64-encoded signature.

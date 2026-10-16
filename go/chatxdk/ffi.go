@@ -36,8 +36,8 @@ type handle = *C.struct_ChatHandle
 
 // utilities (stateless; no Chat handle)
 
-func ffiEncryptedStreamSize(plaintextSize uint64) (string, error) {
-	return ffiResult(C.chat_xdk_encrypted_stream_size(C.uint64_t(plaintextSize)))
+func ffiEncryptedFileSize(plaintextSize uint64) (string, error) {
+	return ffiResult(C.chat_xdk_encrypted_file_size(C.uint64_t(plaintextSize)))
 }
 
 func ffiBytesToBase64(data []byte) (string, error) {
@@ -190,12 +190,10 @@ func ffiExtractConversationKeys(h handle, eventsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_extract_conversation_keys(h, c))
 }
 
-func ffiDecryptEvents(h handle, eventsJSON, signingKeysJSON string) (string, error) {
-	c1 := C.CString(eventsJSON)
-	defer C.free(unsafe.Pointer(c1))
-	c2 := C.CString(signingKeysJSON)
-	defer C.free(unsafe.Pointer(c2))
-	return ffiResult(C.chat_xdk_decrypt_events(h, c1, c2))
+func ffiDecryptEvents(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_decrypt_events(h, c))
 }
 
 func ffiPrepareConversationKeyChange(h handle, paramsJSON string) (string, error) {
@@ -224,26 +222,10 @@ func ffiPrepareMessageDelete(h handle, paramsJSON string) (string, error) {
 
 // decrypt
 
-func ffiDecryptEvent(h handle, eventB64, convKeysJSON, signingKeysJSON string) (string, error) {
-	cEv := C.CString(eventB64)
-	defer C.free(unsafe.Pointer(cEv))
-	cConvKeys := C.CString(convKeysJSON)
-	defer C.free(unsafe.Pointer(cConvKeys))
-	cSigningKeys := C.CString(signingKeysJSON)
-	defer C.free(unsafe.Pointer(cSigningKeys))
-	return ffiResult(C.chat_xdk_decrypt_event(h, cEv, cConvKeys, cSigningKeys))
-}
-
-func ffiDecryptStream(h handle, encB64, eventB64, convKeysJSON, mediaHashKey string) (string, error) {
-	cEnc := C.CString(encB64)
-	defer C.free(unsafe.Pointer(cEnc))
-	cEv := C.CString(eventB64)
-	defer C.free(unsafe.Pointer(cEv))
-	cConvKeys := C.CString(convKeysJSON)
-	defer C.free(unsafe.Pointer(cConvKeys))
-	cHash := C.CString(mediaHashKey)
-	defer C.free(unsafe.Pointer(cHash))
-	return ffiResult(C.chat_xdk_decrypt_stream(h, cEnc, cEv, cConvKeys, cHash))
+func ffiDecryptEvent(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_decrypt_event(h, c))
 }
 
 // encrypt
@@ -278,77 +260,69 @@ func ffiEncryptEdit(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_encrypt_edit(h, c))
 }
 
-func ffiNewMessageID(h handle) (string, error) {
-	return ffiResult(C.chat_xdk_new_message_id(h))
+// files
+
+func ffiEncryptFile(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_encrypt_file(h, c))
 }
 
-func ffiEncryptStream(h handle, plaintextB64, ckeyB64, messageID string, attachmentIndex int) (string, error) {
-	cPT := C.CString(plaintextB64)
-	defer C.free(unsafe.Pointer(cPT))
-	cKey := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(cKey))
-	cID := C.CString(messageID)
-	defer C.free(unsafe.Pointer(cID))
-	return ffiResult(C.chat_xdk_encrypt_stream(h, cPT, cKey, cID, C.int64_t(attachmentIndex)))
+func ffiDecryptFile(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_decrypt_file(h, c))
 }
 
-// incremental streaming
+type fileEncryptorHandle = *C.struct_FileEncryptorHandle
+type fileDecryptorHandle = *C.struct_FileDecryptorHandle
 
-type streamEncryptorHandle = *C.struct_StreamEncryptorHandle
-type streamDecryptorHandle = *C.struct_StreamDecryptorHandle
-
-func ffiStreamEncryptorNew(h handle, ckeyB64, messageID string, attachmentIndex int) (streamEncryptorHandle, error) {
-	cKey := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(cKey))
-	cID := C.CString(messageID)
-	defer C.free(unsafe.Pointer(cID))
-	var out streamEncryptorHandle
-	if _, err := ffiResult(C.chat_xdk_stream_encryptor_new(h, cKey, cID, C.int64_t(attachmentIndex), &out)); err != nil {
+func ffiFileEncryptorNew(h handle, paramsJSON string) (fileEncryptorHandle, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	var out fileEncryptorHandle
+	if _, err := ffiResult(C.chat_xdk_file_encryptor_new(h, c, &out)); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func ffiStreamEncryptorPush(h streamEncryptorHandle, plaintextB64 string) (string, error) {
+func ffiFileEncryptorPush(h fileEncryptorHandle, plaintextB64 string) (string, error) {
 	c := C.CString(plaintextB64)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_stream_encryptor_push(h, c))
+	return ffiResult(C.chat_xdk_file_encryptor_push(h, c))
 }
 
-func ffiStreamEncryptorFinish(h streamEncryptorHandle) (string, error) {
-	return ffiResult(C.chat_xdk_stream_encryptor_finish(h))
+func ffiFileEncryptorFinish(h fileEncryptorHandle) (string, error) {
+	return ffiResult(C.chat_xdk_file_encryptor_finish(h))
 }
 
-func ffiStreamEncryptorFree(h streamEncryptorHandle) {
-	C.chat_xdk_stream_encryptor_free(h)
+func ffiFileEncryptorFree(h fileEncryptorHandle) {
+	C.chat_xdk_file_encryptor_free(h)
 }
 
-func ffiStreamDecryptorNew(h handle, eventB64, convKeysJSON, mediaHashKey string) (streamDecryptorHandle, error) {
-	cEv := C.CString(eventB64)
-	defer C.free(unsafe.Pointer(cEv))
-	cConvKeys := C.CString(convKeysJSON)
-	defer C.free(unsafe.Pointer(cConvKeys))
-	cHash := C.CString(mediaHashKey)
-	defer C.free(unsafe.Pointer(cHash))
-	var out streamDecryptorHandle
-	if _, err := ffiResult(C.chat_xdk_stream_decryptor_new(h, cEv, cConvKeys, cHash, &out)); err != nil {
+func ffiFileDecryptorNew(h handle, paramsJSON string) (fileDecryptorHandle, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	var out fileDecryptorHandle
+	if _, err := ffiResult(C.chat_xdk_file_decryptor_new(h, c, &out)); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func ffiStreamDecryptorPush(h streamDecryptorHandle, ciphertextB64 string) (string, error) {
+func ffiFileDecryptorPush(h fileDecryptorHandle, ciphertextB64 string) (string, error) {
 	c := C.CString(ciphertextB64)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_stream_decryptor_push(h, c))
+	return ffiResult(C.chat_xdk_file_decryptor_push(h, c))
 }
 
-func ffiStreamDecryptorFinish(h streamDecryptorHandle) (string, error) {
-	return ffiResult(C.chat_xdk_stream_decryptor_finish(h))
+func ffiFileDecryptorFinish(h fileDecryptorHandle) (string, error) {
+	return ffiResult(C.chat_xdk_file_decryptor_finish(h))
 }
 
-func ffiStreamDecryptorFree(h streamDecryptorHandle) {
-	C.chat_xdk_stream_decryptor_free(h)
+func ffiFileDecryptorFree(h fileDecryptorHandle) {
+	C.chat_xdk_file_decryptor_free(h)
 }
 
 func ffiEncrypt(h handle, plaintext, ckeyB64 string) (string, error) {

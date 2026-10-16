@@ -29,11 +29,16 @@ type PublicKeyRegistrationPayload struct {
 
 // SendPayload contains the encrypted message ready to send to the X API.
 type SendPayload struct {
-	// MessageID is the message id (UUID) embedded in the signed event: the
-	// MessageID passed in, or one the SDK generated. Send it as the message's
-	// message_id, keep it to dedup and to anchor replies, and reuse the same
-	// encrypted payload on retries so an id is never minted twice.
-	MessageID              string        `json:"message_id"`
+	// MessageID is the message id (UUID) the SDK generated and embedded in
+	// the signed event. Send it as the message's message_id, keep it to dedup
+	// and to anchor replies, and reuse the same encrypted payload on retries
+	// so an id is never minted twice.
+	MessageID string `json:"message_id"`
+	// EventB64 is the outgoing message as a base64 event: what recipients
+	// receive, without the fields the server assigns. Pass it to EncryptFile
+	// or FileEncryptor to encrypt the message's files, or to DecryptEvent to
+	// read the message back.
+	EventB64               string        `json:"event_b64"`
 	EncryptedContent       string        `json:"encrypted_content"`
 	Signature              string        `json:"signature"`
 	EncodedEventSignature  string        `json:"encoded_event_signature"`
@@ -165,9 +170,9 @@ type GroupCreateParams struct {
 // are optional overrides: left at their zero value they resolve from the
 // session identity (SetIdentity) and the opt-in key cache (SetCacheKeys).
 // ConversationKey and ConversationKeyVersion travel together — set both or
-// neither. MessageID is the id from NewMessageID that the message's media
-// was encrypted with; it is required when Attachments include media, and
-// the SDK generates one otherwise.
+// neither. Each file in Attachments names the media hash key its upload
+// started with; encrypt the files afterwards with EncryptFile or
+// FileEncryptor and the returned payload's EventB64.
 type EncryptMessageParams struct {
 	ConversationID         string                 `json:"conversation_id"`
 	Text                   string                 `json:"text"`
@@ -175,7 +180,6 @@ type EncryptMessageParams struct {
 	SigningKeyVersion      string                 `json:"signing_key_version,omitempty"`      // empty = session identity
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
-	MessageID              string                 `json:"message_id,omitempty"`               // empty = generated
 	Entities               []EntityTuple          `json:"entities,omitempty"`
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
 	QuickReply             *QuickReply            `json:"quick_reply,omitempty"`
@@ -208,9 +212,10 @@ type AttachmentDescriptor struct {
 	DisplayTitle   *string `json:"display_title,omitempty"`
 	// Optional encrypted preview images for "url" attachments. Supplying a
 	// display title plus a banner image makes receiving clients render a
-	// full clickable preview card: encrypt the image with EncryptStream at
-	// the card's position, upload it to the conversation's media store, and
-	// reference the returned media hash key here.
+	// full clickable preview card: start the image's upload to the
+	// conversation's media store, reference the media hash key it returns
+	// here, then encrypt the image with EncryptFile or FileEncryptor and the
+	// message's EventB64 and finish the upload.
 	BannerImage  *URLAttachmentImageDescriptor `json:"banner_image,omitempty"`
 	FaviconImage *URLAttachmentImageDescriptor `json:"favicon_image,omitempty"`
 	RestID       *string                       `json:"rest_id,omitempty"`
@@ -279,8 +284,8 @@ type QuickReplyOption struct {
 // can validate the preview. The explicit ReplyTo* field overrides remain for
 // callers that no longer hold the raw event.
 //
-// The identity and key fields are optional overrides, as on
-// EncryptMessageParams.
+// The identity and key fields are optional overrides, and the reply's files
+// work, as on EncryptMessageParams.
 type EncryptReplyParams struct {
 	ConversationID string `json:"conversation_id"`
 	Text           string `json:"text"`
@@ -297,7 +302,6 @@ type EncryptReplyParams struct {
 	SigningKeyVersion      string                 `json:"signing_key_version,omitempty"`      // empty = session identity
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
-	MessageID              string                 `json:"message_id,omitempty"`               // empty = generated
 	ReplyToSequenceID      string                 `json:"reply_to_sequence_id,omitempty"`     // empty = derived from ReplyToEvent
 	ReplyToSenderID        *int64                 `json:"reply_to_sender_id,omitempty"`
 	ReplyToText            *string                `json:"reply_to_text,omitempty"`
@@ -372,6 +376,77 @@ type MessageDeleteParams struct {
 	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
+// DecryptEventParams are the parameters for DecryptEvent.
+type DecryptEventParams struct {
+	// EventB64 is the base64 event, as delivered.
+	EventB64 string `json:"event_b64"`
+	// ConversationKeys maps key version to the raw 32-byte conversation key,
+	// from DecryptEvents or ExtractConversationKeys. Events without message
+	// contents need no keys; an empty map also falls back to the opt-in key
+	// cache (SetCacheKeys).
+	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	// SigningKeys verify the event; nil or empty uses the keys stored via
+	// SetSigningKeys.
+	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
+}
+
+// DecryptEventsParams are the parameters for DecryptEvents.
+type DecryptEventsParams struct {
+	// Events are the base64 events, as delivered. Their key changes supply
+	// the conversation keys the messages among them are decrypted with.
+	Events []string `json:"events"`
+	// SigningKeys are the signing keys of all participants; nil or empty uses
+	// the keys stored via SetSigningKeys.
+	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
+}
+
+// EncryptFileParams are the parameters for EncryptFile.
+type EncryptFileParams struct {
+	// File is the file to encrypt.
+	File []byte `json:"file"`
+	// EventB64 is the EventB64 of the payload that EncryptMessage or
+	// EncryptReply returned for the message carrying the file.
+	EventB64 string `json:"event_b64"`
+	// ConversationKeys maps key version to the raw 32-byte conversation key;
+	// it must hold the key the message was encrypted under.
+	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	// MediaHashKey is the media hash key the file's upload started with, as
+	// listed in the message's attachments.
+	MediaHashKey string `json:"media_hash_key"`
+}
+
+// FileEncryptorParams are the parameters for FileEncryptor: those of
+// EncryptFile apart from the file, which is fed to the encryptor.
+type FileEncryptorParams struct {
+	EventB64         string            `json:"event_b64"`
+	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	MediaHashKey     string            `json:"media_hash_key"`
+}
+
+// DecryptFileParams are the parameters for DecryptFile.
+type DecryptFileParams struct {
+	// Encrypted is the encrypted file, as downloaded.
+	Encrypted []byte `json:"encrypted"`
+	// EventB64 is the base64 event of the message that carries the file, as
+	// passed to DecryptEvent.
+	EventB64 string `json:"event_b64"`
+	// ConversationKeys is the conversation's key map, as passed to
+	// DecryptEvent; it must hold the key for the message's version.
+	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	// MediaHashKey is the file's media hash key from the decrypted message: a
+	// media attachment, a link card's banner or favicon, or media quoted in
+	// its reply preview.
+	MediaHashKey string `json:"media_hash_key"`
+}
+
+// FileDecryptorParams are the parameters for FileDecryptor: those of
+// DecryptFile apart from the encrypted file, which is fed to the decryptor.
+type FileDecryptorParams struct {
+	EventB64         string            `json:"event_b64"`
+	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	MediaHashKey     string            `json:"media_hash_key"`
+}
+
 // ActionSignature authenticates a conversation key change, member add, or
 // message delete.
 type ActionSignature struct {
@@ -389,6 +464,24 @@ func orEmpty(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// orEmptyKeys returns a non-nil map so JSON marshals it as {} rather than
+// null.
+func orEmptyKeys(keys map[string][]byte) map[string][]byte {
+	if keys == nil {
+		return map[string][]byte{}
+	}
+	return keys
+}
+
+// orEmptyBytes returns a non-nil slice so JSON marshals it as "" rather
+// than null.
+func orEmptyBytes(b []byte) []byte {
+	if b == nil {
+		return []byte{}
+	}
+	return b
 }
 
 // EventMeta contains common metadata for all events.
