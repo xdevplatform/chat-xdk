@@ -41,10 +41,13 @@ namespace ChatXdk
             return buf;
         }
 
-        /// <summary>Return the exact ciphertext size produced by stream encryption.</summary>
-        public static ulong EncryptedStreamSize(ulong plaintextSize)
+        /// <summary>
+        /// Return the exact size of a file once encrypted: the size its upload
+        /// declares before the file is encrypted.
+        /// </summary>
+        public static ulong EncryptedFileSize(ulong plaintextSize)
         {
-            string value = Consume(NativeMethods.chat_xdk_encrypted_stream_size(plaintextSize));
+            string value = Consume(NativeMethods.chat_xdk_encrypted_file_size(plaintextSize));
             return ulong.Parse(value, CultureInfo.InvariantCulture);
         }
 

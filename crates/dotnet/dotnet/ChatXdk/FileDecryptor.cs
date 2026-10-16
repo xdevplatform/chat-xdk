@@ -3,20 +3,20 @@ using System;
 namespace ChatXdk
 {
     /// <summary>
-    /// Incremental stream decryptor for large payloads.
+    /// Incremental decryptor for one encrypted file.
     ///
-    /// <para>Feed ciphertext with <see cref="Push"/>; call <see cref="Finish"/>
-    /// once at end of input. <see cref="Finish"/> throws if the stream ended
-    /// before its final frame (truncation), so do not treat plaintext from
-    /// <see cref="Push"/> as complete until <see cref="Finish"/> succeeds.
+    /// <para>Feed the encrypted bytes with <see cref="Push"/>; call
+    /// <see cref="Finish"/> once at end of input. <see cref="Finish"/> throws if
+    /// the file ended before its final frame (truncation), so do not treat bytes
+    /// from <see cref="Push"/> as complete until <see cref="Finish"/> succeeds.
     /// Always <see cref="Dispose"/> when finished.</para>
     /// </summary>
-    public sealed unsafe class StreamDecryptor : IDisposable
+    public sealed unsafe class FileDecryptor : IDisposable
     {
-        private StreamDecryptorHandle* _handle;
+        private FileDecryptorHandle* _handle;
         private bool _disposed;
 
-        private StreamDecryptor(StreamDecryptorHandle* handle)
+        private FileDecryptor(FileDecryptorHandle* handle)
         {
             _handle = handle;
         }
@@ -30,26 +30,20 @@ namespace ChatXdk
         /// <see cref="GC.KeepAlive(object)"/> on <c>this</c> after the call, keeping
         /// this finalizer from freeing the handle mid-call.
         /// </summary>
-        ~StreamDecryptor() => Dispose(disposing: false);
+        ~FileDecryptor() => Dispose(disposing: false);
 
-        internal static StreamDecryptor Create(
-            ChatHandle* chat, string eventB64, string conversationKeysJson, string mediaHashKey)
+        internal static FileDecryptor Create(ChatHandle* chat, string paramsJson)
         {
-            var eventBytes = Chat.Utf8Z(eventB64);
-            var convBytes = Chat.Utf8Z(conversationKeysJson);
-            var hashBytes = Chat.Utf8Z(mediaHashKey);
-            StreamDecryptorHandle* handle = null;
-            fixed (byte* evtPtr = eventBytes)
-            fixed (byte* convPtr = convBytes)
-            fixed (byte* hashPtr = hashBytes)
-                Chat.ConsumeResult(NativeMethods.chat_xdk_stream_decryptor_new(
-                    chat, evtPtr, convPtr, hashPtr, &handle));
-            return new StreamDecryptor(handle);
+            var paramsBytes = Chat.Utf8Z(paramsJson);
+            FileDecryptorHandle* handle = null;
+            fixed (byte* paramsPtr = paramsBytes)
+                Chat.ConsumeResult(NativeMethods.chat_xdk_file_decryptor_new(chat, paramsPtr, &handle));
+            return new FileDecryptor(handle);
         }
 
         /// <summary>
-        /// Decrypt a ciphertext chunk, returning plaintext available so far
-        /// (may be empty until enough input has arrived).
+        /// Decrypt a chunk of the encrypted file, returning the bytes available
+        /// so far (may be empty until enough input has arrived).
         /// </summary>
         public byte[] Push(byte[] ciphertext)
         {
@@ -57,7 +51,7 @@ namespace ChatXdk
             var ctB64 = Chat.Utf8Z(Convert.ToBase64String(ciphertext));
             string resultB64;
             fixed (byte* ctPtr = ctB64)
-                resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_stream_decryptor_push(_handle, ctPtr));
+                resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_file_decryptor_push(_handle, ctPtr));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
@@ -66,14 +60,14 @@ namespace ChatXdk
         public byte[] Finish()
         {
             ThrowIfDisposed();
-            var resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_stream_decryptor_finish(_handle));
+            var resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_file_decryptor_finish(_handle));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
 
         private void ThrowIfDisposed()
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(StreamDecryptor));
+            if (_disposed) throw new ObjectDisposedException(nameof(FileDecryptor));
         }
 
         /// <summary>Release the native handle.</summary>
@@ -91,7 +85,7 @@ namespace ChatXdk
             _disposed = true;
             if (_handle != null)
             {
-                NativeMethods.chat_xdk_stream_decryptor_free(_handle);
+                NativeMethods.chat_xdk_file_decryptor_free(_handle);
                 _handle = null;
             }
         }

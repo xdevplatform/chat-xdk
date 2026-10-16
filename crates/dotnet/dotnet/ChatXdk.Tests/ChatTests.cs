@@ -153,8 +153,8 @@ namespace ChatXdk.Tests
         {
             using var chat = new Chat();
             var encrypted = Convert.FromBase64String(encryptedB64);
-            var whole = chat.DecryptStream(encrypted, eventB64, keys, mediaHashKey);
-            using var decryptor = chat.StreamDecryptor(eventB64, keys, mediaHashKey);
+            var whole = chat.DecryptFile(new DecryptFileParams(encrypted, eventB64, keys, mediaHashKey));
+            using var decryptor = chat.FileDecryptor(new FileDecryptorParams(eventB64, keys, mediaHashKey));
             var incremental = new List<byte>();
             for (var i = 0; i < encrypted.Length; i += 700)
                 incremental.AddRange(decryptor.Push(encrypted[i..Math.Min(i + 700, encrypted.Length)]));
@@ -489,7 +489,6 @@ namespace ChatXdk.Tests
             {
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
-                MessageId = chat.NewMessageId(),
                 Attachments = new List<AttachmentDescriptor>
                 {
                     AttachmentDescriptor.Media("hash123", 1920, 1080, 512_000, "photo.jpg", mediaType: 1),
@@ -539,7 +538,6 @@ namespace ChatXdk.Tests
             {
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
-                MessageId = chat.NewMessageId(),
                 Attachments = new List<AttachmentDescriptor> { attachment },
             });
 
@@ -716,169 +714,184 @@ namespace ChatXdk.Tests
             Assert.Equal(prepared.ConversationKey, decrypted);
         }
 
-        // Stream encrypt / decrypt
+        // File encrypt / decrypt
 
-        // Media is encrypted for the message that carries it: the sender takes the message
-        // id first, encrypts each file with it, then sends the message under that id.
+        // A message with files is built first; each file is then encrypted from the returned
+        // EventB64 and the media hash key its attachment names.
 
         private static AttachmentDescriptor Photo(string mediaHashKey) =>
             AttachmentDescriptor.Media(mediaHashKey, 4, 3, 64, mediaHashKey + ".jpg", mediaType: 1);
 
-        /// <summary>Send a message carrying <paramref name="attachments"/> under
-        /// <paramref name="messageId"/>, check it verifies, and return its event.</summary>
-        private static string SendMedia(Chat chat, SdkVectors v, string messageId, params AttachmentDescriptor[] attachments)
+        /// <summary>Send a message carrying <paramref name="attachments"/>, check it verifies,
+        /// and return its payload.</summary>
+        private static SendPayload SendFiles(Chat chat, SdkVectors v, string text, params AttachmentDescriptor[] attachments)
         {
-            var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "media")
+            var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, text)
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                 ConversationKeyVersion = v.EventConversationKeyVersion,
-                MessageId = messageId,
                 Attachments = attachments,
             });
-            Assert.Equal(messageId, payload.MessageId);
             Assert.Equal("10", payload.SignatureInfo.SignatureVersion);
-            Assert.Equal("media", DecryptOwnContent(chat, v, payload).GetProperty("text").GetString());
-            return FrameSendPayload(payload, v.EventSenderId, v.EventConversationId);
+            Assert.Equal(text, DecryptOwnContent(chat, v, payload).GetProperty("text").GetString());
+            return payload;
+        }
+
+        /// <summary>The event as delivered: <paramref name="eventB64"/> with the sequence id the
+        /// server assigns, prepended as Thrift string field 1.</summary>
+        private static string Delivered(string eventB64, string sequenceId)
+        {
+            var id = System.Text.Encoding.UTF8.GetBytes(sequenceId);
+            var header = new byte[] { 11, 0, 1, (byte)(id.Length >> 24), (byte)(id.Length >> 16), (byte)(id.Length >> 8), (byte)id.Length };
+            return Convert.ToBase64String(header.Concat(id).Concat(Convert.FromBase64String(eventB64)).ToArray());
         }
 
         [Fact]
-        public void EncryptDecryptStream_RoundTrip()
+        public void EncryptDecryptFile_RoundTrip()
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
-            var ckey = Convert.FromBase64String(v.ConversationKeyB64);
             var plaintext = new byte[1024];
             new Random(42).NextBytes(plaintext);
-            var messageId = chat.NewMessageId();
+            var payload = SendFiles(chat, v, "a photo", Photo("photo"));
 
-            var encrypted = chat.EncryptStream(plaintext, ckey, messageId, 0);
+            // A chat with no identity encrypts the file from the payload.
+            using var worker = new Chat();
+            var encrypted = worker.EncryptFile(new EncryptFileParams(plaintext, payload.EventB64, ConversationKeys(v), "photo"));
             Assert.NotEqual(plaintext, encrypted);
-
-            var evt = SendMedia(chat, v, messageId, Photo("photo"));
-            Assert.Equal(plaintext, chat.DecryptStream(encrypted, evt, ConversationKeys(v), "photo"));
+            Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)encrypted.Length);
+            Assert.Equal(plaintext, chat.DecryptFile(new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), "photo")));
         }
 
         [Fact]
-        public void DecryptStream_WrongKey_Throws()
+        public void DecryptFile_WrongKey_Throws()
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
-            var otherKey = NewConvKey(chat);
-            var plaintext = System.Text.Encoding.UTF8.GetBytes("secret content");
-            var messageId = chat.NewMessageId();
-
-            var encrypted = chat.EncryptStream(plaintext, otherKey, messageId, 0);
-            var evt = SendMedia(chat, v, messageId, Photo("photo"));
-            var ex = Assert.Throws<ChatXdkException>(() => chat.DecryptStream(
-                encrypted, evt, ConversationKeys(v), "photo"));
-            Assert.Contains("encrypted file of media_hash_key 'photo'", ex.Message);
+            var payload = SendFiles(chat, v, "a photo", Photo("photo"));
+            var wrongKeys = new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = NewConvKey(chat) };
+            var ex = Assert.Throws<ChatXdkException>(() => chat.DecryptFile(
+                new DecryptFileParams(new byte[64], payload.EventB64, wrongKeys, "photo")));
+            Assert.Contains("does not decrypt the message", ex.Message);
         }
 
         [Fact]
-        public void StreamDecryptor_RoundTripAndTruncation()
+        public void FileDecryptor_RoundTripAndTruncation()
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
-            var ckey = Convert.FromBase64String(v.ConversationKeyB64);
             var plaintext = Enumerable.Repeat((byte)0xAB, 5000).ToArray();
-            var messageId = chat.NewMessageId();
+            var payload = SendFiles(chat, v, "two photos", Photo("first"), Photo("second"));
 
-            using var encryptor = chat.StreamEncryptor(ckey, messageId, 1);
+            using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, ConversationKeys(v), "second"));
             var ciphertext = new List<byte>();
             for (var i = 0; i < plaintext.Length; i += 700)
                 ciphertext.AddRange(encryptor.Push(plaintext[i..Math.Min(i + 700, plaintext.Length)]));
             ciphertext.AddRange(encryptor.Finish());
             var encrypted = ciphertext.ToArray();
 
-            var evt = SendMedia(chat, v, messageId, Photo("first"), Photo("second"));
-            Assert.Throws<ChatXdkException>(() => chat.DecryptStream(encrypted, evt, ConversationKeys(v), "first"));
-            using var decryptor = chat.StreamDecryptor(evt, ConversationKeys(v), "second");
+            Assert.Throws<ChatXdkException>(() => chat.DecryptFile(
+                new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), "first")));
+            using var decryptor = chat.FileDecryptor(new FileDecryptorParams(payload.EventB64, ConversationKeys(v), "second"));
             var output = new List<byte>();
             for (var i = 0; i < encrypted.Length; i += 333)
                 output.AddRange(decryptor.Push(encrypted[i..Math.Min(i + 333, encrypted.Length)]));
             output.AddRange(decryptor.Finish());
             Assert.Equal(plaintext, output.ToArray());
 
-            using var truncated = chat.StreamDecryptor(evt, ConversationKeys(v), "second");
+            using var truncated = chat.FileDecryptor(new FileDecryptorParams(payload.EventB64, ConversationKeys(v), "second"));
             truncated.Push(encrypted[..^4]);
             var ex = Assert.Throws<ChatXdkException>(() => truncated.Finish());
             Assert.Contains("truncated", ex.Message);
         }
 
         [Fact]
-        public void EncryptStream_LinkCardImagesTakeTheCardsPosition()
+        public void EncryptFile_LinkCardImagesTakeTheCardsKey()
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
-            var ckey = Convert.FromBase64String(v.ConversationKeyB64);
-            var messageId = chat.NewMessageId();
-
-            var banner = chat.EncryptStream(System.Text.Encoding.UTF8.GetBytes("banner bytes"), ckey, messageId, 0);
-            var favicon = chat.EncryptStream(System.Text.Encoding.UTF8.GetBytes("favicon bytes"), ckey, messageId, 0);
-            var evt = SendMedia(chat, v, messageId, AttachmentDescriptor.UrlCard(
+            var payload = SendFiles(chat, v, "a link", AttachmentDescriptor.UrlCard(
                 "https://example.com",
                 bannerImage: new UrlAttachmentImageDescriptor { MediaHashKey = "banner", FilesizeBytes = 12, Filename = "banner.png" },
                 faviconImage: new UrlAttachmentImageDescriptor { MediaHashKey = "favicon", FilesizeBytes = 13, Filename = "favicon.png" }));
-            Assert.Equal("banner bytes", System.Text.Encoding.UTF8.GetString(
-                chat.DecryptStream(banner, evt, ConversationKeys(v), "banner")));
-            Assert.Equal("favicon bytes", System.Text.Encoding.UTF8.GetString(
-                chat.DecryptStream(favicon, evt, ConversationKeys(v), "favicon")));
+            foreach (var name in new[] { "banner", "favicon" })
+            {
+                var encrypted = chat.EncryptFile(new EncryptFileParams(
+                    System.Text.Encoding.UTF8.GetBytes(name + " bytes"), payload.EventB64, ConversationKeys(v), name));
+                Assert.Equal(name + " bytes", System.Text.Encoding.UTF8.GetString(
+                    chat.DecryptFile(new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), name))));
+            }
         }
 
         [Fact]
-        public void MediaSendInput_IsChecked()
+        public void AMessageWithFiles_TakesTheIdItsFilesDerive()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+            var draft = SendFiles(chat, v, "draft", Photo("photo-a"), Photo("photo-b"));
+            Assert.Matches("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", draft.MessageId);
+            var encrypted = chat.EncryptFile(new EncryptFileParams(
+                System.Text.Encoding.UTF8.GetBytes("photo b"), draft.EventB64, ConversationKeys(v), "photo-b"));
+
+            // Building the message again gives the same id, so its encrypted files stay valid.
+            var rebuilt = SendFiles(chat, v, "final text", Photo("photo-a"), Photo("photo-b"));
+            Assert.Equal(draft.MessageId, rebuilt.MessageId);
+            Assert.Equal("photo b", System.Text.Encoding.UTF8.GetString(
+                chat.DecryptFile(new DecryptFileParams(encrypted, rebuilt.EventB64, ConversationKeys(v), "photo-b"))));
+
+            Assert.NotEqual(draft.MessageId, SendFiles(chat, v, "draft", Photo("photo-b"), Photo("photo-a")).MessageId);
+            Assert.NotEqual(SendFiles(chat, v, "no files").MessageId, SendFiles(chat, v, "no files").MessageId);
+        }
+
+        [Fact]
+        public void FileSendInput_IsChecked()
         {
             var v = LoadVectors();
             using var chat = QuickReplyChat(v);
             var ckey = Convert.FromBase64String(v.ConversationKeyB64);
-            var messageId = chat.NewMessageId();
-            Assert.Matches("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", messageId);
-            Assert.NotEqual(messageId, chat.NewMessageId());
 
             var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
-                new EncryptMessageParams(v.EventConversationId, "a photo")
+                new EncryptMessageParams(v.EventConversationId, "twice")
                 {
                     ConversationKey = ckey,
                     ConversationKeyVersion = v.EventConversationKeyVersion,
-                    Attachments = new[] { Photo("photo") },
+                    Attachments = new[] { Photo("photo"), Photo("photo") },
                 }));
-            Assert.Contains("message_id is not set", ex.Message);
-            ex = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
-                new EncryptReplyParams(v.EventConversationId, "a photo", replyToEvent: null)
-                {
-                    ReplyToSequenceId = "seq-orig",
-                    ConversationKey = ckey,
-                    ConversationKeyVersion = v.EventConversationKeyVersion,
-                    Attachments = new[] { Photo("photo") },
-                }));
-            Assert.Contains("message_id is not set", ex.Message);
+            Assert.Contains("media_hash_key 'photo' is in more than one attachment", ex.Message);
 
-            foreach (var bad in new[] { messageId.ToUpperInvariant(), "msg-1", messageId + " " })
+            var payload = SendFiles(chat, v, "a photo", Photo("photo"));
+            Assert.Contains("is not one of the message's files", Assert.Throws<ChatXdkException>(
+                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, ConversationKeys(v), "other"))).Message);
+            Assert.Contains("is not 32 bytes", Assert.Throws<ChatXdkException>(
+                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64,
+                    new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = new byte[3] }, "photo"))).Message);
+
+            // A reply needs the delivered event, which carries the sequence id; the files it
+            // quotes belong to the quoted message.
+            Assert.Contains("reply_to_event carries no sequence_id", Assert.Throws<ChatXdkException>(
+                () => chat.EncryptReply(new EncryptReplyParams(v.EventConversationId, "too early", payload.EventB64)
+                {
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                })).Message);
+            var reply = chat.EncryptReply(new EncryptReplyParams(v.EventConversationId, "and mine", Delivered(payload.EventB64, "100"))
             {
-                Assert.Contains("Invalid message_id", Assert.Throws<ChatXdkException>(
-                    () => chat.EncryptStream(new byte[] { 1 }, ckey, bad, 0)).Message);
-                Assert.Contains("Invalid message_id", Assert.Throws<ChatXdkException>(
-                    () => chat.StreamEncryptor(ckey, bad, 0)).Message);
-                Assert.Contains("Invalid message_id", Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
-                    new EncryptMessageParams(v.EventConversationId, "text")
-                    {
-                        ConversationKey = ckey,
-                        ConversationKeyVersion = v.EventConversationKeyVersion,
-                        MessageId = bad,
-                    })).Message);
-            }
-            foreach (var index in new[] { -1, 10 })
-            {
-                Assert.Contains("Invalid attachment_index", Assert.Throws<ChatXdkException>(
-                    () => chat.EncryptStream(new byte[] { 1 }, ckey, messageId, index)).Message);
-                Assert.Contains("Invalid attachment_index", Assert.Throws<ChatXdkException>(
-                    () => chat.StreamEncryptor(ckey, messageId, index)).Message);
-            }
+                ConversationKey = ckey,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+                Attachments = new[] { Photo("reply-photo") },
+            });
+            Assert.Contains("is media the reply quotes", Assert.Throws<ChatXdkException>(
+                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, reply.EventB64, ConversationKeys(v), "photo"))).Message);
 
             using var noIdentity = new Chat();
             noIdentity.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
             Assert.Contains("set_identity", Assert.Throws<ChatXdkException>(
-                () => noIdentity.EncryptStream(new byte[] { 1 }, ckey, messageId, 0)).Message);
+                () => noIdentity.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "a photo")
+                {
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    Attachments = new[] { Photo("photo") },
+                })).Message);
         }
 
         // Sign / verify
@@ -1138,8 +1151,10 @@ namespace ChatXdk.Tests
             // indexed error, the signed KeyChange's key is adopted, and the
             // message verifies with the fixture text.
             var result = chat.DecryptEvents(
-                new[] { v.EventKeyChangeB64, v.EventMessageB64, v.EventGarbageB64 },
-                signingKeys);
+                new DecryptEventsParams(new[] { v.EventKeyChangeB64, v.EventMessageB64, v.EventGarbageB64 })
+                {
+                    SigningKeys = signingKeys,
+                });
 
             Assert.Single(result.Errors);
             Assert.Contains("2", result.Errors.Keys);
@@ -1169,7 +1184,7 @@ namespace ChatXdk.Tests
 
             // Single-event path with pre-cached keys verifies the same message …
             var single = chat.DecryptEvent(
-                v.EventMessageB64, result.ConversationKeys, signingKeys);
+                new DecryptEventParams(v.EventMessageB64, result.ConversationKeys.Keys) { SigningKeys = signingKeys });
             Assert.Equal("Message", single.GetProperty("type").GetString());
             Assert.Equal(v.EventMessageText,
                 single.GetProperty("content").GetProperty("text").GetString());
@@ -1177,7 +1192,10 @@ namespace ChatXdk.Tests
 
             // … and throws on the garbage event.
             Assert.Throws<ChatXdkException>(() =>
-                chat.DecryptEvent(v.EventGarbageB64, (ConversationKeyBundle?)null, signingKeys));
+                chat.DecryptEvent(new DecryptEventParams(v.EventGarbageB64, new Dictionary<string, byte[]>())
+                {
+                    SigningKeys = signingKeys,
+                }));
         }
 
         // Failure events are unsigned by protocol: the fixture failure decodes
@@ -1189,8 +1207,7 @@ namespace ChatXdk.Tests
             var v = LoadVectors();
             using var chat = new Chat(); // default reject-unverified policy
 
-            var e = chat.DecryptEvent(
-                v.EventFailureB64, (ConversationKeyBundle?)null, Array.Empty<SigningKeyEntry>());
+            var e = chat.DecryptEvent(new DecryptEventParams(v.EventFailureB64, new Dictionary<string, byte[]>()));
             Assert.Equal("Failure", e.GetProperty("type").GetString());
             Assert.Equal("RateLimitUpsell", e.GetProperty("failure").GetString());
             Assert.Equal("Premium", e.GetProperty("rate_limit_tier").GetString());
@@ -1239,7 +1256,7 @@ namespace ChatXdk.Tests
             chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
 
             chat.SetCacheKeys(true);
-            chat.DecryptEvents(new[] { v.EventKeyChangeB64 }, EventSigningKeys(v));
+            chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }) { SigningKeys = EventSigningKeys(v) });
 
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "from the key cache"));
             Assert.Equal(v.EventConversationKeyVersion, payload.ConversationKeyVersion);
@@ -1262,10 +1279,10 @@ namespace ChatXdk.Tests
             chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
             chat.SetSigningKeys(EventSigningKeys(v));
 
-            var result = chat.DecryptEvents(new[] { v.EventKeyChangeB64 });
+            var result = chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }));
             Assert.Empty(result.Errors);
 
-            var single = chat.DecryptEvent(v.EventMessageB64, result.ConversationKeys);
+            var single = chat.DecryptEvent(new DecryptEventParams(v.EventMessageB64, result.ConversationKeys.Keys));
             Assert.Equal("Message", single.GetProperty("type").GetString());
             Assert.Equal(v.EventMessageText,
                 single.GetProperty("content").GetProperty("text").GetString());
@@ -1282,8 +1299,10 @@ namespace ChatXdk.Tests
             chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
 
             var result = chat.DecryptEvents(
-                new[] { v.EventKeyChangeB64, v.EventReplyValidB64, v.EventReplyForgedB64 },
-                EventSigningKeys(v));
+                new DecryptEventsParams(new[] { v.EventKeyChangeB64, v.EventReplyValidB64, v.EventReplyForgedB64 })
+                {
+                    SigningKeys = EventSigningKeys(v),
+                });
             Assert.Empty(result.Errors);
 
             var messages = result.Messages
@@ -1328,7 +1347,10 @@ namespace ChatXdk.Tests
             var v = LoadVectors();
             using var chat = new Chat();
             var e = chat.DecryptEvent(
-                v.EventMessageKeyB64, MessageKeyConversationKeys(v), SigningKeysFor(v, v.MessageKeySenderId));
+                new DecryptEventParams(v.EventMessageKeyB64, MessageKeyConversationKeys(v))
+                {
+                    SigningKeys = SigningKeysFor(v, v.MessageKeySenderId),
+                });
             Assert.Equal("Message", e.GetProperty("type").GetString());
             Assert.True(e.GetProperty("verified").GetBoolean());
             Assert.Equal(v.EventMessageKeyText,
@@ -1414,12 +1436,12 @@ namespace ChatXdk.Tests
             foreach (var c in cases)
             {
                 var ex = Assert.Throws<ChatXdkException>(
-                    () => chat.DecryptStream(c.Encrypted, c.Event, c.Keys, c.MediaHashKey));
+                    () => chat.DecryptFile(new DecryptFileParams(c.Encrypted, c.Event, c.Keys, c.MediaHashKey)));
                 Assert.Contains(c.Expected, ex.Message);
             }
-            var streamEx = Assert.Throws<ChatXdkException>(
-                () => chat.StreamDecryptor(v.EventMessageKeyB64, ConversationKeys(v), v.MediaFirstHashKey));
-            Assert.Contains("no key for version", streamEx.Message);
+            var decryptorEx = Assert.Throws<ChatXdkException>(
+                () => chat.FileDecryptor(new FileDecryptorParams(v.EventMessageKeyB64, ConversationKeys(v), v.MediaFirstHashKey)));
+            Assert.Contains("no key for version", decryptorEx.Message);
         }
 
         [Fact]
@@ -1430,8 +1452,10 @@ namespace ChatXdk.Tests
             chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
 
             var result = chat.DecryptEvents(
-                new[] { v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64 },
-                SigningKeysFor(v, v.EventSenderId, v.MessageKeySenderId));
+                new DecryptEventsParams(new[] { v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64 })
+                {
+                    SigningKeys = SigningKeysFor(v, v.EventSenderId, v.MessageKeySenderId),
+                });
             Assert.Empty(result.Errors);
 
             var key = result.ConversationKeys.Keys[v.MessageKeyConversationKeyVersion];
@@ -1453,13 +1477,16 @@ namespace ChatXdk.Tests
             var v = LoadVectors();
             using var chat = new Chat();
             var e = chat.DecryptEvent(
-                v.EventMessageKeyShortB64,
-                new Dictionary<string, byte[]>
+                new DecryptEventParams(
+                    v.EventMessageKeyShortB64,
+                    new Dictionary<string, byte[]>
+                    {
+                        [v.MessageKeyShortConversationKeyVersion] =
+                            ChatXdkUtilities.HexToBytes(v.MessageKeyShortConversationKeyHex),
+                    })
                 {
-                    [v.MessageKeyShortConversationKeyVersion] =
-                        ChatXdkUtilities.HexToBytes(v.MessageKeyShortConversationKeyHex),
-                },
-                SigningKeysFor(v, v.MessageKeyShortSenderId));
+                    SigningKeys = SigningKeysFor(v, v.MessageKeyShortSenderId),
+                });
             Assert.True(e.GetProperty("verified").GetBoolean());
             Assert.Equal(v.EventMessageKeyShortText,
                 e.GetProperty("content").GetProperty("text").GetString());
@@ -1472,9 +1499,12 @@ namespace ChatXdk.Tests
             using var chat = new Chat();
             var key = Convert.FromBase64String(v.ConversationKeyB64);
             var e = chat.DecryptEvent(
-                v.EventReplyMessageKeyB64,
-                new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = key },
-                SigningKeysFor(v, v.EventSenderId, v.MessageKeySenderId));
+                new DecryptEventParams(
+                    v.EventReplyMessageKeyB64,
+                    new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = key })
+                {
+                    SigningKeys = SigningKeysFor(v, v.EventSenderId, v.MessageKeySenderId),
+                });
             Assert.True(e.GetProperty("verified").GetBoolean());
             Assert.Equal(v.EventReplyMessageKeyText,
                 e.GetProperty("content").GetProperty("text").GetString());
@@ -1634,7 +1664,6 @@ namespace ChatXdk.Tests
             {
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
-                MessageId = chat.NewMessageId(),
                 Attachments = new List<AttachmentDescriptor>
                 {
                     AttachmentDescriptor.Media(
@@ -1675,13 +1704,13 @@ namespace ChatXdk.Tests
         // ChatXdkUtilities (stateless helpers)
 
         [Fact]
-        public void Utilities_EncryptedStreamSize()
+        public void Utilities_EncryptedFileSize()
         {
-            Assert.Equal(24UL, ChatXdkUtilities.EncryptedStreamSize(0));
-            Assert.Equal(42UL, ChatXdkUtilities.EncryptedStreamSize(1));
-            Assert.Equal(1065UL, ChatXdkUtilities.EncryptedStreamSize(1024));
-            Assert.Equal(1083UL, ChatXdkUtilities.EncryptedStreamSize(1025));
-            Assert.Throws<ChatXdkException>(() => ChatXdkUtilities.EncryptedStreamSize(ulong.MaxValue));
+            Assert.Equal(24UL, ChatXdkUtilities.EncryptedFileSize(0));
+            Assert.Equal(42UL, ChatXdkUtilities.EncryptedFileSize(1));
+            Assert.Equal(1065UL, ChatXdkUtilities.EncryptedFileSize(1024));
+            Assert.Equal(1083UL, ChatXdkUtilities.EncryptedFileSize(1025));
+            Assert.Throws<ChatXdkException>(() => ChatXdkUtilities.EncryptedFileSize(ulong.MaxValue));
         }
 
         [Fact]
@@ -1793,7 +1822,7 @@ namespace ChatXdk.Tests
         public void DecryptEvents_EmptyList_ReturnsNonNullResult()
         {
             using var chat = CreateUnlocked();
-            var result = chat.DecryptEvents(Array.Empty<string>());
+            var result = chat.DecryptEvents(new DecryptEventsParams(Array.Empty<string>()));
 
             Assert.NotNull(result);
             Assert.Empty(result.Messages);
@@ -1820,8 +1849,8 @@ namespace ChatXdk.Tests
             };
 
             var ex = Assert.Throws<ChatXdkException>(
-                () => chat.DecryptEvents(Array.Empty<string>(), malformed));
-            Assert.Contains("Invalid signing keys JSON", ex.Message);
+                () => chat.DecryptEvents(new DecryptEventsParams(Array.Empty<string>()) { SigningKeys = malformed }));
+            Assert.Contains("Invalid params JSON: missing field `user_id`", ex.Message);
         }
 
         // Quick replies
@@ -1855,36 +1884,6 @@ namespace ChatXdk.Tests
                 },
             };
 
-        /// <summary>
-        /// Frame a SendPayload as the base64 MessageEvent envelope DecryptEvent
-        /// consumes: string header fields, the payload's MessageCreateEvent in
-        /// the detail union, and its encoded signature.
-        /// </summary>
-        private static string FrameSendPayload(SendPayload p, string senderId, string conversationId)
-        {
-            using var ms = new MemoryStream();
-            void Str(short id, string value)
-            {
-                var data = System.Text.Encoding.UTF8.GetBytes(value);
-                ms.WriteByte(11);
-                ms.WriteByte((byte)(id >> 8));
-                ms.WriteByte((byte)id);
-                ms.Write(new[] { (byte)(data.Length >> 24), (byte)(data.Length >> 16), (byte)(data.Length >> 8), (byte)data.Length });
-                ms.Write(data);
-            }
-            Str(1, "1");
-            Str(2, p.MessageId);
-            Str(3, senderId);
-            Str(4, conversationId);
-            Str(6, "1700000000000");
-            ms.Write(new byte[] { 12, 0, 7, 12, 0, 1 });
-            ms.Write(Convert.FromBase64String(p.EncryptedContent));
-            ms.Write(new byte[] { 0, 12, 0, 9 });
-            ms.Write(Convert.FromBase64String(p.EncodedEventSignature));
-            ms.WriteByte(0);
-            return Convert.ToBase64String(ms.ToArray());
-        }
-
         private static Chat QuickReplyChat(SdkVectors v)
         {
             var chat = new Chat();
@@ -1896,13 +1895,17 @@ namespace ChatXdk.Tests
         private static JsonElement DecryptOwnContent(Chat chat, SdkVectors v, SendPayload payload)
         {
             var evt = chat.DecryptEvent(
-                FrameSendPayload(payload, v.EventSenderId, v.EventConversationId),
-                new Dictionary<string, byte[]>
+                new DecryptEventParams(
+                    payload.EventB64,
+                    new Dictionary<string, byte[]>
+                    {
+                        [v.EventConversationKeyVersion] = Convert.FromBase64String(v.ConversationKeyB64),
+                    })
                 {
-                    [v.EventConversationKeyVersion] = Convert.FromBase64String(v.ConversationKeyB64),
-                },
-                EventSigningKeys(v));
+                    SigningKeys = EventSigningKeys(v),
+                });
             Assert.True(evt.GetProperty("verified").GetBoolean());
+            Assert.Equal(payload.MessageId, evt.GetProperty("id").GetString());
             return evt.GetProperty("content");
         }
 

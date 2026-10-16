@@ -18,7 +18,7 @@ namespace ChatXdk
     ///   <item>Signed conversation-key changes (<see cref="PrepareConversationKeyChange"/>, <see cref="PrepareGroupCreate"/>, <see cref="PrepareGroupMembersChange"/>)</item>
     ///   <item>UTF-8 metadata encryption with the conversation key (<see cref="Encrypt"/>, <see cref="Decrypt"/>)</item>
     ///   <item>Message / reaction / reply encryption (<see cref="EncryptMessage"/>, etc.)</item>
-    ///   <item>Media streaming encryption (<see cref="EncryptStream"/>, <see cref="DecryptStream"/>)</item>
+    ///   <item>File encryption (<see cref="EncryptFile"/>, <see cref="DecryptFile"/>, <see cref="FileEncryptor"/>, <see cref="FileDecryptor"/>)</item>
     ///   <item>Stateless helpers on <see cref="ChatXdkUtilities"/> (base64/hex, MIME, image dimensions)</item>
     /// </list>
     ///
@@ -40,8 +40,8 @@ namespace ChatXdk
     /// chat.SetSigningKeys(participantSigningKeys);     // default verification keys
     ///
     /// // Decrypt incoming events (keys are cached from verified KeyChange events)
-    /// var result = chat.DecryptEvents(eventsB64);
-    /// var evt = chat.DecryptEvent(eventB64);
+    /// var result = chat.DecryptEvents(new DecryptEventsParams(eventsB64));
+    /// var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, result.ConversationKeys.Keys));
     /// Console.WriteLine(evt.GetProperty("type").GetString()); // "Message", "KeyChange", …
     ///
     /// // Send a message — identity and conversation key resolve from the session
@@ -457,99 +457,63 @@ namespace ChatXdk
 
         /// <summary>
         /// Decrypt a webhook event and return it as a <see cref="JsonElement"/>.
-        /// </summary>
-        /// <param name="eventB64">Base64-encoded raw event from the webhook.</param>
-        /// <param name="conversationKeys">
-        /// Map of version → raw 32-byte key bytes from <see cref="ExtractConversationKeys"/> or
-        /// <see cref="DecryptEventsResult.ConversationKeys"/>. Pass <see langword="null"/> (or an empty dict)
-        /// for non-message events, or to fall back to the opt-in key cache
-        /// (<see cref="SetCacheKeys"/>).
-        /// </param>
-        /// <param name="signingKeys">
-        /// Signing keys for the sender. The SDK picks the matching version automatically.
-        /// <see langword="null"/> (or an empty list) falls back to the keys stored via
-        /// <see cref="SetSigningKeys"/>; if none are stored either, every signed event
-        /// throws under the default reject-unverified policy (only after
+        /// Under the default reject-unverified policy, a signed event with no usable signing
+        /// key (passed or stored via <see cref="SetSigningKeys"/>) throws; only after
         /// <see cref="SetRejectUnverified"/>(false) are such events returned with
-        /// <c>verified: false</c>).
-        /// </param>
+        /// <c>verified: false</c>.
+        /// </summary>
         /// <returns>
         /// A <see cref="JsonElement"/> with a <c>"type"</c> field indicating the event kind
         /// (<c>"Message"</c>, <c>"KeyChange"</c>, <c>"GroupChange"</c>, etc.).
         /// </returns>
-        public JsonElement DecryptEvent(
-            string eventB64,
-            Dictionary<string, byte[]>? conversationKeys = null,
-            IEnumerable<SigningKeyEntry>? signingKeys = null)
+        public JsonElement DecryptEvent(DecryptEventParams parameters)
         {
             ThrowIfDisposed();
-
-            var convKeysJson = ConversationKeysJson(conversationKeys);
-
-            var signingKeysList = signingKeys != null
-                ? new List<SigningKeyEntry>(signingKeys)
-                : new List<SigningKeyEntry>();
-            var signingKeysJson = JsonSerializer.Serialize(signingKeysList, JsonOpts);
-
-            var eventBytes = Utf8Z(eventB64);
-            var convBytes = Utf8Z(convKeysJson);
-            var sigBytes = Utf8Z(signingKeysJson);
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["event_b64"] = parameters.EventB64,
+                ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
+                ["signing_keys"] = parameters.SigningKeys,
+            }, JsonOpts);
+            var jsonBytes = Utf8Z(json);
             string resultJson;
-            fixed (byte* evtPtr = eventBytes)
-            fixed (byte* convPtr = convBytes)
-            fixed (byte* sigPtr = sigBytes)
-                resultJson = ConsumeResult(
-                    NativeMethods.chat_xdk_decrypt_event(_handle, evtPtr, convPtr, sigPtr));
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
             return doc.RootElement.Clone();
         }
 
-        /// <summary>Serialise a version → key map as <c>{ "version": "base64", ... }</c>.</summary>
-        private static string ConversationKeysJson(Dictionary<string, byte[]>? conversationKeys)
+        /// <summary>Encode a version → key map as <c>{ "version": "base64", ... }</c>.</summary>
+        private static Dictionary<string, string> ConversationKeysB64(IReadOnlyDictionary<string, byte[]>? conversationKeys)
         {
             var convKeysB64 = new Dictionary<string, string>();
             if (conversationKeys != null)
                 foreach (var (version, key) in conversationKeys)
                     convKeysB64[version] = Convert.ToBase64String(key);
-            return JsonSerializer.Serialize(convKeysB64, JsonOpts);
+            return convKeysB64;
         }
-
-        /// <summary>
-        /// Decrypt a single event using keys from <see cref="ExtractConversationKeys"/> or
-        /// <see cref="DecryptEventsResult.ConversationKeys"/> (uses <see cref="ConversationKeyBundle.Keys"/>).
-        /// </summary>
-        public JsonElement DecryptEvent(
-            string eventB64,
-            ConversationKeyBundle? conversationKeys,
-            IEnumerable<SigningKeyEntry>? signingKeys = null)
-            => DecryptEvent(eventB64, conversationKeys?.Keys, signingKeys);
 
         /// <summary>
         /// Decrypt a batch of webhook events in one call.
         /// Keys are extracted from <c>KeyChange</c> events in the batch; failures are recorded
         /// in <see cref="DecryptEventsResult.Errors"/> — this method never throws per-event.
-        /// Passing <see langword="null"/> (or an empty list) for <paramref name="signingKeys"/>
-        /// falls back to the keys stored via <see cref="SetSigningKeys"/>.
         /// </summary>
-        public DecryptEventsResult DecryptEvents(
-            IEnumerable<string> events,
-            IEnumerable<SigningKeyEntry>? signingKeys = null)
+        public DecryptEventsResult DecryptEvents(DecryptEventsParams parameters)
         {
             ThrowIfDisposed();
-            var eventsJson = JsonSerializer.Serialize(new List<string>(events), JsonOpts);
-            var signingKeysList = signingKeys != null
-                ? new List<SigningKeyEntry>(signingKeys)
-                : new List<SigningKeyEntry>();
-            var signingKeysJson = JsonSerializer.Serialize(signingKeysList, JsonOpts);
-            var eventsBytes = Utf8Z(eventsJson);
-            var sigBytes = Utf8Z(signingKeysJson);
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["events"] = parameters.Events ?? Array.Empty<string>(),
+                ["signing_keys"] = parameters.SigningKeys,
+            }, JsonOpts);
+            var jsonBytes = Utf8Z(json);
             string resultJson;
-            fixed (byte* evPtr = eventsBytes)
-            fixed (byte* sigPtr = sigBytes)
-                resultJson = ConsumeResult(
-                    NativeMethods.chat_xdk_decrypt_events(_handle, evPtr, sigPtr));
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
@@ -702,7 +666,10 @@ namespace ChatXdk
         /// <summary>
         /// Encrypt a message for the X API.
         /// POST the returned <see cref="SendPayload"/> fields to
-        /// <c>POST /2/chat/conversations/{id}/messages</c>.
+        /// <c>POST /2/chat/conversations/{id}/messages</c>. A message with files takes an id
+        /// derived from its files, so building it again gives the same id; encrypt each file
+        /// afterwards with <see cref="EncryptFile"/> or <see cref="FileEncryptor"/> and the
+        /// payload's <see cref="SendPayload.EventB64"/>.
         /// </summary>
         public SendPayload EncryptMessage(EncryptMessageParams parameters)
         {
@@ -713,7 +680,8 @@ namespace ChatXdk
 
         /// <summary>
         /// Encrypt a reply message for the X API.
-        /// Like <see cref="EncryptMessage"/> but includes a reply-to preview.
+        /// Like <see cref="EncryptMessage"/> but includes a reply-to preview; the reply's id
+        /// and files work the same way.
         /// </summary>
         public SendPayload EncryptReply(EncryptReplyParams parameters)
         {
@@ -784,120 +752,102 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Decrypt an encrypted media file (e.g. an image or video), as downloaded.
+        /// Encrypt a file of an outgoing message, after the message is built. The SDK finds the
+        /// attachment that names <see cref="EncryptFileParams.MediaHashKey"/> in the message
+        /// <see cref="EncryptFileParams.EventB64"/> carries, and encrypts the file under that
+        /// attachment's key. Upload the result under the same media hash key; its size is
+        /// <see cref="ChatXdkUtilities.EncryptedFileSize"/>.
         /// </summary>
-        /// <param name="encrypted">Encrypted bytes.</param>
-        /// <param name="eventB64">
-        /// Base64-encoded event of the message that carries the media, as passed to
-        /// <c>DecryptEvent</c>.
-        /// </param>
-        /// <param name="conversationKeys">
-        /// Map of version → raw 32-byte key bytes from <see cref="ExtractConversationKeys"/> or
-        /// <see cref="DecryptEventsResult.ConversationKeys"/>. It must hold the key for the
-        /// message's version.
-        /// </param>
-        /// <param name="mediaHashKey">
-        /// The media's hash key from the decrypted message: one of its media attachments, a link
-        /// card's banner or favicon, or media quoted in its reply preview.
-        /// </param>
+        /// <returns>Encrypted bytes.</returns>
+        /// <exception cref="ChatXdkException">
+        /// The event is not a message with this file, or the key map lacks its key. The message
+        /// says what to pass instead.
+        /// </exception>
+        public byte[] EncryptFile(EncryptFileParams parameters)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["file"] = Convert.ToBase64String(parameters.File ?? Array.Empty<byte>()),
+                ["event_b64"] = parameters.EventB64,
+                ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
+                ["media_hash_key"] = parameters.MediaHashKey,
+            }, JsonOpts);
+            return CallFileEndpoint(json, NativeMethods.chat_xdk_encrypt_file);
+        }
+
+        /// <summary>
+        /// Decrypt an encrypted file (e.g. an image or video), as downloaded.
+        /// </summary>
         /// <returns>Decrypted bytes.</returns>
         /// <exception cref="ChatXdkException">
-        /// The key version is missing, the event is not an encrypted message with this media, or
-        /// <paramref name="encrypted"/> is not the media's complete encrypted file. The message says
-        /// what to pass instead.
+        /// The key version is missing, the event is not an encrypted message with this file, or
+        /// <see cref="DecryptFileParams.Encrypted"/> is not the file's complete encrypted bytes.
+        /// The message says what to pass instead.
         /// </exception>
-        public byte[] DecryptStream(
-            byte[] encrypted,
-            string eventB64,
-            Dictionary<string, byte[]> conversationKeys,
-            string mediaHashKey)
+        public byte[] DecryptFile(DecryptFileParams parameters)
         {
             ThrowIfDisposed();
-            var encB64 = Utf8Z(Convert.ToBase64String(encrypted));
-            var eventBytes = Utf8Z(eventB64);
-            var convBytes = Utf8Z(ConversationKeysJson(conversationKeys));
-            var hashBytes = Utf8Z(mediaHashKey);
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["encrypted"] = Convert.ToBase64String(parameters.Encrypted ?? Array.Empty<byte>()),
+                ["event_b64"] = parameters.EventB64,
+                ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
+                ["media_hash_key"] = parameters.MediaHashKey,
+            }, JsonOpts);
+            return CallFileEndpoint(json, NativeMethods.chat_xdk_decrypt_file);
+        }
+
+        // Shared helper: marshal JSON, call the delegate, decode the base64 bytes.
+        private byte[] CallFileEndpoint(string paramsJson, ParamsJsonDelegate fn)
+        {
+            var jsonBytes = Utf8Z(paramsJson);
             string resultB64;
-            fixed (byte* encPtr = encB64)
-            fixed (byte* evtPtr = eventBytes)
-            fixed (byte* convPtr = convBytes)
-            fixed (byte* hashPtr = hashBytes)
-                resultB64 = ConsumeResult(
-                    NativeMethods.chat_xdk_decrypt_stream(_handle, encPtr, evtPtr, convPtr, hashPtr));
+            fixed (byte* jsonPtr = jsonBytes)
+                resultB64 = ConsumeResult(fn(_handle, jsonPtr));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
 
         /// <summary>
-        /// A fresh message id for a message with media. Media keys derive from the message
-        /// id, so take the id first, pass it to <see cref="EncryptStream"/> or
-        /// <see cref="StreamEncryptor"/> for every file, then as
-        /// <see cref="EncryptMessageParams.MessageId"/> or <see cref="EncryptReplyParams.MessageId"/>.
+        /// Create an incremental encryptor for a file too large to hold in memory. Takes the
+        /// params of <see cref="EncryptFile"/> apart from the file, which is fed to the encryptor.
         /// </summary>
-        public string NewMessageId()
+        public FileEncryptor FileEncryptor(FileEncryptorParams parameters)
         {
             ThrowIfDisposed();
-            var id = ConsumeResult(NativeMethods.chat_xdk_new_message_id(_handle));
-            GC.KeepAlive(this);
-            return id;
-        }
-
-        /// <summary>
-        /// Encrypt a media file for an outgoing message. Requires <see cref="SetIdentity"/>.
-        /// </summary>
-        /// <param name="plaintext">Raw bytes to encrypt.</param>
-        /// <param name="conversationKey">Raw 32-byte conversation key the message is sent under.</param>
-        /// <param name="messageId">The message's id, from <see cref="NewMessageId"/>.</param>
-        /// <param name="attachmentIndex">
-        /// The file's position in the message's attachments; a link card's banner and favicon
-        /// both take the card's position.
-        /// </param>
-        /// <returns>Encrypted bytes.</returns>
-        public byte[] EncryptStream(byte[] plaintext, byte[] conversationKey, string messageId, int attachmentIndex)
-        {
-            ThrowIfDisposed();
-            var ptB64 = Utf8Z(Convert.ToBase64String(plaintext));
-            var keyB64 = Utf8Z(Convert.ToBase64String(conversationKey));
-            var idBytes = Utf8Z(messageId);
-            string resultB64;
-            fixed (byte* ptPtr = ptB64)
-            fixed (byte* keyPtr = keyB64)
-            fixed (byte* idPtr = idBytes)
-                resultB64 = ConsumeResult(
-                    NativeMethods.chat_xdk_encrypt_stream(_handle, ptPtr, keyPtr, idPtr, attachmentIndex));
-            GC.KeepAlive(this);
-            return Convert.FromBase64String(resultB64);
-        }
-
-        /// <summary>
-        /// Create an incremental encryptor for a media file too large to hold in memory.
-        /// Takes the arguments of <see cref="EncryptStream"/> apart from the bytes, which are
-        /// fed to the encryptor.
-        /// </summary>
-        public StreamEncryptor StreamEncryptor(byte[] conversationKey, string messageId, int attachmentIndex)
-        {
-            ThrowIfDisposed();
-            var encryptor = ChatXdk.StreamEncryptor.Create(_handle, conversationKey, messageId, attachmentIndex);
+            ArgumentNullException.ThrowIfNull(parameters);
+            var encryptor = ChatXdk.FileEncryptor.Create(
+                _handle, FileParamsJson(parameters.EventB64, parameters.ConversationKeys, parameters.MediaHashKey));
             GC.KeepAlive(this);
             return encryptor;
         }
 
         /// <summary>
-        /// Create an incremental decryptor for an encrypted media file too large to hold in
-        /// memory. Takes the arguments of <see cref="DecryptStream"/> apart from the bytes, which
-        /// are fed to the decryptor.
+        /// Create an incremental decryptor for an encrypted file too large to hold in memory.
+        /// Takes the params of <see cref="DecryptFile"/> apart from the encrypted bytes, which are
+        /// fed to the decryptor.
         /// </summary>
-        public StreamDecryptor StreamDecryptor(
-            string eventB64,
-            Dictionary<string, byte[]> conversationKeys,
-            string mediaHashKey)
+        public FileDecryptor FileDecryptor(FileDecryptorParams parameters)
         {
             ThrowIfDisposed();
-            var decryptor = ChatXdk.StreamDecryptor.Create(
-                _handle, eventB64, ConversationKeysJson(conversationKeys), mediaHashKey);
+            ArgumentNullException.ThrowIfNull(parameters);
+            var decryptor = ChatXdk.FileDecryptor.Create(
+                _handle, FileParamsJson(parameters.EventB64, parameters.ConversationKeys, parameters.MediaHashKey));
             GC.KeepAlive(this);
             return decryptor;
         }
+
+        private static string FileParamsJson(
+            string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys, string mediaHashKey)
+            => JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["event_b64"] = eventB64,
+                ["conversation_keys"] = ConversationKeysB64(conversationKeys),
+                ["media_hash_key"] = mediaHashKey,
+            }, JsonOpts);
 
         // Signing / verification
 
@@ -1043,7 +993,6 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["message_id"] = p.MessageId,
                 ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
                 ["attachments"] = p.Attachments,
                 ["quick_reply"] = p.QuickReply,
@@ -1066,7 +1015,6 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["message_id"] = p.MessageId,
                 ["reply_to_sequence_id"] = p.ReplyToSequenceId,
                 ["reply_to_sender_id"] = p.ReplyToSenderId,
                 ["reply_to_text"] = p.ReplyToText,
