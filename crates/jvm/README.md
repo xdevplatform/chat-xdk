@@ -48,12 +48,13 @@ try (Chat chat = new Chat()) {
     chat.setCacheKeys(true);
     chat.setSigningKeys(signingKeys);
 
-    // Batch load — null signing keys fall back to the store; the verified
-    // conversation keys populate the cache.
-    DecryptEventsResult batch = chat.decryptEvents(rawEventB64List, null);
+    // Batch load — unset (null) signing keys fall back to the store; the
+    // verified conversation keys populate the cache.
+    DecryptEventsResult batch = chat.decryptEvents(new DecryptEventsParams(rawEventB64List));
 
-    // Individual events: null arguments resolve from the session stores.
-    JsonNode event = chat.decryptEvent(eventB64, (Map<String, byte[]>) null, null);
+    // Individual events: the empty key map and unset signing keys resolve
+    // from the session stores.
+    JsonNode event = chat.decryptEvent(new DecryptEventParams(eventB64, Map.of()));
     String conversationId = event.path("conversation_id").asText();
 
     // Sending resolves the identity and conversation key from the session too.
@@ -71,7 +72,7 @@ Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkU
 
 ## API
 
-See the **JVM** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types.
+See the **JVM** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media).
 
 ## Security limitations
 

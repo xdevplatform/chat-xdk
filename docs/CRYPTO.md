@@ -9,7 +9,7 @@ This document describes the cryptographic operations, key lifecycle, wire format
 3. [Key Lifecycle](#3-key-lifecycle)
 4. [ECIES — Asymmetric Encryption](#4-ecies--asymmetric-encryption)
 5. [Message Encryption — XSalsa20-Poly1305](#5-message-encryption--xsalsa20-poly1305)
-6. [Streaming Encryption](#6-streaming-encryption)
+6. [File Encryption](#6-file-encryption)
 7. [Digital Signatures — ECDSA P-256](#7-digital-signatures--ecdsa-p-256)
 8. [Key Derivation Functions](#8-key-derivation-functions)
 9. [Encryption Flow](#9-encryption-flow)
@@ -29,7 +29,7 @@ All crypto dependencies are **pure Rust** and **WASM-compatible** (no C bindings
 | `elliptic-curve` | 0.13 | SEC1 point encoding/decoding |
 | `aes-gcm` | 0.10 | AES-128-GCM for ECIES payload encryption |
 | `xsalsa20poly1305` | 0.9 | XSalsa20-Poly1305 for message encryption (secretbox construction) |
-| `crypto_secretstream` | 0.2 | `crypto_secretstream_xchacha20poly1305` for streaming media encryption (libsodium-compatible) |
+| `crypto_secretstream` | 0.2 | `crypto_secretstream_xchacha20poly1305` for media file encryption (libsodium-compatible) |
 | `sha2` | 0.10 | SHA-256 hashing |
 | `hmac` | 0.12 | HMAC-SHA256; also the building block for the SDK's HKDF-SHA256 expand step (`crypto/hash.rs`) |
 | `zeroize` | 1.7 | Secure memory zeroing on drop for all secret key types |
@@ -250,8 +250,9 @@ The SDK decrypts both forms and sends with message keys: every message,
 reply, reaction, and edit it encrypts carries `contents_encryption_version` 1
 and is signed at signature version 10, whose payload covers that field. The
 sender id must be the sender's numeric user id, the form the key derivation
-and recipients use, and the message id is the one returned in the
-`SendPayload` — the caller's `message_id`, or one the SDK generated.
+and recipients use. The SDK generates the message id and returns it in the
+`SendPayload`: a random one for a message without files, and one derived from
+its files for a message with files (see [Media Keys](#media-keys)).
 
 Readers that predate message keys cannot open these messages: they decrypt
 the contents with the conversation key, and readers that do not know
@@ -259,9 +260,9 @@ signature version 10 reject the signature.
 
 ---
 
-## 6. Streaming Encryption
+## 6. File Encryption
 
-Large payloads (e.g., media attachments) use `crypto_secretstream_xchacha20poly1305` — the libsodium secretstream AEAD construct. This is a pure-Rust implementation (via the `crypto_secretstream` crate) that produces wire-format-compatible output with libsodium.
+Files (e.g., media attachments) use `crypto_secretstream_xchacha20poly1305` — the libsodium secretstream AEAD construct. This is a pure-Rust implementation (via the `crypto_secretstream` crate) that produces wire-format-compatible output with libsodium.
 
 ### Algorithm
 
@@ -311,27 +312,27 @@ Decrypt(conversation_key, encrypted_stream):
 
 ### Truncation detection
 
-Every non-empty stream ends with a `TAG_FINAL` chunk. Decryption rejects a
-non-empty stream that ends before its `TAG_FINAL` chunk, so dropping trailing
-whole chunks (which the per-chunk MAC alone cannot catch) is detected. The only
-stream that legitimately has no `TAG_FINAL` is the empty stream (bare 24-byte
-header).
+Every non-empty encrypted file ends with a `TAG_FINAL` chunk. Decryption
+rejects a non-empty file that ends before its `TAG_FINAL` chunk, so dropping
+trailing whole chunks (which the per-chunk MAC alone cannot catch) is detected.
+The only file that legitimately has no `TAG_FINAL` is the empty file (bare
+24-byte header).
 
 ### Incremental API
 
-For large payloads, the whole-buffer `encrypt_stream` / `decrypt_stream` have
-incremental counterparts so callers can process one chunk at a time without
-holding the entire payload in memory: a stream encryptor and decryptor that
+For large files, the whole-file `encrypt_file` / `decrypt_file` have
+incremental counterparts, `file_encryptor` / `file_decryptor`, so callers can
+process one chunk at a time without holding the entire file in memory: they
 accept chunks via `push` and emit the final frame via `finish`. Output bytes
-are byte-for-byte identical to the whole-buffer functions regardless of how the
+are byte-for-byte identical to the whole-file functions regardless of how the
 input is split. Because truncation is only proven absent once `finish`
 succeeds, plaintext returned by `push` must not be treated as complete until
 `finish` returns successfully.
 
 ### Media Keys
 
-Each media file is stream-encrypted under one key, set by the message that
-carries it. A message without a [message key](#message-keys) encrypts its media
+Each media file is encrypted under one key, set by the message that carries
+it. A message without a [message key](#message-keys) encrypts its media
 under the conversation key. A message with one encrypts each attachment under
 its own key:
 
@@ -348,19 +349,50 @@ counts as set); otherwise it is the message id for the first attachment and
 list, counting every attachment, including kinds the SDK does not surface. A
 URL card's banner and favicon images share the card's key.
 
-On send, the media is encrypted before the message, so the message id comes
-first: `new_message_id` returns one, `encrypt_stream` and `stream_encryptor`
-derive the key for the session identity, that message id, and the file's
-position, and the message is encrypted with the same `message_id`. The SDK
-writes each attachment's id into the message explicitly — the message id for
-the first and `{message_id}#{index}` for later ones — so recipients derive the
-same keys whatever their fallback. A message with media and no `message_id` is
-rejected rather than sent under a fresh id its media was not encrypted for, and
-so is one whose `sender_id` is not the session identity its media keys used.
+On send, the message is built before its files are encrypted. Each file of
+the message names the media hash key its upload started with. `encrypt_file`
+and `file_encryptor` take the message's `event_b64` (returned in the
+`SendPayload`), the conversation key map, and the file's media hash key: they
+find the attachment in the message, derive the message key and that
+attachment's key, and encrypt the file under it, so a file's key always
+matches the message that carries it. They need no session identity: the
+sender, message id and key version come from the event. The SDK writes each
+attachment's id into the message explicitly — the message id for the first
+and `{message_id}#{index}` for later ones — so recipients derive the same keys
+whatever their fallback.
 
-`decrypt_stream` and `stream_decryptor` take the event of the message that
-carries the media, the conversation key map, and the media hash key, and derive
-the key from those alone:
+A message with files takes its id from them:
+
+```
+info       = len(conversation_key_version) ‖ conversation_key_version
+           ‖ len(sender_id)                ‖ sender_id
+           ‖ len(conversation_id)          ‖ conversation_id
+           ‖ len(media_hash_key_1)         ‖ media_hash_key_1 ‖ …
+bytes      = HKDF-SHA256(ikm  = conversation_key,
+                         salt = "chat-xdk-media-message-id",
+                         info = info,
+                         length = 16)
+message_id = bytes as a version-4 UUID (version and variant bits set),
+             lowercase and hyphenated
+```
+
+Each `len` is the field's byte length as a big-endian u64, so no two inputs
+share an encoding. `sender_id` is the numeric sender, `conversation_id` the
+canonical form that is signed, and the media hash keys are the message's
+files in attachment order (a URL card contributes its banner, then its
+favicon). Every upload has its own media hash key, so the id is unique to
+the message, and building the same message again (same files, sender,
+conversation and key) gives the same id, which keeps the files already
+encrypted for it valid. The text does not affect the id. A message without
+files takes a random version-4 UUID. A message that lists an empty media hash
+key, or lists one in more than one attachment, is rejected: each file is
+uploaded once and encrypted under the key of the one attachment that names it
+(a URL card's banner and favicon share the card's key, so they may share an
+upload).
+
+`decrypt_file` and `file_decryptor` take the event of the message that carries
+the media, the conversation key map, and the media hash key, and derive the
+key from those alone:
 
 1. Parse the event. It must be a `MessageCreateEvent` with a conversation key
    version; one without is unencrypted, and so is its media.
@@ -447,10 +479,11 @@ of the XSalsa20-Poly1305 ciphertext. Signing the surrounding metadata (sender,
 conversation, key version) binds the signature to its context and prevents a
 signature from being replayed onto a different message or conversation.
 
-`message_id` is a random UUID — the caller's `message_id` from
-`new_message_id`, or one the encrypt entry point generates — bound into the
-signature the same way and returned in the `SendPayload`. Reuse the returned
-payload on retries so the id is never minted twice for one logical message.
+`message_id` is a version-4 UUID the encrypt entry point generates — random
+for a message without files, derived from its files for a message with files
+(see [Media Keys](#media-keys)) — bound into the signature the same way and
+returned in the `SendPayload`. Reuse the returned payload on retries so one
+logical message is never sent under two ids.
 
 #### Action signatures
 
@@ -557,8 +590,9 @@ HKDF-Expand:
 The extract step follows standard HKDF (RFC 5869).  The `hmac_sha256(message, key)` helper uses `(message, key)` argument order — so `hmac_sha256(secret, salt)` is `HMAC(key=salt, msg=IKM)`, which is the standard order.
 
 **Notes**:
-- Message and attachment keys pass an `info` string; every other derivation
-  uses an empty `info`, so its expand step is just `T(i-1) || counter`
+- Message keys, attachment keys and the id of a message with files pass an
+  `info` string; every other derivation uses an empty `info`, so its expand
+  step is just `T(i-1) || counter`
 - Empty salt string is treated as 32 zero bytes
 
 ### X9.63 KDF (KDF2)
@@ -650,6 +684,9 @@ Complete flow for encrypting a message via `encrypt_message()` (the `encrypt_rep
                              ▼
                         SendPayload {
                           message_id,
+                          event_b64: base64(MessageEvent { message_id,
+                                     sender_id, conversation_id,
+                                     detail, signature }),
                           encrypted_content: base64(event_bytes),
                           signature: base64(signature),
                           encoded_event_signature: base64(sig_thrift),
@@ -832,7 +869,7 @@ events were embedded remain readable.
 
 `set_cache_keys(true)` enables a per-conversation cache that lets the encrypt
 methods resolve an omitted `conversation_key`/`conversation_key_version` pair
-and the decrypt methods fall back when no key map is passed. Its guardrails:
+and `decrypt_event` fall back when its key map is empty. Its guardrails:
 
 - A key enters the cache **only** when its key-change event carries a valid
   signature — a merely adopted (unverified) key change can decrypt history but

@@ -48,13 +48,20 @@ When you add or change SDK behavior:
 Keep the public surface small and uniform. The flow every binding exposes:
 key management (`import`/`export`, `setup`/`unlock`), conversation keys
 (`prepareConversationKeyChange` / `decryptConversationKey`), `encryptMessage`/reply,
+the file calls (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`),
 and two decrypt paths whose contracts are **identical across bindings**:
 
-- `decryptEvents(events, signingKeys)` — batch (initial load / pagination).
+- `decryptEvents({ events, signingKeys })` — batch (initial load / pagination).
   Self-extracts conversation keys from `KeyChange` events, **never throws**
   (per-event errors collected in the result).
-- `decryptEvent(event, conversationKeys, signingKeys)` — single event with
-  pre-cached keys. **Throws** on failure.
+- `decryptEvent({ eventB64, conversationKeys, signingKeys })` — single event
+  with pre-cached keys. **Throws** on failure.
+
+Each `prepare*`, message `encrypt*`, `decryptEvent(s)` and file method takes
+one params type, named the same in every binding (`DecryptEventParams`,
+`EncryptFileParams`, …), so fields can be added without breaking callers.
+One-input calls (`extractConversationKeys`, `encryptedFileSize`) stay
+positional.
 
 Don't add speculative configurability or one-off helpers.
 

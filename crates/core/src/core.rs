@@ -4563,10 +4563,11 @@ mod tests {
         assert!(serde_json::from_str::<QuickReply>("{}").is_err());
     }
 
-    /// The SDK mints the message id: `encrypt_message` returns a fresh UUID in
-    /// `SendPayload.message_id` on every call, and callers can no longer supply
-    /// one. (That the returned id is the one actually signed is proven by the
-    /// verify-on-decrypt tests, which embed `payload.message_id` in the event.)
+    /// The SDK mints the message id: for a message without files,
+    /// `encrypt_message` returns a fresh UUID in `SendPayload.message_id` on
+    /// every call, and callers cannot supply one. (That the returned id is the
+    /// one actually signed is proven by the verify-on-decrypt tests, which
+    /// embed `payload.message_id` in the event.)
     #[test]
     fn encrypt_message_generates_a_unique_uuid_message_id() {
         let core = ChatCore::new();

@@ -40,16 +40,21 @@ Python/Rust, PascalCase in .NET/Go):
    to these values. Optionally `setCacheKeys(true)` and
    `setSigningKeys(signingKeys)` so the decrypt/encrypt calls below need no
    per-call key plumbing.
-3. **Initial load** — `decryptEvents(events)`: batch-decrypts a backlog,
+3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
    keys by user automatically. Never throws; per-event errors are collected in
    the result. The events endpoint returns the `KeyChange` events in
    `meta.conversation_key_events`, separate from `data` — pass both together.
-4. **Each new event** — `decryptEvent(event)`: decrypts one event
-   (webhook / poll). Throws on failure.
+4. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
+   decrypts one event (webhook / poll). Throws on failure.
 5. **Reply** — `encryptMessage({conversationId, text})` or
    `encryptReply({conversationId, text, replyToEvent})` → POST the result to
    the X Chat API.
+6. **Files** — a message with files is built first: start each upload, list
+   its media hash key in the message's attachments, then
+   `encryptFile({file, eventB64, conversationKeys, mediaHashKey})` with the
+   payload's `eventB64`. `decryptFile` opens a received file from its
+   message's event.
 
 | Method | Use case |
 |--------|----------|
@@ -64,7 +69,7 @@ Python/Rust, PascalCase in .NET/Go):
 ### Quick start (Python)
 
 ```python
-from chat_xdk import Chat
+from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessageParams
 
 chat = Chat()
 chat.import_keys(private_key_blob, version=key_version)  # or Chat(config).unlock(pin)
@@ -72,13 +77,13 @@ chat.set_identity(my_user_id, key_version)
 chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)
 
-result = chat.decrypt_events(raw_events)
+result = chat.decrypt_events(DecryptEventsParams(raw_events))
 for dm in result["messages"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
 
-event = chat.decrypt_event(new_event_b64)
-payload = chat.encrypt_message(conversation_id, "hello")   # POST payload to the X API
+event = chat.decrypt_event(DecryptEventParams(new_event_b64, {}))
+payload = chat.encrypt_message(EncryptMessageParams(conversation_id, "hello"))  # POST to the X API
 ```
 
 ### Quick start (JavaScript / WASM)
@@ -92,11 +97,11 @@ chat.setIdentity(myUserId, signingKeyVersion);
 chat.setCacheKeys(true);
 chat.setSigningKeys(signingKeys);
 
-const result = chat.decryptEvents(rawEvents);
+const result = chat.decryptEvents({ events: rawEvents });
 for (const dm of result.messages) {
   if (dm.event.type === "message") console.log(dm.event.senderId, dm.event.content.text);
 }
-const event = chat.decryptEvent(newEventB64);
+const event = chat.decryptEvent({ eventB64: newEventB64, conversationKeys: {} });
 const payload = chat.encryptMessage({ conversationId, text: "hello" });
 ```
 
@@ -128,7 +133,7 @@ provisioning step in both modes.
 |---------|-----------|
 | Conversation key exchange | ECIES — ECDH P-256 + AES-128-GCM |
 | Message content | XSalsa20-Poly1305 (256-bit key, random 192-bit nonce) |
-| Media streams | `crypto_secretstream_xchacha20poly1305` |
+| Media files | `crypto_secretstream_xchacha20poly1305` |
 | Message authorship | ECDSA P-256 over the encrypted content |
 | Key derivation | HKDF-SHA256 |
 

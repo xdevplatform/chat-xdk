@@ -51,16 +51,16 @@ chat.SetSigningKeys(signingKeys);
 
 // Batch load — signing keys come from the store; the verified conversation
 // keys populate the cache.
-var batch = chat.DecryptEvents(rawEventB64List);
+var batch = chat.DecryptEvents(new DecryptEventsParams(rawEventB64List));
 foreach (var dm in batch.Messages)
 {
     if (dm.Event.GetProperty("type").GetString() == "Message")
         Console.WriteLine(dm.Event.GetProperty("sender_id").GetString());
 }
 
-// Individual events: omitted arguments resolve from the session stores
-// (pass conversation/signing keys explicitly to override).
-var evt = chat.DecryptEvent(eventB64);
+// Individual events: the empty key map and unset signing keys resolve from
+// the session stores (pass conversation/signing keys explicitly to override).
+var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, new Dictionary<string, byte[]>()));
 var conversationId = evt.GetProperty("conversation_id").GetString()!;
 
 // Sending resolves the identity and conversation key from the session too.
@@ -76,7 +76,7 @@ Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatX
 
 ## API
 
-See the **.NET** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types.
+See the **.NET** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media).
 
 ## Security limitations
 
