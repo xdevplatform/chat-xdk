@@ -2,6 +2,7 @@ package com.example.chatbot;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.x.chatxdk.ChatXdkUtilities;
 import com.x.chatxdk.Types.AttachmentDescriptor;
 import com.x.chatxdk.Types.DecryptEventsResult;
 import com.x.chatxdk.Types.EntityDescriptor;
@@ -45,8 +46,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *
  * Optional extras:
  * <ul>
- *   <li>CHATXDK_E2E_MEDIA=1 also stream-encrypts a media blob, uploads it,
- *       sends a message referencing it, then downloads and decrypts it back</li>
+ *   <li>CHATXDK_E2E_MEDIA=1 also starts a media upload, sends a message naming
+ *       it, encrypts the file from that message, finishes the upload, then
+ *       downloads and decrypts it back to the original bytes</li>
  *   <li>CHATXDK_E2E_GROUPS=1 also creates a group (two-signature create),
  *       sends a group message, and adds the 1:1 partner as a member</li>
  * </ul>
@@ -379,11 +381,9 @@ class E2ELiveTest {
         for (int i = 0; i < plaintext.length; i++) {
             plaintext[i] = (byte) ((i * 31 + 7) % 256);
         }
-        String mediaMessageId = core.newMessageId();
-        byte[] ciphertext = core.encryptMedia(plaintext, key, mediaMessageId, 0);
-        String mediaHashKey = api.uploadMedia(canonicalConv, ciphertext);
-        System.out.println("encrypted media uploaded: " + mediaHashKey
-                + " (" + ciphertext.length + " bytes)");
+        XChatClient.MediaUpload upload =
+                api.startMediaUpload(canonicalConv, ChatXdkUtilities.encryptedFileSize(plaintext.length));
+        String mediaHashKey = upload.mediaHashKey();
 
         AttachmentDescriptor descriptor =
                 AttachmentDescriptor.media(mediaHashKey, 0, 0, plaintext.length, "e2e.bin", 5, null);
@@ -396,9 +396,11 @@ class E2ELiveTest {
                 null,
                 List.of(descriptor),
                 24L * 60 * 60 * 1000,
-                null,
-                null,
-                mediaMessageId);
+                null);
+        byte[] ciphertext = core.encryptMedia(plaintext, mediaMsg.eventB64(), Map.of(kv, key), mediaHashKey);
+        api.finishMediaUpload(canonicalConv, upload, ciphertext);
+        System.out.println("encrypted media uploaded: " + mediaHashKey
+                + " (" + ciphertext.length + " bytes)");
         api.sendMessage(canonicalConv, mediaMsg);
         Decrypted media = awaitDecrypted(api, core, conv, convKeys, signing, mediaMsg.messageId());
         ObjectNode one = media.event();
@@ -417,7 +419,7 @@ class E2ELiveTest {
         byte[] downloaded = api.downloadMedia(canonicalConv, mediaHashKey);
         assertArrayEquals(plaintext, core.decryptMedia(downloaded, media.rawB64(), convKeys, mediaHashKey),
                 "downloaded media did not decrypt to the original bytes");
-        System.out.println("media downloaded + stream-decrypted to the original bytes");
+        System.out.println("media downloaded + decrypted to the original bytes");
     }
 
     private static void groupsFlow(
