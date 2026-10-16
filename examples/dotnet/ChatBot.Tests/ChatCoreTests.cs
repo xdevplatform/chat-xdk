@@ -23,12 +23,14 @@ public class ChatCoreTests
         string EventConversationId,
         string EventConversationKeyVersion,
         string EventMessageKeyB64,
-        string MessageKeySenderId,
-        string MessageKeyMessageId,
         string MessageKeyConversationKeyHex,
         string MessageKeyConversationKeyVersion,
         string MediaFirstHashKey,
-        string MediaSecondHashKey);
+        string MediaFirstEncryptedB64,
+        string MediaFirstPlaintextB64,
+        string MediaSecondHashKey,
+        string MediaSecondEncryptedB64,
+        string MediaSecondPlaintextB64);
 
     private static Vectors LoadVectors()
     {
@@ -52,12 +54,14 @@ public class ChatCoreTests
             r.GetProperty("event_conversation_id").GetString()!,
             r.GetProperty("event_conversation_key_version").GetString()!,
             r.GetProperty("event_message_key_b64").GetString()!,
-            r.GetProperty("message_key_sender_id").GetString()!,
-            r.GetProperty("message_key_message_id").GetString()!,
             r.GetProperty("message_key_conversation_key_hex").GetString()!,
             r.GetProperty("message_key_conversation_key_version").GetString()!,
             r.GetProperty("media_first_hash_key").GetString()!,
-            r.GetProperty("media_second_hash_key").GetString()!);
+            r.GetProperty("media_first_encrypted_b64").GetString()!,
+            r.GetProperty("media_first_plaintext_b64").GetString()!,
+            r.GetProperty("media_second_hash_key").GetString()!,
+            r.GetProperty("media_second_encrypted_b64").GetString()!,
+            r.GetProperty("media_second_plaintext_b64").GetString()!);
     }
 
     private static ChatCore LoadedCore(Vectors v)
@@ -206,43 +210,55 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void Media_Stream_Encrypt_Decrypt_Roundtrip()
+    public void Media_Encrypt_Decrypt_Roundtrip()
     {
-        // The chunked stream path the media flow uses: multi-chunk payload in,
-        // identical bytes out, and truncation is detected. Media is encrypted for
-        // its message and position, so encrypting as the fixture message's sender,
-        // under its message id and key, yields media that opens through that
-        // message: its first and second attachments.
+        // The message-first media flow: the message names the file by the media
+        // hash key its upload started with, the file is encrypted from the
+        // message's EventB64 in chunks, and it decrypts through that event. A
+        // truncated file is detected.
         var v = LoadVectors();
         using var core = LoadedCore(v);
-        core.SetIdentity(v.MessageKeySenderId);
-        var convKey = Convert.FromHexString(v.MessageKeyConversationKeyHex);
-        var convKeys = new Dictionary<string, byte[]> { [v.MessageKeyConversationKeyVersion] = convKey };
+        core.SetIdentity("1000");
+        var convKey = Convert.FromBase64String(v.ConversationKeyB64);
+        var convKeys = new Dictionary<string, byte[]> { ["1"] = convKey };
         var plaintext = new byte[300_000];
         for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
-
-        var ciphertext = Array.Empty<byte>();
-        var mediaHashKeys = new[] { v.MediaFirstHashKey, v.MediaSecondHashKey };
-        for (var index = 0; index < mediaHashKeys.Length; index++)
-        {
-            ciphertext = core.EncryptMedia(plaintext, convKey, v.MessageKeyMessageId, index);
-            Assert.False(ciphertext.AsSpan(0, plaintext.Length).SequenceEqual(plaintext));
-            Assert.Equal(plaintext, core.DecryptMedia(ciphertext, v.EventMessageKeyB64, convKeys, mediaHashKeys[index]));
-        }
-
-        var ex = Assert.Throws<ChatXdkException>(
-            () => core.DecryptMedia(ciphertext[..^4], v.EventMessageKeyB64, convKeys, v.MediaSecondHashKey));
-        Assert.Contains("truncated", ex.Message);
-
-        var messageId = core.NewMessageId();
         var body = core.EncryptReply(
-            "6789:12345",
+            "1000:2000",
             "a photo",
             convKey,
-            v.MessageKeyConversationKeyVersion,
-            attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, ciphertext.Length, "photo.bin", 5) },
-            messageId: messageId);
-        Assert.Equal(messageId, body.MessageId);
+            "1",
+            attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, plaintext.Length, "photo.bin", 5) });
+        Assert.False(string.IsNullOrEmpty(body.EventB64));
+
+        var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKeys, "photo");
+        Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)ciphertext.Length);
+        Assert.Equal(plaintext, core.DecryptMedia(ciphertext, body.EventB64, convKeys, "photo"));
+        var ex = Assert.Throws<ChatXdkException>(
+            () => core.DecryptMedia(ciphertext[..^4], body.EventB64, convKeys, "photo"));
+        Assert.Contains("truncated", ex.Message);
+    }
+
+    [Fact]
+    public void Media_From_The_Fixture_Message_Opens()
+    {
+        // Media encrypted by another client opens through its message's event.
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        var convKeys = new Dictionary<string, byte[]>
+        {
+            [v.MessageKeyConversationKeyVersion] = Convert.FromHexString(v.MessageKeyConversationKeyHex),
+        };
+        foreach (var (hashKey, encryptedB64, plaintextB64) in new[]
+        {
+            (v.MediaFirstHashKey, v.MediaFirstEncryptedB64, v.MediaFirstPlaintextB64),
+            (v.MediaSecondHashKey, v.MediaSecondEncryptedB64, v.MediaSecondPlaintextB64),
+        })
+        {
+            Assert.Equal(
+                Convert.FromBase64String(plaintextB64),
+                core.DecryptMedia(Convert.FromBase64String(encryptedB64), v.EventMessageKeyB64, convKeys, hashKey));
+        }
     }
 
     [Fact]
