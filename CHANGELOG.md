@@ -24,6 +24,44 @@ Upgrade readers before senders.
 Other values are now rejected, since recipients derive the key from the
 numeric id and look it up by the version.
 
+#### Key registration sends only the public key
+
+`generate_keypairs` returns a `PublicKeyRegistrationPayload` that carries
+only `public_key`: `version` and `generate_version` are removed in every
+binding (`Version` / `GenerateVersion` in Go and .NET, `generateVersion` in
+JS). POST the payload as returned. Rust:
+`ChatCore::generate_keypairs_with_version` is removed; use
+`generate_keypairs`.
+
+`generate_keypairs` no longer sets a signing-key version. After you register
+the keys, call `set_identity` with your user id and the `public_key_version`
+the registration returns, or pass that version to `import_keys` when you
+load saved keys. A signed action without a version fails in the SDK with
+`signing_key_version is not set: pass it explicitly or call set_identity()
+first`. In 0.5.x, `generate_keypairs` set a local timestamp as the version,
+and signed actions were rejected unless the app called `set_identity` with
+the registered version.
+
+```js
+// Before
+const payload = chat.generateKeypairs(); // carried version and generateVersion
+await registerPublicKey(userId, payload);
+// After
+const payload = chat.generateKeypairs(); // carries publicKey only
+const publicKeyVersion = await registerPublicKey(userId, payload); // the public_key_version the X API returns
+chat.setIdentity(userId, publicKeyVersion);
+```
+
+```python
+# After
+payload = chat.generate_keypairs()
+public_key_version = register_public_key(user_id, payload)
+chat.set_identity(user_id, public_key_version)
+```
+
+Go, .NET, JVM and Rust call `SetIdentity` / `setIdentity` / `set_identity`
+the same way.
+
 #### A message with files is built before its files are encrypted
 
 Each file of a message is encrypted under its own key, derived from the
@@ -345,3 +383,11 @@ prepared = chat.prepare_conversation_key_change(
   message it edits.
 - Signatures verify at versions 8 through 11, in the payload layout of the
   version each carries. Versions above 11 are rejected.
+- Read receipts can be signed. `prepare_mark_conversation_read` takes
+  `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
+  (the sequence id of the newest event read) and an optional
+  `seen_at_msec`, which defaults to the current time. It returns an
+  `ActionSignature`; send it with the mark-read request, as you send a
+  message delete's signature. Recipients' `decrypt_event` returns the
+  receipt as a verified `ReadReceipt`. The C ABI adds
+  `chat_xdk_prepare_mark_conversation_read`.
