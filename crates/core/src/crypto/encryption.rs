@@ -41,10 +41,11 @@ pub const SECRETSTREAM_ABYTES: usize = 17;
 /// `DECRYPTED_CHUNK_SIZE + SECRETSTREAM_ABYTES` (1024 + 17 = 1041).
 pub const ENCRYPTED_CHUNK_SIZE: usize = DECRYPTED_CHUNK_SIZE + SECRETSTREAM_ABYTES;
 
-/// Return the exact ciphertext size produced by stream encryption.
+/// Return the exact ciphertext size [`encrypt_file`] and [`FileEncryptor`]
+/// produce for `plaintext_size` bytes.
 ///
 /// Returns `None` when the result cannot be represented as a `u64`.
-pub fn encrypted_stream_size(plaintext_size: u64) -> Option<u64> {
+pub fn encrypted_file_size(plaintext_size: u64) -> Option<u64> {
     if plaintext_size == 0 {
         return Some(SECRETSTREAM_HEADER_SIZE as u64);
     }
@@ -148,11 +149,11 @@ fn read_full<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> 
     Ok(filled)
 }
 
-/// Incremental streaming encryptor.
+/// Incremental encryptor for one file.
 ///
 /// Feed plaintext with [`push`](Self::push) and call [`finish`](Self::finish)
 /// once to emit the terminating frame. The concatenated output is the same
-/// wire format as [`encrypt_stream`]:
+/// wire format as [`encrypt_file`]:
 ///
 /// ```text
 /// header (24B) || chunk_0 || chunk_1 || … || chunk_n
@@ -183,7 +184,7 @@ impl Drop for FileEncryptor {
 }
 
 impl FileEncryptor {
-    /// Create an encryptor for one stream.
+    /// Create an encryptor for one file.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
         let cs_key = crypto_secretstream::Key::from(*secretstream_key_bytes(key)?);
         let (header, push) = crypto_secretstream::PushStream::init(OsRng, &cs_key);
@@ -233,7 +234,7 @@ impl FileEncryptor {
 ///
 /// Reads one chunk at a time, so memory use is constant regardless of payload
 /// size. Empty input produces only the 24-byte header.
-pub fn encrypt_stream<R: Read, W: Write>(
+pub fn encrypt_file<R: Read, W: Write>(
     key: &XChatConversationKey,
     mut reader: R,
     mut writer: W,
@@ -255,12 +256,12 @@ pub fn encrypt_stream<R: Read, W: Write>(
     Ok(())
 }
 
-/// Incremental streaming decryptor.
+/// Incremental decryptor for one file.
 ///
 /// Feed ciphertext with [`push`](Self::push) and call [`finish`](Self::finish)
 /// once at end of input. Each chunk fed to `push` is authenticated as it is
-/// decrypted, but the stream is only proven complete when `finish` returns
-/// `Ok`: a stream that ends before its final frame is rejected as truncated.
+/// decrypted, but the file is only proven complete when `finish` returns
+/// `Ok`: a file that ends before its final frame is rejected as truncated.
 /// Callers must therefore not treat plaintext from `push` as complete until
 /// `finish` succeeds.
 ///
@@ -301,7 +302,7 @@ enum StreamFault {
 }
 
 impl FileDecryptor {
-    /// Create a decryptor for one stream.
+    /// Create a decryptor for one file.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
         Ok(Self {
             key: secretstream_key_bytes(key)?,
@@ -407,8 +408,8 @@ impl FileDecryptor {
 
     /// Decrypt the final frame and consume the decryptor.
     ///
-    /// Returns an error if the stream ended before its final frame, which
-    /// detects truncation. A stream of only the 24-byte header decrypts to
+    /// Returns an error if the file ended before its final frame, which
+    /// detects truncation. A file of only the 24-byte header decrypts to
     /// empty output.
     pub fn finish(mut self) -> Result<Vec<u8>, CryptoError> {
         let Some(pull) = self.pull.as_mut() else {
@@ -451,11 +452,11 @@ pub(crate) fn decrypt_media(
     Ok(plaintext)
 }
 
-/// Decrypt all of `reader` into `writer`, rejecting truncated streams.
+/// Decrypt all of `reader` into `writer`, rejecting truncated files.
 ///
 /// Reads one frame at a time, so memory use is constant regardless of payload
-/// size. A non-empty stream that ends before its final frame is rejected.
-pub fn decrypt_stream<R: Read, W: Write>(
+/// size. A non-empty file that ends before its final frame is rejected.
+pub fn decrypt_file<R: Read, W: Write>(
     key: &XChatConversationKey,
     mut reader: R,
     mut writer: W,
@@ -584,12 +585,12 @@ mod tests {
     }
 
     #[test]
-    fn test_encrypt_decrypt_stream() {
+    fn test_encrypt_decrypt_file() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = b"Hello, streaming world! This is a test message.";
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
 
         // Should be: header (24) + one chunk (plaintext_len + ABYTES)
         assert_eq!(
@@ -598,17 +599,17 @@ mod tests {
         );
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_encrypt_decrypt_stream_large() {
+    fn test_encrypt_decrypt_file_large() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xABu8; 5000]; // Multiple chunks (5 chunks: 4×1024 + 904)
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
 
         // 5 chunks: 4 full (1024+17 each) + 1 partial (904+17)
         let expected = SECRETSTREAM_HEADER_SIZE
@@ -617,49 +618,49 @@ mod tests {
         assert_eq!(encrypted.len(), expected);
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_encrypt_decrypt_stream_empty() {
+    fn test_encrypt_decrypt_file_empty() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(vec![]), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(vec![]), &mut encrypted).unwrap();
 
         // Empty input → just the 24-byte header, no chunks.
         assert_eq!(encrypted.len(), SECRETSTREAM_HEADER_SIZE);
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, Vec::<u8>::new());
     }
 
     #[test]
-    fn test_encrypted_stream_size() {
+    fn test_encrypted_file_size() {
         for plaintext_size in [0, 1, 1024, 1025, 2048, 5000] {
             let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
             let plaintext = vec![0xAB; plaintext_size];
             let mut encrypted = Vec::new();
-            encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+            encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
 
             assert_eq!(
-                encrypted_stream_size(plaintext_size as u64),
+                encrypted_file_size(plaintext_size as u64),
                 Some(encrypted.len() as u64)
             );
         }
-        assert_eq!(encrypted_stream_size(u64::MAX), None);
+        assert_eq!(encrypted_file_size(u64::MAX), None);
     }
 
     #[test]
-    fn test_encrypt_decrypt_stream_exact_chunk() {
+    fn test_encrypt_decrypt_file_exact_chunk() {
         // Exactly one chunk (1024 bytes) — boundary case
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xCDu8; DECRYPTED_CHUNK_SIZE];
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
 
         assert_eq!(
             encrypted.len(),
@@ -667,7 +668,7 @@ mod tests {
         );
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
@@ -677,14 +678,14 @@ mod tests {
         let plaintext = vec![0xABu8; 3000]; // 3 chunks
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
 
         // Tamper with a byte in the first chunk (right after the header)
         let tamper_offset = SECRETSTREAM_HEADER_SIZE + 5;
         encrypted[tamper_offset] ^= 0xFF;
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
     }
 
@@ -694,13 +695,13 @@ mod tests {
         let plaintext = b"test data";
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
 
         // Tamper with a byte in the 24-byte header
         encrypted[10] ^= 0x01;
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
     }
 
@@ -711,10 +712,10 @@ mod tests {
         let plaintext = b"secret media payload";
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key1, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
+        encrypt_file(&key1, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key2, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key2, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
     }
 
@@ -797,28 +798,28 @@ mod tests {
     // Additional streaming encryption edge-case tests
 
     #[test]
-    fn test_encrypt_decrypt_stream_two_exact_chunks() {
+    fn test_encrypt_decrypt_file_two_exact_chunks() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xABu8; DECRYPTED_CHUNK_SIZE * 2]; // Exactly 2048 bytes
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
 
         let expected = SECRETSTREAM_HEADER_SIZE + 2 * (DECRYPTED_CHUNK_SIZE + SECRETSTREAM_ABYTES);
         assert_eq!(encrypted.len(), expected);
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_encrypt_decrypt_stream_just_over_one_chunk() {
+    fn test_encrypt_decrypt_file_just_over_one_chunk() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xABu8; DECRYPTED_CHUNK_SIZE + 1]; // 1025 bytes → 2 chunks
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
 
         // 2 chunks: full (1024+17) + partial (1+17) + header (24)
         let expected = SECRETSTREAM_HEADER_SIZE
@@ -827,67 +828,67 @@ mod tests {
         assert_eq!(encrypted.len(), expected);
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_encrypt_decrypt_stream_three_exact_chunks() {
+    fn test_encrypt_decrypt_file_three_exact_chunks() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xCDu8; DECRYPTED_CHUNK_SIZE * 3]; // 3072 bytes
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.clone()), &mut encrypted).unwrap();
 
         let expected = SECRETSTREAM_HEADER_SIZE + 3 * (DECRYPTED_CHUNK_SIZE + SECRETSTREAM_ABYTES);
         assert_eq!(encrypted.len(), expected);
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_decrypt_stream_truncated_header() {
+    fn test_decrypt_file_truncated_header() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         // Stream input shorter than the 24-byte header → read_exact fails
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(vec![0u8; 10]), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(vec![0u8; 10]), &mut decrypted);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_decrypt_stream_truncated_chunk() {
+    fn test_decrypt_file_truncated_chunk() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = b"Hello, streaming world!";
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext.to_vec()), &mut encrypted).unwrap();
 
         // Truncate to just header + 5 bytes (incomplete chunk) → pull fails
         encrypted.truncate(SECRETSTREAM_HEADER_SIZE + 5);
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_decrypt_stream_empty_header_only() {
+    fn test_decrypt_file_empty_header_only() {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         // 24 bytes = valid header but no chunks → should succeed with empty output
-        // (same as encrypt_stream with empty input)
+        // (same as encrypt_file with empty input)
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(vec![]), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(vec![]), &mut encrypted).unwrap();
         assert_eq!(encrypted.len(), SECRETSTREAM_HEADER_SIZE);
 
         let mut decrypted = Vec::new();
-        decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
+        decrypt_file(&key, Cursor::new(encrypted), &mut decrypted).unwrap();
         assert!(decrypted.is_empty());
     }
 
     #[test]
-    fn test_decrypt_stream_truncated_at_chunk_boundary_fails() {
+    fn test_decrypt_file_truncated_at_chunk_boundary_fails() {
         // Dropping trailing *whole* chunks must be detected. Mid-chunk
         // truncation is caught by the Poly1305 tag; boundary truncation
         // is only caught by the TAG_FINAL check.
@@ -895,30 +896,30 @@ mod tests {
         let plaintext = vec![0xABu8; DECRYPTED_CHUNK_SIZE * 3]; // 3 full chunks
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
 
         // Keep header + exactly one intact chunk, drop the rest.
         encrypted.truncate(SECRETSTREAM_HEADER_SIZE + ENCRYPTED_CHUNK_SIZE);
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("truncated"));
     }
 
     #[test]
-    fn test_decrypt_stream_truncated_two_of_three_chunks_fails() {
+    fn test_decrypt_file_truncated_two_of_three_chunks_fails() {
         // Same as above but keeping two intact chunks of three.
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xCDu8; DECRYPTED_CHUNK_SIZE * 2 + 500]; // 3 chunks
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
 
         encrypted.truncate(SECRETSTREAM_HEADER_SIZE + 2 * ENCRYPTED_CHUNK_SIZE);
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
     }
 
@@ -928,14 +929,14 @@ mod tests {
         let plaintext = vec![0xABu8; DECRYPTED_CHUNK_SIZE + 500]; // 2 chunks
 
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
 
         // Tamper with the last byte of the ciphertext (inside the final chunk)
         let last = encrypted.len() - 1;
         encrypted[last] ^= 0xFF;
 
         let mut decrypted = Vec::new();
-        let result = decrypt_stream(&key, Cursor::new(encrypted), &mut decrypted);
+        let result = decrypt_file(&key, Cursor::new(encrypted), &mut decrypted);
         assert!(result.is_err());
     }
 
@@ -987,14 +988,14 @@ mod tests {
 
     #[test]
     fn test_incremental_encrypt_matches_whole_buffer() {
-        // Framing must be identical to encrypt_stream regardless of push sizes,
+        // Framing must be identical to encrypt_file regardless of push sizes,
         // so a stream encrypted incrementally decrypts byte-for-byte the same.
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         for len in [0usize, 1, 1024, 3000] {
             let plaintext = vec![0x5Au8; len];
 
             let mut whole = Vec::new();
-            encrypt_stream(&key, Cursor::new(plaintext.clone()), &mut whole).unwrap();
+            encrypt_file(&key, Cursor::new(plaintext.clone()), &mut whole).unwrap();
 
             for step in [1usize, 100, 1024, 4096] {
                 let incremental = incremental_encrypt(&key, &plaintext, step);
@@ -1012,7 +1013,7 @@ mod tests {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let plaintext = vec![0xABu8; DECRYPTED_CHUNK_SIZE * 3];
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
 
         // Drop the final whole frame.
         encrypted.truncate(SECRETSTREAM_HEADER_SIZE + 2 * ENCRYPTED_CHUNK_SIZE);
@@ -1027,7 +1028,7 @@ mod tests {
         // frame, so appended bytes land cleanly after it and the guard fires.
         let plaintext = vec![0x11u8; DECRYPTED_CHUNK_SIZE];
         let mut encrypted = Vec::new();
-        encrypt_stream(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
+        encrypt_file(&key, Cursor::new(plaintext), &mut encrypted).unwrap();
         encrypted.extend_from_slice(&[0u8; 100]); // junk after the final frame
 
         let err = incremental_decrypt(&key, &encrypted, 4096).unwrap_err();
@@ -1055,7 +1056,7 @@ mod tests {
     fn encrypted_media(key: &XChatConversationKey, len: usize) -> (Vec<u8>, Vec<u8>) {
         let plaintext: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
         let mut encrypted = Vec::new();
-        encrypt_stream(key, Cursor::new(&plaintext), &mut encrypted).unwrap();
+        encrypt_file(key, Cursor::new(&plaintext), &mut encrypted).unwrap();
         (plaintext, encrypted)
     }
 

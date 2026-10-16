@@ -11,7 +11,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 ///
 /// Returns `None` when the result cannot be represented as a `u64`.
 pub fn encrypted_file_size(plaintext_size: u64) -> Option<u64> {
-    crate::crypto::encryption::encrypted_stream_size(plaintext_size)
+    crate::crypto::encryption::encrypted_file_size(plaintext_size)
 }
 
 // Base64 Encoding/Decoding

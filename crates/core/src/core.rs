@@ -2700,7 +2700,7 @@ impl ChatCore {
         )?;
         let mut reader = Cursor::new(params.file.as_slice());
         let mut output: Vec<u8> = Vec::new();
-        crate::crypto::encryption::encrypt_stream(&key, &mut reader, &mut output)?;
+        crate::crypto::encryption::encrypt_file(&key, &mut reader, &mut output)?;
         Ok(output)
     }
 
@@ -4689,7 +4689,7 @@ mod tests {
             Some("favicon-hash")
         );
 
-        // media_hashes lists both blobs for download + decrypt_stream.
+        // media_hashes lists both blobs for download + decrypt_file.
         let hashes: Vec<(&str, &str)> = msg
             .media_hashes
             .iter()
@@ -7595,7 +7595,7 @@ mod tests {
         assert!(core.sign(b"data").is_err());
     }
 
-    // Stream encryption tests
+    // File encryption tests
 
     /// A core with keys and the session identity of user 1000.
     fn sending_core() -> ChatCore {

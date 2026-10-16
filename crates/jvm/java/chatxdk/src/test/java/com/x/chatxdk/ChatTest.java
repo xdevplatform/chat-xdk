@@ -270,7 +270,7 @@ class ChatTest {
     }
 
     @Test
-    void utilitiesEncryptedStreamSize() {
+    void utilitiesEncryptedFileSize() {
         assertEquals(24, ChatXdkUtilities.encryptedFileSize(0));
         assertEquals(42, ChatXdkUtilities.encryptedFileSize(1));
         assertEquals(1065, ChatXdkUtilities.encryptedFileSize(1024));

@@ -6,7 +6,7 @@ use super::test_support::{
     KAT_SECOND_ATTACHMENT_KEY,
 };
 use super::*;
-use crate::crypto::encryption::encrypt_stream;
+use crate::crypto::encryption::encrypt_file;
 use crate::pipeline::serialize_thrift;
 use crate::thrift::event::{
     MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail as Detail,
@@ -21,7 +21,7 @@ use crate::thrift::product::{
 
 fn encrypt_media(key: &XChatConversationKey, plaintext: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    encrypt_stream(key, Cursor::new(plaintext), &mut out).unwrap();
+    encrypt_file(key, Cursor::new(plaintext), &mut out).unwrap();
     out
 }
 
