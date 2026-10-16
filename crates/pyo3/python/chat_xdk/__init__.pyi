@@ -1,10 +1,10 @@
 """Type stubs for chat-xdk Python bindings."""
 
-from typing import Optional, TypedDict, Union, overload
+from typing import Optional, TypedDict, Union
 
 __version__: str
 
-def encrypted_stream_size(plaintext_size: int) -> int: ...
+def encrypted_file_size(plaintext_size: int) -> int: ...
 
 # ---------------------------------------------------------------------------
 # Classes
@@ -76,12 +76,289 @@ class SignatureInfo:
 
 class SendPayload:
     message_id: str
+    event_b64: str
     encrypted_content: str
     signature: str
     encoded_event_signature: str
     signature_info: SignatureInfo
     conversation_key_version: str
     should_notify: bool
+
+# ---------------------------------------------------------------------------
+# Params
+# ---------------------------------------------------------------------------
+
+class EncryptMessageParams:
+    conversation_id: str
+    text: str
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
+    entities: Optional[list[tuple[int, int, str]]]
+    attachments: Optional[list[dict]]
+    quick_reply: Optional[QuickReply]
+    should_notify: Optional[bool]
+    ttl_msec: Optional[int]
+    def __init__(
+        self,
+        conversation_id: str,
+        text: str,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        attachments: Optional[list[dict]] = None,
+        quick_reply: Optional[QuickReply] = None,
+        should_notify: Optional[bool] = None,
+        ttl_msec: Optional[int] = None,
+    ) -> None: ...
+
+class EncryptReplyParams:
+    conversation_id: str
+    text: str
+    reply_to_event: Optional[str]
+    reply_to_edit_event: Optional[str]
+    reply_to_ckces: Optional[list[str]]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
+    reply_to_sequence_id: Optional[str]
+    reply_to_sender_id: Optional[int]
+    reply_to_text: Optional[str]
+    entities: Optional[list[tuple[int, int, str]]]
+    attachments: Optional[list[dict]]
+    reply_to_entities: Optional[list[tuple[int, int, str]]]
+    reply_to_attachments: Optional[list[dict]]
+    quick_reply: Optional[QuickReply]
+    should_notify: Optional[bool]
+    ttl_msec: Optional[int]
+    def __init__(
+        self,
+        conversation_id: str,
+        text: str,
+        reply_to_event: Optional[str],
+        *,
+        reply_to_edit_event: Optional[str] = None,
+        reply_to_ckces: Optional[list[str]] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+        reply_to_sequence_id: Optional[str] = None,
+        reply_to_sender_id: Optional[int] = None,
+        reply_to_text: Optional[str] = None,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        attachments: Optional[list[dict]] = None,
+        reply_to_entities: Optional[list[tuple[int, int, str]]] = None,
+        reply_to_attachments: Optional[list[dict]] = None,
+        quick_reply: Optional[QuickReply] = None,
+        should_notify: Optional[bool] = None,
+        ttl_msec: Optional[int] = None,
+    ) -> None: ...
+
+class EncryptReactionParams:
+    target_event: Optional[str]
+    emoji: str
+    conversation_id: Optional[str]
+    target_message_sequence_id: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
+    def __init__(
+        self,
+        target_event: Optional[str],
+        emoji: str,
+        *,
+        conversation_id: Optional[str] = None,
+        target_message_sequence_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class EncryptEditParams:
+    target_event: Optional[str]
+    updated_text: str
+    entities: Optional[list[tuple[int, int, str]]]
+    conversation_id: Optional[str]
+    target_message_sequence_id: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
+    def __init__(
+        self,
+        target_event: Optional[str],
+        updated_text: str,
+        *,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        conversation_id: Optional[str] = None,
+        target_message_sequence_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class ConversationKeyChangeParams:
+    public_keys: list[dict[str, str]]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_id: Optional[str]
+    def __init__(
+        self,
+        public_keys: list[dict[str, str]],
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> None: ...
+
+class GroupMembersChangeParams:
+    public_keys: list[dict[str, str]]
+    conversation_id: str
+    new_member_ids: list[str]
+    current_member_ids: list[str]
+    current_admin_ids: list[str]
+    current_pending_member_ids: list[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    current_title: Optional[str]
+    current_avatar_url: Optional[str]
+    current_ttl_msec: Optional[int]
+    current_screen_capture_blocking_enabled: Optional[bool]
+    def __init__(
+        self,
+        public_keys: list[dict[str, str]],
+        conversation_id: str,
+        new_member_ids: list[str],
+        current_member_ids: list[str],
+        current_admin_ids: list[str],
+        current_pending_member_ids: list[str],
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        current_title: Optional[str] = None,
+        current_avatar_url: Optional[str] = None,
+        current_ttl_msec: Optional[int] = None,
+        current_screen_capture_blocking_enabled: Optional[bool] = None,
+    ) -> None: ...
+
+class GroupCreateParams:
+    public_keys: list[dict[str, str]]
+    conversation_id: str
+    member_ids: list[str]
+    admin_ids: list[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    title: Optional[str]
+    avatar_url: Optional[str]
+    ttl_msec: Optional[int]
+    def __init__(
+        self,
+        public_keys: list[dict[str, str]],
+        conversation_id: str,
+        member_ids: list[str],
+        admin_ids: list[str],
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        title: Optional[str] = None,
+        avatar_url: Optional[str] = None,
+        ttl_msec: Optional[int] = None,
+    ) -> None: ...
+
+class MessageDeleteParams:
+    conversation_id: str
+    sequence_ids: list[str]
+    delete_for_all: bool
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        sequence_ids: list[str],
+        delete_for_all: bool,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class DecryptEventParams:
+    event_b64: str
+    conversation_keys: dict[str, bytes]
+    signing_keys: Optional[list[dict[str, str]]]
+    def __init__(
+        self,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        *,
+        signing_keys: Optional[list[dict[str, str]]] = None,
+    ) -> None: ...
+
+class DecryptEventsParams:
+    events: list[str]
+    signing_keys: Optional[list[dict[str, str]]]
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        signing_keys: Optional[list[dict[str, str]]] = None,
+    ) -> None: ...
+
+class EncryptFileParams:
+    file: bytes
+    event_b64: str
+    conversation_keys: dict[str, bytes]
+    media_hash_key: str
+    def __init__(
+        self,
+        file: bytes,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        media_hash_key: str,
+    ) -> None: ...
+
+class FileEncryptorParams:
+    event_b64: str
+    conversation_keys: dict[str, bytes]
+    media_hash_key: str
+    def __init__(
+        self,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        media_hash_key: str,
+    ) -> None: ...
+
+class DecryptFileParams:
+    encrypted: bytes
+    event_b64: str
+    conversation_keys: dict[str, bytes]
+    media_hash_key: str
+    def __init__(
+        self,
+        encrypted: bytes,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        media_hash_key: str,
+    ) -> None: ...
+
+class FileDecryptorParams:
+    event_b64: str
+    conversation_keys: dict[str, bytes]
+    media_hash_key: str
+    def __init__(
+        self,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        media_hash_key: str,
+    ) -> None: ...
 
 class Chat:
     def __init__(self, config_json: Optional[str] = None) -> None: ...
@@ -124,189 +401,28 @@ class Chat:
 
     # Conversation Keys
     def decrypt_conversation_key(self, encrypted_key_b64: str) -> bytes: ...
-    def prepare_conversation_key_change(
-        self,
-        public_keys: list[dict[str, str]],
-        *,
-        conversation_id: Optional[str] = None,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-    ) -> dict: ...
-    def prepare_group_members_change(
-        self,
-        public_keys: list[dict[str, str]],
-        conversation_id: str,
-        new_member_ids: list[str],
-        current_member_ids: list[str],
-        current_admin_ids: list[str],
-        current_pending_member_ids: list[str],
-        *,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        current_title: Optional[str] = None,
-        current_avatar_url: Optional[str] = None,
-        current_ttl_msec: Optional[int] = None,
-        current_screen_capture_blocking_enabled: Optional[bool] = None,
-    ) -> dict: ...
-    def prepare_group_create(
-        self,
-        public_keys: list[dict[str, str]],
-        conversation_id: str,
-        member_ids: list[str],
-        admin_ids: list[str],
-        *,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        title: Optional[str] = None,
-        avatar_url: Optional[str] = None,
-        ttl_msec: Optional[int] = None,
-    ) -> dict: ...
-    def prepare_message_delete(
-        self,
-        conversation_id: str,
-        sequence_ids: list[str],
-        delete_for_all: bool,
-        *,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-    ) -> dict: ...
+    def prepare_conversation_key_change(self, params: ConversationKeyChangeParams) -> dict: ...
+    def prepare_group_members_change(self, params: GroupMembersChangeParams) -> dict: ...
+    def prepare_group_create(self, params: GroupCreateParams) -> dict: ...
+    def prepare_message_delete(self, params: MessageDeleteParams) -> dict: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> dict: ...
-    def decrypt_events(
-        self,
-        events: list[str],
-        signing_keys: Optional[list[dict[str, str]]] = None,
-    ) -> dict: ...
-    def decrypt_event(
-        self,
-        event_b64: str,
-        conversation_keys: Optional[dict[str, bytes]] = None,
-        signing_keys: Optional[list[dict[str, str]]] = None,
-    ) -> dict: ...
+    def decrypt_events(self, params: DecryptEventsParams) -> dict: ...
+    def decrypt_event(self, params: DecryptEventParams) -> dict: ...
 
     # Message Encryption
-    def encrypt_message(
-        self,
-        conversation_id: str,
-        text: str,
-        *,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
-        message_id: Optional[str] = None,
-        entities: Optional[list[tuple[int, int, str]]] = None,
-        attachments: Optional[list[dict]] = None,
-        quick_reply: Optional[QuickReply] = None,
-        should_notify: Optional[bool] = None,
-        ttl_msec: Optional[int] = None,
-    ) -> SendPayload: ...
-    def encrypt_reply(
-        self,
-        conversation_id: str,
-        text: str,
-        reply_to_event: Optional[str] = None,
-        *,
-        reply_to_edit_event: Optional[str] = None,
-        reply_to_ckces: Optional[list[str]] = None,
-        reply_to_sequence_id: Optional[str] = None,
-        reply_to_sender_id: Optional[int] = None,
-        reply_to_text: Optional[str] = None,
-        reply_to_entities: Optional[list[tuple[int, int, str]]] = None,
-        reply_to_attachments: Optional[list[dict]] = None,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
-        message_id: Optional[str] = None,
-        entities: Optional[list[tuple[int, int, str]]] = None,
-        attachments: Optional[list[dict]] = None,
-        quick_reply: Optional[QuickReply] = None,
-        should_notify: Optional[bool] = None,
-        ttl_msec: Optional[int] = None,
-    ) -> SendPayload: ...
-    def encrypt_add_reaction(
-        self,
-        target_event: Optional[str] = None,
-        emoji: str = ...,
-        *,
-        conversation_id: Optional[str] = None,
-        target_message_sequence_id: Optional[str] = None,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
-    ) -> SendPayload: ...
-    def encrypt_remove_reaction(
-        self,
-        target_event: Optional[str] = None,
-        emoji: str = ...,
-        *,
-        conversation_id: Optional[str] = None,
-        target_message_sequence_id: Optional[str] = None,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
-    ) -> SendPayload: ...
-    # `updated_text` is required at runtime (missing it raises TypeError)
-    # even though it sits after the optional `target_event` positional; the
-    # overloads keep static checkers flagging calls that omit it.
-    @overload
-    def encrypt_edit(
-        self,
-        target_event: str,
-        updated_text: str,
-        *,
-        entities: Optional[list[tuple[int, int, str]]] = None,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
-    ) -> SendPayload: ...
-    @overload
-    def encrypt_edit(
-        self,
-        *,
-        updated_text: str,
-        conversation_id: str,
-        target_message_sequence_id: str,
-        entities: Optional[list[tuple[int, int, str]]] = None,
-        sender_id: Optional[str] = None,
-        signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
-    ) -> SendPayload: ...
+    def encrypt_message(self, params: EncryptMessageParams) -> SendPayload: ...
+    def encrypt_reply(self, params: EncryptReplyParams) -> SendPayload: ...
+    def encrypt_add_reaction(self, params: EncryptReactionParams) -> SendPayload: ...
+    def encrypt_remove_reaction(self, params: EncryptReactionParams) -> SendPayload: ...
+    def encrypt_edit(self, params: EncryptEditParams) -> SendPayload: ...
 
-    # Streams
-    def new_message_id(self) -> str: ...
-    def encrypt_stream(
-        self,
-        plaintext: bytes,
-        conversation_key: bytes,
-        message_id: str,
-        attachment_index: int,
-    ) -> bytes: ...
-    def decrypt_stream(
-        self,
-        encrypted: bytes,
-        event_b64: str,
-        conversation_keys: dict[str, bytes],
-        media_hash_key: str,
-    ) -> bytes: ...
-    def stream_encryptor(
-        self,
-        conversation_key: bytes,
-        message_id: str,
-        attachment_index: int,
-    ) -> StreamEncryptor: ...
-    def stream_decryptor(
-        self,
-        event_b64: str,
-        conversation_keys: dict[str, bytes],
-        media_hash_key: str,
-    ) -> StreamDecryptor: ...
+    # Files
+    def encrypt_file(self, params: EncryptFileParams) -> bytes: ...
+    def file_encryptor(self, params: FileEncryptorParams) -> FileEncryptor: ...
+    def decrypt_file(self, params: DecryptFileParams) -> bytes: ...
+    def file_decryptor(self, params: FileDecryptorParams) -> FileDecryptor: ...
 
     # Generic Encrypt / Decrypt
     def encrypt(self, plaintext: str, conversation_key: bytes) -> str: ...
@@ -316,21 +432,21 @@ class Chat:
     def sign(self, data: bytes) -> bytes: ...
     def verify(self, public_key_b64: str, signature: bytes, data: bytes) -> bool: ...
 
-class StreamEncryptor:
-    """Incremental stream encryptor for large payloads.
+class FileEncryptor:
+    """Incremental encryptor for one file of an outgoing message.
 
-    Feed plaintext with ``push``; call ``finish`` once to emit the final frame.
+    Feed the file with ``push``; call ``finish`` once to emit the final frame.
     """
     def push(self, plaintext: bytes) -> bytes: ...
     def finish(self) -> bytes: ...
 
-class StreamDecryptor:
-    """Incremental stream decryptor for large payloads.
+class FileDecryptor:
+    """Incremental decryptor for one encrypted file.
 
-    Feed ciphertext with ``push``; call ``finish`` once at end of input.
-    ``finish`` raises if the stream ended before its final frame (truncation),
-    so do not treat plaintext from ``push`` as complete until ``finish``
-    succeeds.
+    Feed the encrypted bytes with ``push``; call ``finish`` once at end of
+    input. ``finish`` raises if the file ended before its final frame
+    (truncation), so do not treat bytes from ``push`` as complete until
+    ``finish`` succeeds.
     """
     def push(self, ciphertext: bytes) -> bytes: ...
     def finish(self) -> bytes: ...
