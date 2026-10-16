@@ -55,6 +55,9 @@ chat.updateConfig(configJson);
 await chat.setup("2580");
 ```
 
+After registering the keys, call `setIdentity()` with the
+`public_key_version` the registration returns.
+
 Later sessions pass the config up front and unlock:
 
 ```typescript
@@ -66,8 +69,9 @@ const chat = await createChat({
 });
 await chat.unlock("2580");
 
-// Set the session once: your user id + registered signing-key version,
-// the participants' signing keys, and the opt-in conversation-key cache.
+// Set the session once: your user id + the public_key_version of your
+// registered keys, the participants' signing keys, and the opt-in
+// conversation-key cache.
 chat.setIdentity("111", "v1");
 chat.setCacheKeys(true);
 // Each signing-key entry carries all five fields from the X API
