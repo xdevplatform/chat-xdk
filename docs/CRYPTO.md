@@ -487,8 +487,8 @@ logical message is never sent under two ids.
 
 #### Action signatures
 
-Group operations are signed the same way, over their own comma-separated
-payloads (`signatures.rs`):
+Group operations and read receipts are signed the same way, over their own
+comma-separated payloads (`signatures.rs`):
 
 - **GroupCreate** (from `prepare_group_create`, v4+):
   ```
@@ -511,6 +511,12 @@ payloads (`signatures.rs`):
   ```
   where `conversation_key_b64_no_pad` is the Base64-without-padding encoding of
   the plaintext 32-byte conversation key.
+- **MarkConversationRead** (from `prepare_mark_conversation_read`):
+  ```
+  "MarkConversationReadEvent,{message_id},{sender_id},{conversation_id},{seen_until_sequence_id},{seen_at_msec}"
+  ```
+  `seen_at_msec` is the read time in milliseconds since the Unix epoch, the
+  same value the event detail carries as `seen_at_millis`.
 
 Both `prepare_group_create` and `prepare_group_members_change` emit **two**
 action signatures — a `ConversationKeyChangeEvent` plus the group change — since
