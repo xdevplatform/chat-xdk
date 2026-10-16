@@ -214,22 +214,23 @@ mod http_impl {
         /// Bytes per append segment when uploading media.
         const UPLOAD_CHUNK: usize = 3 * 1024 * 1024;
 
-        /// Upload an encrypted media blob; returns its `media_hash_key`.
+        /// Start an upload; returns its `(session_id, media_hash_key)`.
         ///
-        /// Three-step flow: initialize (returns an upload session and the
-        /// hash key), append (3 MB segments), finalize. The media endpoints
+        /// `total_bytes` is the encrypted size, `encrypted_file_size` of the
+        /// plaintext size. The media hash key names the file in the
+        /// message's attachments; encrypt the file once the message is
+        /// built, then [`Self::finish_media_upload`]. The media endpoints
         /// take the colon form of the conversation id in the body.
-        pub fn upload_media(
+        pub fn start_media_upload(
             &self,
             conversation_id: &str,
-            ciphertext: &[u8],
-        ) -> Result<String, String> {
-            let conv = conversation_id.replace('-', ":");
+            total_bytes: u64,
+        ) -> Result<(String, String), String> {
             let init = self.post_json(
                 "/2/chat/media/upload/initialize",
                 &serde_json::json!({
-                    "conversation_id": conv,
-                    "total_bytes": ciphertext.len(),
+                    "conversation_id": conversation_id.replace('-', ":"),
+                    "total_bytes": total_bytes,
                 }),
             )?;
             let data = &init["data"];
@@ -246,7 +247,18 @@ mod http_impl {
             if session_id.is_empty() || media_hash_key.is_empty() {
                 return Err(format!("media upload initialize failed: {init}"));
             }
+            Ok((session_id, media_hash_key))
+        }
 
+        /// Upload the encrypted file in 3 MB segments, then finalize.
+        pub fn finish_media_upload(
+            &self,
+            conversation_id: &str,
+            session_id: &str,
+            media_hash_key: &str,
+            ciphertext: &[u8],
+        ) -> Result<(), String> {
+            let conv = conversation_id.replace('-', ":");
             let mut segment = 0;
             for chunk in ciphertext.chunks(Self::UPLOAD_CHUNK) {
                 self.post_json(
@@ -269,7 +281,7 @@ mod http_impl {
                     "num_parts": segment.to_string(),
                 }),
             )?;
-            Ok(media_hash_key)
+            Ok(())
         }
 
         /// Download an encrypted media blob as raw bytes.
@@ -370,6 +382,7 @@ mod http_impl {
             Ok((items, key_events, next))
         }
 
+        /// Only the send fields go out; `event_b64` stays local.
         fn send_message(
             &self,
             conversation_id: &str,

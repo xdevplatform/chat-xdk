@@ -6,7 +6,8 @@
 //!
 //! - key management     -> [`ChatCore::load_keys`] / [`ChatCore::generate_and_register`]
 //! - conversation keys  -> [`ChatCore::prepare_conversation_key_change`] / [`ChatCore::decrypt_conversation_key`]
-//! - message encryption -> [`ChatCore::encrypt_reply`]
+//! - message encryption -> [`ChatCore::encrypt_reply`], then
+//!   [`ChatCore::encrypt_media`] for its files
 //! - event decryption   -> [`ChatCore::decrypt_batch`] (decrypt_events) and
 //!   [`ChatCore::decrypt_one`] (decrypt_event)
 
@@ -16,8 +17,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{
-    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventsResult,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event,
+    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventParams,
+    DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
     GroupCreateParams, GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
     PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
@@ -35,18 +37,18 @@ pub struct ReplyOptions {
     pub reply_to_ckces: Option<Vec<String>>,
     /// Rich-text entities (mentions, URLs, etc.) as byte ranges in the text.
     pub entities: Option<Vec<EntityDescriptor>>,
-    /// Attachment descriptors (e.g. a media reference) to embed.
+    /// Attachment descriptors to embed. Each file names the media hash key
+    /// its upload started with; encrypt the files afterwards with
+    /// [`ChatCore::encrypt_media`] and the returned body's `event_b64`.
     pub attachments: Option<Vec<AttachmentDescriptor>>,
-    /// Id from [`ChatCore::new_message_id`] that the message's media was
-    /// encrypted with; required when `attachments` include media.
-    pub message_id: Option<String>,
     /// Quick reply offering selectable options, or answering them.
     pub quick_reply: Option<QuickReply>,
     /// Disappearing-message lifetime in milliseconds.
     pub ttl_msec: Option<i64>,
 }
 
-/// Fields the X API expects for an encrypted message send.
+/// Fields the X API expects for an encrypted message send, plus the
+/// message's `event_b64`, which stays local.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendBody {
     pub message_id: String,
@@ -54,6 +56,10 @@ pub struct SendBody {
     pub encoded_message_event_signature: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_token: Option<String>,
+    /// The message as recipients receive it; encrypt the message's files
+    /// from it with [`ChatCore::encrypt_media`].
+    #[serde(skip)]
+    pub event_b64: String,
 }
 
 /// Wraps a single unlocked `chat_xdk_core::ChatCore` for one bot identity.
@@ -142,7 +148,10 @@ impl ChatCore {
         events: &[&str],
         signing_keys: &[SigningKeyEntry],
     ) -> DecryptEventsResult {
-        self.inner.decrypt_events(events, signing_keys)
+        self.inner.decrypt_events(
+            DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
+                .with_signing_keys(signing_keys.to_vec()),
+        )
     }
 
     /// Single-event path — used for each new event after the initial load.
@@ -152,8 +161,10 @@ impl ChatCore {
         conversation_keys: &HashMap<String, XChatConversationKey>,
         signing_keys: &[SigningKeyEntry],
     ) -> Result<Event, SdkError> {
-        self.inner
-            .decrypt_event(event_b64, conversation_keys, signing_keys)
+        self.inner.decrypt_event(
+            DecryptEventParams::new(event_b64, conversation_keys.clone())
+                .with_signing_keys(signing_keys.to_vec()),
+        )
     }
 
     // -- Message encryption -------------------------------------------------
@@ -182,7 +193,6 @@ impl ChatCore {
                     .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
                 params.entities = options.entities;
                 params.attachments = options.attachments;
-                params.message_id = options.message_id;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_message(params)?
@@ -197,18 +207,18 @@ impl ChatCore {
                 params.reply_to_ckces = options.reply_to_ckces.clone();
                 params.entities = options.entities;
                 params.attachments = options.attachments;
-                params.message_id = options.message_id;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_reply(params)?
             }
         };
         Ok(SendBody {
-            // The message id: the caller's, or one the SDK generated.
+            // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
             encoded_message_create_event: payload.encrypted_content,
             encoded_message_event_signature: payload.encoded_event_signature,
             conversation_token: None,
+            event_b64: payload.event_b64,
         })
     }
 
@@ -235,6 +245,7 @@ impl ChatCore {
             encoded_message_create_event: payload.encrypted_content,
             encoded_message_event_signature: payload.encoded_event_signature,
             conversation_token: None,
+            event_b64: payload.event_b64,
         })
     }
 
@@ -276,35 +287,33 @@ impl ChatCore {
             ))
     }
 
-    // -- Media streaming -----------------------------------------------------
+    // -- Media files -----------------------------------------------------------
 
-    /// Chunk size fed through the incremental stream encryptor/decryptor.
+    /// Chunk size fed through the incremental file encryptor/decryptor.
     pub const MEDIA_CHUNK: usize = 1024 * 1024;
 
-    /// A fresh id for a message with media, taken before its media is
-    /// encrypted.
-    pub fn new_message_id(&self) -> String {
-        self.inner.new_message_id()
-    }
-
-    /// Encrypt a media blob with the incremental stream API.
+    /// Encrypt a media file of an outgoing message with the incremental file
+    /// API.
     ///
-    /// The blob is encrypted for the message `message_id` (from
-    /// [`ChatCore::new_message_id`]) at `attachment_index` in its
-    /// attachments; send the message with the same id. Feeding fixed-size
+    /// `event_b64` is the `event_b64` of the body [`ChatCore::encrypt_reply`]
+    /// returned for the message, and `media_hash_key` the hash key the file's
+    /// upload started with, as listed in the message's attachments; the SDK
+    /// encrypts the file under that attachment's key. Feeding fixed-size
     /// chunks through `push` keeps memory bounded no matter how large the
-    /// file is; `finish` emits the final frame that seals the stream
+    /// file is; `finish` emits the final frame that seals the file
     /// (decryption fails without it).
     pub fn encrypt_media(
         &self,
         plaintext: &[u8],
-        conversation_key: &XChatConversationKey,
-        message_id: &str,
-        attachment_index: i64,
+        event_b64: &str,
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut enc =
-            self.inner
-                .stream_encryptor(conversation_key, message_id, attachment_index)?;
+        let mut enc = self.inner.file_encryptor(FileEncryptorParams::new(
+            event_b64,
+            conversation_keys.clone(),
+            media_hash_key,
+        ))?;
         let mut out = Vec::new();
         for chunk in plaintext.chunks(Self::MEDIA_CHUNK) {
             out.extend(enc.push(chunk)?);
@@ -313,12 +322,12 @@ impl ChatCore {
         Ok(out)
     }
 
-    /// Decrypt a downloaded media blob with the incremental stream API.
+    /// Decrypt a downloaded media file with the incremental file API.
     ///
     /// `event_b64` is the raw event of the message that carries the media and
     /// `conversation_keys` its conversation's key map, as passed to
     /// `decrypt_one`; the SDK finds `media_hash_key` in the event and derives
-    /// that file's key. `finish` errors if the stream was truncated, so
+    /// that file's key. `finish` errors if the file was truncated, so
     /// plaintext from `push` must not be treated as complete until it
     /// succeeds.
     pub fn decrypt_media(
@@ -328,9 +337,11 @@ impl ChatCore {
         conversation_keys: &HashMap<String, XChatConversationKey>,
         media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut dec = self
-            .inner
-            .stream_decryptor(event_b64, conversation_keys, media_hash_key)?;
+        let mut dec = self.inner.file_decryptor(FileDecryptorParams::new(
+            event_b64,
+            conversation_keys.clone(),
+            media_hash_key,
+        ))?;
         let mut out = Vec::new();
         for chunk in ciphertext.chunks(Self::MEDIA_CHUNK) {
             out.extend(dec.push(chunk)?);
