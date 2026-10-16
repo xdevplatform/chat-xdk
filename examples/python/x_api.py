@@ -177,28 +177,36 @@ class XChatClient:
         path = f"/2/chat/conversations/{conversation_id}/members"
         return self._post(path, body)
 
-    # -- Media (encrypted blobs) ---------------------------------------------
+    # -- Media (encrypted files) ---------------------------------------------
 
     UPLOAD_CHUNK = 3 * 1024 * 1024
 
-    def upload_media(self, conversation_id: str, ciphertext: bytes) -> str:
-        """Upload an encrypted media blob; returns its ``media_hash_key``.
+    def start_media_upload(self, conversation_id: str, total_bytes: int) -> tuple[str, str]:
+        """Start an upload; returns its ``(session_id, media_hash_key)``.
 
-        Three-step flow: initialize (returns an upload session and the hash
-        key), append (3 MB segments), finalize. The media endpoints take the
-        colon form of the conversation id in the body.
+        ``total_bytes`` is the encrypted size, ``encrypted_file_size`` of the
+        plaintext size. The media hash key names the file in the message's
+        attachments; encrypt the file once the message is built, then
+        ``finish_media_upload``. The media endpoints take the colon form of
+        the conversation id in the body.
         """
         conv = conversation_id.replace("-", ":")
         init = self._post(
             "/2/chat/media/upload/initialize",
-            {"conversation_id": conv, "total_bytes": len(ciphertext)},
+            {"conversation_id": conv, "total_bytes": total_bytes},
         )
         data = init.get("data") or {}
         session_id = data.get("session_id") or data.get("sessionId")
         media_hash_key = data.get("media_hash_key") or data.get("mediaHashKey")
         if not session_id or not media_hash_key:
             raise RuntimeError(f"media upload initialize failed: {init}")
+        return str(session_id), str(media_hash_key)
 
+    def finish_media_upload(
+        self, conversation_id: str, session_id: str, media_hash_key: str, ciphertext: bytes
+    ) -> None:
+        """Upload the encrypted file in 3 MB segments, then finalize."""
+        conv = conversation_id.replace("-", ":")
         segment = 0
         for offset in range(0, len(ciphertext), self.UPLOAD_CHUNK):
             chunk = ciphertext[offset : offset + self.UPLOAD_CHUNK]
@@ -221,7 +229,6 @@ class XChatClient:
                 "num_parts": str(segment),
             },
         )
-        return str(media_hash_key)
 
     def download_media(self, conversation_id: str, media_hash_key: str) -> bytes:
         """Download an encrypted media blob as raw bytes.
@@ -241,11 +248,14 @@ class XChatClient:
 
     # -- Sending ------------------------------------------------------------
 
+    SEND_FIELDS = ("message_id", "encoded_message_create_event", "encoded_message_event_signature")
+
     def send_message(self, conversation_id: str, body: dict[str, str]) -> Any:
         """POST an encrypted message produced by ``ChatCore.encrypt_reply``.
 
-        For a 1:1 conversation, ``conversation_id`` is the recipient's user ID;
-        the server constructs the canonical conversation ID.
+        Only the send fields go out; ``event_b64`` stays local. For a 1:1
+        conversation, ``conversation_id`` is the recipient's user ID; the
+        server constructs the canonical conversation ID.
         """
-        request = SendMessageRequest.model_validate(body)
+        request = SendMessageRequest.model_validate({k: body[k] for k in self.SEND_FIELDS})
         return self.client.chat.send_message(conversation_id.replace(":", "-"), request)

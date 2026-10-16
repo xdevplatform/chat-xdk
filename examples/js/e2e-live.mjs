@@ -268,14 +268,16 @@ const remove = core.encryptReaction({
 await api.sendMessage(canonicalConv, remove);
 console.log("reaction remove sent");
 
-// -- 5. Optional: media — stream-encrypt, upload, send, download, decrypt ----
+// -- 5. Optional: media — start upload, build message, encrypt, finish, send --
 if (process.env.CHATXDK_E2E_MEDIA === "1") {
   // A deterministic multi-chunk payload, so the incremental encryptor emits
   // several frames and any corruption is byte-attributable.
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
-  const ciphertext = core.encryptMedia(plaintext, key);
-  const mediaHashKey = await api.uploadMedia(canonicalConv, ciphertext);
-  console.log(`encrypted media uploaded: ${mediaHashKey} (${ciphertext.length} bytes)`);
+  const upload = await api.startMediaUpload(
+    canonicalConv,
+    ChatCore.encryptedFileSize(plaintext.length),
+  );
+  const { mediaHashKey } = upload;
 
   const mediaMsg = core.encryptReply({
     conversationId: canonicalConv,
@@ -295,6 +297,9 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     ],
     ttlMsec: 24 * 60 * 60 * 1000,
   });
+  const ciphertext = core.encryptMedia(plaintext, mediaMsg.event_b64, { [kv]: key }, mediaHashKey);
+  await api.finishMediaUpload(canonicalConv, upload, ciphertext);
+  console.log(`encrypted media uploaded: ${mediaHashKey} (${ciphertext.length} bytes)`);
   await api.sendMessage(canonicalConv, mediaMsg);
   const { event: mediaOne, b64: mediaEventB64 } = await awaitDecrypted(
     api,
@@ -315,7 +320,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     decrypted.length === plaintext.length && decrypted.every((b, i) => b === plaintext[i]),
     "downloaded media did not decrypt to the original bytes",
   );
-  console.log("media downloaded + stream-decrypted to the original bytes");
+  console.log("media downloaded + decrypted to the original bytes");
 }
 
 // -- 6. Optional: group create + message + member add ------------------------

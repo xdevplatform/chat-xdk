@@ -58,8 +58,8 @@ func main() {
     chat.SetCacheKeys(true)
     _ = chat.SetSigningKeys(signingKeyEntries)
 
-    // Batch load: decrypt many events at once (nil = stored signing keys)
-    batch, err := chat.DecryptEvents(rawEventB64List, nil)
+    // Batch load: decrypt many events at once (unset SigningKeys = stored signing keys)
+    batch, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: rawEventB64List})
     if err != nil {
         panic(err)
     }
@@ -70,8 +70,9 @@ func main() {
         }
     }
 
-    // Single webhook: nil maps resolve from the session stores
-    event, err := chat.DecryptEvent(eventB64, nil, nil)
+    // Single webhook: the empty key map and unset signing keys resolve from
+    // the session stores
+    event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{EventB64: eventB64})
     if err != nil {
         panic(err)
     }
@@ -94,7 +95,7 @@ func main() {
 
 ## API
 
-See the **Go** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Method names use **PascalCase**; raw-byte parameters cross the FFI boundary as **base64 strings**.
+See the **Go** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media). Method names use **PascalCase**; raw-byte parameters cross the FFI boundary as **base64 strings**.
 
 ## Security limitations
 

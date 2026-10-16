@@ -6,6 +6,7 @@
 //! feature) and the WASM bindings wrap this struct.
 
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
+use crate::crypto::encryption::{FileDecryptor, FileEncryptor};
 use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{KeypairPurpose, XChatConversationKey, XChatKeyPair, XChatPrivateKey};
 use crate::crypto::message_keys;
@@ -13,8 +14,10 @@ use crate::error::{CryptoError, SdkError};
 use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
-    ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
+    EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
+    GroupMembersChangeParams, MessageDeleteParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -594,6 +597,35 @@ impl ChatCore {
         uuid::Builder::from_random_bytes(bytes)
             .into_uuid()
             .to_string()
+    }
+
+    /// The id of an outgoing message or reply. Its files are encrypted after
+    /// the message is built and uploaded under keys derived from this id, so
+    /// a message with files takes an id derived from what identifies it (see
+    /// [`message_keys::derive_media_message_id`]): building the same message
+    /// again keeps its uploaded files valid. Other messages take a random id.
+    fn outgoing_message_id(
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
+        sender_id: &str,
+        conversation_id: &str,
+        attachments: Option<&[AttachmentDescriptor]>,
+    ) -> Result<String, SdkError> {
+        let media_hash_keys = attachments
+            .map(crate::pipeline::file_media_hash_keys)
+            .unwrap_or_default();
+        if media_hash_keys.is_empty() {
+            return Ok(Self::generate_message_id());
+        }
+        let conversation_id =
+            crate::pipeline::canonical_conversation_id(conversation_id, sender_id);
+        Ok(message_keys::derive_media_message_id(
+            conversation_key,
+            conversation_key_version,
+            sender_id,
+            &conversation_id,
+            &media_hash_keys,
+        )?)
     }
 
     /// Prepare a signed conversation-key change, ready to send to the X API.
@@ -1287,16 +1319,22 @@ impl ChatCore {
     /// 2. For each message, finds the correct signing key by matching sender_id + version
     /// 3. Decrypts the message using the appropriate conversation key
     ///
-    /// # Arguments
-    /// * `events` - Raw base64-encoded event strings from the webhook
-    /// * `signing_keys` - All known signing keys for all participants (with user_id)
+    /// `params.events` are the raw base64 events; `params.signing_keys` the
+    /// known signing keys of the participants, or the keys stored via
+    /// [`Self::set_signing_keys`] when unset or empty.
     ///
     /// # Returns
     /// A `DecryptEventsResult` containing:
     /// * `messages` - Successfully decrypted messages
     /// * `conversation_keys` - Extracted conversation keys (for caching)
     /// * `errors` - Map of event index → error message for failed decryptions
-    pub fn decrypt_events(
+    pub fn decrypt_events(&self, params: DecryptEventsParams) -> DecryptEventsResult {
+        let events: Vec<&str> = params.events.iter().map(String::as_str).collect();
+        self.decrypt_events_with(&events, params.signing_keys.as_deref().unwrap_or_default())
+    }
+
+    /// [`Self::decrypt_events`] over borrowed inputs.
+    pub(crate) fn decrypt_events_with(
         &self,
         events: &[&str],
         signing_keys: &[SigningKeyEntry],
@@ -1388,20 +1426,31 @@ impl ChatCore {
 
     /// Decrypt a raw webhook event payload.
     ///
-    /// `conversation_keys` is a map of `key_version → conversation_key` from
-    /// `extract_conversation_keys()`. For non-message events the map is unused
-    /// and may be empty.
+    /// `params.conversation_keys` is a map of `key_version →
+    /// conversation_key` from `decrypt_events()` or
+    /// `extract_conversation_keys()`. For non-message events the map is
+    /// unused and may be empty.
     ///
-    /// `signing_keys` may contain keys for any set of users (e.g. every
-    /// conversation participant); before verification the SDK keeps only the
-    /// entries whose identity binding checks out **and** whose `user_id`
-    /// matches the event's sender, then picks the one matching the version
-    /// embedded in the message signature — the same selection
+    /// `params.signing_keys` may contain keys for any set of users (e.g. every
+    /// conversation participant); unset or empty, the keys stored via
+    /// [`Self::set_signing_keys`] are used. Before verification the SDK keeps
+    /// only the entries whose identity binding checks out **and** whose
+    /// `user_id` matches the event's sender, then picks the one matching the
+    /// version embedded in the message signature — the same selection
     /// [`Self::decrypt_events`] applies. Under the default reject-unverified
-    /// policy an empty slice makes every signed event fail; only after
+    /// policy, no matching key makes every signed event fail; only after
     /// [`Self::set_reject_unverified`]`(false)` are such events returned with
     /// `verified: false`.
-    pub fn decrypt_event(
+    pub fn decrypt_event(&self, params: DecryptEventParams) -> Result<Event, SdkError> {
+        self.decrypt_event_with(
+            &params.event_b64,
+            &params.conversation_keys,
+            params.signing_keys.as_deref().unwrap_or_default(),
+        )
+    }
+
+    /// [`Self::decrypt_event`] over borrowed inputs.
+    pub(crate) fn decrypt_event_with(
         &self,
         event_b64: &str,
         conversation_keys: &HashMap<String, XChatConversationKey>,
@@ -1739,11 +1788,19 @@ impl ChatCore {
             .map(|e| crate::pipeline::build_thrift_entities(&e));
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
+            crate::pipeline::validate_file_media_hash_keys(a)?;
         }
+        let message_id = Self::outgoing_message_id(
+            &ckey,
+            &conversation_key_version,
+            &sender_id,
+            &params.conversation_id,
+            params.attachments.as_deref(),
+        )?;
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+            .map(|a| crate::pipeline::build_message_attachments(&a, &message_id));
         let thrift_quick_reply = params
             .quick_reply
             .as_ref()
@@ -1755,7 +1812,6 @@ impl ChatCore {
             thrift_quick_reply,
         )?;
 
-        let message_id = Self::generate_message_id();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
             &ckey,
             &signing_kp.private,
@@ -1796,11 +1852,19 @@ impl ChatCore {
             .map(|e| crate::pipeline::build_thrift_entities(&e));
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
+            crate::pipeline::validate_file_media_hash_keys(a)?;
         }
+        let message_id = Self::outgoing_message_id(
+            &ckey,
+            &conversation_key_version,
+            &sender_id,
+            &params.conversation_id,
+            params.attachments.as_deref(),
+        )?;
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_thrift_attachments(&a));
+            .map(|a| crate::pipeline::build_message_attachments(&a, &message_id));
 
         let thrift_quick_reply = params
             .quick_reply
@@ -1817,7 +1881,6 @@ impl ChatCore {
             thrift_quick_reply,
         )?;
 
-        let message_id = Self::generate_message_id();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
             &ckey,
             &signing_kp.private,
@@ -2618,75 +2681,80 @@ impl ChatCore {
         ReplyPreviewValidation::Valid
     }
 
-    // Stream (Media)
+    // Files
 
-    /// Encrypt a stream.
-    pub fn encrypt_stream(
-        &self,
-        plaintext: &[u8],
-        conversation_key: &XChatConversationKey,
-    ) -> Result<Vec<u8>, SdkError> {
-        let mut reader = Cursor::new(plaintext);
+    /// Encrypt a file for an outgoing message.
+    ///
+    /// Build the message first: its attachments name each file by the media
+    /// hash key the file's upload started with. Then pass the returned
+    /// payload's `event_b64`, the conversation's key map, and the file's
+    /// media hash key. The SDK finds the file's attachment in the message
+    /// and derives its key, so files can be encrypted in any order, and a
+    /// file that is not in the message, or a key map that does not decrypt
+    /// the message, is an error.
+    pub fn encrypt_file(&self, params: EncryptFileParams) -> Result<Vec<u8>, SdkError> {
+        let key = media::outgoing_media_key(
+            &params.event_b64,
+            &params.conversation_keys,
+            &params.media_hash_key,
+        )?;
+        let mut reader = Cursor::new(params.file.as_slice());
         let mut output: Vec<u8> = Vec::new();
-        crate::crypto::encryption::encrypt_stream(conversation_key, &mut reader, &mut output)?;
+        crate::crypto::encryption::encrypt_file(&key, &mut reader, &mut output)?;
         Ok(output)
     }
 
-    /// Decrypt an encrypted media file.
+    /// Create an incremental encryptor for a file too large to hold in
+    /// memory. Takes the params of [`Self::encrypt_file`] apart from the
+    /// file, which is fed to the encryptor.
+    pub fn file_encryptor(&self, params: FileEncryptorParams) -> Result<FileEncryptor, SdkError> {
+        let key = media::outgoing_media_key(
+            &params.event_b64,
+            &params.conversation_keys,
+            &params.media_hash_key,
+        )?;
+        Ok(FileEncryptor::new(&key)?)
+    }
+
+    /// Decrypt a file.
     ///
-    /// `event_b64` is the event of the message that carries the media and
-    /// `conversation_keys` its conversation's key map, as passed to
-    /// [`Self::decrypt_event`]. `media_hash_key` names the media: a media
-    /// attachment, a link card's banner or favicon, or media the message
-    /// quotes from another message in its reply preview. The SDK finds that
-    /// attachment in the event and derives its key from the key for the
-    /// message's version.
+    /// `params.event_b64` is the event of the message that carries the file
+    /// and `params.conversation_keys` its conversation's key map, as passed
+    /// to [`Self::decrypt_event`]. `params.media_hash_key` names the file: a
+    /// media attachment, a link card's banner or favicon, or media the
+    /// message quotes from another message in its reply preview. The SDK
+    /// finds that attachment in the event and derives its key from the key
+    /// for the message's version.
     ///
-    /// Errors say what to pass instead when `conversation_keys` lacks the
-    /// message's key version, the event is not an encrypted message with
-    /// media, `media_hash_key` is not in it, or `encrypted` is not the
+    /// Errors say what to pass instead when the key map lacks the message's
+    /// key version, the event is not an encrypted message with files, the
+    /// media hash key is not in it, or `params.encrypted` is not the
     /// complete encrypted file. Signatures are not checked here; use the
     /// `verified` flag from [`Self::decrypt_event`].
-    pub fn decrypt_stream(
-        &self,
-        encrypted: &[u8],
-        event_b64: &str,
-        conversation_keys: &HashMap<String, XChatConversationKey>,
-        media_hash_key: &str,
-    ) -> Result<Vec<u8>, SdkError> {
-        let key = media::media_key(event_b64, conversation_keys, media_hash_key)?;
+    pub fn decrypt_file(&self, params: DecryptFileParams) -> Result<Vec<u8>, SdkError> {
+        let key = media::media_key(
+            &params.event_b64,
+            &params.conversation_keys,
+            &params.media_hash_key,
+        )?;
         Ok(crate::crypto::encryption::decrypt_media(
             &key,
-            media_hash_key,
-            encrypted,
+            &params.media_hash_key,
+            &params.encrypted,
         )?)
     }
 
-    /// Create an incremental stream encryptor for large payloads.
-    pub fn stream_encryptor(
-        &self,
-        conversation_key: &XChatConversationKey,
-    ) -> Result<crate::crypto::encryption::StreamEncryptor, SdkError> {
-        Ok(crate::crypto::encryption::StreamEncryptor::new(
-            conversation_key,
-        )?)
-    }
-
-    /// Create an incremental decryptor for an encrypted media file too large
-    /// to hold in memory. Takes the arguments of [`Self::decrypt_stream`]
-    /// apart from the bytes, which are fed to the decryptor; its errors say
-    /// which media failed and what to pass.
-    pub fn stream_decryptor(
-        &self,
-        event_b64: &str,
-        conversation_keys: &HashMap<String, XChatConversationKey>,
-        media_hash_key: &str,
-    ) -> Result<crate::crypto::encryption::StreamDecryptor, SdkError> {
-        let key = media::media_key(event_b64, conversation_keys, media_hash_key)?;
-        Ok(crate::crypto::encryption::StreamDecryptor::for_media(
-            &key,
-            media_hash_key,
-        )?)
+    /// Create an incremental decryptor for a file too large to hold in
+    /// memory. Takes the params of [`Self::decrypt_file`] apart from the
+    /// encrypted file, which is fed to the decryptor; its errors say which
+    /// file failed and what to pass.
+    pub fn file_decryptor(&self, params: FileDecryptorParams) -> Result<FileDecryptor, SdkError> {
+        let key = media::media_key(
+            &params.event_b64,
+            &params.conversation_keys,
+            &params.media_hash_key,
+        )?;
+        Ok(FileDecryptor::for_media(&key, &params.media_hash_key)?)
     }
 
     /// Encrypt a UTF-8 string using XSalsa20-Poly1305 and return base64.
@@ -3039,7 +3107,7 @@ pub fn build_event_signature_payload(
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
             // v8+ signs the key version as a canonical integer, "null" when
             // absent or not an integer. Earlier versions sign it as carried,
-            // empty when absent, which is how this SDK signs at v7.
+            // empty when absent.
             let ckey_ver = if sig_version >= 8 {
                 nullable_i64(
                     mce.conversation_key_version
@@ -4138,6 +4206,9 @@ mod message_key_tests;
 mod media_tests;
 
 #[cfg(test)]
+mod send_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline::serialize_thrift;
@@ -4221,7 +4292,7 @@ mod tests {
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "hello v7")
-                    .with_identity("sender-1", "1733889755256")
+                    .with_identity("4001", "1733889755256")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -4253,7 +4324,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some(payload.message_id.clone()),
-            Some("sender-1".to_string()),
+            Some("4001".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             Some("1700000000000".to_string()),
@@ -4268,7 +4339,7 @@ mod tests {
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "1733889755256".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -4276,7 +4347,7 @@ mod tests {
         }];
 
         let event = core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap();
         match event {
             Event::Message(msg) => {
@@ -4297,7 +4368,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptEditParams::new("", "read https://example.com")
-            .with_identity("sender-1", "1733889755256")
+            .with_identity("4001", "1733889755256")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-orig".into());
@@ -4308,10 +4379,10 @@ mod tests {
         }]);
         let payload = core.encrypt_edit(&params).unwrap();
 
-        let event_b64 = wrap_signed_payload_with_seq(&payload, "sender-1", "conv-1", "seq-edit");
+        let event_b64 = wrap_signed_payload_with_seq(&payload, "4001", "conv-1", "seq-edit");
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "1733889755256".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -4319,7 +4390,7 @@ mod tests {
         }];
 
         let event = core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap();
         match event {
             Event::Message(msg) => {
@@ -4389,7 +4460,7 @@ mod tests {
 
         let payload = if reply {
             let mut params = crate::EncryptReplyParams::new("conv-1", "Yes", "")
-                .with_identity("sender-1", "1733889755256")
+                .with_identity("4001", "1733889755256")
                 .with_conversation_key(ckey.to_bytes(), "9001");
             params.reply_to_sequence_id = Some("seq-orig".into());
             params.reply_to_sender_id = Some(42);
@@ -4398,16 +4469,16 @@ mod tests {
             core.encrypt_reply(params).unwrap()
         } else {
             let mut params = crate::EncryptMessageParams::new("conv-1", "Continue?")
-                .with_identity("sender-1", "1733889755256")
+                .with_identity("4001", "1733889755256")
                 .with_conversation_key(ckey.to_bytes(), "9001");
             params.quick_reply = quick_reply;
             core.encrypt_message(params).unwrap()
         };
 
-        let event_b64 = wrap_signed_payload_with_seq(&payload, "sender-1", "conv-1", "seq-qr");
+        let event_b64 = wrap_signed_payload_with_seq(&payload, "4001", "conv-1", "seq-qr");
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "1733889755256".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -4415,7 +4486,7 @@ mod tests {
         }];
 
         match core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap()
         {
             Event::Message(msg) => {
@@ -4492,10 +4563,11 @@ mod tests {
         assert!(serde_json::from_str::<QuickReply>("{}").is_err());
     }
 
-    /// The SDK mints the message id: `encrypt_message` returns a fresh UUID in
-    /// `SendPayload.message_id` on every call, and callers can no longer supply
-    /// one. (That the returned id is the one actually signed is proven by the
-    /// verify-on-decrypt tests, which embed `payload.message_id` in the event.)
+    /// The SDK mints the message id: for a message without files,
+    /// `encrypt_message` returns a fresh UUID in `SendPayload.message_id` on
+    /// every call, and callers cannot supply one. (That the returned id is the
+    /// one actually signed is proven by the verify-on-decrypt tests, which
+    /// embed `payload.message_id` in the event.)
     #[test]
     fn encrypt_message_generates_a_unique_uuid_message_id() {
         let core = ChatCore::new();
@@ -4505,7 +4577,7 @@ mod tests {
         let encrypt = || {
             core.encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "hello")
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap()
@@ -4531,8 +4603,8 @@ mod tests {
         let reg = core.generate_keypairs().unwrap();
 
         let ckey = core.generate_conversation_key().unwrap();
+        core.set_identity("4001", "1733889755256");
         let mut params = crate::EncryptMessageParams::new("conv-1", "Check this out")
-            .with_identity("sender-1", "1733889755256")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.attachments = Some(vec![crate::AttachmentDescriptor::Url {
             url: "https://example.com/product".to_string(),
@@ -4572,7 +4644,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some(payload.message_id.clone()),
-            Some("sender-1".to_string()),
+            Some("4001".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             Some("1700000000000".to_string()),
@@ -4587,7 +4659,7 @@ mod tests {
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "1733889755256".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -4595,7 +4667,7 @@ mod tests {
         }];
 
         let event = core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap();
         let Event::Message(msg) = event else {
             panic!("expected Message");
@@ -4618,7 +4690,7 @@ mod tests {
             Some("favicon-hash")
         );
 
-        // media_hashes lists both blobs for download + decrypt_stream.
+        // media_hashes lists both blobs for download + decrypt_file.
         let hashes: Vec<(&str, &str)> = msg
             .media_hashes
             .iter()
@@ -4659,7 +4731,7 @@ mod tests {
         let payload = attacker
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "forged")
-                    .with_identity("victim-id", "attacker-pkv")
+                    .with_identity("4003", "attacker-pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -4681,8 +4753,8 @@ mod tests {
         );
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
-            Some("msg-forged".to_string()),
-            Some("victim-id".to_string()),
+            Some(payload.message_id.clone()),
+            Some("4003".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             Some("1700000000000".to_string()),
@@ -4701,7 +4773,7 @@ mod tests {
         // by version alone would wrongly verify this event.
         let signing_keys = [
             SigningKeyEntry {
-                user_id: "victim-id".to_string(),
+                user_id: "4003".to_string(),
                 public_key_version: "victim-pkv".to_string(),
                 public_key: victim_reg.public_key.signing_public_key.clone(),
                 identity_public_key: victim_reg.public_key.public_key.clone(),
@@ -4711,7 +4783,7 @@ mod tests {
                     .clone(),
             },
             SigningKeyEntry {
-                user_id: "attacker-id".to_string(),
+                user_id: "4004".to_string(),
                 public_key_version: "attacker-pkv".to_string(),
                 public_key: attacker_reg.public_key.signing_public_key.clone(),
                 identity_public_key: attacker_reg.public_key.public_key.clone(),
@@ -4723,7 +4795,7 @@ mod tests {
         ];
 
         let err = attacker
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .expect_err("forged sender must not verify");
         assert!(
             err.to_string().contains("could not be verified"),
@@ -4735,7 +4807,7 @@ mod tests {
         let mut lenient = ChatCore::new();
         lenient.set_reject_unverified(false);
         match lenient
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap()
         {
             Event::Message(msg) => assert!(!msg.verified, "forged sender must not verify"),
@@ -4811,7 +4883,7 @@ mod tests {
             }];
 
             let event = core
-                .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+                .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
                 .unwrap();
             match event {
                 Event::Message(msg) => {
@@ -4872,7 +4944,7 @@ mod tests {
         let event_b64 = build_test_message_event(&content, None);
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
 
         match event {
@@ -4902,7 +4974,7 @@ mod tests {
 
         // Unencrypted MCE — key map is unused, any map works
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
 
         match event {
@@ -4925,7 +4997,7 @@ mod tests {
         let content = build_plaintext_content("No sig");
         let event_b64 = build_test_message_event(&content, None);
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(
             result.is_err(),
             "unencrypted message must be rejected under reject_unverified"
@@ -4943,7 +5015,7 @@ mod tests {
         let content = build_plaintext_content("will be 'encrypted'");
         let event_b64 = build_test_message_event(&content, Some("3"));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(result.is_err());
 
         // With reject_unverified=false, the signature check passes and
@@ -4952,7 +5024,7 @@ mod tests {
         core2.generate_keypairs().unwrap();
         core2.set_reject_unverified(false);
 
-        let result2 = core2.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result2 = core2.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(result2.is_err());
         let err_msg = format!("{}", result2.unwrap_err());
         assert!(
@@ -5001,7 +5073,7 @@ mod tests {
         core.generate_keypairs().unwrap();
 
         let result = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         assert!(
             matches!(result, Event::Unknown(_)),
@@ -5019,7 +5091,7 @@ mod tests {
         let event_b64 = build_test_message_event(&content, None);
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Message(msg) => {
@@ -5049,7 +5121,7 @@ mod tests {
         let event_b64 = build_test_message_event(&encrypted, Some("42"));
 
         let event = core
-            .decrypt_event(
+            .decrypt_event_with(
                 &event_b64,
                 &[("42".to_string(), ckey.clone())].into_iter().collect(),
                 &[],
@@ -5106,13 +5178,13 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(result.is_err(), "Should reject unsigned GroupChange");
 
         // With reject_unverified=false it passes through with verified=false.
         core.set_reject_unverified(false);
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => {
@@ -5153,7 +5225,7 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(result.is_err(), "Should reject unsigned GroupChange");
     }
 
@@ -5170,7 +5242,7 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(result.is_err(), "Should reject unsigned MessageDelete");
     }
 
@@ -5183,7 +5255,7 @@ mod tests {
         let gc = ThriftGCE::new(None::<crate::thrift::event::GroupChange>, None);
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(result.is_err(), "Should reject unsigned GroupChange");
     }
 
@@ -5295,7 +5367,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Typing(t) => {
@@ -5317,7 +5389,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MarkConversationReadEvent(read));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::ReadReceipt(r) => {
@@ -5340,7 +5412,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MarkConversationUnreadEvent(unread));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::MarkedUnread(u) => {
@@ -5365,7 +5437,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::MessageDeleted(md) => {
@@ -5391,7 +5463,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageDeleteEvent(del));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::MessageDeleted(md) => {
@@ -5418,7 +5490,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationDeleteEvent(conv_del));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::ConversationDeleted(cd) => {
@@ -5442,7 +5514,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationDeleteEvent(conv_del));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::ConversationDeleted(cd) => {
@@ -5465,7 +5537,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => {
@@ -5489,7 +5561,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => {
@@ -5513,7 +5585,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => {
@@ -5535,7 +5607,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::TooManyMessages),
@@ -5555,7 +5627,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::InvalidSenderSignature),
@@ -5575,7 +5647,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::NonLatestKeyVersion),
@@ -5595,7 +5667,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::RecipientNotTrusted),
@@ -5615,7 +5687,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::RecipientKeyChanged),
@@ -5635,7 +5707,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::EmptyDetail),
@@ -5652,7 +5724,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MessageFailureEvent(failure));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Failure(f) => assert_eq!(f.failure, FailureType::Unknown),
@@ -5670,7 +5742,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::MemberDeleted(md) => {
@@ -5690,7 +5762,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::MemberDeleted(md) => {
@@ -5725,7 +5797,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5763,7 +5835,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5790,7 +5862,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5817,7 +5889,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5860,7 +5932,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5893,7 +5965,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5924,7 +5996,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5955,7 +6027,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -5982,7 +6054,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -6012,7 +6084,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -6040,7 +6112,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => match sc.change {
@@ -6069,7 +6141,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6092,7 +6164,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6115,7 +6187,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6137,7 +6209,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6162,7 +6234,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6187,7 +6259,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6212,7 +6284,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6234,7 +6306,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(cmce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::SettingsChange(sc) => {
@@ -6270,7 +6342,7 @@ mod tests {
         let event_b64 = base64_encode(&bytes);
 
         let result = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match result {
             Event::Unknown(u) => {
@@ -6291,7 +6363,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::GrokSearchResponseEvent(grok));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::Unknown(u) => {
@@ -6332,7 +6404,7 @@ mod tests {
         let event_b64 = build_test_event(ThriftDetail::ConversationKeyChangeEvent(kce));
 
         let event = core
-            .decrypt_event(&event_b64, &Default::default(), &[])
+            .decrypt_event_with(&event_b64, &Default::default(), &[])
             .unwrap();
         match event {
             Event::KeyChange(kc) => {
@@ -6429,7 +6501,7 @@ mod tests {
 
         // Empty key map forces the self-decrypt path.
         let decrypted = core
-            .decrypt_event(&event_b64, &Default::default(), &signing_keys)
+            .decrypt_event_with(&event_b64, &Default::default(), &signing_keys)
             .unwrap();
         match decrypted {
             Event::KeyChange(kc) => {
@@ -6461,7 +6533,7 @@ mod tests {
         let member_del_b64 = build_test_event(ThriftDetail::MemberAccountDeleteEvent(member_del));
 
         let events: Vec<&str> = vec![&typing_b64, &failure_b64, &member_del_b64];
-        let result = core.decrypt_events(&events, &[]);
+        let result = core.decrypt_events_with(&events, &[]);
 
         assert_eq!(result.messages.len(), 3);
         assert!(result.errors.is_empty());
@@ -6480,7 +6552,7 @@ mod tests {
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let events: Vec<&str> = vec![&typing_b64, "!!!invalid-base64!!!"];
-        let result = core.decrypt_events(&events, &[]);
+        let result = core.decrypt_events_with(&events, &[]);
 
         assert_eq!(result.messages.len(), 1);
         assert!(result.errors.contains_key(&1));
@@ -6495,7 +6567,7 @@ mod tests {
         let typing_b64 = build_test_event(ThriftDetail::MessageTypingEvent(typing));
 
         let events: Vec<&str> = vec![&typing_b64];
-        let result = core.decrypt_events(&events, &[]);
+        let result = core.decrypt_events_with(&events, &[]);
 
         assert_eq!(result.messages.len(), 1);
         assert_eq!(
@@ -7524,54 +7596,81 @@ mod tests {
         assert!(core.sign(b"data").is_err());
     }
 
-    // Stream encryption tests
+    // File encryption tests
 
-    /// A conversation-key message under key version "1" with one media
-    /// attachment named `media_hash_key`, and the key map that opens it.
-    fn media_message(
+    /// A core with keys and the session identity of user 1000.
+    fn sending_core() -> ChatCore {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        core.set_identity("1000", "1");
+        core
+    }
+
+    /// The outgoing event of a message `core` sends under key version "1"
+    /// whose only attachment is the file `media_hash_key`, and the key map
+    /// that opens it.
+    fn sent_file_message(
+        core: &ChatCore,
         ckey: &XChatConversationKey,
         media_hash_key: &str,
     ) -> (String, HashMap<String, XChatConversationKey>) {
-        let media = Box::new(ThriftMessageAttachment::Media(Box::new(
-            crate::thrift::product::MediaAttachment {
-                media_hash_key: Some(media_hash_key.to_string()),
-                ..Default::default()
-            },
-        )));
-        let content =
-            crate::pipeline::build_message_content("media", None, Some(vec![media]), None).unwrap();
-        let encrypted = crate::crypto::encryption::encrypt_message(ckey, &content).unwrap();
+        let mut params = crate::EncryptMessageParams::new("1000:2000", "a file")
+            .with_conversation_key(ckey.to_bytes(), "1");
+        params.attachments = Some(vec![crate::AttachmentDescriptor::Media {
+            media_hash_key: media_hash_key.to_string(),
+            width: 4,
+            height: 3,
+            filesize_bytes: 64,
+            filename: "photo.png".to_string(),
+            media_type: None,
+            duration_millis: None,
+        }]);
+        let payload = core.encrypt_message(params).unwrap();
         (
-            build_test_message_event(&encrypted, Some("1")),
+            payload.event_b64,
             [("1".to_string(), ckey.clone())].into_iter().collect(),
         )
     }
 
     #[test]
-    fn encrypt_decrypt_stream_roundtrip() {
-        let core = ChatCore::new();
+    fn encrypt_decrypt_file_roundtrip() {
+        let core = sending_core();
         let ckey = core.generate_conversation_key().unwrap();
-        let (event, keys) = media_message(&ckey, "hash-1");
+        let (event, keys) = sent_file_message(&core, &ckey, "hash-1");
 
-        let plaintext = b"stream data for media encryption test";
-        let encrypted = core.encrypt_stream(plaintext, &ckey).unwrap();
+        let plaintext = b"file data for media encryption test";
+        let encrypted = core
+            .encrypt_file(EncryptFileParams::new(
+                plaintext.to_vec(),
+                event.clone(),
+                keys.clone(),
+                "hash-1",
+            ))
+            .unwrap();
         assert_ne!(&encrypted[..], plaintext);
 
         let decrypted = core
-            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
 
     #[test]
-    fn encrypt_decrypt_stream_empty() {
-        let core = ChatCore::new();
+    fn encrypt_decrypt_file_empty() {
+        let core = sending_core();
         let ckey = core.generate_conversation_key().unwrap();
-        let (event, keys) = media_message(&ckey, "hash-1");
+        let (event, keys) = sent_file_message(&core, &ckey, "hash-1");
 
-        let encrypted = core.encrypt_stream(b"", &ckey).unwrap();
+        let encrypted = core
+            .encrypt_file(EncryptFileParams::new(
+                Vec::new(),
+                event.clone(),
+                keys.clone(),
+                "hash-1",
+            ))
+            .unwrap();
         let decrypted = core
-            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert!(decrypted.is_empty());
     }
@@ -7590,7 +7689,7 @@ mod tests {
     #[test]
     fn decrypt_event_invalid_base64_errors() {
         let core = ChatCore::new();
-        let result = core.decrypt_event("not_valid_base64!!!", &Default::default(), &[]);
+        let result = core.decrypt_event_with("not_valid_base64!!!", &Default::default(), &[]);
         assert!(result.is_err());
     }
 
@@ -7893,24 +7992,24 @@ mod tests {
         let reg = core.generate_keypairs().unwrap();
 
         let ckey = core.generate_conversation_key().unwrap();
-        let ckey_version = "ckv-1";
+        let ckey_version = "1";
 
         // KeyChange event seeds the conversation key for the batch.
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "sender-1", reg.version.clone());
+            build_self_keychange_event(&core, &ckey, ckey_version, "4001", reg.version.clone());
 
         // A signed message encrypted with that conversation key.
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "binding check")
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), ckey_version),
             )
             .unwrap();
-        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let good_key = SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "pkv".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -7927,7 +8026,7 @@ mod tests {
         let events: Vec<&str> = vec![&kc_b64, &msg_b64];
 
         // With only the bad-binding key, it is dropped → message unverified.
-        let result_bad = core.decrypt_events(&events, std::slice::from_ref(&bad_key));
+        let result_bad = core.decrypt_events_with(&events, std::slice::from_ref(&bad_key));
         let msg_bad = result_bad
             .messages
             .iter()
@@ -7943,7 +8042,7 @@ mod tests {
         );
 
         // With the correct key, the same message verifies.
-        let result_good = core.decrypt_events(&events, std::slice::from_ref(&good_key));
+        let result_good = core.decrypt_events_with(&events, std::slice::from_ref(&good_key));
         let msg_good = result_good
             .messages
             .iter()
@@ -8046,20 +8145,20 @@ mod tests {
         let ckey_version = "1001";
 
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "sender-1", reg.version.clone());
+            build_self_keychange_event(&core, &ckey, ckey_version, "4001", reg.version.clone());
 
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "hello")
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), ckey_version),
             )
             .unwrap();
-        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "4001")];
         let events: Vec<&str> = vec![&kc_b64, &msg_b64];
-        let result = core.decrypt_events(&events, &signing_keys);
+        let result = core.decrypt_events_with(&events, &signing_keys);
 
         // Key adopted despite the unverifiable KeyChange signature.
         assert!(result.conversation_keys.keys.contains_key(ckey_version));
@@ -8095,7 +8194,7 @@ mod tests {
             &core,
             &ckey,
             ckey_version,
-            "sender-1",
+            "4001",
             "pkv",
             reg.version.clone(),
         );
@@ -8103,15 +8202,15 @@ mod tests {
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "hello verified")
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), ckey_version),
             )
             .unwrap();
-        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "4001")];
         let events: Vec<&str> = vec![&kc_b64, &msg_b64];
-        let result = core.decrypt_events(&events, &signing_keys);
+        let result = core.decrypt_events_with(&events, &signing_keys);
 
         assert!(
             result.conversation_keys.keys.contains_key(ckey_version),
@@ -8208,7 +8307,7 @@ mod tests {
         // The shipped decrypt path holds enforcement off, so a bad signature
         // is still adopted (and surfaced as an error).
         let bad = build(&core, "100", true);
-        let result = core.decrypt_events(&[&bad], &signing_keys);
+        let result = core.decrypt_events_with(&[&bad], &signing_keys);
         assert!(result.conversation_keys.keys.contains_key("1001"));
 
         // Enforce from sequence 0: a valid signature is kept.
@@ -8245,7 +8344,7 @@ mod tests {
             build_self_keychange_event(&core, &ckey, ckey_version, "sender-1", reg.version.clone());
 
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
-        let result = core.decrypt_events(&[&kc_b64], &signing_keys);
+        let result = core.decrypt_events_with(&[&kc_b64], &signing_keys);
 
         assert!(
             result.conversation_keys.keys.contains_key(ckey_version),
@@ -8332,7 +8431,7 @@ mod tests {
 
         // A verified key change at version 200 is reported as latest.
         let kc200 = build_freshness_keychange(&core, "conv-1", "200", false);
-        let result = core.decrypt_events(&[&kc200], &signing_keys);
+        let result = core.decrypt_events_with(&[&kc200], &signing_keys);
         assert_eq!(
             result.conversation_keys.latest_version.as_deref(),
             Some("200")
@@ -8341,7 +8440,7 @@ mod tests {
         // A later replay of an OLDER verified key change does not downgrade the
         // reported latest, but its key is still adopted for decryption.
         let kc100 = build_freshness_keychange(&core, "conv-1", "100", false);
-        let result = core.decrypt_events(&[&kc100], &signing_keys);
+        let result = core.decrypt_events_with(&[&kc100], &signing_keys);
         assert_eq!(
             result.conversation_keys.latest_version.as_deref(),
             Some("200")
@@ -8357,7 +8456,7 @@ mod tests {
 
         // Establish a verified high-water at 100.
         let kc100 = build_freshness_keychange(&core, "conv-1", "100", false);
-        let result = core.decrypt_events(&[&kc100], &signing_keys);
+        let result = core.decrypt_events_with(&[&kc100], &signing_keys);
         assert_eq!(
             result.conversation_keys.latest_version.as_deref(),
             Some("100")
@@ -8365,7 +8464,7 @@ mod tests {
 
         // A higher version 200 with a bad signature must not become latest.
         let kc200_bad = build_freshness_keychange(&core, "conv-1", "200", true);
-        let result = core.decrypt_events(&[&kc200_bad], &signing_keys);
+        let result = core.decrypt_events_with(&[&kc200_bad], &signing_keys);
         assert_eq!(
             result.conversation_keys.latest_version.as_deref(),
             Some("100")
@@ -8380,11 +8479,11 @@ mod tests {
 
         // High-water for conv-1 at 500.
         let kc_a = build_freshness_keychange(&core, "conv-1", "500", false);
-        let _ = core.decrypt_events(&[&kc_a], &signing_keys);
+        let _ = core.decrypt_events_with(&[&kc_a], &signing_keys);
 
         // conv-2 is independent: its own verified version 100 is latest.
         let kc_b = build_freshness_keychange(&core, "conv-2", "100", false);
-        let result = core.decrypt_events(&[&kc_b], &signing_keys);
+        let result = core.decrypt_events_with(&[&kc_b], &signing_keys);
         assert_eq!(
             result.conversation_keys.latest_version.as_deref(),
             Some("100")
@@ -8400,12 +8499,11 @@ mod tests {
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "downgrade probe")
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
-        let mut event_b64 =
-            wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let mut event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         // Re-parse and rewrite the signature_version field.
         let bytes = base64_decode(&event_b64).unwrap();
@@ -8430,7 +8528,7 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
 
-        let result = core.decrypt_event(&event_b64, &conv_keys, &signing_keys);
+        let result = core.decrypt_event_with(&event_b64, &conv_keys, &signing_keys);
         let err = result.expect_err("v1 signature must be rejected");
         assert!(
             err.to_string().contains("no longer accepted"),
@@ -8451,7 +8549,7 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
 
-        match core.decrypt_event(&event_b64, &conv_keys, &signing_keys) {
+        match core.decrypt_event_with(&event_b64, &conv_keys, &signing_keys) {
             Ok(Event::Message(msg)) => {
                 assert!(!msg.verified, "below-floor version must never verify")
             }
@@ -8462,24 +8560,26 @@ mod tests {
 
     #[test]
     fn signature_version_at_floor_is_processed() {
-        // At/above the floor the message payload format is identical, so
-        // the signature still verifies.
-        let core = ChatCore::new();
-        let reg = core.generate_keypairs().unwrap();
-        let (event_b64, ckey_b64) = build_message_event_with_sig_version(
-            &core,
-            &crate::signatures::MIN_SIGNATURE_VERSION.to_string(),
+        let author = super::test_support::Party::new("4001");
+        let ckey = author.core.generate_conversation_key().unwrap();
+        let event = super::test_support::message_event(
+            &author,
+            "m-1",
+            "100",
+            "9001",
+            None,
+            crate::signatures::MIN_SIGNATURE_VERSION,
+            &ckey,
+            &crate::pipeline::build_message_content("at the floor", None, None, None).unwrap(),
         );
-
-        let ckey =
-            XChatConversationKey::from_bytes(STANDARD_NO_PAD.decode(&ckey_b64).unwrap()).unwrap();
-        let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
-
-        match core.decrypt_event(&event_b64, &conv_keys, &signing_keys) {
-            Ok(Event::Message(msg)) => assert!(msg.verified),
-            other => panic!("expected verified Message, got {:?}", other),
-        }
+        let message = super::test_support::decrypt_message(
+            &ChatCore::new(),
+            &event,
+            &[("9001".to_string(), ckey)].into_iter().collect(),
+            std::slice::from_ref(&author.entry),
+        )
+        .unwrap();
+        assert!(message.verified);
     }
 
     // Default reject_unverified=true rejects unverifiable events
@@ -8521,7 +8621,7 @@ mod tests {
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
         // No matching signing key supplied → rejected.
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(
             result.is_err(),
             "KeyChange with no matching signing key must be rejected"
@@ -8538,7 +8638,7 @@ mod tests {
         let content = build_plaintext_content("plaintext");
         let event_b64 = build_test_message_event(&content, None);
 
-        let result = core.decrypt_event(&event_b64, &Default::default(), &[]);
+        let result = core.decrypt_event_with(&event_b64, &Default::default(), &[]);
         assert!(
             result.is_err(),
             "unencrypted message must be rejected under default reject_unverified"
@@ -8554,15 +8654,15 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut reply_params = crate::EncryptReplyParams::new("conv-1", "a reply", "")
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         reply_params.reply_to_sequence_id = Some("seq-99".into());
         let payload = core.encrypt_reply(reply_params).unwrap();
-        let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "pkv".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -8570,7 +8670,7 @@ mod tests {
         }];
 
         let event = core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap();
         match event {
             Event::Message(msg) => {
@@ -8588,16 +8688,16 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptReactionParams::new("", "thumbs")
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
         let payload = core.encrypt_add_reaction(&params).unwrap();
-        let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "pkv".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -8605,7 +8705,7 @@ mod tests {
         }];
 
         let event = core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap();
         match event {
             Event::Message(msg) => {
@@ -8632,16 +8732,16 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptReactionParams::new("", "thumbs")
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
         let payload = core.encrypt_remove_reaction(&params).unwrap();
-        let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "4001".to_string(),
             public_key_version: "pkv".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -8649,7 +8749,7 @@ mod tests {
         }];
 
         let event = core
-            .decrypt_event(&event_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
             .unwrap();
         match event {
             Event::Message(msg) => {
@@ -8720,7 +8820,7 @@ mod tests {
     fn session_identity_signs_the_same_values_as_explicit_params() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity("sender-1", "pkv");
+        core.set_identity("4001", "pkv");
         let ckey = core.generate_conversation_key().unwrap();
 
         let payload = core
@@ -8734,11 +8834,11 @@ mod tests {
         // Verifying against the session sender_id and signing_key_version
         // proves the signature covers exactly the values an explicit call
         // would have signed.
-        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "4001")];
         match core
-            .decrypt_event(&msg_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&msg_b64, &conv_keys, &signing_keys)
             .unwrap()
         {
             Event::Message(msg) => {
@@ -8770,10 +8870,11 @@ mod tests {
     fn encrypt_message_rejects_disallowed_attachment_combos() {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
+        core.set_identity("4001", "pkv");
         let ckey = core.generate_conversation_key().unwrap();
 
         let media = |mt: Option<i32>| crate::AttachmentDescriptor::Media {
-            media_hash_key: "hash".into(),
+            media_hash_key: format!("hash-{mt:?}"),
             width: 100,
             height: 100,
             filesize_bytes: 1000,
@@ -8789,7 +8890,6 @@ mod tests {
         };
         let params_with = |attachments: Vec<crate::AttachmentDescriptor>| {
             let mut p = crate::EncryptMessageParams::new("conv-1", "hi")
-                .with_identity("sender-1", "pkv")
                 .with_conversation_key(ckey.to_bytes(), "1");
             p.attachments = Some(attachments);
             p
@@ -8882,7 +8982,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
         let mut params = crate::EncryptMessageParams::new("conv-1", "hi")
             .with_conversation_key(ckey.to_bytes(), "1");
-        params.sender_id = Some("sender-1".into());
+        params.sender_id = Some("4001".into());
         let payload = core.encrypt_message(params).unwrap();
         assert_eq!(payload.signature_info.public_key_version, "pkv-2");
     }
@@ -8909,7 +9009,7 @@ mod tests {
     fn cache_resolves_verified_latest_key_for_encrypt() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity("sender-1", "pkv");
+        core.set_identity("4001", "pkv");
         core.set_cache_keys(true);
 
         let ckey = core.generate_conversation_key().unwrap();
@@ -8917,12 +9017,12 @@ mod tests {
             &core,
             &ckey,
             "1001",
-            "sender-1",
+            "4001",
             "pkv",
             Some("pkv".to_string()),
         );
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
-        core.decrypt_events(&[kc_b64.as_str()], &signing_keys);
+        let signing_keys = [signing_key_entry_for(&reg, "4001")];
+        core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
 
         // No key passed: it resolves from the cache at the verified version.
         let payload = core
@@ -8930,10 +9030,10 @@ mod tests {
             .unwrap();
         assert_eq!(payload.conversation_key_version, "1001");
 
-        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
         let conv_keys = [("1001".to_string(), ckey)].into_iter().collect();
         match core
-            .decrypt_event(&msg_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&msg_b64, &conv_keys, &signing_keys)
             .unwrap()
         {
             Event::Message(msg) => assert_eq!(msg.text(), Some("cached")),
@@ -8957,7 +9057,7 @@ mod tests {
             Some("pkv".to_string()),
         );
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
-        core.decrypt_events(&[kc_b64.as_str()], &signing_keys);
+        core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
 
         let err = core
             .encrypt_message(crate::EncryptMessageParams::new("conv-1", "no cache"))
@@ -8977,7 +9077,7 @@ mod tests {
         let kc_b64 =
             build_self_keychange_event(&core, &ckey, "2002", "sender-1", Some("pkv".to_string()));
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
-        let result = core.decrypt_events(&[kc_b64.as_str()], &signing_keys);
+        let result = core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
         assert!(result.conversation_keys.keys.contains_key("2002"));
 
         let err = core
@@ -8990,20 +9090,20 @@ mod tests {
     fn cache_never_moves_below_the_verified_high_water() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity("sender-1", "pkv");
+        core.set_identity("4001", "pkv");
         core.set_cache_keys(true);
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "4001")];
 
         let newer = core.generate_conversation_key().unwrap();
         let kc_newer = build_signed_self_keychange_event(
             &core,
             &newer,
             "2000",
-            "sender-1",
+            "4001",
             "pkv",
             Some("pkv".to_string()),
         );
-        core.decrypt_events(&[kc_newer.as_str()], &signing_keys);
+        core.decrypt_events_with(&[kc_newer.as_str()], &signing_keys);
 
         // A validly signed but older key change replayed later must not
         // displace the newer cached key.
@@ -9012,11 +9112,11 @@ mod tests {
             &core,
             &older,
             "1000",
-            "sender-1",
+            "4001",
             "pkv",
             Some("pkv".to_string()),
         );
-        core.decrypt_events(&[kc_older.as_str()], &signing_keys);
+        core.decrypt_events_with(&[kc_older.as_str()], &signing_keys);
 
         let payload = core
             .encrypt_message(crate::EncryptMessageParams::new("conv-1", "fresh"))
@@ -9028,7 +9128,7 @@ mod tests {
     fn signing_key_store_is_used_when_the_argument_is_omitted() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity("sender-1", "pkv");
+        core.set_identity("4001", "pkv");
         let ckey = core.generate_conversation_key().unwrap();
         let payload = core
             .encrypt_message(
@@ -9036,15 +9136,15 @@ mod tests {
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
-        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "sender-1", "conv-1");
+        let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
         let conv_keys: HashMap<String, XChatConversationKey> =
             [("9001".to_string(), ckey)].into_iter().collect();
 
         // Without stored keys an empty slice still fails verification.
-        assert!(core.decrypt_event(&msg_b64, &conv_keys, &[]).is_err());
+        assert!(core.decrypt_event_with(&msg_b64, &conv_keys, &[]).is_err());
 
-        core.set_signing_keys(vec![signing_key_entry_for(&reg, "sender-1")]);
-        match core.decrypt_event(&msg_b64, &conv_keys, &[]).unwrap() {
+        core.set_signing_keys(vec![signing_key_entry_for(&reg, "4001")]);
+        match core.decrypt_event_with(&msg_b64, &conv_keys, &[]).unwrap() {
             Event::Message(msg) => {
                 assert!(msg.verified);
                 assert_eq!(msg.text(), Some("hello"));
@@ -9073,8 +9173,8 @@ mod tests {
         // Both participants sign with the same test keypair; only the
         // user ids differ, which is what key selection filters on.
         let signing_keys = vec![
-            signing_key_entry_for(&reg, "sender-1"),
-            signing_key_entry_for(&reg, "sender-2"),
+            signing_key_entry_for(&reg, "4001"),
+            signing_key_entry_for(&reg, "4002"),
         ];
         (core, ckey, signing_keys)
     }
@@ -9083,11 +9183,11 @@ mod tests {
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", text)
-                    .with_identity("sender-2", "pkv")
+                    .with_identity("4002", "pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
-        wrap_signed_payload_with_seq(&payload, "sender-2", "conv-1", "seq-orig")
+        wrap_signed_payload_with_seq(&payload, "4002", "conv-1", "seq-orig")
     }
 
     fn decrypt_reply(
@@ -9096,11 +9196,10 @@ mod tests {
         reply_payload: &SendPayload,
         signing_keys: &[SigningKeyEntry],
     ) -> Message {
-        let reply_b64 =
-            wrap_signed_payload_with_seq(reply_payload, "sender-1", "conv-1", "seq-reply");
+        let reply_b64 = wrap_signed_payload_with_seq(reply_payload, "4001", "conv-1", "seq-reply");
         let conv_keys = [("9001".to_string(), ckey.clone())].into_iter().collect();
         match core
-            .decrypt_event(&reply_b64, &conv_keys, signing_keys)
+            .decrypt_event_with(&reply_b64, &conv_keys, signing_keys)
             .unwrap()
         {
             Event::Message(msg) => *msg,
@@ -9116,7 +9215,7 @@ mod tests {
         let reply_payload = core
             .encrypt_reply(
                 crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9148,7 +9247,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "what was actually said");
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_text = Some("words never sent".into());
         let reply_payload = core.encrypt_reply(params).unwrap();
@@ -9166,7 +9265,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "hello");
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_sender_id = Some(424242);
         let reply_payload = core.encrypt_reply(params).unwrap();
@@ -9187,7 +9286,7 @@ mod tests {
         let payload = core
             .encrypt_message(
                 crate::EncryptMessageParams::new("conv-1", "genuine text")
-                    .with_identity("sender-2", "pkv")
+                    .with_identity("4002", "pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9195,12 +9294,12 @@ mod tests {
         let mut sig = base64_decode_or_empty(&tampered.signature);
         sig[0] ^= 0x01;
         tampered.signature = STANDARD_NO_PAD.encode(&sig);
-        let orig_b64 = wrap_signed_payload_with_seq(&tampered, "sender-2", "conv-1", "seq-orig");
+        let orig_b64 = wrap_signed_payload_with_seq(&tampered, "4002", "conv-1", "seq-orig");
 
         let reply_payload = core
             .encrypt_reply(
                 crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-                    .with_identity("sender-1", "pkv")
+                    .with_identity("4001", "pkv")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9218,7 +9317,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "a long original message body");
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_text = Some("a long original".into());
         let reply_payload = core.encrypt_reply(params).unwrap();
@@ -9235,7 +9334,7 @@ mod tests {
         let (core, ckey, signing_keys) = reply_test_setup();
 
         let mut orig_params = crate::EncryptMessageParams::new("conv-1", "#topic original")
-            .with_identity("sender-2", "pkv")
+            .with_identity("4002", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         orig_params.entities = Some(vec![crate::EntityDescriptor {
             start: 0,
@@ -9243,13 +9342,12 @@ mod tests {
             entity_type: "hashtag".into(),
         }]);
         let orig_payload = core.encrypt_message(orig_params).unwrap();
-        let orig_b64 =
-            wrap_signed_payload_with_seq(&orig_payload, "sender-2", "conv-1", "seq-orig");
+        let orig_b64 = wrap_signed_payload_with_seq(&orig_payload, "4002", "conv-1", "seq-orig");
 
         // A prefix text override must not suppress deriving the remaining
         // preview fields from the decrypted original.
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_text = Some("#topic".into());
         let reply_payload = core.encrypt_reply(params).unwrap();
@@ -9277,7 +9375,7 @@ mod tests {
         let (core, ckey, signing_keys) = reply_test_setup();
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", "")
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_sequence_id = Some("seq-orig".into());
         params.reply_to_text = Some("whatever".into());
@@ -9293,15 +9391,16 @@ mod tests {
         core: &ChatCore,
         ckey: &XChatConversationKey,
         sender: &str,
-        original_seq: &str,
+        original_b64: &str,
         updated_text: &str,
         edit_seq: &str,
     ) -> String {
+        let original = ChatCore::parse_event_b64(original_b64).unwrap();
         let edit = crate::thrift::product::MessageEdit::new(
-            Some(original_seq.to_string()),
+            original.sequence_id,
             Some(updated_text.to_string()),
             None,
-            None,
+            original.message_id,
         );
         let holder = crate::thrift::product::MessageEntryHolder::new(Some(Box::new(
             crate::thrift::product::MessageEntryContents::MessageEdit(Box::new(edit)),
@@ -9331,14 +9430,14 @@ mod tests {
         let edit_b64 = edit_event_b64(
             &core,
             &ckey,
-            "sender-2",
-            "seq-orig",
+            "4002",
+            &orig_b64,
             "the new wording",
             "seq-edit",
         );
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_edit_event = Some(edit_b64);
         let reply_payload = core.encrypt_reply(params).unwrap();
@@ -9367,8 +9466,8 @@ mod tests {
         let edit_b64 = edit_event_b64(
             &core,
             &ckey,
-            "sender-2",
-            "seq-orig",
+            "4002",
+            &orig_b64,
             "the new wording",
             "seq-edit",
         );
@@ -9376,7 +9475,7 @@ mod tests {
         // A preview that embeds the edit but quotes the pre-edit text is
         // misattributing the message's current contents.
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_edit_event = Some(edit_b64);
         params.reply_to_text = Some("the first wording".into());
@@ -9397,14 +9496,14 @@ mod tests {
         let edit_b64 = edit_event_b64(
             &core,
             &ckey,
-            "sender-1",
-            "seq-orig",
+            "4001",
+            &orig_b64,
             "the new wording",
             "seq-edit",
         );
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_edit_event = Some(edit_b64);
         let reply_payload = core.encrypt_reply(params).unwrap();
@@ -9422,14 +9521,14 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "react to me");
 
         let params = crate::EncryptReactionParams::new(orig_b64, "👍")
-            .with_identity("sender-1", "pkv")
+            .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
         let payload = core.encrypt_add_reaction(&params).unwrap();
 
-        let react_b64 = wrap_signed_payload_with_seq(&payload, "sender-1", "conv-1", "seq-react");
+        let react_b64 = wrap_signed_payload_with_seq(&payload, "4001", "conv-1", "seq-react");
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         match core
-            .decrypt_event(&react_b64, &conv_keys, &signing_keys)
+            .decrypt_event_with(&react_b64, &conv_keys, &signing_keys)
             .unwrap()
         {
             Event::Message(msg) => match &msg.content {

@@ -166,29 +166,36 @@ export class XChatClient {
     return this.client.chat.addGroupMembers(conversationId, body);
   }
 
-  // -- Media (encrypted blobs) ------------------------------------------------
+  // -- Media (encrypted files) ------------------------------------------------
 
   static UPLOAD_CHUNK = 3 * 1024 * 1024;
 
   /**
-   * Upload an encrypted media blob; returns its `media_hash_key`.
+   * Start an upload; returns `{ sessionId, mediaHashKey }`.
    *
-   * Three-step flow: initialize (returns an upload session and the hash
-   * key), append (3 MB segments), finalize. The media endpoints take the
-   * colon form of the conversation id in the body.
+   * `totalBytes` is the encrypted size, `ChatCore.encryptedFileSize` of the
+   * plaintext size. The media hash key names the file in the message's
+   * attachments; encrypt the file once the message is built, then
+   * `finishMediaUpload`. The media endpoints take the colon form of the
+   * conversation id in the body.
    */
-  async uploadMedia(conversationId, ciphertext) {
+  async startMediaUpload(conversationId, totalBytes) {
     const conv = conversationId.replaceAll("-", ":");
     const init = await this.client.chat.mediaUploadInitialize({
       conversationId: conv,
-      totalBytes: ciphertext.length,
+      totalBytes,
     });
     const sessionId = init.data?.sessionId ?? init.data?.session_id;
     const mediaHashKey = init.data?.mediaHashKey ?? init.data?.media_hash_key;
     if (!sessionId || !mediaHashKey) {
       throw new Error(`media upload initialize failed: ${JSON.stringify(init)}`);
     }
+    return { sessionId: String(sessionId), mediaHashKey: String(mediaHashKey) };
+  }
 
+  /** Upload the encrypted file in 3 MB segments, then finalize. */
+  async finishMediaUpload(conversationId, { sessionId, mediaHashKey }, ciphertext) {
+    const conv = conversationId.replaceAll("-", ":");
     let segment = 0;
     for (let offset = 0; offset < ciphertext.length; offset += XChatClient.UPLOAD_CHUNK) {
       const chunk = ciphertext.subarray(offset, offset + XChatClient.UPLOAD_CHUNK);
@@ -206,7 +213,6 @@ export class XChatClient {
       mediaHashKey,
       numParts: String(segment),
     });
-    return String(mediaHashKey);
   }
 
   /**

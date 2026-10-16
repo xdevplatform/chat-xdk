@@ -15,9 +15,10 @@
 //!   4. react to the sent message (add + remove), decrypting the add back
 //!
 //! Optional extras:
-//!   CHATXDK_E2E_MEDIA=1   also stream-encrypts a media blob, uploads it,
-//!                         sends a message referencing it, then downloads and
-//!                         stream-decrypts it back to the original bytes
+//!   CHATXDK_E2E_MEDIA=1   also starts a media upload, sends a message naming
+//!                         it, encrypts the file from that message, finishes
+//!                         the upload, then downloads and decrypts it back to
+//!                         the original bytes
 //!   CHATXDK_E2E_GROUPS=1  also creates a group (two-signature create), sends
 //!                         a group message, and adds the 1:1 partner as a member
 
@@ -348,21 +349,18 @@ fn e2e_live() {
         .expect("send reaction remove");
     eprintln!("reaction remove sent");
 
-    // -- 5. Optional: media — stream-encrypt, upload, send, download, decrypt
+    // -- 5. Optional: media — start upload, build message, encrypt, finish, send
     if env("CHATXDK_E2E_MEDIA").as_deref() == Some("1") {
         // A deterministic multi-chunk payload, so the incremental encryptor
         // emits several frames and any corruption is byte-attributable.
         let plaintext: Vec<u8> = (0..300_000u32)
             .map(|i| ((i * 31 + 7) % 256) as u8)
             .collect();
-        let ciphertext = core.encrypt_media(&plaintext, &key).expect("encrypt_media");
-        let media_hash_key = api
-            .upload_media(&canonical_conv, &ciphertext)
-            .expect("upload_media");
-        eprintln!(
-            "encrypted media uploaded: {media_hash_key} ({} bytes)",
-            ciphertext.len()
-        );
+        let total_bytes = chat_xdk_core::utils::encrypted_file_size(plaintext.len() as u64)
+            .expect("encrypted_file_size");
+        let (session_id, media_hash_key) = api
+            .start_media_upload(&canonical_conv, total_bytes)
+            .expect("start_media_upload");
 
         let media_msg = core
             .encrypt_reply(
@@ -388,6 +386,20 @@ fn e2e_live() {
                 },
             )
             .expect("encrypt media message");
+        let ciphertext = core
+            .encrypt_media(
+                &plaintext,
+                &media_msg.event_b64,
+                &HashMap::from([(kv.clone(), key.clone())]),
+                &media_hash_key,
+            )
+            .expect("encrypt_media");
+        api.finish_media_upload(&canonical_conv, &session_id, &media_hash_key, &ciphertext)
+            .expect("finish_media_upload");
+        eprintln!(
+            "encrypted media uploaded: {media_hash_key} ({} bytes)",
+            ciphertext.len()
+        );
         api.send_message(&canonical_conv, &media_msg)
             .expect("send media message");
         let (one, _, media_event_b64) = await_decrypted(
@@ -428,7 +440,7 @@ fn e2e_live() {
             plaintext,
             "downloaded media did not decrypt to the original bytes"
         );
-        eprintln!("media downloaded + stream-decrypted to the original bytes");
+        eprintln!("media downloaded + decrypted to the original bytes");
     }
 
     // -- 6. Optional: group create + message + member add --------------------

@@ -9,7 +9,7 @@ import init, {
   hexToBytes,
   detectMimeType,
   detectImageDimensions,
-  encryptedStreamSize,
+  encryptedFileSize,
 } from "../../pkg/chat_xdk_wasm.js";
 
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
@@ -48,11 +48,11 @@ async function main() {
   // matches Node's own base64 encoding
   assert.equal(b64, Buffer.from(someBytes).toString("base64"));
 
-  assert.equal(encryptedStreamSize(0), 24);
-  assert.equal(encryptedStreamSize(1), 42);
-  assert.equal(encryptedStreamSize(1024), 1065);
-  assert.equal(encryptedStreamSize(1025), 1083);
-  assert.throws(() => encryptedStreamSize(-1), /non-negative safe integer/);
+  assert.equal(encryptedFileSize(0), 24);
+  assert.equal(encryptedFileSize(1), 42);
+  assert.equal(encryptedFileSize(1024), 1065);
+  assert.equal(encryptedFileSize(1025), 1083);
+  assert.throws(() => encryptedFileSize(-1), /non-negative safe integer/);
 
   // hex roundtrip
   const hex = bytesToHex(someBytes);
@@ -232,7 +232,7 @@ async function main() {
 
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // 3. encrypt/decrypt (generic string) + encryptStream/decryptStream
+  // 3. encrypt/decrypt (generic string) + encryptFile/decryptFile
   const text = "group name \u{1F510} \u00e9\u00e8";
   const ciphertextB64 = chat.encrypt(text, convKey);
   assert.equal(typeof ciphertextB64, "string");
@@ -240,20 +240,75 @@ async function main() {
   // randomized ciphertext
   assert.notEqual(chat.encrypt(text, convKey), chat.encrypt(text, convKey));
 
-  // Media decrypts through the message that names it: the fixture
-  // conversation-key message whose media is under the conversation key.
-  const mediaEvent = v.event_conversation_key_media_b64;
-  const mediaKeys = { [v.event_conversation_key_version]: convKey };
-  const mediaHashKey = v.media_conversation_key_hash_key;
+  // A message with files is built first; each file is then encrypted from
+  // the returned eventB64 and the media hash key its attachment names, and
+  // decrypts through the sent message's event.
+  const sender = new Chat();
+  sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+  sender.setIdentity("111", "1");
+  const mediaHashKey = "photo";
+  const mediaKeys = { "1": convKey };
+  const photoAttachment = (hash) => ({
+    attachment_type: "media",
+    media_hash_key: hash,
+    width: 4,
+    height: 3,
+    filesize_bytes: 64,
+    filename: `${hash}.jpg`,
+    media_type: 1,
+  });
+  const sendPhotos = (text, hashes) =>
+    sender.encryptMessage({
+      conversationId: "conv-1",
+      text,
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+      attachments: hashes.map(photoAttachment),
+    });
+  const photoPayload = sendPhotos("a photo", [mediaHashKey]);
+  const mediaEvent = photoPayload.eventB64;
+  const fileParams = { eventB64: mediaEvent, conversationKeys: mediaKeys, mediaHashKey };
 
   const plaintext = b64ToBytes(v.plaintext_b64);
-  const streamCt1 = chat.encryptStream(plaintext, convKey);
-  const streamCt2 = chat.encryptStream(plaintext, convKey);
-  assert.notDeepEqual(streamCt1, streamCt2); // randomized nonces
-  assert.deepEqual(chat.decryptStream(streamCt1, mediaEvent, mediaKeys, mediaHashKey), plaintext);
+  // A session with no identity encrypts the file.
+  const fileCt1 = new Chat().encryptFile({ ...fileParams, file: plaintext });
+  const fileCt2 = sender.encryptFile({ ...fileParams, file: plaintext });
+  assert.notDeepEqual(fileCt1, fileCt2); // randomized nonces
+  assert.equal(fileCt1.length, encryptedFileSize(plaintext.length));
+  assert.deepEqual(chat.decryptFile({ ...fileParams, encrypted: fileCt1 }), plaintext);
 
-  // 3b. Incremental streams: chunked encryptor/decryptor roundtrip over a
-  // multi-frame payload, and a truncated stream fails at finish (missing
+  // A message with files takes the id its files derive: building it again
+  // gives the same id, so files already encrypted stay valid.
+  assert.equal(sendPhotos("another caption", [mediaHashKey]).messageId, photoPayload.messageId);
+  assert.notEqual(sendPhotos("a photo", ["other"]).messageId, photoPayload.messageId);
+  assert.match(photoPayload.messageId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  // Each file needs its own media hash key.
+  assert.throws(
+    () => sendPhotos("twice", [mediaHashKey, mediaHashKey]),
+    /media_hash_key 'photo' is in more than one attachment/,
+  );
+
+  // File errors say what to pass instead.
+  assert.throws(
+    () => sender.encryptFile({ ...fileParams, file: plaintext, mediaHashKey: "other" }),
+    /is not one of the message's files/,
+  );
+  assert.throws(
+    () => sender.encryptFile({ ...fileParams, file: [1, 2, 3] }),
+    /Invalid encryptFile params: file must be a Uint8Array/,
+  );
+  assert.throws(
+    () => sender.encryptFile({ ...fileParams, file: plaintext, conversationKeys: { "1": new Uint8Array(3) } }),
+    /the key for version '1' in the conversation key map is not 32 bytes/,
+  );
+  assert.throws(
+    () => sender.encryptFile({ eventB64: mediaEvent, conversationKeys: mediaKeys, file: plaintext }),
+    /Invalid encryptFile params.*missing field `mediaHashKey`/,
+  );
+
+  // 3b. Incremental files: chunked encryptor/decryptor roundtrip over a
+  // multi-frame payload, and a truncated file fails at finish (missing
   // final frame).
   {
     const concat = (pieces) => {
@@ -266,15 +321,16 @@ async function main() {
       return out;
     };
     const bigPlain = new Uint8Array(5000).fill(0xab);
-    const enc = chat.streamEncryptor(convKey);
+    const enc = sender.fileEncryptor(fileParams);
     const ctPieces = [];
     for (let i = 0; i < bigPlain.length; i += 700) {
       ctPieces.push(enc.push(bigPlain.subarray(i, i + 700)));
     }
     ctPieces.push(enc.finish());
     const ciphertext = concat(ctPieces);
+    assert.equal(ciphertext.length, encryptedFileSize(bigPlain.length));
 
-    const dec = chat.streamDecryptor(mediaEvent, mediaKeys, mediaHashKey);
+    const dec = chat.fileDecryptor(fileParams);
     const ptPieces = [];
     for (let i = 0; i < ciphertext.length; i += 333) {
       ptPieces.push(dec.push(ciphertext.subarray(i, i + 333)));
@@ -282,12 +338,12 @@ async function main() {
     ptPieces.push(dec.finish());
     assert.deepEqual(concat(ptPieces), bigPlain);
 
-    const truncated = chat.streamDecryptor(mediaEvent, mediaKeys, mediaHashKey);
+    const truncated = chat.fileDecryptor(fileParams);
     truncated.push(ciphertext.subarray(0, ciphertext.length - 4));
     assert.throws(() => truncated.finish(), /truncated/);
   }
 
-  // 4. encryptMessage returns a SendPayload with signatureVersion === "7"
+  // 4. encryptMessage returns a SendPayload with signatureVersion === "10"
   const payload = chat.encryptMessage({
     senderId: "111",
     conversationId: "conv-1",
@@ -302,7 +358,7 @@ async function main() {
   assert.equal(typeof payload.encryptedContent, "string");
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
-  assert.equal(payload.signatureInfo.signatureVersion, "7");
+  assert.equal(payload.signatureInfo.signatureVersion, "10");
   assert.equal(payload.conversationKeyVersion, "1");
 
   // 4b. encryptReply produces a signed payload like encryptMessage
@@ -320,16 +376,36 @@ async function main() {
   assert.ok(replyPayload.encryptedContent.length > 0);
   assert.ok(replyPayload.signature.length > 0);
   assert.ok(replyPayload.encodedEventSignature.length > 0);
-  assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
+  assert.equal(replyPayload.signatureInfo.signatureVersion, "10");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
+  // Own sends decrypt through their eventB64, verified against the fixture
+  // signing key registered to sender 111.
+  const ownSigningKeys = [
+    {
+      userId: "111",
+      publicKeyVersion: "1",
+      publicKey: v.signing_public_b64,
+      identityPublicKey: v.identity_public_b64,
+      identityPublicKeySignature: v.identity_public_key_signature_b64,
+    },
+  ];
+  const decryptOwn = (sent) => {
+    const event = chat.decryptEvent({
+      eventB64: sent.eventB64,
+      conversationKeys: { "1": convKey },
+      signingKeys: ownSigningKeys,
+    });
+    assert.equal(event.verified, true);
+    assert.equal(event.id, sent.messageId);
+    assert.equal(event.sequenceId, null);
+    return event.content;
+  };
+
   // 4b2. replyToSenderId precision: a snowflake-sized id passed as a string
-  // must land in the reply payload exactly. The id is above 2^53 (where JS
-  // numbers stop being exact) and chosen so its 8 big-endian i64 bytes are
-  // all ASCII, keeping the Thrift plaintext valid UTF-8 so the encrypted
-  // content can be inspected through chat.decrypt with the same key.
+  // must land in the reply payload exactly. The id is above 2^53, where JS
+  // numbers stop being exact.
   const bigSenderId = 0x2122232425262728n; // 2387509390608492328 > 2^53
-  const bigSenderIdBE = "!\"#$%&'("; // bytes 0x21..0x28, big-endian
   const replyParamsBase = {
     senderId: "111",
     conversationId: "conv-1",
@@ -344,19 +420,10 @@ async function main() {
     ...replyParamsBase,
     replyToSenderId: bigSenderId.toString(),
   });
-  // encryptedContent is a Thrift MessageCreateEvent whose `contents` field
-  // (id 100, binary) is the XSalsa20-Poly1305 ciphertext: 0x0B type byte,
-  // i16 field id, i32 big-endian length, then the ciphertext itself.
-  const eventBytes = b64ToBytes(bigReplyPayload.encryptedContent);
-  assert.equal(eventBytes[0], 0x0b);
-  assert.equal((eventBytes[1] << 8) | eventBytes[2], 100);
-  const ctLen =
-    (eventBytes[3] << 24) | (eventBytes[4] << 16) | (eventBytes[5] << 8) | eventBytes[6];
-  const replyCiphertext = eventBytes.subarray(7, 7 + ctLen);
-  const decodedReplyContent = chat.decrypt(bytesToBase64(replyCiphertext), convKey);
-  assert.ok(
-    decodedReplyContent.includes(bigSenderIdBE),
-    "decrypted reply content must embed the exact big-endian sender id",
+  assert.equal(
+    decryptOwn(bigReplyPayload).replyingToPreview.senderId,
+    bigSenderId.toString(),
+    "the decrypted reply preview must carry the exact sender id",
   );
   // The same id as a number has already been rounded by JS — rejected.
   assert.throws(
@@ -395,9 +462,9 @@ async function main() {
   assert.ok(removePayload.signature.length > 0);
   assert.ok(removePayload.encodedEventSignature.length > 0);
 
-  // 4c2. encryptEdit produces a signed payload whose encrypted contents
-  // decrypt back to the edit: updated text, target sequence id, and the
-  // [start, end, type] entity tuple all survive the WASM boundary.
+  // 4c2. encryptEdit produces a signed payload that decrypts back to the
+  // edit: updated text, target sequence id, and the [start, end, type]
+  // entity tuple all survive the WASM boundary.
   const editPayload = chat.encryptEdit({
     senderId: "111",
     conversationId: "conv-1",
@@ -412,35 +479,12 @@ async function main() {
   assert.ok(editPayload.signature.length > 0);
   assert.ok(editPayload.encodedEventSignature.length > 0);
   assert.ok(editPayload.messageId.length > 0);
-  // Same extraction as 4b2: the ciphertext is the `contents` binary field
-  // (id 100) of the Thrift MessageCreateEvent, and the edit plaintext is
-  // all-ASCII Thrift, so chat.decrypt returns it intact as a string.
-  const editEventBytes = b64ToBytes(editPayload.encryptedContent);
-  assert.equal(editEventBytes[0], 0x0b);
-  assert.equal((editEventBytes[1] << 8) | editEventBytes[2], 100);
-  const editCtLen =
-    (editEventBytes[3] << 24) |
-    (editEventBytes[4] << 16) |
-    (editEventBytes[5] << 8) |
-    editEventBytes[6];
-  const editCiphertext = editEventBytes.subarray(7, 7 + editCtLen);
-  const decodedEdit = chat.decrypt(bytesToBase64(editCiphertext), convKey);
-  assert.ok(
-    decodedEdit.includes("see https://example.com"),
-    "decrypted edit content must embed the updated text",
-  );
-  assert.ok(
-    decodedEdit.includes("seq-99"),
-    "decrypted edit content must embed the target sequence id",
-  );
-  // Thrift RichTextEntity serializes field 1 (i32 startIndex) then field 2
-  // (i32 endIndex): the [4, 23, "url"] tuple must land as start=4, end=23.
-  assert.ok(
-    decodedEdit.includes(
-      "\u0008\u0000\u0001\u0000\u0000\u0000\u0004\u0008\u0000\u0002\u0000\u0000\u0000\u0017",
-    ),
-    "decrypted edit content must carry the entity's start/end indexes",
-  );
+  const decodedEdit = decryptOwn(editPayload);
+  assert.equal(decodedEdit.newText, "see https://example.com");
+  assert.equal(decodedEdit.targetMessageId, "seq-99");
+  assert.equal(decodedEdit.entities.length, 1);
+  assert.equal(decodedEdit.entities[0].startIndex, 4);
+  assert.equal(decodedEdit.entities[0].endIndex, 23);
 
   // 4c3. prepareMessageDelete returns a signed action with the encoded
   // MessageDeleteEvent detail; 1:1 ids are signed in canonical colon form.
@@ -581,13 +625,11 @@ async function main() {
 
   // 4g. A URL card attachment carries encrypted banner/favicon image
   // references (media hash keys) for clickable preview cards.
-  const urlCardPayload = chat.encryptMessage({
-    senderId: "111",
+  const urlCardPayload = sender.encryptMessage({
     conversationId: "conv-1",
     conversationKey: convKey,
     text: "check this out",
     conversationKeyVersion: "1",
-    signingKeyVersion: "1",
     attachments: [
       {
         attachment_type: "url",
@@ -610,6 +652,20 @@ async function main() {
   });
   assert.ok(urlCardPayload.encryptedContent.length > 0);
   assert.ok(urlCardPayload.signature.length > 0);
+  assert.deepEqual(
+    chat.decryptFile({
+      encrypted: sender.encryptFile({
+        file: plaintext,
+        eventB64: urlCardPayload.eventB64,
+        conversationKeys: mediaKeys,
+        mediaHashKey: "favicon-hash",
+      }),
+      eventB64: urlCardPayload.eventB64,
+      conversationKeys: mediaKeys,
+      mediaHashKey: "favicon-hash",
+    }),
+    plaintext,
+  );
 
   // 4h. A banner image missing any of its required fields is rejected.
   // media_hash_key, filesize_bytes, and filename are all mandatory: receiving
@@ -672,12 +728,27 @@ async function main() {
     { userId: "111", publicKeyVersion: "1", publicKey: v.signing_public_b64 },
   ];
   assert.throws(
-    () => chat.decryptEvents(["AAAA"], malformedSigningKeys),
-    /Invalid signingKeys/i,
+    () => chat.decryptEvents({ events: ["AAAA"], signingKeys: malformedSigningKeys }),
+    /Invalid decryptEvents params.*missing field `identityPublicKey`/,
   );
   assert.throws(
-    () => chat.decryptEvent("AAAA", {}, malformedSigningKeys),
-    /Invalid signingKeys/i,
+    () => chat.decryptEvent({ eventB64: "AAAA", conversationKeys: {}, signingKeys: malformedSigningKeys }),
+    /Invalid decryptEvent params.*missing field `identityPublicKey`/,
+  );
+
+  // 5b. decryptEvent takes the key map as given: it is required, and an
+  // entry that is not a 32-byte key is an error.
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64 }),
+    /Invalid decryptEvent params.*missing field `conversationKeys`/,
+  );
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys: null }),
+    /conversationKeys must be an object/,
+  );
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys: bundle }),
+    /the key for version 'keys' in the conversation key map is not 32 bytes/,
   );
 
   // 6. Juicebox guess-budget parity with the native bindings: the config's

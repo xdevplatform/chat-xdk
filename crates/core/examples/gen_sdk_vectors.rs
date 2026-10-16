@@ -91,7 +91,7 @@ fn hex_key(hex_str: &str) -> chat_xdk_core::crypto::keys::XChatConversationKey {
 
 fn encrypt_media(key_hex: &str, plaintext: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    chat_xdk_core::crypto::encryption::encrypt_stream(&hex_key(key_hex), plaintext, &mut out)
+    chat_xdk_core::crypto::encryption::encrypt_file(&hex_key(key_hex), plaintext, &mut out)
         .expect("encrypt media");
     out
 }
@@ -352,7 +352,7 @@ fn main() {
     .expect("frame conversation-key media message");
     let media_conversation_key_plaintext: Vec<u8> = (0..1500u32).map(|i| (i % 241) as u8).collect();
     let mut media_conversation_key_encrypted = Vec::new();
-    chat_xdk_core::crypto::encryption::encrypt_stream(
+    chat_xdk_core::crypto::encryption::encrypt_file(
         &ckey,
         media_conversation_key_plaintext.as_slice(),
         &mut media_conversation_key_encrypted,
@@ -384,8 +384,10 @@ fn main() {
         identity_public_key: B64.encode(identity_kp.public.encoded()),
         identity_public_key_signature: B64.encode(&identity_binding_signature),
     }];
-    let cached =
-        replier.decrypt_events(&[&event_key_change_message_key_b64], &fixture_signing_keys);
+    let cached = replier.decrypt_events(
+        chat_xdk_core::DecryptEventsParams::new(vec![event_key_change_message_key_b64.clone()])
+            .with_signing_keys(fixture_signing_keys.to_vec()),
+    );
     assert!(cached.errors.is_empty(), "{:?}", cached.errors);
     let reply_message_key = replier
         .encrypt_reply(

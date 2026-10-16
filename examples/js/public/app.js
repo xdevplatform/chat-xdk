@@ -127,7 +127,7 @@ async function loadBacklog() {
   await storeSigningKeysFor(raw);
   // Signing keys come from the store; the verified conversation keys land in
   // the SDK's key cache for encryptMessage to resolve later.
-  const batch = chat.decryptEvents(eventsB64);
+  const batch = chat.decryptEvents({ events: eventsB64 });
   state.paginationToken = page.meta?.next_token;
   for (const m of batch.messages) renderMessage(m.event);
   log(`backlog: ${batch.messages.length} messages, ${Object.keys(batch.conversationKeys.keys ?? {}).length} keys`);
@@ -144,13 +144,13 @@ async function poll() {
     for (const item of raw) {
       const eventB64 = item.encodedEvent ?? item.encoded_event;
       if (!eventB64) continue;
-      // Both key arguments omitted: conversation keys resolve from the cache
-      // and signing keys from the store.
-      const event = chat.decryptEvent(eventB64);
+      // An empty key map resolves from the cache, and the omitted signing
+      // keys from the store.
+      const event = chat.decryptEvent({ eventB64, conversationKeys: {} });
       if (event.type === "keyChange") {
         // Only the batch path feeds the key cache, so route key changes back
         // through it to adopt the rotated key.
-        chat.decryptEvents([eventB64]);
+        chat.decryptEvents({ events: [eventB64] });
         continue;
       }
       renderMessage(event);

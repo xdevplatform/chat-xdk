@@ -27,8 +27,11 @@
 //	// Decrypt events. The batch path self-extracts conversation keys from
 //	// KeyChange events (and caches them while SetCacheKeys is on); with nil
 //	// signing keys the stored set is used.
-//	result, _ := chat.DecryptEvents(eventsB64, nil)
-//	event, err := chat.DecryptEvent(eventB64, nil, nil) // nil maps = session stores
+//	result, _ := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: eventsB64})
+//	event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{
+//	    EventB64:         eventB64,
+//	    ConversationKeys: result.ConversationKeys.Keys,
+//	})
 //
 //	// Encrypt messages: the sender identity and conversation key resolve
 //	// from the session; the SDK generates the message id — read it back
@@ -251,24 +254,17 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 // a per-event failure as an error: those are collected in the result's
 // Errors map, keyed by event index.
 //
-// A nil (or empty) signingKeys falls back to the keys stored via
+// Nil (or empty) SigningKeys fall back to the keys stored via
 // SetSigningKeys; with nothing stored either, signed events fail decryption
 // under the default reject-unverified policy.
-func (c *Chat) DecryptEvents(events []string, signingKeys []SigningKeyEntry) (*DecryptEventsResult, error) {
+func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, error) {
 	defer runtime.KeepAlive(c)
-	eventsJSON, err := json.Marshal(events)
+	params.Events = orEmpty(params.Events)
+	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-	signingJSON := "[]"
-	if signingKeys != nil {
-		b, err := json.Marshal(signingKeys)
-		if err != nil {
-			return nil, err
-		}
-		signingJSON = string(b)
-	}
-	data, err := ffiDecryptEvents(c.h, string(eventsJSON), signingJSON)
+	data, err := ffiDecryptEvents(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}
@@ -395,36 +391,21 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 
 // DecryptEvent decrypts a single webhook event and errors on failure.
 //
-// conversationKeys is a map of version -> raw 32-byte conversation key,
-// from ExtractConversationKeys or DecryptConversationKey. A nil (or empty)
-// map falls back to the opt-in conversation-key cache (SetCacheKeys); pass
-// nil for non-message events.
-//
-// signingKeys is a list of signing keys for the sender; the SDK picks the
-// matching version. A nil (or empty) list falls back to the keys stored via
-// SetSigningKeys. With nothing stored either, every signed event fails under
-// the default reject-unverified policy; only after SetRejectUnverified(false)
-// are such events returned with Verified=false.
-func (c *Chat) DecryptEvent(eventB64 string, conversationKeys map[string][]byte, signingKeys []SigningKeyEntry) (*Event, error) {
+// Nil (or empty) ConversationKeys fall back to the opt-in conversation-key
+// cache (SetCacheKeys); leave them nil for non-message events. Nil (or empty)
+// SigningKeys fall back to the keys stored via SetSigningKeys; the SDK picks
+// the sender's key for the version the event carries. With no signing keys
+// passed or stored, every signed event fails under the default
+// reject-unverified policy; only after SetRejectUnverified(false) are such
+// events returned with Verified=false.
+func (c *Chat) DecryptEvent(params DecryptEventParams) (*Event, error) {
 	defer runtime.KeepAlive(c)
-	var signingKeysJSON string
-
-	convKeysJSON, err := marshalConversationKeys(conversationKeys)
+	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
+	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-
-	if signingKeys != nil {
-		b, err := json.Marshal(signingKeys)
-		if err != nil {
-			return nil, err
-		}
-		signingKeysJSON = string(b)
-	} else {
-		signingKeysJSON = "[]"
-	}
-
-	data, err := ffiDecryptEvent(c.h, eventB64, convKeysJSON, signingKeysJSON)
+	data, err := ffiDecryptEvent(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}
@@ -435,20 +416,12 @@ func (c *Chat) DecryptEvent(eventB64 string, conversationKeys map[string][]byte,
 	return &event, nil
 }
 
-// marshalConversationKeys encodes a version -> key map as the FFI's
-// {"version": "base64"} JSON; a nil map encodes as an empty object.
-func marshalConversationKeys(conversationKeys map[string][]byte) (string, error) {
-	if conversationKeys == nil {
-		return "{}", nil
-	}
-	b, err := json.Marshal(conversationKeys)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
 // EncryptMessage encrypts a message for the X API.
+//
+// The message id comes back in the payload's MessageID. A message with files
+// takes an id derived from its files, so building it again gives the same
+// id; encrypt each file afterwards with EncryptFile or FileEncryptor and the
+// payload's EventB64.
 func (c *Chat) EncryptMessage(params EncryptMessageParams) (*SendPayload, error) {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)
@@ -466,7 +439,8 @@ func (c *Chat) EncryptMessage(params EncryptMessageParams) (*SendPayload, error)
 	return &payload, nil
 }
 
-// EncryptReply encrypts a reply message for the X API.
+// EncryptReply encrypts a reply message for the X API. The reply's id and
+// files work as in EncryptMessage.
 func (c *Chat) EncryptReply(params EncryptReplyParams) (*SendPayload, error) {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)
@@ -566,73 +540,83 @@ func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, er
 	return ffiDecrypt(c.h, ciphertextB64, base64.StdEncoding.EncodeToString(conversationKey))
 }
 
-// DecryptStream decrypts an encrypted media file, as downloaded.
-//
-// eventB64 is the event of the message that carries the media and
-// conversationKeys the conversation's key map, as passed to DecryptEvent; the
-// map must hold the key for the message's version. mediaHashKey names the
-// media: one of the message's media attachments, a link card's banner or
-// favicon, or media quoted in its reply preview. Errors say what to pass
-// instead. Raw bytes in, raw bytes out; the FFI transports base64 internally.
-func (c *Chat) DecryptStream(encrypted []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
+// EncryptFile encrypts a file of an outgoing message, after the message is
+// built. The SDK finds the attachment that names MediaHashKey in the message
+// EventB64 carries, and encrypts the file under that attachment's key.
+// Upload the result under the same media hash key; its size is
+// EncryptedFileSize(len(File)). Errors say what to pass instead. Raw bytes
+// in, raw bytes out; the FFI transports base64 internally.
+func (c *Chat) EncryptFile(params EncryptFileParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
-	convKeysJSON, err := marshalConversationKeys(conversationKeys)
+	params.File = orEmptyBytes(params.File)
+	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
+	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-	outB64, err := ffiDecryptStream(c.h,
-		base64.StdEncoding.EncodeToString(encrypted),
-		eventB64, convKeysJSON, mediaHashKey)
+	outB64, err := ffiEncryptFile(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}
 	return base64.StdEncoding.DecodeString(outB64)
 }
 
-// EncryptStream encrypts a stream (e.g., media) with the raw 32-byte
-// conversation key. Raw bytes in, raw bytes out; the FFI transports base64
+// DecryptFile decrypts an encrypted file, as downloaded. Errors say what to
+// pass instead. Raw bytes in, raw bytes out; the FFI transports base64
 // internally.
-func (c *Chat) EncryptStream(plaintext, conversationKey []byte) ([]byte, error) {
+func (c *Chat) DecryptFile(params DecryptFileParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
-	outB64, err := ffiEncryptStream(c.h,
-		base64.StdEncoding.EncodeToString(plaintext),
-		base64.StdEncoding.EncodeToString(conversationKey))
+	params.Encrypted = orEmptyBytes(params.Encrypted)
+	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	outB64, err := ffiDecryptFile(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}
 	return base64.StdEncoding.DecodeString(outB64)
 }
 
-// StreamEncryptor is an incremental stream encryptor for large payloads.
+// FileEncryptor is an incremental encryptor for one file of an outgoing
+// message.
 //
-// Feed plaintext chunks with Push; call Finish once to emit the final
+// Feed the file in chunks with Push; call Finish once to emit the final
 // frame. Always call Close to release the handle.
-type StreamEncryptor struct {
-	h streamEncryptorHandle
+type FileEncryptor struct {
+	h fileEncryptorHandle
 }
 
-// StreamEncryptor creates an incremental stream encryptor for the given
-// raw 32-byte conversation key.
-func (c *Chat) StreamEncryptor(conversationKey []byte) (*StreamEncryptor, error) {
-	h := ffiStreamEncryptorNew(base64.StdEncoding.EncodeToString(conversationKey))
-	if h == nil {
-		return nil, errors.New("invalid conversation key (expected 32 bytes)")
+// FileEncryptor creates an incremental encryptor for a file too large to
+// hold in memory. It takes the params of EncryptFile apart from the file,
+// which is fed to Push.
+func (c *Chat) FileEncryptor(params FileEncryptorParams) (*FileEncryptor, error) {
+	defer runtime.KeepAlive(c)
+	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
 	}
-	e := &StreamEncryptor{h: h}
+	h, err := ffiFileEncryptorNew(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	e := &FileEncryptor{h: h}
 	// GC backstop for encryptors never explicitly Closed. A receiver becomes
 	// collectible as soon as its last use passes — even while one of its
 	// methods is still executing native code — so every method that hands
 	// e.h to cgo defers runtime.KeepAlive(e), keeping this finalizer from
 	// freeing the handle (live secretstream key state) mid-call.
-	runtime.SetFinalizer(e, func(e *StreamEncryptor) { e.Close() })
+	runtime.SetFinalizer(e, func(e *FileEncryptor) { e.Close() })
 	return e, nil
 }
 
-// Push encrypts a plaintext chunk, returning ciphertext available so far
-// (may be empty for small inputs).
-func (e *StreamEncryptor) Push(plaintext []byte) ([]byte, error) {
+// Push encrypts a chunk of the file, returning the encrypted bytes available
+// so far (may be empty for small inputs).
+func (e *FileEncryptor) Push(plaintext []byte) ([]byte, error) {
 	defer runtime.KeepAlive(e)
-	outB64, err := ffiStreamEncryptorPush(e.h, base64.StdEncoding.EncodeToString(plaintext))
+	outB64, err := ffiFileEncryptorPush(e.h, base64.StdEncoding.EncodeToString(plaintext))
 	if err != nil {
 		return nil, err
 	}
@@ -641,9 +625,9 @@ func (e *StreamEncryptor) Push(plaintext []byte) ([]byte, error) {
 
 // Finish emits the final frame and consumes the encryptor. Call Close
 // afterwards to release the handle.
-func (e *StreamEncryptor) Finish() ([]byte, error) {
+func (e *FileEncryptor) Finish() ([]byte, error) {
 	defer runtime.KeepAlive(e)
-	outB64, err := ffiStreamEncryptorFinish(e.h)
+	outB64, err := ffiFileEncryptorFinish(e.h)
 	if err != nil {
 		return nil, err
 	}
@@ -651,53 +635,54 @@ func (e *StreamEncryptor) Finish() ([]byte, error) {
 }
 
 // Close releases the underlying handle. Safe to call more than once.
-func (e *StreamEncryptor) Close() {
+func (e *FileEncryptor) Close() {
 	defer runtime.KeepAlive(e)
 	if e.h != nil {
-		ffiStreamEncryptorFree(e.h)
+		ffiFileEncryptorFree(e.h)
 		e.h = nil
 		runtime.SetFinalizer(e, nil)
 	}
 }
 
-// StreamDecryptor is an incremental stream decryptor for large payloads.
+// FileDecryptor is an incremental decryptor for one encrypted file.
 //
-// Feed ciphertext chunks with Push; call Finish once at end of input.
-// Finish errors if the stream ended before its final frame (truncation), so do
-// not treat plaintext from Push as complete until Finish succeeds. Always call
-// Close to release the handle.
-type StreamDecryptor struct {
-	h streamDecryptorHandle
+// Feed the encrypted bytes in chunks with Push; call Finish once at end of
+// input. Finish errors if the file ended before its final frame
+// (truncation), so do not treat bytes from Push as complete until Finish
+// succeeds. Always call Close to release the handle.
+type FileDecryptor struct {
+	h fileDecryptorHandle
 }
 
-// StreamDecryptor creates an incremental decryptor for an encrypted media file
-// too large to hold in memory. It takes the arguments of DecryptStream apart
-// from the bytes, which are fed to the decryptor.
-func (c *Chat) StreamDecryptor(eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) (*StreamDecryptor, error) {
+// FileDecryptor creates an incremental decryptor for an encrypted file too
+// large to hold in memory. It takes the params of DecryptFile apart from the
+// encrypted bytes, which are fed to Push.
+func (c *Chat) FileDecryptor(params FileDecryptorParams) (*FileDecryptor, error) {
 	defer runtime.KeepAlive(c)
-	convKeysJSON, err := marshalConversationKeys(conversationKeys)
+	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
+	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-	h, err := ffiStreamDecryptorNew(c.h, eventB64, convKeysJSON, mediaHashKey)
+	h, err := ffiFileDecryptorNew(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}
-	d := &StreamDecryptor{h: h}
+	d := &FileDecryptor{h: h}
 	// GC backstop for decryptors never explicitly Closed. A receiver becomes
 	// collectible as soon as its last use passes — even while one of its
 	// methods is still executing native code — so every method that hands
 	// d.h to cgo defers runtime.KeepAlive(d), keeping this finalizer from
 	// freeing the handle (live secretstream key state) mid-call.
-	runtime.SetFinalizer(d, func(d *StreamDecryptor) { d.Close() })
+	runtime.SetFinalizer(d, func(d *FileDecryptor) { d.Close() })
 	return d, nil
 }
 
-// Push decrypts a ciphertext chunk, returning plaintext available so far
-// (may be empty until enough input has arrived).
-func (d *StreamDecryptor) Push(ciphertext []byte) ([]byte, error) {
+// Push decrypts a chunk of the encrypted file, returning the bytes available
+// so far (may be empty until enough input has arrived).
+func (d *FileDecryptor) Push(ciphertext []byte) ([]byte, error) {
 	defer runtime.KeepAlive(d)
-	outB64, err := ffiStreamDecryptorPush(d.h, base64.StdEncoding.EncodeToString(ciphertext))
+	outB64, err := ffiFileDecryptorPush(d.h, base64.StdEncoding.EncodeToString(ciphertext))
 	if err != nil {
 		return nil, err
 	}
@@ -706,9 +691,9 @@ func (d *StreamDecryptor) Push(ciphertext []byte) ([]byte, error) {
 
 // Finish decrypts the final frame and consumes the decryptor. Call Close
 // afterwards to release the handle.
-func (d *StreamDecryptor) Finish() ([]byte, error) {
+func (d *FileDecryptor) Finish() ([]byte, error) {
 	defer runtime.KeepAlive(d)
-	outB64, err := ffiStreamDecryptorFinish(d.h)
+	outB64, err := ffiFileDecryptorFinish(d.h)
 	if err != nil {
 		return nil, err
 	}
@@ -716,10 +701,10 @@ func (d *StreamDecryptor) Finish() ([]byte, error) {
 }
 
 // Close releases the underlying handle. Safe to call more than once.
-func (d *StreamDecryptor) Close() {
+func (d *FileDecryptor) Close() {
 	defer runtime.KeepAlive(d)
 	if d.h != nil {
-		ffiStreamDecryptorFree(d.h)
+		ffiFileDecryptorFree(d.h)
 		d.h = nil
 		runtime.SetFinalizer(d, nil)
 	}

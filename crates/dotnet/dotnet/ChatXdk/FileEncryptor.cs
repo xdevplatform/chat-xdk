@@ -3,17 +3,17 @@ using System;
 namespace ChatXdk
 {
     /// <summary>
-    /// Incremental stream encryptor for large payloads.
+    /// Incremental encryptor for one file of an outgoing message.
     ///
-    /// <para>Feed plaintext with <see cref="Push"/>; call <see cref="Finish"/>
+    /// <para>Feed the file with <see cref="Push"/>; call <see cref="Finish"/>
     /// once to emit the final frame. Always <see cref="Dispose"/> when finished.</para>
     /// </summary>
-    public sealed unsafe class StreamEncryptor : IDisposable
+    public sealed unsafe class FileEncryptor : IDisposable
     {
-        private StreamEncryptorHandle* _handle;
+        private FileEncryptorHandle* _handle;
         private bool _disposed;
 
-        private StreamEncryptor(StreamEncryptorHandle* handle)
+        private FileEncryptor(FileEncryptorHandle* handle)
         {
             _handle = handle;
         }
@@ -27,22 +27,20 @@ namespace ChatXdk
         /// <see cref="GC.KeepAlive(object)"/> on <c>this</c> after the call, keeping
         /// this finalizer from freeing the handle mid-call.
         /// </summary>
-        ~StreamEncryptor() => Dispose(disposing: false);
+        ~FileEncryptor() => Dispose(disposing: false);
 
-        internal static StreamEncryptor Create(byte[] conversationKey)
+        internal static FileEncryptor Create(ChatHandle* chat, string paramsJson)
         {
-            var keyB64 = Chat.Utf8Z(Convert.ToBase64String(conversationKey));
-            StreamEncryptorHandle* handle;
-            fixed (byte* keyPtr = keyB64)
-                handle = NativeMethods.chat_xdk_stream_encryptor_new(keyPtr);
-            if (handle == null)
-                throw new ChatXdkException("Invalid conversation key (expected 32 bytes)");
-            return new StreamEncryptor(handle);
+            var paramsBytes = Chat.Utf8Z(paramsJson);
+            FileEncryptorHandle* handle = null;
+            fixed (byte* paramsPtr = paramsBytes)
+                Chat.ConsumeResult(NativeMethods.chat_xdk_file_encryptor_new(chat, paramsPtr, &handle));
+            return new FileEncryptor(handle);
         }
 
         /// <summary>
-        /// Encrypt a plaintext chunk, returning ciphertext available so far
-        /// (may be empty for small inputs).
+        /// Encrypt a chunk of the file, returning the encrypted bytes available
+        /// so far (may be empty for small inputs).
         /// </summary>
         public byte[] Push(byte[] plaintext)
         {
@@ -50,7 +48,7 @@ namespace ChatXdk
             var ptB64 = Chat.Utf8Z(Convert.ToBase64String(plaintext));
             string resultB64;
             fixed (byte* ptPtr = ptB64)
-                resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_stream_encryptor_push(_handle, ptPtr));
+                resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_file_encryptor_push(_handle, ptPtr));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
@@ -59,14 +57,14 @@ namespace ChatXdk
         public byte[] Finish()
         {
             ThrowIfDisposed();
-            var resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_stream_encryptor_finish(_handle));
+            var resultB64 = Chat.ConsumeResult(NativeMethods.chat_xdk_file_encryptor_finish(_handle));
             GC.KeepAlive(this);
             return Convert.FromBase64String(resultB64);
         }
 
         private void ThrowIfDisposed()
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(StreamEncryptor));
+            if (_disposed) throw new ObjectDisposedException(nameof(FileEncryptor));
         }
 
         /// <summary>Release the native handle.</summary>
@@ -84,7 +82,7 @@ namespace ChatXdk
             _disposed = true;
             if (_handle != null)
             {
-                NativeMethods.chat_xdk_stream_encryptor_free(_handle);
+                NativeMethods.chat_xdk_file_encryptor_free(_handle);
                 _handle = null;
             }
         }

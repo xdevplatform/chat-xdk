@@ -5,8 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.Chat;
-import com.x.chatxdk.StreamDecryptor;
-import com.x.chatxdk.StreamEncryptor;
+import com.x.chatxdk.FileDecryptor;
+import com.x.chatxdk.FileEncryptor;
 import com.x.chatxdk.Types.*;
 
 import java.io.ByteArrayOutputStream;
@@ -25,7 +25,7 @@ import java.util.Map;
  * <ul>
  *   <li>key management     -&gt; loadKeys / setIdentity / generateAndRegister</li>
  *   <li>conversation keys  -&gt; prepareConversationKeyChange / decryptConversationKey</li>
- *   <li>message encryption -&gt; encryptReply</li>
+ *   <li>message encryption -&gt; encryptReply, then encryptMedia for its files</li>
  *   <li>event decryption   -&gt; decryptBatch (decryptEvents) and decryptOne (decryptEvent)</li>
  * </ul>
  */
@@ -90,18 +90,30 @@ public final class ChatCore implements AutoCloseable {
 
     /** Batch path — used on initial conversation load. */
     public DecryptEventsResult decryptBatch(List<String> eventsB64, List<SigningKeyEntry> signingKeys) throws Exception {
-        return chat.decryptEvents(eventsB64, signingKeys);
+        DecryptEventsParams params = new DecryptEventsParams(eventsB64);
+        params.signingKeys = signingKeys;
+        return chat.decryptEvents(params);
     }
 
     /** Single-event path — used for each new event after the initial load. */
     public JsonNode decryptOne(String eventB64, Map<String, byte[]> conversationKeys, List<SigningKeyEntry> signingKeys) throws Exception {
-        return chat.decryptEvent(eventB64, conversationKeys, signingKeys);
+        DecryptEventParams params = new DecryptEventParams(eventB64, conversationKeys);
+        params.signingKeys = signingKeys;
+        return chat.decryptEvent(params);
     }
 
     // -- Message encryption -------------------------------------------------
 
-    /** Fields the X API expects for an encrypted message send. */
-    public record SendBody(String messageId, String encodedMessageCreateEvent, String encodedMessageEventSignature) {}
+    /**
+     * Fields the X API expects for an encrypted message send, plus the
+     * message's {@code eventB64}, which stays local: the message as recipients
+     * receive it, to encrypt the message's files from with {@link #encryptMedia}.
+     */
+    public record SendBody(
+            String messageId,
+            String encodedMessageCreateEvent,
+            String encodedMessageEventSignature,
+            String eventB64) {}
 
     /**
      * Encrypt + sign a fresh message ({@code encryptMessage}); returns fields
@@ -120,7 +132,9 @@ public final class ChatCore implements AutoCloseable {
      * event ({@code replyToCkces} carries the key-change events for the
      * original's key version when it differs from this reply's version).
      * {@code entities} are byte-range descriptors (start, end, type);
-     * {@code attachments} are attachment descriptors (e.g. a media reference);
+     * {@code attachments} are attachment descriptors, each file naming the
+     * media hash key its upload started with (encrypt the files afterwards
+     * with {@link #encryptMedia} and the returned body's {@code eventB64});
      * {@code ttlMsec} makes the message disappear after the given lifetime.
      */
     public SendBody encryptReply(
@@ -176,7 +190,8 @@ public final class ChatCore implements AutoCloseable {
             payload = chat.encryptReply(params);
         }
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
+        return new SendBody(
+                payload.messageId, payload.encryptedContent, payload.encodedEventSignature, payload.eventB64);
     }
 
     /** Encrypt + sign a reaction add/remove targeting a raw event
@@ -193,7 +208,8 @@ public final class ChatCore implements AutoCloseable {
         params.conversationKeyVersion = conversationKeyVersion;
         SendPayload payload = add ? chat.encryptAddReaction(params) : chat.encryptRemoveReaction(params);
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.messageId, payload.encryptedContent, payload.encodedEventSignature);
+        return new SendBody(
+                payload.messageId, payload.encryptedContent, payload.encodedEventSignature, payload.eventB64);
     }
 
     // -- Group management -----------------------------------------------------
@@ -221,19 +237,26 @@ public final class ChatCore implements AutoCloseable {
                 publicKeys, conversationId, newMemberIds, currentMemberIds, currentAdminIds, List.of()));
     }
 
-    // -- Media streaming -----------------------------------------------------
+    // -- Media files ----------------------------------------------------------
 
     private static final int MEDIA_CHUNK = 1024 * 1024;
 
     /**
-     * Encrypt a media blob with the incremental stream API.
+     * Encrypt a media file of an outgoing message with the incremental file API.
      *
-     * <p>Feeding fixed-size chunks through {@code push} keeps memory bounded no
+     * <p>{@code eventB64} is the {@code eventB64} of the body
+     * {@link #encryptReply} returned for the message, and {@code mediaHashKey}
+     * the hash key the file's upload started with, as listed in the message's
+     * attachments; the SDK encrypts the file under that attachment's key.
+     * Feeding fixed-size chunks through {@code push} keeps memory bounded no
      * matter how large the file is; {@code finish} emits the final frame that
-     * seals the stream (decryption fails without it).
+     * seals the file (decryption fails without it).
      */
-    public byte[] encryptMedia(byte[] plaintext, byte[] conversationKey) throws Exception {
-        try (StreamEncryptor enc = chat.streamEncryptor(conversationKey)) {
+    public byte[] encryptMedia(
+            byte[] plaintext, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)
+            throws Exception {
+        try (FileEncryptor enc = chat.fileEncryptor(
+                new FileEncryptorParams(eventB64, conversationKeys, mediaHashKey))) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             for (int offset = 0; offset < plaintext.length; offset += MEDIA_CHUNK) {
                 int end = Math.min(offset + MEDIA_CHUNK, plaintext.length);
@@ -245,19 +268,20 @@ public final class ChatCore implements AutoCloseable {
     }
 
     /**
-     * Decrypt a downloaded media blob with the incremental stream API.
+     * Decrypt a downloaded media file with the incremental file API.
      *
      * <p>{@code eventB64} is the raw event of the message that carries the
      * media and {@code conversationKeys} its conversation's key map, as passed
      * to {@link #decryptOne}; the SDK finds {@code mediaHashKey} in the event
-     * and derives that file's key. {@code finish} throws if the stream was
+     * and derives that file's key. {@code finish} throws if the file was
      * truncated, so plaintext from {@code push} must not be treated as complete
      * until it succeeds.
      */
     public byte[] decryptMedia(
             byte[] ciphertext, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)
             throws Exception {
-        try (StreamDecryptor dec = chat.streamDecryptor(eventB64, conversationKeys, mediaHashKey)) {
+        try (FileDecryptor dec = chat.fileDecryptor(
+                new FileDecryptorParams(eventB64, conversationKeys, mediaHashKey))) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             for (int offset = 0; offset < ciphertext.length; offset += MEDIA_CHUNK) {
                 int end = Math.min(offset + MEDIA_CHUNK, ciphertext.length);

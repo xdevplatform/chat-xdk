@@ -32,28 +32,24 @@ def _signing_keys_for(v: dict, *user_ids: str) -> list[dict]:
     } for user_id in user_ids]
 
 
-def _thrift_string_field(field_id: int, value: str) -> bytes:
-    data = value.encode("utf-8")
-    return bytes([11]) + field_id.to_bytes(2, "big") + len(data).to_bytes(4, "big") + data
+def _delivered(event_b64: str, sequence_id: str) -> str:
+    """``event_b64`` as delivered: with the sequence id the server assigns,
+    prepended as Thrift string field 1."""
+    data = sequence_id.encode("utf-8")
+    field = b"\x0b\x00\x01" + len(data).to_bytes(4, "big") + data
+    return base64.b64encode(field + base64.b64decode(event_b64)).decode("ascii")
 
 
-def _frame_send_payload(payload, sender_id: str, conversation_id: str) -> str:
-    """Frame a SendPayload as the base64 MessageEvent envelope decrypt_event
-    consumes: string header fields, the payload's MessageCreateEvent in the
-    detail union, and its encoded signature."""
-    mce = base64.b64decode(payload.encrypted_content)
-    signature = base64.b64decode(payload.encoded_event_signature)
-    envelope = (
-        _thrift_string_field(1, "1")
-        + _thrift_string_field(2, payload.message_id)
-        + _thrift_string_field(3, sender_id)
-        + _thrift_string_field(4, conversation_id)
-        + _thrift_string_field(6, "1700000000000")
-        + b"\x0c\x00\x07" + b"\x0c\x00\x01" + mce + b"\x00"
-        + b"\x0c\x00\x09" + signature
-        + b"\x00"
-    )
-    return base64.b64encode(envelope).decode("ascii")
+def _media(media_hash_key: str) -> dict:
+    return {
+        "attachment_type": "media",
+        "media_hash_key": media_hash_key,
+        "width": 4,
+        "height": 3,
+        "filesize_bytes": 64,
+        "filename": f"{media_hash_key}.jpg",
+        "media_type": 1,
+    }
 
 
 QUICK_REPLY_REQUEST = {
@@ -108,7 +104,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertFalse(chat.verify(v["signing_public_b64"], sig_bytes, (v["message_utf8"] + "!").encode("utf-8")))
 
     def test_ecies_conversation_key_roundtrip(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ConversationKeyChangeParams
 
         v = _load_vectors()
         chat = Chat()
@@ -116,7 +112,9 @@ class TestPythonSdkVectors(unittest.TestCase):
 
         public_keys = [{"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}]
         result = chat.prepare_conversation_key_change(
-            public_keys, conversation_id="conv-1", sender_id="me", signing_key_version="1"
+            ConversationKeyChangeParams(
+                public_keys, conversation_id="conv-1", sender_id="me", signing_key_version="1"
+            )
         )
         encrypted_key_b64 = result["participant_keys"][0]["encrypted_key"]
 
@@ -124,7 +122,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(decrypted_ckey, result["conversation_key"])
 
     def test_encrypt_message_smoke_and_invalid_import(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, EncryptMessageParams
 
         v = _load_vectors()
         chat = Chat()
@@ -137,11 +135,13 @@ class TestPythonSdkVectors(unittest.TestCase):
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
         payload = chat.encrypt_message(
-            "conv-1", "hello from python",
-            sender_id="me",
-            signing_key_version="1",
-            conversation_key=conv_key,
-            conversation_key_version="1",
+            EncryptMessageParams(
+                "conv-1", "hello from python",
+                sender_id=v["event_sender_id"],
+                signing_key_version="1",
+                conversation_key=conv_key,
+                conversation_key_version="1",
+            )
         )
 
         self.assertTrue(payload.message_id)
@@ -151,7 +151,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(payload.signature_info.public_key_version is not None)
 
     def test_decrypt_events_fixture_vectors_batch_and_single(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams
 
         v = _load_vectors()
         chat = Chat()  # default reject-unverified policy
@@ -166,8 +166,10 @@ class TestPythonSdkVectors(unittest.TestCase):
         # indexed error, the signed KeyChange's key is adopted, and the
         # message verifies with the fixture text.
         result = chat.decrypt_events(
-            [v["event_key_change_b64"], v["event_message_b64"], v["event_garbage_b64"]],
-            signing_keys,
+            DecryptEventsParams(
+                [v["event_key_change_b64"], v["event_message_b64"], v["event_garbage_b64"]],
+                signing_keys=signing_keys,
+            )
         )
         self.assertEqual(list(result["errors"].keys()), ["2"])
 
@@ -190,17 +192,21 @@ class TestPythonSdkVectors(unittest.TestCase):
 
         # Single-event path with pre-cached keys verifies the same message ...
         cached = {ck_version: bytes(result["conversation_keys"]["keys"][ck_version])}
-        event = chat.decrypt_event(v["event_message_b64"], cached, signing_keys)
+        event = chat.decrypt_event(
+            DecryptEventParams(v["event_message_b64"], cached, signing_keys=signing_keys)
+        )
         self.assertEqual(event["type"], "Message")
         self.assertEqual(event["content"]["text"], v["event_message_text"])
         self.assertTrue(event["verified"])
 
         # ... and raises on the garbage event.
         with self.assertRaises(Exception):
-            chat.decrypt_event(v["event_garbage_b64"], {}, signing_keys)
+            chat.decrypt_event(
+                DecryptEventParams(v["event_garbage_b64"], {}, signing_keys=signing_keys)
+            )
 
     def test_key_cache_resolves_omitted_conversation_key(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventsParams, EncryptMessageParams
 
         v = _load_vectors()
         chat = Chat()
@@ -211,18 +217,20 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
         chat.set_cache_keys(True)
 
-        result = chat.decrypt_events([v["event_key_change_b64"]], _fixture_signing_keys(v))
+        result = chat.decrypt_events(
+            DecryptEventsParams([v["event_key_change_b64"]], signing_keys=_fixture_signing_keys(v))
+        )
         self.assertEqual(result["errors"], {})
 
         # No key passed: the encrypt resolves the cached verified key.
-        payload = chat.encrypt_message(v["event_conversation_id"], "hi")
+        payload = chat.encrypt_message(EncryptMessageParams(v["event_conversation_id"], "hi"))
         self.assertEqual(
             payload.conversation_key_version, v["event_conversation_key_version"]
         )
         self.assertTrue(payload.encrypted_content)
 
     def test_key_cache_off_omitted_conversation_key_raises(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventsParams, EncryptMessageParams
 
         v = _load_vectors()
         chat = Chat()
@@ -233,13 +241,15 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
 
         # Same decrypt, but the cache is off (the default): nothing to resolve.
-        result = chat.decrypt_events([v["event_key_change_b64"]], _fixture_signing_keys(v))
+        result = chat.decrypt_events(
+            DecryptEventsParams([v["event_key_change_b64"]], signing_keys=_fixture_signing_keys(v))
+        )
         self.assertEqual(result["errors"], {})
         with self.assertRaises(ValueError):
-            chat.encrypt_message(v["event_conversation_id"], "hi")
+            chat.encrypt_message(EncryptMessageParams(v["event_conversation_id"], "hi"))
 
     def test_signing_key_store_verifies_when_arg_omitted(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams
 
         v = _load_vectors()
         chat = Chat()
@@ -249,22 +259,22 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
         chat.set_signing_keys(_fixture_signing_keys(v))
 
-        # No signing_keys argument anywhere: both decrypt paths fall back to
-        # the store and still positively verify.
-        batch = chat.decrypt_events([v["event_key_change_b64"]])
+        # No signing_keys anywhere: both decrypt paths fall back to the store
+        # and still positively verify.
+        batch = chat.decrypt_events(DecryptEventsParams([v["event_key_change_b64"]]))
         self.assertEqual(batch["errors"], {})
         extracted = {
             version: bytes(key)
             for version, key in batch["conversation_keys"]["keys"].items()
         }
 
-        event = chat.decrypt_event(v["event_message_b64"], conversation_keys=extracted)
+        event = chat.decrypt_event(DecryptEventParams(v["event_message_b64"], extracted))
         self.assertEqual(event["type"], "Message")
         self.assertEqual(event["content"]["text"], v["event_message_text"])
         self.assertTrue(event["verified"])
 
     def test_reply_preview_validation_valid_and_forged(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventsParams
 
         v = _load_vectors()
         chat = Chat()
@@ -274,8 +284,10 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
 
         result = chat.decrypt_events(
-            [v["event_key_change_b64"], v["event_reply_valid_b64"], v["event_reply_forged_b64"]],
-            _fixture_signing_keys(v),
+            DecryptEventsParams(
+                [v["event_key_change_b64"], v["event_reply_valid_b64"], v["event_reply_forged_b64"]],
+                signing_keys=_fixture_signing_keys(v),
+            )
         )
         self.assertEqual(result["errors"], {})
 
@@ -288,21 +300,21 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(messages[1]["reply_preview_validation"], "Invalid")
 
     def test_failure_event_decodes_type_and_rate_limit_tier(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventParams
 
         v = _load_vectors()
         chat = Chat()  # default reject-unverified policy
 
         # Failure events are unsigned by protocol, so the fixture failure
         # decodes with no conversation or signing keys.
-        event = chat.decrypt_event(v["event_failure_b64"], {}, [])
+        event = chat.decrypt_event(DecryptEventParams(v["event_failure_b64"], {}))
         self.assertEqual(event["type"], "Failure")
         self.assertEqual(event["failure"], "RateLimitUpsell")
         self.assertEqual(event["rate_limit_tier"], "Premium")
         self.assertEqual(event["sender_id"], v["event_sender_id"])
 
     def test_encrypt_reply_derives_preview_from_raw_event(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, EncryptReplyParams
 
         v = _load_vectors()
         chat = Chat()
@@ -313,11 +325,13 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
 
         payload = chat.encrypt_reply(
-            v["event_conversation_id"],
-            "a reply",
-            reply_to_event=v["event_message_b64"],
-            conversation_key=base64.b64decode(v["conversation_key_b64"]),
-            conversation_key_version=v["event_conversation_key_version"],
+            EncryptReplyParams(
+                v["event_conversation_id"],
+                "a reply",
+                v["event_message_b64"],
+                conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                conversation_key_version=v["event_conversation_key_version"],
+            )
         )
         # The SDK mints the message id as a UUID.
         uuid.UUID(payload.message_id)
@@ -325,10 +339,14 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(payload.encoded_event_signature)
 
     def _decrypt_own(self, chat, v, payload) -> dict:
+        from chat_xdk import DecryptEventParams
+
         event = chat.decrypt_event(
-            _frame_send_payload(payload, v["event_sender_id"], v["event_conversation_id"]),
-            {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])},
-            _fixture_signing_keys(v),
+            DecryptEventParams(
+                payload.event_b64,
+                {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])},
+                signing_keys=_fixture_signing_keys(v),
+            )
         )
         self.assertTrue(event["verified"])
         return event["content"]
@@ -342,6 +360,8 @@ class TestPythonSdkVectors(unittest.TestCase):
         return chat
 
     def test_encrypt_message_quick_reply_round_trips(self):
+        from chat_xdk import EncryptMessageParams
+
         v = _load_vectors()
         chat = self._identity_chat(v)
         key = base64.b64decode(v["conversation_key_b64"])
@@ -349,11 +369,13 @@ class TestPythonSdkVectors(unittest.TestCase):
 
         for quick_reply in (QUICK_REPLY_REQUEST, QUICK_REPLY_RESPONSE):
             payload = chat.encrypt_message(
-                v["event_conversation_id"],
-                "Continue?",
-                conversation_key=key,
-                conversation_key_version=key_version,
-                quick_reply=quick_reply,
+                EncryptMessageParams(
+                    v["event_conversation_id"],
+                    "Continue?",
+                    conversation_key=key,
+                    conversation_key_version=key_version,
+                    quick_reply=quick_reply,
+                )
             )
             content = self._decrypt_own(chat, v, payload)
             self.assertEqual(content["text"], "Continue?")
@@ -361,54 +383,67 @@ class TestPythonSdkVectors(unittest.TestCase):
 
             # A received quick reply can be sent back unchanged.
             resent = chat.encrypt_message(
-                v["event_conversation_id"],
-                "again",
-                conversation_key=key,
-                conversation_key_version=key_version,
-                quick_reply=content["quick_reply"],
+                EncryptMessageParams(
+                    v["event_conversation_id"],
+                    "again",
+                    conversation_key=key,
+                    conversation_key_version=key_version,
+                    quick_reply=content["quick_reply"],
+                )
             )
             self.assertEqual(self._decrypt_own(chat, v, resent)["quick_reply"], quick_reply)
 
         plain = chat.encrypt_message(
-            v["event_conversation_id"],
-            "no quick reply",
-            conversation_key=key,
-            conversation_key_version=key_version,
+            EncryptMessageParams(
+                v["event_conversation_id"],
+                "no quick reply",
+                conversation_key=key,
+                conversation_key_version=key_version,
+            )
         )
         self.assertNotIn("quick_reply", self._decrypt_own(chat, v, plain))
 
     def test_encrypt_reply_quick_reply_round_trips(self):
+        from chat_xdk import EncryptReplyParams
+
         v = _load_vectors()
         chat = self._identity_chat(v)
 
         payload = chat.encrypt_reply(
-            v["event_conversation_id"],
-            "Yes",
-            reply_to_sequence_id="seq-orig",
-            reply_to_sender_id=int(v["event_sender_id"]),
-            reply_to_text="Continue?",
-            conversation_key=base64.b64decode(v["conversation_key_b64"]),
-            conversation_key_version=v["event_conversation_key_version"],
-            quick_reply=QUICK_REPLY_RESPONSE,
+            EncryptReplyParams(
+                v["event_conversation_id"],
+                "Yes",
+                None,
+                reply_to_sequence_id="seq-orig",
+                reply_to_sender_id=int(v["event_sender_id"]),
+                reply_to_text="Continue?",
+                conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                conversation_key_version=v["event_conversation_key_version"],
+                quick_reply=QUICK_REPLY_RESPONSE,
+            )
         )
         content = self._decrypt_own(chat, v, payload)
         self.assertEqual(content["quick_reply"], QUICK_REPLY_RESPONSE)
 
     def test_encrypt_message_rejects_invalid_quick_reply(self):
+        from chat_xdk import EncryptMessageParams
+
         v = _load_vectors()
         chat = self._identity_chat(v)
 
         both = {**QUICK_REPLY_REQUEST, **QUICK_REPLY_RESPONSE}
         for invalid in ({}, both):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
-                ValueError, "Invalid quick reply"
+                ValueError, "Invalid quick_reply"
             ):
                 chat.encrypt_message(
-                    v["event_conversation_id"],
-                    "bad",
-                    conversation_key=base64.b64decode(v["conversation_key_b64"]),
-                    conversation_key_version=v["event_conversation_key_version"],
-                    quick_reply=invalid,
+                    EncryptMessageParams(
+                        v["event_conversation_id"],
+                        "bad",
+                        conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                        conversation_key_version=v["event_conversation_key_version"],
+                        quick_reply=invalid,
+                    )
                 )
 
     def test_quick_reply_typed_dicts_build_the_sent_shape(self):
@@ -448,12 +483,12 @@ class TestPythonSdkVectors(unittest.TestCase):
 
     def _open_media(self, event_b64, keys, media_hash_key, encrypted_b64):
         """Decrypt media whole and in 700-byte chunks, checking both agree."""
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptFileParams, FileDecryptorParams
 
         chat = Chat()
         encrypted = base64.b64decode(encrypted_b64)
-        whole = chat.decrypt_stream(encrypted, event_b64, keys, media_hash_key)
-        decryptor = chat.stream_decryptor(event_b64, keys, media_hash_key)
+        whole = chat.decrypt_file(DecryptFileParams(encrypted, event_b64, keys, media_hash_key))
+        decryptor = chat.file_decryptor(FileDecryptorParams(event_b64, keys, media_hash_key))
         incremental = b"".join(
             decryptor.push(encrypted[i:i + 700]) for i in range(0, len(encrypted), 700)
         ) + decryptor.finish()
@@ -461,13 +496,15 @@ class TestPythonSdkVectors(unittest.TestCase):
         return whole
 
     def test_message_key_event_decrypts_with_the_conversation_key(self):
-        from chat_xdk import Chat, hex_to_bytes
+        from chat_xdk import Chat, DecryptEventParams, hex_to_bytes
 
         v = _load_vectors()
         event = Chat().decrypt_event(
-            v["event_message_key_b64"],
-            {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])},
-            _signing_keys_for(v, v["message_key_sender_id"]),
+            DecryptEventParams(
+                v["event_message_key_b64"],
+                {v["message_key_conversation_key_version"]: hex_to_bytes(v["message_key_conversation_key_hex"])},
+                signing_keys=_signing_keys_for(v, v["message_key_sender_id"]),
+            )
         )
         self.assertEqual(event["type"], "Message")
         self.assertTrue(event["verified"])
@@ -535,7 +572,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
 
     def test_media_errors_say_what_to_pass(self):
-        from chat_xdk import Chat, hex_to_bytes
+        from chat_xdk import Chat, DecryptFileParams, FileDecryptorParams, hex_to_bytes
 
         v = _load_vectors()
         chat = Chat()
@@ -561,15 +598,17 @@ class TestPythonSdkVectors(unittest.TestCase):
         for encrypted, event, keys, media_hash_key, expected in cases:
             with self.subTest(expected=expected):
                 with self.assertRaises(ValueError) as ctx:
-                    chat.decrypt_stream(encrypted, event, keys, media_hash_key)
+                    chat.decrypt_file(DecryptFileParams(encrypted, event, keys, media_hash_key))
                 self.assertIn(expected, str(ctx.exception))
 
         with self.assertRaises(ValueError) as ctx:
-            chat.stream_decryptor(v["event_message_key_b64"], fixture_keys, first_hash)
+            chat.file_decryptor(
+                FileDecryptorParams(v["event_message_key_b64"], fixture_keys, first_hash)
+            )
         self.assertIn("no key for version", str(ctx.exception))
 
     def test_message_key_event_decrypts_in_a_batch_with_its_key_change(self):
-        from chat_xdk import Chat, hex_to_bytes
+        from chat_xdk import Chat, DecryptEventsParams, hex_to_bytes
 
         v = _load_vectors()
         chat = Chat()
@@ -578,8 +617,10 @@ class TestPythonSdkVectors(unittest.TestCase):
             version=v["event_recipient_key_version"],
         )
         result = chat.decrypt_events(
-            [v["event_key_change_message_key_b64"], v["event_message_key_b64"]],
-            _signing_keys_for(v, v["event_sender_id"], v["message_key_sender_id"]),
+            DecryptEventsParams(
+                [v["event_key_change_message_key_b64"], v["event_message_key_b64"]],
+                signing_keys=_signing_keys_for(v, v["event_sender_id"], v["message_key_sender_id"]),
+            )
         )
         self.assertEqual(result["errors"], {})
         version = v["message_key_conversation_key_version"]
@@ -601,30 +642,34 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
 
     def test_short_sender_message_key_event_verifies_at_v11(self):
-        from chat_xdk import Chat, hex_to_bytes
+        from chat_xdk import Chat, DecryptEventParams, hex_to_bytes
 
         v = _load_vectors()
         event = Chat().decrypt_event(
-            v["event_message_key_short_b64"],
-            {
-                v["message_key_short_conversation_key_version"]:
-                    hex_to_bytes(v["message_key_short_conversation_key_hex"]),
-            },
-            _signing_keys_for(v, v["message_key_short_sender_id"]),
+            DecryptEventParams(
+                v["event_message_key_short_b64"],
+                {
+                    v["message_key_short_conversation_key_version"]:
+                        hex_to_bytes(v["message_key_short_conversation_key_hex"]),
+                },
+                signing_keys=_signing_keys_for(v, v["message_key_short_sender_id"]),
+            )
         )
         self.assertTrue(event["verified"])
         self.assertEqual(event["content"]["text"], v["event_message_key_short_text"])
 
     def test_reply_carrying_a_message_key_validates_and_opens_the_quoted_media(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, DecryptEventParams
 
         v = _load_vectors()
         chat = Chat()
         ckey = base64.b64decode(v["conversation_key_b64"])
         event = chat.decrypt_event(
-            v["event_reply_message_key_b64"],
-            {v["event_conversation_key_version"]: ckey},
-            _signing_keys_for(v, v["event_sender_id"], v["message_key_sender_id"]),
+            DecryptEventParams(
+                v["event_reply_message_key_b64"],
+                {v["event_conversation_key_version"]: ckey},
+                signing_keys=_signing_keys_for(v, v["event_sender_id"], v["message_key_sender_id"]),
+            )
         )
         self.assertTrue(event["verified"])
         self.assertEqual(event["content"]["text"], v["event_reply_message_key_text"])
@@ -646,3 +691,178 @@ class TestPythonSdkVectors(unittest.TestCase):
         public_key = v["signature_v10_cev1_public_key_b64"]
         self.assertTrue(chat.verify(public_key, signature, v["payload_message_v10_cev1"].encode()))
         self.assertFalse(chat.verify(public_key, signature, v["payload_message_v10"].encode()))
+
+    def _send_files(self, chat, v, text, attachments):
+        """Send a message with ``attachments``, check it verifies, and return
+        its payload."""
+        from chat_xdk import EncryptMessageParams
+
+        payload = chat.encrypt_message(
+            EncryptMessageParams(
+                v["event_conversation_id"],
+                text,
+                conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                conversation_key_version=v["event_conversation_key_version"],
+                attachments=attachments,
+            )
+        )
+        self.assertEqual(payload.signature_info.signature_version, "10")
+        self.assertEqual(self._decrypt_own(chat, v, payload)["text"], text)
+        return payload
+
+    def test_files_encrypted_from_the_payload_open_from_the_sent_message(self):
+        from chat_xdk import (
+            Chat,
+            DecryptFileParams,
+            EncryptFileParams,
+            FileDecryptorParams,
+            FileEncryptorParams,
+        )
+
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        key = base64.b64decode(v["conversation_key_b64"])
+        keys = {v["event_conversation_key_version"]: key}
+        photos = [b"\x01" * 3000, b"\x02" * 5000]
+        payload = self._send_files(chat, v, "two photos", [_media("photo-0"), _media("photo-1")])
+
+        # A session with no identity encrypts the files from the payload.
+        worker = Chat()
+        first = worker.encrypt_file(EncryptFileParams(photos[0], payload.event_b64, keys, "photo-0"))
+        # Randomized nonces: two encryptions differ.
+        self.assertNotEqual(
+            worker.encrypt_file(EncryptFileParams(photos[0], payload.event_b64, keys, "photo-0")),
+            first,
+        )
+        encryptor = worker.file_encryptor(FileEncryptorParams(payload.event_b64, keys, "photo-1"))
+        second = b"".join(
+            encryptor.push(photos[1][i:i + 700]) for i in range(0, len(photos[1]), 700)
+        ) + encryptor.finish()
+
+        for name, encrypted, plaintext in (("photo-0", first, photos[0]), ("photo-1", second, photos[1])):
+            with self.subTest(media=name):
+                self.assertEqual(
+                    self._open_media(payload.event_b64, keys, name, base64.b64encode(encrypted)),
+                    plaintext,
+                )
+
+        with self.assertRaises(ValueError):
+            chat.decrypt_file(DecryptFileParams(second, payload.event_b64, keys, "photo-0"))
+        wrong_key = bytearray(key)
+        wrong_key[31] ^= 0xFF
+        with self.assertRaises(ValueError) as ctx:
+            chat.decrypt_file(
+                DecryptFileParams(
+                    first, payload.event_b64,
+                    {v["event_conversation_key_version"]: bytes(wrong_key)}, "photo-0",
+                )
+            )
+        self.assertIn("does not decrypt the message", str(ctx.exception))
+        truncated = chat.file_decryptor(FileDecryptorParams(payload.event_b64, keys, "photo-1"))
+        truncated.push(second[:-4])
+        with self.assertRaises(ValueError) as ctx:
+            truncated.finish()
+        self.assertIn("truncated", str(ctx.exception))
+
+    def test_link_card_images_take_the_cards_key(self):
+        from chat_xdk import EncryptFileParams
+
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        card = {
+            "attachment_type": "url",
+            "url": "https://example.com",
+            "banner_image": {"media_hash_key": "banner", "filesize_bytes": 12, "filename": "banner.png"},
+            "favicon_image": {"media_hash_key": "favicon", "filesize_bytes": 13, "filename": "favicon.png"},
+        }
+        payload = self._send_files(chat, v, "a link", [card])
+        for name, plaintext in (("banner", b"banner bytes"), ("favicon", b"favicon bytes")):
+            with self.subTest(image=name):
+                encrypted = chat.encrypt_file(EncryptFileParams(plaintext, payload.event_b64, keys, name))
+                self.assertEqual(
+                    self._open_media(payload.event_b64, keys, name, base64.b64encode(encrypted)),
+                    plaintext,
+                )
+
+    def test_a_rebuilt_message_keeps_its_encrypted_files_valid(self):
+        from chat_xdk import EncryptFileParams
+
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        draft = self._send_files(chat, v, "draft", [_media("photo-0"), _media("photo-1")])
+        encrypted = chat.encrypt_file(EncryptFileParams(b"photo", draft.event_b64, keys, "photo-1"))
+
+        rebuilt = self._send_files(chat, v, "final text", [_media("photo-0"), _media("photo-1")])
+        self.assertEqual(rebuilt.message_id, draft.message_id)
+        self.assertEqual(str(uuid.UUID(rebuilt.message_id)), rebuilt.message_id)
+        self.assertEqual(
+            self._open_media(rebuilt.event_b64, keys, "photo-1", base64.b64encode(encrypted)),
+            b"photo",
+        )
+
+    def test_a_reply_encrypts_its_own_files_but_not_the_quoted_ones(self):
+        from chat_xdk import EncryptFileParams, EncryptReplyParams
+
+        v = _load_vectors()
+        chat = self._identity_chat(v)
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        original = self._send_files(chat, v, "a photo", [_media("original-photo")])
+        with self.assertRaisesRegex(ValueError, "reply_to_event carries no sequence_id"):
+            chat.encrypt_reply(
+                EncryptReplyParams(
+                    v["event_conversation_id"],
+                    "too early",
+                    original.event_b64,
+                    conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                    conversation_key_version=v["event_conversation_key_version"],
+                )
+            )
+        reply = chat.encrypt_reply(
+            EncryptReplyParams(
+                v["event_conversation_id"],
+                "and mine",
+                _delivered(original.event_b64, "100"),
+                conversation_key=base64.b64decode(v["conversation_key_b64"]),
+                conversation_key_version=v["event_conversation_key_version"],
+                attachments=[_media("reply-photo")],
+            )
+        )
+        encrypted = chat.encrypt_file(EncryptFileParams(b"mine", reply.event_b64, keys, "reply-photo"))
+        self.assertEqual(
+            self._open_media(reply.event_b64, keys, "reply-photo", base64.b64encode(encrypted)),
+            b"mine",
+        )
+        with self.assertRaisesRegex(ValueError, "is media the reply quotes"):
+            chat.encrypt_file(EncryptFileParams(b"x", reply.event_b64, keys, "original-photo"))
+
+    def test_a_message_with_files_needs_an_identity(self):
+        from chat_xdk import Chat, EncryptMessageParams
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        key = base64.b64decode(v["conversation_key_b64"])
+        with self.assertRaisesRegex(ValueError, "call set_identity\\(\\) first"):
+            chat.encrypt_message(
+                EncryptMessageParams(
+                    v["event_conversation_id"],
+                    "a photo",
+                    conversation_key=key,
+                    conversation_key_version=v["event_conversation_key_version"],
+                    attachments=[_media("photo")],
+                )
+            )
+        payload = chat.encrypt_message(
+            EncryptMessageParams(
+                v["event_conversation_id"],
+                "a photo",
+                sender_id=v["event_sender_id"],
+                signing_key_version=v["event_signing_key_version"],
+                conversation_key=key,
+                conversation_key_version=v["event_conversation_key_version"],
+                attachments=[_media("photo")],
+            )
+        )
+        self.assertEqual(self._decrypt_own(chat, v, payload)["text"], "a photo")

@@ -204,25 +204,65 @@ test("threaded reply by raw event with entities and TTL encrypts", async () => {
   assert.ok(body.encoded_message_create_event);
 });
 
-test("media stream encrypt -> decrypt round-trip and truncation", async () => {
-  // The chunked stream path the media flow uses: multi-chunk payload in,
-  // identical bytes out, and truncation is detected. The fixture
-  // conversation-key message names one media file under the conversation
-  // key, so the upload decrypts through that message.
+test("media encrypt -> decrypt round-trip and truncation", async () => {
+  // The message-first media flow: the message names the file by the media
+  // hash key its upload started with, the file is encrypted from the
+  // message's event_b64 in chunks, and it decrypts through that event. A
+  // truncated file is detected.
   const core = await loadedCore();
-  const key = convKey();
-  const keys = { [vectors.event_conversation_key_version]: key };
-  const event = vectors.event_conversation_key_media_b64;
-  const mediaHashKey = vectors.media_conversation_key_hash_key;
+  core.setIdentity("1000");
+  const key = new Uint8Array(Buffer.from(vectors.conversation_key_b64, "base64"));
+  const keys = { 1: key };
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
+  const body = core.encryptReply({
+    conversationId: "1000:2000",
+    text: "a photo",
+    conversationKey: key,
+    conversationKeyVersion: "1",
+    attachments: [
+      {
+        attachment_type: "media",
+        media_hash_key: "photo",
+        width: 4,
+        height: 3,
+        filesize_bytes: plaintext.length,
+        filename: "photo.bin",
+        media_type: 5,
+      },
+    ],
+  });
+  assert.ok(body.event_b64);
 
-  const ciphertext = core.encryptMedia(plaintext, key);
-  const decrypted = core.decryptMedia(ciphertext, event, keys, mediaHashKey);
+  const ciphertext = core.encryptMedia(plaintext, body.event_b64, keys, "photo");
+  assert.equal(ciphertext.length, ChatCore.encryptedFileSize(plaintext.length));
+  const decrypted = core.decryptMedia(ciphertext, body.event_b64, keys, "photo");
   assert.equal(decrypted.length, plaintext.length);
   assert.ok(decrypted.every((b, i) => b === plaintext[i]));
 
   assert.throws(
-    () => core.decryptMedia(ciphertext.subarray(0, ciphertext.length - 4), event, keys, mediaHashKey),
+    () => core.decryptMedia(ciphertext.subarray(0, ciphertext.length - 4), body.event_b64, keys, "photo"),
     /truncated/,
   );
+});
+
+test("media from the fixture message opens", async () => {
+  // Media encrypted by another client opens through its message's event.
+  const core = await loadedCore();
+  const keys = {
+    [vectors.message_key_conversation_key_version]: new Uint8Array(
+      Buffer.from(vectors.message_key_conversation_key_hex, "hex"),
+    ),
+  };
+  for (const name of ["first", "second"]) {
+    const decrypted = core.decryptMedia(
+      new Uint8Array(Buffer.from(vectors[`media_${name}_encrypted_b64`], "base64")),
+      vectors.event_message_key_b64,
+      keys,
+      vectors[`media_${name}_hash_key`],
+    );
+    assert.deepEqual(
+      Buffer.from(decrypted),
+      Buffer.from(vectors[`media_${name}_plaintext_b64`], "base64"),
+    );
+  }
 });

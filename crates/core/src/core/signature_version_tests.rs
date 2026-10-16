@@ -5,7 +5,7 @@
 //! its own output.
 
 use super::test_support::{
-    decrypt_message, envelope, frame, key, keys, message_event, sent_event, Party, CONVERSATION,
+    decrypt_message, envelope, frame, key, keys, message_event, Party, CONVERSATION,
 };
 use super::*;
 use crate::pipeline::build_message_content;
@@ -189,31 +189,26 @@ fn a_version_above_eleven_is_rejected() {
 
 #[test]
 fn a_v7_message_signed_over_a_non_integer_key_version_still_verifies() {
-    let core = ChatCore::new();
-    let reg = core.generate_keypairs().unwrap();
+    let author = Party::new("1001");
     let ckey = key(9);
-    let payload = core
-        .encrypt_message(
-            crate::EncryptMessageParams::new("conv-1", "legacy")
-                .with_identity("sender-1", "1")
-                .with_conversation_key(ckey.to_bytes(), "v1"),
-        )
-        .unwrap();
-    let event_b64 = frame(&sent_event(&payload, "sender-1", "conv-1"));
-    let signing_keys = [SigningKeyEntry {
-        user_id: "sender-1".to_string(),
-        public_key_version: "1".to_string(),
-        public_key: reg.public_key.signing_public_key,
-        identity_public_key: reg.public_key.public_key,
-        identity_public_key_signature: reg.public_key.identity_public_key_signature,
-    }];
-    match core
-        .decrypt_event(&event_b64, &keys("v1", &ckey), &signing_keys)
-        .unwrap()
-    {
-        Event::Message(message) => assert!(message.verified),
-        other => panic!("expected a message, got {:?}", other),
-    }
+    let event = message_event(
+        &author,
+        "m-1",
+        "100",
+        "v1",
+        None,
+        7,
+        &ckey,
+        &build_message_content("legacy", None, None, None).unwrap(),
+    );
+    let message = decrypt_message(
+        &ChatCore::new(),
+        &event,
+        &keys("v1", &ckey),
+        std::slice::from_ref(&author.entry),
+    )
+    .unwrap();
+    assert!(message.verified);
 }
 
 #[test]
@@ -297,7 +292,7 @@ fn group_change_verified(event: &ThriftEvent, signer: &Party) -> bool {
     let mut core = ChatCore::new();
     core.set_reject_unverified(false);
     match core
-        .decrypt_event(
+        .decrypt_event_with(
             &frame(event),
             &HashMap::new(),
             std::slice::from_ref(&signer.entry),
@@ -513,7 +508,7 @@ fn key_change_verified(event: &ThriftEvent, signer: &Party, ckey: &XChatConversa
     let mut core = ChatCore::new();
     core.set_reject_unverified(false);
     match core
-        .decrypt_event(
+        .decrypt_event_with(
             &frame(event),
             &keys("2", ckey),
             std::slice::from_ref(&signer.entry),

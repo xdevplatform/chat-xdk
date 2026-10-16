@@ -14,9 +14,10 @@ Flow (each numbered step asserts against the live API):
   4. react to the sent message (add + remove), decrypting the add back
 
 Optional extras:
-  CHATXDK_E2E_MEDIA=1   also stream-encrypts a media blob, uploads it,
-                        sends a message referencing it, then downloads and
-                        stream-decrypts it back to the original bytes
+  CHATXDK_E2E_MEDIA=1   also starts a media upload, sends a message naming
+                        it, encrypts the file from that message, finishes the
+                        upload, then downloads and decrypts it back to the
+                        original bytes
   CHATXDK_E2E_GROUPS=1  also creates a group (two-signature create), sends a
                         group message, and adds the 1:1 partner as a member
   CHAT_PIN=...          also unlocks keys via live Juicebox and checks they
@@ -27,6 +28,8 @@ from __future__ import annotations
 
 import os
 import time
+
+from chat_xdk import encrypted_file_size
 
 from chat_core import ChatCore, message_text, prep_to_request
 from x_api import XChatClient
@@ -239,14 +242,14 @@ def main() -> None:
     api.send_message(canonical_conv, remove)
     print("reaction remove sent")
 
-    # -- 5. Optional: media — stream-encrypt, upload, send, download, decrypt
+    # -- 5. Optional: media — start upload, build message, encrypt, finish, send
     if os.environ.get("CHATXDK_E2E_MEDIA") == "1":
         # A deterministic multi-chunk payload, so the incremental encryptor
         # emits several frames and any corruption is byte-attributable.
         plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
-        ciphertext = core.encrypt_media(plaintext, key)
-        media_hash_key = api.upload_media(canonical_conv, ciphertext)
-        print(f"encrypted media uploaded: {media_hash_key} ({len(ciphertext)} bytes)")
+        session_id, media_hash_key = api.start_media_upload(
+            canonical_conv, encrypted_file_size(len(plaintext))
+        )
 
         media_msg = core.encrypt_reply(
             conversation_id=canonical_conv,
@@ -266,6 +269,9 @@ def main() -> None:
             ],
             ttl_msec=24 * 60 * 60 * 1000,
         )
+        ciphertext = core.encrypt_media(plaintext, media_msg["event_b64"], {kv: key}, media_hash_key)
+        api.finish_media_upload(canonical_conv, session_id, media_hash_key, ciphertext)
+        print(f"encrypted media uploaded: {media_hash_key} ({len(ciphertext)} bytes)")
         api.send_message(canonical_conv, media_msg)
         one = _await_decrypted(api, core, conversation_id, conv_keys, signing, media_msg["message_id"])
         assert one.get("verified") is True, "media message failed signature verification"
@@ -278,7 +284,7 @@ def main() -> None:
         downloaded = api.download_media(canonical_conv, media_hash_key)
         decrypted = core.decrypt_media(downloaded, one["encoded_event"], conv_keys, media_hash_key)
         assert decrypted == plaintext, "downloaded media did not decrypt to the original bytes"
-        print("media downloaded + stream-decrypted to the original bytes")
+        print("media downloaded + decrypted to the original bytes")
 
     # -- 6. Optional: group create + message + member add --------------------
     if os.environ.get("CHATXDK_E2E_GROUPS") == "1":

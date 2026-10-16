@@ -59,7 +59,7 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_extract_conversation_keys(Pointer handle, Pointer eventsJson);
 
-    FfiResult.ByValue chat_xdk_decrypt_events(Pointer handle, Pointer eventsJson, Pointer signingKeysJson);
+    FfiResult.ByValue chat_xdk_decrypt_events(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_prepare_conversation_key_change(Pointer handle, Pointer paramsJson);
 
@@ -69,8 +69,7 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_message_delete(Pointer handle, Pointer paramsJson);
 
-    FfiResult.ByValue chat_xdk_decrypt_event(
-            Pointer handle, Pointer eventB64, Pointer conversationKeysJson, Pointer signingKeysJson);
+    FfiResult.ByValue chat_xdk_decrypt_event(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_message(Pointer handle, Pointer paramsJson);
 
@@ -88,35 +87,27 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_decrypt(Pointer handle, Pointer ciphertextB64, Pointer conversationKeyB64);
 
-    FfiResult.ByValue chat_xdk_decrypt_stream(
-            Pointer handle,
-            Pointer encryptedB64,
-            Pointer eventB64,
-            Pointer conversationKeysJson,
-            Pointer mediaHashKey);
+    FfiResult.ByValue chat_xdk_encrypt_file(Pointer handle, Pointer paramsJson);
 
-    FfiResult.ByValue chat_xdk_encrypt_stream(Pointer handle, Pointer plaintextB64, Pointer conversationKeyB64);
+    FfiResult.ByValue chat_xdk_decrypt_file(Pointer handle, Pointer paramsJson);
 
-    Pointer chat_xdk_stream_encryptor_new(Pointer conversationKeyB64);
+    FfiResult.ByValue chat_xdk_file_encryptor_new(
+            Pointer handle, Pointer paramsJson, PointerByReference outEncryptor);
 
-    FfiResult.ByValue chat_xdk_stream_encryptor_push(Pointer handle, Pointer plaintextB64);
+    FfiResult.ByValue chat_xdk_file_encryptor_push(Pointer handle, Pointer plaintextB64);
 
-    FfiResult.ByValue chat_xdk_stream_encryptor_finish(Pointer handle);
+    FfiResult.ByValue chat_xdk_file_encryptor_finish(Pointer handle);
 
-    void chat_xdk_stream_encryptor_free(Pointer handle);
+    void chat_xdk_file_encryptor_free(Pointer handle);
 
-    FfiResult.ByValue chat_xdk_stream_decryptor_new(
-            Pointer handle,
-            Pointer eventB64,
-            Pointer conversationKeysJson,
-            Pointer mediaHashKey,
-            PointerByReference outDecryptor);
+    FfiResult.ByValue chat_xdk_file_decryptor_new(
+            Pointer handle, Pointer paramsJson, PointerByReference outDecryptor);
 
-    FfiResult.ByValue chat_xdk_stream_decryptor_push(Pointer handle, Pointer ciphertextB64);
+    FfiResult.ByValue chat_xdk_file_decryptor_push(Pointer handle, Pointer ciphertextB64);
 
-    FfiResult.ByValue chat_xdk_stream_decryptor_finish(Pointer handle);
+    FfiResult.ByValue chat_xdk_file_decryptor_finish(Pointer handle);
 
-    void chat_xdk_stream_decryptor_free(Pointer handle);
+    void chat_xdk_file_decryptor_free(Pointer handle);
 
     FfiResult.ByValue chat_xdk_sign(Pointer handle, Pointer data, long dataLen);
 
@@ -126,7 +117,7 @@ public interface ChatNative extends Library {
 
     int chat_xdk_matches_registered_key(Pointer handle, Pointer publicKeyB64);
 
-    FfiResult.ByValue chat_xdk_encrypted_stream_size(long plaintextSize);
+    FfiResult.ByValue chat_xdk_encrypted_file_size(long plaintextSize);
 
     FfiResult.ByValue chat_xdk_bytes_to_base64(Pointer data, long dataLen);
 

@@ -21,9 +21,11 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
+    AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
+    DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, FileDecryptorParams,
+    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
+    PublicKeyInput, QuickReply, SigningKeyEntry,
 };
 
 // FFI result type
@@ -172,16 +174,6 @@ fn parse_signing_keys(json: &str) -> Result<Vec<SigningKeyEntry>, String> {
 /// Parse the Juicebox config JSON accepted by the X API into our internal type.
 fn parse_juicebox_config(config_json: &str) -> Result<JuiceboxConfig, String> {
     JuiceboxConfig::from_x_api_json(config_json)
-}
-
-/// Parse conversation key bytes from a base64 string, returning an `FfiResult`
-/// error if it fails.
-fn parse_ckey(ckey_b64: &str) -> Result<XChatConversationKey, FfiResult> {
-    let bytes = BASE64
-        .decode(ckey_b64)
-        .map_err(|e| err_result(&format!("Invalid conversation key base64: {}", e)))?;
-    XChatConversationKey::from_bytes(bytes)
-        .ok_or_else(|| err_result("Invalid conversation key (expected 32 bytes)"))
 }
 
 /// Decode an optional base64 conversation-key override for the params
@@ -375,6 +367,48 @@ struct FfiGroupCreateParams {
     avatar_url: Option<String>,
     #[serde(default)]
     ttl_msec: Option<i64>,
+}
+
+// The receive and file params carry `conversation_keys` as
+// `{"version": "base64 raw 32-byte key"}` and byte fields as base64.
+
+#[derive(serde::Deserialize)]
+struct FfiDecryptEventParams {
+    event_b64: String,
+    conversation_keys: HashMap<String, String>,
+    #[serde(default)]
+    signing_keys: Option<Vec<SigningKeyEntry>>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiDecryptEventsParams {
+    events: Vec<String>,
+    #[serde(default)]
+    signing_keys: Option<Vec<SigningKeyEntry>>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiEncryptFileParams {
+    file: String,
+    event_b64: String,
+    conversation_keys: HashMap<String, String>,
+    media_hash_key: String,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiDecryptFileParams {
+    encrypted: String,
+    event_b64: String,
+    conversation_keys: HashMap<String, String>,
+    media_hash_key: String,
+}
+
+/// The params of the file encryptor and decryptor.
+#[derive(serde::Deserialize)]
+struct FfiFileParams {
+    event_b64: String,
+    conversation_keys: HashMap<String, String>,
+    media_hash_key: String,
 }
 
 /// Deserialize a single-JSON params document into its FFI mirror struct.
@@ -943,34 +977,29 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
     })
 }
 
-/// Batch decrypt. `signing_keys_json`: `[{"user_id","public_key_version","public_key",
-/// "identity_public_key","identity_public_key_signature"},...]`. An empty
-/// array falls back to the keys stored via `chat_xdk_set_signing_keys`.
+/// Batch decrypt.
+///
+/// `params_json` — single JSON document: `events` (the base64 events) plus
+/// optional `signing_keys` (`[{"user_id","public_key_version","public_key",
+/// "identity_public_key","identity_public_key_signature"},...]`); absent or
+/// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_events(
     handle: *const ChatHandle,
-    events_json: *const c_char,
-    signing_keys_json: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let events_json = try_str!(events_json);
-        let signing_keys_json = try_str!(signing_keys_json);
-
-        let events: Vec<String> = match serde_json::from_str(events_json) {
-            Ok(e) => e,
-            Err(e) => return err_result(&format!("Invalid events JSON: {}", e)),
+        let p: FfiDecryptEventsParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
         };
-        let signing_keys = match parse_signing_keys(signing_keys_json) {
-            Ok(k) => k,
-            Err(e) => return err_result(&e),
-        };
-
-        let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
-        let result = h.inner.decrypt_events(&refs, &signing_keys);
+        let mut params = DecryptEventsParams::new(p.events);
+        params.signing_keys = p.signing_keys;
+        let result = h.inner.decrypt_events(params);
 
         match json_decrypt_events_result(&result) {
             Ok(json) => ok_data(&json),
@@ -1176,58 +1205,39 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
 
 /// Decrypt a webhook event.
 ///
-/// - `event_b64` — base64-encoded raw event from the webhook.
-/// - `conversation_keys_json` — JSON object `{"version": "base64_key"}` from
-///   `chat_xdk_extract_conversation_keys`. Pass `"{}"` for non-message events
-///   or to fall back to the opt-in key cache (`chat_xdk_set_cache_keys`).
-/// - `signing_keys_json` — JSON array `[{"user_id","public_key_version","public_key",
-///   "identity_public_key","identity_public_key_signature"},...]` for the sender.
-///   The SDK selects the matching version automatically. An empty array falls
-///   back to the keys stored via `chat_xdk_set_signing_keys`; if none are
-///   stored either, signed events fail decryption under the default
-///   reject-unverified policy (disable it via `chat_xdk_set_reject_unverified`
-///   to have them returned with `verified: false` instead).
+/// `params_json` — single JSON document: `event_b64` (the base64 event),
+/// `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
+/// `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
+/// for events without message contents, which also falls back to the opt-in
+/// key cache), plus optional `signing_keys` (as for
+/// `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
+/// events fail decryption under the default reject-unverified policy
+/// (disable it via `chat_xdk_set_reject_unverified` to have them returned
+/// with `verified: false` instead).
 ///
-/// Returns a JSON representation of the decrypted `Event`.
+/// Returns JSON representation of the decrypted Event.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_event(
     handle: *const ChatHandle,
-    event_b64: *const c_char,
-    conversation_keys_json: *const c_char,
-    signing_keys_json: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let event_b64 = try_str!(event_b64);
-        let conv_keys_str = try_str!(conversation_keys_json);
-        let signing_keys_str = try_str!(signing_keys_json);
-
-        // Parse conversation keys: { "version": "base64_bytes", ... }
-        let conv_keys_b64: HashMap<String, String> = match serde_json::from_str(conv_keys_str) {
-            Ok(keys) => keys,
-            Err(e) => return err_result(&format!("Invalid conversation keys JSON: {}", e)),
+        let p: FfiDecryptEventParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
         };
-        // A malformed document errors above; individual entries are best-effort.
-        // An undecodable or wrong-length value is skipped and surfaces later
-        // as a missing-key decrypt error.
-        let mut conv_keys: HashMap<String, XChatConversationKey> = HashMap::new();
-        for (version, key_b64) in conv_keys_b64 {
-            if let Ok(bytes) = BASE64.decode(&key_b64) {
-                if let Some(ckey) = XChatConversationKey::from_bytes(bytes) {
-                    conv_keys.insert(version, ckey);
-                }
-            }
-        }
-
-        let signing_keys = match parse_signing_keys(signing_keys_str) {
+        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
             Ok(k) => k,
-            Err(e) => return err_result(&e),
+            Err(e) => return e,
         };
+        let mut params = DecryptEventParams::new(p.event_b64, conversation_keys);
+        params.signing_keys = p.signing_keys;
 
-        match h.inner.decrypt_event(event_b64, &conv_keys, &signing_keys) {
+        match h.inner.decrypt_event(params) {
             Ok(event) => match serde_json::to_string(&event) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
@@ -1250,7 +1260,11 @@ pub extern "C" fn chat_xdk_decrypt_event(
 /// `quick_reply` shape of decrypted text content), `should_notify`, and
 /// `ttl_msec`.
 ///
-/// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+/// Returns JSON `SendPayload`, whose `message_id` is the message's id. A
+/// message with files takes an id derived from its files, so building it
+/// again gives the same id; encrypt each file afterwards with
+/// `chat_xdk_encrypt_file` or a file encryptor and the payload's
+/// `event_b64`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_encrypt_message(
     handle: *const ChatHandle,
@@ -1310,7 +1324,8 @@ pub extern "C" fn chat_xdk_encrypt_message(
 /// `reply_to_entities`, and `reply_to_attachments` remain for callers that no
 /// longer hold the raw event.
 ///
-/// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
+/// Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
+/// and files work as for `chat_xdk_encrypt_message`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_encrypt_reply(
     handle: *const ChatHandle,
@@ -1586,14 +1601,11 @@ pub extern "C" fn chat_xdk_decrypt(
     })
 }
 
-/// Parse the conversation-key JSON of a media call: `{"version":
-/// "base64_key", ...}`. An entry that is not a base64 32-byte key is an
-/// error.
-fn parse_media_conversation_keys(
-    json: &str,
+/// Decode a params document's `conversation_keys`. An entry that is not a
+/// base64 32-byte key is an error.
+fn conversation_keys_from_b64(
+    entries: HashMap<String, String>,
 ) -> Result<HashMap<String, XChatConversationKey>, FfiResult> {
-    let entries: HashMap<String, String> = serde_json::from_str(json)
-        .map_err(|e| err_result(&format!("Invalid conversation keys JSON: {}", e)))?;
     entries
         .into_iter()
         .map(|(version, key_b64)| {
@@ -1613,125 +1625,160 @@ fn parse_media_conversation_keys(
         .collect()
 }
 
-/// Decrypt an encrypted media file (e.g. an image or video).
-///
-/// - `encrypted_b64` — the encrypted bytes, base64.
-/// - `event_b64` — the event of the message that carries the media.
-/// - `conversation_keys_json` — JSON object `{"version": "base64_key"}`
-///   holding the key for the message's version.
-/// - `media_hash_key` — the media's hash key from the decrypted message.
-///
-/// Returns base64-encoded decrypted bytes.
-#[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_stream(
-    handle: *const ChatHandle,
-    encrypted_b64: *const c_char,
-    event_b64: *const c_char,
-    conversation_keys_json: *const c_char,
-    media_hash_key: *const c_char,
-) -> FfiResult {
-    catch_ffi(|| {
-        if handle.is_null() {
-            return err_result("Null handle");
-        }
-        let h = unsafe { &*handle };
-        let encrypted_b64 = try_str!(encrypted_b64);
-        let event_b64 = try_str!(event_b64);
-        let conv_keys_str = try_str!(conversation_keys_json);
-        let media_hash_key = try_str!(media_hash_key);
-
-        let encrypted = match BASE64.decode(encrypted_b64) {
-            Ok(b) => b,
-            Err(e) => return err_result(&format!("Base64 error: {}", e)),
-        };
-        let conv_keys = match parse_media_conversation_keys(conv_keys_str) {
-            Ok(k) => k,
-            Err(e) => return e,
-        };
-        match h
-            .inner
-            .decrypt_stream(&encrypted, event_b64, &conv_keys, media_hash_key)
-        {
-            Ok(output) => ok_data(&BASE64.encode(&output)),
-            Err(e) => err_from(e),
-        }
-    })
+/// Decode a params document's base64 byte field.
+fn bytes_from_b64(field: &str, b64: &str) -> Result<Vec<u8>, FfiResult> {
+    BASE64
+        .decode(b64)
+        .map_err(|e| err_result(&format!("Invalid {field} base64: {e}")))
 }
 
-/// Encrypt a stream (e.g. media files) with a conversation key.
+/// Encrypt a file of an outgoing message, after the message is built.
 ///
-/// Both arguments are base64-encoded.
-/// Returns base64-encoded encrypted bytes.
+/// `params_json` — single JSON document: `file` (base64), `event_b64` (the
+/// `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
+/// `chat_xdk_encrypt_reply` returned for the message carrying the file),
+/// `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
+/// key the message was encrypted under), and `media_hash_key` (the media
+/// hash key the file's upload started with, as listed in the message's
+/// attachments). The SDK finds that attachment and encrypts the file under
+/// its key.
+///
+/// Returns the encrypted file, base64.
 #[no_mangle]
-pub extern "C" fn chat_xdk_encrypt_stream(
+pub extern "C" fn chat_xdk_encrypt_file(
     handle: *const ChatHandle,
-    plaintext_b64: *const c_char,
-    conversation_key_b64: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let plaintext_b64 = try_str!(plaintext_b64);
-        let ckey_b64 = try_str!(conversation_key_b64);
-
-        let plaintext = match BASE64.decode(plaintext_b64) {
-            Ok(b) => b,
-            Err(e) => return err_result(&format!("Base64 error: {}", e)),
+        let p: FfiEncryptFileParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
         };
-        let ckey = match parse_ckey(ckey_b64) {
+        let file = match bytes_from_b64("file", &p.file) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
             Ok(k) => k,
             Err(e) => return e,
         };
-        match h.inner.encrypt_stream(&plaintext, &ckey) {
+        let params = EncryptFileParams::new(file, p.event_b64, conversation_keys, p.media_hash_key);
+        match h.inner.encrypt_file(params) {
             Ok(encrypted) => ok_data(&BASE64.encode(&encrypted)),
             Err(e) => err_from(e),
         }
     })
 }
 
-/// Opaque handle to an incremental stream encryptor.
+/// Decrypt an encrypted file.
 ///
-/// Created by `chat_xdk_stream_encryptor_new`, freed by
-/// `chat_xdk_stream_encryptor_free`.
-pub struct StreamEncryptorHandle {
-    inner: Option<chat_xdk_core::StreamEncryptor>,
-}
-
-/// Opaque handle to an incremental stream decryptor.
+/// `params_json` — single JSON document: `encrypted` (base64, as
+/// downloaded), `event_b64` (the event of the message that carries the
+/// file), `conversation_keys` (`{"version": "base64 raw 32-byte key"}`
+/// holding the key for the message's version), and `media_hash_key` (the
+/// file's media hash key from the decrypted message).
 ///
-/// Created by `chat_xdk_stream_decryptor_new`, freed by
-/// `chat_xdk_stream_decryptor_free`.
-pub struct StreamDecryptorHandle {
-    inner: Option<chat_xdk_core::StreamDecryptor>,
-}
-
-/// Create a stream encryptor for a base64 conversation key. Returns NULL on a
-/// bad key; free the handle with `chat_xdk_stream_encryptor_free`.
+/// Returns the decrypted file, base64.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_encryptor_new(
-    conversation_key_b64: *const c_char,
-) -> *mut StreamEncryptorHandle {
-    catch_ffi_or(std::ptr::null_mut(), || {
-        let ckey = match parse_ckey(match unsafe { from_c_str(conversation_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
-        }) {
-            Ok(k) => k,
-            Err(_) => return std::ptr::null_mut(),
+pub extern "C" fn chat_xdk_decrypt_file(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiDecryptFileParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
         };
-        match chat_xdk_core::StreamEncryptor::new(&ckey) {
-            Ok(enc) => Box::into_raw(Box::new(StreamEncryptorHandle { inner: Some(enc) })),
-            Err(_) => std::ptr::null_mut(),
+        let encrypted = match bytes_from_b64("encrypted", &p.encrypted) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let params =
+            DecryptFileParams::new(encrypted, p.event_b64, conversation_keys, p.media_hash_key);
+        match h.inner.decrypt_file(params) {
+            Ok(output) => ok_data(&BASE64.encode(&output)),
+            Err(e) => err_from(e),
         }
     })
 }
 
-/// Encrypt a base64 plaintext chunk; returns base64 ciphertext available so far.
+// Incremental files
+
+/// Opaque handle to an incremental file encryptor.
+///
+/// Created by `chat_xdk_file_encryptor_new`, freed by
+/// `chat_xdk_file_encryptor_free`.
+pub struct FileEncryptorHandle {
+    inner: Option<chat_xdk_core::FileEncryptor>,
+}
+
+/// Opaque handle to an incremental file decryptor.
+///
+/// Created by `chat_xdk_file_decryptor_new`, freed by
+/// `chat_xdk_file_decryptor_free`.
+pub struct FileDecryptorHandle {
+    inner: Option<chat_xdk_core::FileDecryptor>,
+}
+
+/// Create an incremental encryptor for a file too large to hold in memory.
+/// `params_json` takes the fields of `chat_xdk_encrypt_file` apart from
+/// `file`, which is fed to the encryptor.
+///
+/// On success writes the new handle to `out_encryptor` and returns an empty
+/// result; free the handle with `chat_xdk_file_encryptor_free`. On
+/// failure writes NULL and returns the error.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_encryptor_push(
-    handle: *mut StreamEncryptorHandle,
+pub extern "C" fn chat_xdk_file_encryptor_new(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+    out_encryptor: *mut *mut FileEncryptorHandle,
+) -> FfiResult {
+    catch_ffi(|| {
+        if out_encryptor.is_null() {
+            return err_result("Null out_encryptor");
+        }
+        unsafe { *out_encryptor = std::ptr::null_mut() };
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiFileParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let params = FileEncryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
+        match h.inner.file_encryptor(params) {
+            Ok(enc) => {
+                let boxed = Box::new(FileEncryptorHandle { inner: Some(enc) });
+                unsafe { *out_encryptor = Box::into_raw(boxed) };
+                ok_void()
+            }
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// Encrypt a base64 chunk of the file; returns the base64 encrypted bytes
+/// available so far.
+#[no_mangle]
+pub extern "C" fn chat_xdk_file_encryptor_push(
+    handle: *mut FileEncryptorHandle,
     plaintext_b64: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
@@ -1740,7 +1787,7 @@ pub extern "C" fn chat_xdk_stream_encryptor_push(
         }
         let enc = match unsafe { &mut *handle }.inner.as_mut() {
             Some(e) => e,
-            None => return err_result("Stream encryptor already finished"),
+            None => return err_result("File encryptor already finished"),
         };
         let plaintext = match BASE64.decode(try_str!(plaintext_b64)) {
             Ok(b) => b,
@@ -1755,9 +1802,7 @@ pub extern "C" fn chat_xdk_stream_encryptor_push(
 
 /// Emit the final frame as base64. The handle must still be freed afterwards.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_encryptor_finish(
-    handle: *mut StreamEncryptorHandle,
-) -> FfiResult {
+pub extern "C" fn chat_xdk_file_encryptor_finish(handle: *mut FileEncryptorHandle) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
@@ -1767,14 +1812,14 @@ pub extern "C" fn chat_xdk_stream_encryptor_finish(
                 Ok(out) => ok_data(&BASE64.encode(&out)),
                 Err(e) => err_from(e),
             },
-            None => err_result("Stream encryptor already finished"),
+            None => err_result("File encryptor already finished"),
         }
     })
 }
 
-/// Free a stream encryptor handle.
+/// Free a file encryptor handle.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_encryptor_free(handle: *mut StreamEncryptorHandle) {
+pub extern "C" fn chat_xdk_file_encryptor_free(handle: *mut FileEncryptorHandle) {
     catch_ffi_or((), || {
         if !handle.is_null() {
             unsafe {
@@ -1784,19 +1829,18 @@ pub extern "C" fn chat_xdk_stream_encryptor_free(handle: *mut StreamEncryptorHan
     })
 }
 
-/// Create an incremental decryptor for an encrypted media file, taking the
-/// arguments of `chat_xdk_decrypt_stream` apart from the bytes.
+/// Create an incremental decryptor for an encrypted file too large to hold
+/// in memory. `params_json` takes the fields of `chat_xdk_decrypt_file`
+/// apart from `encrypted`, which is fed to the decryptor.
 ///
 /// On success writes the new handle to `out_decryptor` and returns an empty
-/// result; free the handle with `chat_xdk_stream_decryptor_free`. On failure
-/// writes NULL and returns the error.
+/// result; free the handle with `chat_xdk_file_decryptor_free`. On
+/// failure writes NULL and returns the error.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_decryptor_new(
+pub extern "C" fn chat_xdk_file_decryptor_new(
     handle: *const ChatHandle,
-    event_b64: *const c_char,
-    conversation_keys_json: *const c_char,
-    media_hash_key: *const c_char,
-    out_decryptor: *mut *mut StreamDecryptorHandle,
+    params_json: *const c_char,
+    out_decryptor: *mut *mut FileDecryptorHandle,
 ) -> FfiResult {
     catch_ffi(|| {
         if out_decryptor.is_null() {
@@ -1807,20 +1851,18 @@ pub extern "C" fn chat_xdk_stream_decryptor_new(
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let event_b64 = try_str!(event_b64);
-        let conv_keys_str = try_str!(conversation_keys_json);
-        let media_hash_key = try_str!(media_hash_key);
-
-        let conv_keys = match parse_media_conversation_keys(conv_keys_str) {
+        let p: FfiFileParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
             Ok(k) => k,
             Err(e) => return e,
         };
-        match h
-            .inner
-            .stream_decryptor(event_b64, &conv_keys, media_hash_key)
-        {
+        let params = FileDecryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
+        match h.inner.file_decryptor(params) {
             Ok(dec) => {
-                let boxed = Box::new(StreamDecryptorHandle { inner: Some(dec) });
+                let boxed = Box::new(FileDecryptorHandle { inner: Some(dec) });
                 unsafe { *out_decryptor = Box::into_raw(boxed) };
                 ok_void()
             }
@@ -1829,10 +1871,11 @@ pub extern "C" fn chat_xdk_stream_decryptor_new(
     })
 }
 
-/// Decrypt a base64 ciphertext chunk; returns base64 plaintext available so far.
+/// Decrypt a base64 chunk of the encrypted file; returns the base64 bytes
+/// available so far.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_decryptor_push(
-    handle: *mut StreamDecryptorHandle,
+pub extern "C" fn chat_xdk_file_decryptor_push(
+    handle: *mut FileDecryptorHandle,
     ciphertext_b64: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
@@ -1841,7 +1884,7 @@ pub extern "C" fn chat_xdk_stream_decryptor_push(
         }
         let dec = match unsafe { &mut *handle }.inner.as_mut() {
             Some(d) => d,
-            None => return err_result("Stream decryptor already finished"),
+            None => return err_result("File decryptor already finished"),
         };
         let ciphertext = match BASE64.decode(try_str!(ciphertext_b64)) {
             Ok(b) => b,
@@ -1854,12 +1897,10 @@ pub extern "C" fn chat_xdk_stream_decryptor_push(
     })
 }
 
-/// Decrypt the final frame as base64. Errors if the stream was truncated. The
+/// Decrypt the final frame as base64. Errors if the file was truncated. The
 /// handle must still be freed afterwards.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_decryptor_finish(
-    handle: *mut StreamDecryptorHandle,
-) -> FfiResult {
+pub extern "C" fn chat_xdk_file_decryptor_finish(handle: *mut FileDecryptorHandle) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
@@ -1869,14 +1910,14 @@ pub extern "C" fn chat_xdk_stream_decryptor_finish(
                 Ok(out) => ok_data(&BASE64.encode(&out)),
                 Err(e) => err_from(e),
             },
-            None => err_result("Stream decryptor already finished"),
+            None => err_result("File decryptor already finished"),
         }
     })
 }
 
-/// Free a stream decryptor handle.
+/// Free a file decryptor handle.
 #[no_mangle]
-pub extern "C" fn chat_xdk_stream_decryptor_free(handle: *mut StreamDecryptorHandle) {
+pub extern "C" fn chat_xdk_file_decryptor_free(handle: *mut FileDecryptorHandle) {
     catch_ffi_or((), || {
         if !handle.is_null() {
             unsafe {
@@ -2047,13 +2088,14 @@ pub extern "C" fn chat_xdk_bytes_to_base64(data: *const u8, data_len: usize) -> 
     })
 }
 
-/// Return the exact ciphertext size produced by stream encryption.
+/// Return the exact size of a file once encrypted: the size its upload
+/// declares before the file is encrypted.
 #[no_mangle]
-pub extern "C" fn chat_xdk_encrypted_stream_size(plaintext_size: u64) -> FfiResult {
+pub extern "C" fn chat_xdk_encrypted_file_size(plaintext_size: u64) -> FfiResult {
     catch_ffi(
-        || match chat_xdk_core::utils::encrypted_stream_size(plaintext_size) {
+        || match chat_xdk_core::utils::encrypted_file_size(plaintext_size) {
             Some(size) => ok_data(&size.to_string()),
-            None => err_result("Encrypted stream size overflow"),
+            None => err_result("Encrypted file size overflow"),
         },
     )
 }

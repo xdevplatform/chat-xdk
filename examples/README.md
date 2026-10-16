@@ -15,8 +15,8 @@ reply (a simple echo), encrypts the reply, and sends it back.
 
 The bots deliberately stop at that messaging core. The rest of the SDK surface
 — group management (`prepareGroupCreate` / `prepareGroupMembersChange`),
-reactions (`encryptAddReaction` / `encryptRemoveReaction`), and media streaming
-(`encryptStream` / `streamEncryptor` / `streamDecryptor`) — is documented in
+reactions (`encryptAddReaction` / `encryptRemoveReaction`), and media files
+(`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`) — is documented in
 [`../docs/API.md`](../docs/API.md), with tested reference call shapes in each
 binding's test suite (`crates/*/tests`, `crates/wasm/js/tests`,
 `go/chatxdk/chatxdk_test.go`).
@@ -123,10 +123,12 @@ Each example ships **two** test paths:
      assert it verifies — closing the sign → verify loop end to end
   4. add a reaction to the sent message, decrypt + verify it, then remove it
 
-  Three optional extras: `CHATXDK_E2E_MEDIA=1` additionally stream-encrypts
-  a media blob, uploads it (initialize → append → finalize), sends a message
-  referencing its `media_hash_key`, then downloads and stream-decrypts it
-  back to the original bytes; `CHATXDK_E2E_GROUPS=1` additionally creates a
+  Three optional extras: `CHATXDK_E2E_MEDIA=1` additionally starts a media
+  upload, builds a message whose attachment names the upload's
+  `media_hash_key`, encrypts the file from that message's `event_b64`,
+  finishes the upload (append → finalize), sends the message, then downloads
+  and decrypts the file back to the original bytes; `CHATXDK_E2E_GROUPS=1`
+  additionally creates a
   group (the two-signature create), sends a group message, and adds the 1:1
   partner as a member (a key rotation); `CHAT_PIN=…` (Python only)
   additionally unlocks keys via live Juicebox and checks they match the
@@ -136,25 +138,33 @@ Each example ships **two** test paths:
 ## Encrypted media
 
 Media never travels in the message: the message carries a `media` attachment
-descriptor referencing a `media_hash_key`, and the bytes themselves are
-stream-encrypted and stored via the chat media endpoints. The examples encrypt
-uploads with the conversation key; to decrypt, the SDK reads the message that
-carries the media and derives that file's key, whichever client sent it.
+descriptor naming a `media_hash_key`, and the bytes themselves are encrypted
+and stored via the chat media endpoints. Each file is encrypted under a key
+derived from its message and its attachment, so the message comes first:
+start each upload to get its `media_hash_key`, build the message with
+attachments naming those keys, then encrypt each file from the message's
+`event_b64` (returned with the send payload) and finish its upload. To
+decrypt, the SDK reads the message that carries the media and derives that
+file's key, whichever client sent it.
 Every example's crypto core shows the pattern with the SDK's
-**incremental** stream API (`streamEncryptor` / `streamDecryptor`), feeding
+**incremental** file API (`fileEncryptor` / `fileDecryptor`), feeding
 fixed-size chunks through `push` and sealing with `finish` — memory stays
 bounded regardless of file size, which matters most in the WASM binding where
 the heap cannot hold large files whole:
 
-- **encrypt + upload**: `encryptMedia`/`encrypt_media` (chunked `push` +
-  `finish`) → `uploadMedia`/`upload_media` (initialize → 3 MB appends →
-  finalize, returning the `media_hash_key`) → send a message whose
-  attachment descriptor references that key
+- **upload + encrypt + send**: `startMediaUpload`/`start_media_upload`
+  (initialize with the encrypted size from
+  `encryptedFileSize`/`encrypted_file_size`, returning the upload session and
+  the `media_hash_key`) → `encryptReply`/`encrypt_reply` with an attachment
+  descriptor naming that key → `encryptMedia`/`encrypt_media` with the
+  payload's `event_b64`, the conversation key map and the `media_hash_key`
+  (chunked `push` + `finish`) → `finishMediaUpload`/`finish_media_upload`
+  (3 MB appends → finalize) → send the message
 - **download + decrypt**: `downloadMedia`/`download_media` (raw **bytes** —
   never decode the body as text; that corrupts the ciphertext) →
   `decryptMedia`/`decrypt_media` with the raw event of the message that
   carries the media, the conversation key map and the `media_hash_key`
-  (chunked `push`, then `finish`, which errors if the stream was truncated)
+  (chunked `push`, then `finish`, which errors if the file was truncated)
 
 ## What these examples are not
 

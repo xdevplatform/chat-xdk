@@ -91,7 +91,7 @@ chat.setSigningKeys([
 
 // Initial load — batch decrypt with automatic key extraction. Signing keys
 // come from the store; the verified conversation keys populate the cache.
-const result = chat.decryptEvents(rawEvents);
+const result = chat.decryptEvents({ events: rawEvents });
 
 for (const dm of result.messages) {
   if (dm.event.type === "message") {
@@ -99,10 +99,10 @@ for (const dm of result.messages) {
   }
 }
 
-// Individual events after the initial load: conversation keys resolve from
-// the cache and signing keys from the store (pass either explicitly to
-// override).
-const event = chat.decryptEvent(webhookEventB64);
+// Individual events after the initial load: the empty key map resolves from
+// the cache and the unset signing keys from the store (pass either
+// explicitly to override).
+const event = chat.decryptEvent({ eventB64: webhookEventB64, conversationKeys: {} });
 
 // Sending resolves the identity and conversation key from the session too.
 const payload = chat.encryptMessage({ conversationId: event.conversationId, text: "hi!" });
@@ -117,7 +117,7 @@ const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: webhookEv
 
 ## API
 
-See the **JS** column of the unified tables in [`docs/API.md`](../../../docs/API.md) for the full method list, parameters, and return types.
+See the **JS** column of the unified tables in [`docs/API.md`](../../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../../docs/API.md#files-media).
 
 ## Security limitations
 

@@ -158,19 +158,21 @@ public sealed class XChatClient
     private const int UploadChunk = 3 * 1024 * 1024;
 
     /// <summary>
-    /// Upload an encrypted media blob; returns its <c>media_hash_key</c>.
+    /// Start an upload; returns its session id and media hash key.
     ///
-    /// Three-step flow: initialize (returns an upload session and the hash
-    /// key), append (3 MB segments), finalize. The media endpoints take the
-    /// colon form of the conversation id in the body.
+    /// <paramref name="totalBytes"/> is the encrypted size,
+    /// <c>ChatXdkUtilities.EncryptedFileSize</c> of the plaintext size. The
+    /// media hash key names the file in the message's attachments; encrypt the
+    /// file once the message is built, then <see cref="FinishMediaUploadAsync"/>.
+    /// The media endpoints take the colon form of the conversation id in the body.
     /// </summary>
-    public async Task<string> UploadMediaAsync(string conversationId, byte[] ciphertext)
+    public async Task<(string SessionId, string MediaHashKey)> StartMediaUploadAsync(
+        string conversationId, ulong totalBytes)
     {
-        var conv = conversationId.Replace('-', ':');
         var init = await PostAsync("/2/chat/media/upload/initialize", new Dictionary<string, object?>
         {
-            ["conversation_id"] = conv,
-            ["total_bytes"] = ciphertext.Length,
+            ["conversation_id"] = conversationId.Replace('-', ':'),
+            ["total_bytes"] = totalBytes,
         });
         var data = init.ValueKind == JsonValueKind.Object && init.TryGetProperty("data", out var d)
             ? d
@@ -179,7 +181,14 @@ public sealed class XChatClient
         var mediaHashKey = Prop(data, "media_hash_key") ?? Prop(data, "mediaHashKey");
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(mediaHashKey))
             throw new InvalidOperationException($"media upload initialize failed: {init}");
+        return (sessionId, mediaHashKey);
+    }
 
+    /// <summary>Upload the encrypted file in 3 MB segments, then finalize.</summary>
+    public async Task FinishMediaUploadAsync(
+        string conversationId, string sessionId, string mediaHashKey, byte[] ciphertext)
+    {
+        var conv = conversationId.Replace('-', ':');
         var segment = 0;
         for (var offset = 0; offset < ciphertext.Length; offset += UploadChunk)
         {
@@ -202,7 +211,6 @@ public sealed class XChatClient
                 ["media_hash_key"] = mediaHashKey,
                 ["num_parts"] = segment.ToString(),
             });
-        return mediaHashKey;
     }
 
     /// <summary>
@@ -221,7 +229,10 @@ public sealed class XChatClient
 
     // -- Sending ------------------------------------------------------------
 
-    /// <summary>POST an encrypted message produced by <see cref="ChatCore.EncryptReply"/>.</summary>
+    /// <summary>
+    /// POST an encrypted message produced by <see cref="ChatCore.EncryptReply"/>.
+    /// Only the send fields go out; <c>EventB64</c> stays local.
+    /// </summary>
     public async Task SendMessageAsync(string conversationId, SendBody body)
     {
         var payload = new Dictionary<string, string>

@@ -213,18 +213,22 @@ public final class XChatClient {
 
     private static final int UPLOAD_CHUNK = 3 * 1024 * 1024;
 
+    /** A started upload: its session id and the media hash key that names the file. */
+    public record MediaUpload(String sessionId, String mediaHashKey) {}
+
     /**
-     * Upload an encrypted media blob; returns its {@code media_hash_key}.
+     * Start an upload.
      *
-     * <p>Three-step flow: initialize (returns an upload session and the hash
-     * key), append (3 MB segments), finalize. The media endpoints take the
-     * colon form of the conversation id in the body.
+     * <p>{@code totalBytes} is the encrypted size,
+     * {@code ChatXdkUtilities.encryptedFileSize} of the plaintext size. The
+     * media hash key names the file in the message's attachments; encrypt the
+     * file once the message is built, then {@link #finishMediaUpload}. The
+     * media endpoints take the colon form of the conversation id in the body.
      */
-    public String uploadMedia(String conversationId, byte[] ciphertext) throws Exception {
-        String conv = conversationId.replace("-", ":");
+    public MediaUpload startMediaUpload(String conversationId, long totalBytes) throws Exception {
         var initBody = mapper.createObjectNode();
-        initBody.put("conversation_id", conv);
-        initBody.put("total_bytes", ciphertext.length);
+        initBody.put("conversation_id", conversationId.replace("-", ":"));
+        initBody.put("total_bytes", totalBytes);
         JsonNode init = post("/2/chat/media/upload/initialize", initBody);
         JsonNode data = init.path("data");
         String sessionId = data.path("session_id").asText(data.path("sessionId").asText(""));
@@ -232,26 +236,30 @@ public final class XChatClient {
         if (sessionId.isEmpty() || mediaHashKey.isEmpty()) {
             throw new RuntimeException("media upload initialize failed: " + init);
         }
+        return new MediaUpload(sessionId, mediaHashKey);
+    }
 
+    /** Upload the encrypted file in 3 MB segments, then finalize. */
+    public void finishMediaUpload(String conversationId, MediaUpload upload, byte[] ciphertext) throws Exception {
+        String conv = conversationId.replace("-", ":");
         int segment = 0;
         for (int offset = 0; offset < ciphertext.length; offset += UPLOAD_CHUNK) {
             int end = Math.min(offset + UPLOAD_CHUNK, ciphertext.length);
             byte[] chunk = Arrays.copyOfRange(ciphertext, offset, end);
             var appendBody = mapper.createObjectNode();
             appendBody.put("conversation_id", conv);
-            appendBody.put("media_hash_key", mediaHashKey);
+            appendBody.put("media_hash_key", upload.mediaHashKey());
             appendBody.put("segment_index", String.valueOf(segment));
             appendBody.put("media", Base64.getEncoder().encodeToString(chunk));
-            post("/2/chat/media/upload/" + enc(sessionId) + "/append", appendBody);
+            post("/2/chat/media/upload/" + enc(upload.sessionId()) + "/append", appendBody);
             segment++;
         }
 
         var finalizeBody = mapper.createObjectNode();
         finalizeBody.put("conversation_id", conv);
-        finalizeBody.put("media_hash_key", mediaHashKey);
+        finalizeBody.put("media_hash_key", upload.mediaHashKey());
         finalizeBody.put("num_parts", String.valueOf(segment));
-        post("/2/chat/media/upload/" + enc(sessionId) + "/finalize", finalizeBody);
-        return mediaHashKey;
+        post("/2/chat/media/upload/" + enc(upload.sessionId()) + "/finalize", finalizeBody);
     }
 
     /**
@@ -277,7 +285,10 @@ public final class XChatClient {
 
     // -- Sending --------------------------------------------------------------
 
-    /** POST an encrypted message produced by {@link ChatCore#encryptReply}. */
+    /**
+     * POST an encrypted message produced by {@link ChatCore#encryptReply}.
+     * Only the send fields go out; {@code eventB64} stays local.
+     */
     public void sendMessage(String conversationId, ChatCore.SendBody body) throws Exception {
         var payload = mapper.createObjectNode();
         payload.put("message_id", body.messageId());

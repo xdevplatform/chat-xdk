@@ -5,11 +5,13 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-/// Return the exact ciphertext size produced by stream encryption.
+/// Return the exact size of a file of `plaintext_size` bytes once
+/// `encrypt_file` or a file encryptor has encrypted it: the total an upload
+/// declares before the file is encrypted.
 ///
 /// Returns `None` when the result cannot be represented as a `u64`.
-pub fn encrypted_stream_size(plaintext_size: u64) -> Option<u64> {
-    crate::crypto::encryption::encrypted_stream_size(plaintext_size)
+pub fn encrypted_file_size(plaintext_size: u64) -> Option<u64> {
+    crate::crypto::encryption::encrypted_file_size(plaintext_size)
 }
 
 // Base64 Encoding/Decoding

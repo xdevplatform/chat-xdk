@@ -2,7 +2,7 @@
 chat-xdk - Python bindings for the X Chat encryption SDK.
 
 Quick Start:
-    from chat_xdk import Chat
+    from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams
 
     chat = Chat(config_json)  # optional; None or an empty JSON object ("{}")
                               # selects manual key management
@@ -10,14 +10,18 @@ Quick Start:
     chat.set_identity(my_user_id, signing_key_version)
 
     # Decrypt webhook events (returns a dict)
-    event = chat.decrypt_event(event_b64, conversation_keys, signing_keys)
+    event = chat.decrypt_event(
+        DecryptEventParams(event_b64, conversation_keys, signing_keys=signing_keys)
+    )
     if event["type"] == "Message":
         print(event["content"]["text"])
 
     # Encrypt outgoing messages
-    payload = chat.encrypt_message(conversation_id, "Hello!",
-                                   conversation_key=key,
-                                   conversation_key_version=version)
+    payload = chat.encrypt_message(
+        EncryptMessageParams(conversation_id, "Hello!",
+                             conversation_key=key,
+                             conversation_key_version=version)
+    )
     # payload.message_id, payload.encrypted_content, payload.signature, etc.
 """
 
@@ -28,19 +32,33 @@ from typing import Optional, TypedDict
 
 from chat_xdk._native import (
     Chat,
+    ConversationKeyChangeParams,
+    DecryptEventParams,
+    DecryptEventsParams,
+    DecryptFileParams,
+    EncryptEditParams,
+    EncryptFileParams,
+    EncryptMessageParams,
+    EncryptReactionParams,
+    EncryptReplyParams,
+    FileDecryptor,
+    FileDecryptorParams,
+    FileEncryptor,
+    FileEncryptorParams,
+    GroupCreateParams,
+    GroupMembersChangeParams,
+    MessageDeleteParams,
     PublicKeyRegistration,
     PublicKeyRegistrationPayload,
     PublicKeys,
     SendPayload,
     SignatureInfo,
-    StreamDecryptor,
-    StreamEncryptor,
     base64_to_bytes,
     bytes_to_base64,
     bytes_to_hex,
     detect_image_dimensions,
     detect_mime_type,
-    encrypted_stream_size,
+    encrypted_file_size,
     hex_to_bytes,
 )
 
@@ -111,6 +129,22 @@ def guesses_remaining(exc):
 
 __all__ = [
     "Chat",
+    "ConversationKeyChangeParams",
+    "DecryptEventParams",
+    "DecryptEventsParams",
+    "DecryptFileParams",
+    "EncryptEditParams",
+    "EncryptFileParams",
+    "EncryptMessageParams",
+    "EncryptReactionParams",
+    "EncryptReplyParams",
+    "FileDecryptor",
+    "FileDecryptorParams",
+    "FileEncryptor",
+    "FileEncryptorParams",
+    "GroupCreateParams",
+    "GroupMembersChangeParams",
+    "MessageDeleteParams",
     "PublicKeyRegistration",
     "PublicKeyRegistrationPayload",
     "PublicKeys",
@@ -122,14 +156,12 @@ __all__ = [
     "QuickReplyResponse",
     "SendPayload",
     "SignatureInfo",
-    "StreamDecryptor",
-    "StreamEncryptor",
     "base64_to_bytes",
     "bytes_to_base64",
     "bytes_to_hex",
     "detect_image_dimensions",
     "detect_mime_type",
-    "encrypted_stream_size",
+    "encrypted_file_size",
     "guesses_remaining",
     "hex_to_bytes",
 ]

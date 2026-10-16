@@ -221,24 +221,61 @@ class TestPreparedChanges(unittest.TestCase):
         )
         self.assertTrue(body["encoded_message_create_event"])
 
-    def test_media_stream_encrypt_decrypt_roundtrip(self):
-        # The chunked stream path the media flow uses: multi-chunk payload in,
-        # identical bytes out, and truncation is detected. The fixture
-        # conversation-key message names one media file under the
-        # conversation key, so the upload decrypts through that message.
+    def test_media_encrypt_decrypt_roundtrip(self):
+        # The message-first media flow: the message names the file by the
+        # media hash key its upload started with, the file is encrypted from
+        # the message's event_b64 in chunks, and it decrypts through that
+        # event. A truncated file is detected.
+        from chat_xdk import encrypted_file_size
+
+        core, _ = self._core_and_keys()
+        conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
+        conv_keys = {"1": conv_key}
+        plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
+        body = core.encrypt_reply(
+            conversation_id="1000:2000",
+            text="a photo",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+            attachments=[
+                {
+                    "attachment_type": "media",
+                    "media_hash_key": "photo",
+                    "width": 4,
+                    "height": 3,
+                    "filesize_bytes": len(plaintext),
+                    "filename": "photo.bin",
+                    "media_type": 5,
+                }
+            ],
+        )
+        self.assertTrue(body["event_b64"])
+
+        ciphertext = core.encrypt_media(plaintext, body["event_b64"], conv_keys, "photo")
+        self.assertEqual(len(ciphertext), encrypted_file_size(len(plaintext)))
+        self.assertEqual(
+            core.decrypt_media(ciphertext, body["event_b64"], conv_keys, "photo"), plaintext
+        )
+        with self.assertRaises(ValueError) as ctx:
+            core.decrypt_media(ciphertext[:-4], body["event_b64"], conv_keys, "photo")
+        self.assertIn("truncated", str(ctx.exception))
+
+    def test_media_from_the_fixture_message_opens(self):
+        # Media encrypted by another client opens through its message's event.
         core, _ = self._core_and_keys()
         v = self.vectors
-        conv_key = base64.b64decode(v["conversation_key_b64"])
-        conv_keys = {v["event_conversation_key_version"]: conv_key}
-        event, media_hash_key = v["event_conversation_key_media_b64"], v["media_conversation_key_hash_key"]
-        plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
-
-        ciphertext = core.encrypt_media(plaintext, conv_key)
-        self.assertNotEqual(ciphertext[: len(plaintext)], plaintext)
-        self.assertEqual(
-            core.decrypt_media(ciphertext, event, conv_keys, media_hash_key), plaintext
-        )
-
-        with self.assertRaises(ValueError) as ctx:
-            core.decrypt_media(ciphertext[:-4], event, conv_keys, media_hash_key)
-        self.assertIn("truncated", str(ctx.exception))
+        conv_keys = {
+            v["message_key_conversation_key_version"]: bytes.fromhex(
+                v["message_key_conversation_key_hex"]
+            )
+        }
+        for name in ("first", "second"):
+            self.assertEqual(
+                core.decrypt_media(
+                    base64.b64decode(v[f"media_{name}_encrypted_b64"]),
+                    v["event_message_key_b64"],
+                    conv_keys,
+                    v[f"media_{name}_hash_key"],
+                ),
+                base64.b64decode(v[f"media_{name}_plaintext_b64"]),
+            )
