@@ -67,8 +67,6 @@ class PublicKeyRegistration:
 
 class PublicKeyRegistrationPayload:
     public_key: PublicKeyRegistration
-    version: Optional[str]
-    generate_version: bool
 
 class SignatureInfo:
     public_key_version: str

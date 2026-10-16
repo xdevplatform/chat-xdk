@@ -52,12 +52,6 @@ namespace ChatXdk
     {
         [JsonPropertyName("public_key")]
         public PublicKeyRegistration PublicKey { get; init; } = new();
-
-        [JsonPropertyName("version")]
-        public string? Version { get; init; }
-
-        [JsonPropertyName("generate_version")]
-        public bool GenerateVersion { get; init; }
     }
 
     // Send payload

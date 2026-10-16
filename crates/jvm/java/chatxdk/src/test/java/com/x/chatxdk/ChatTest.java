@@ -215,7 +215,6 @@ class ChatTest {
             assertFalse(payload.publicKey.signingPublicKey.isEmpty());
             assertFalse(payload.publicKey.identityPublicKeySignature.isEmpty());
             assertEquals("CustomPin", payload.publicKey.registrationMethod);
-            assertTrue(payload.generateVersion);
             assertNotNull(payload.publicKey.publicKeyFingerprint);
             assertEquals(43, payload.publicKey.publicKeyFingerprint.length());
         }
@@ -570,6 +569,30 @@ class ChatTest {
             ChatXdkException e =
                     assertThrows(ChatXdkException.class, () -> chat.prepareMarkConversationRead(p));
             assertTrue(e.getMessage().contains("seen_until_sequence_id is empty"), e.getMessage());
+        }
+    }
+
+    @Test
+    void generatedKeysSignOnlyWithTheRegisteredVersion() throws Exception {
+        try (Chat chat = new Chat(); Chat restored = new Chat()) {
+            chat.generateKeypairs();
+            MessageDeleteParams p = new MessageDeleteParams("1234-5678", List.of("seq-1"), false);
+            p.senderId = "1234";
+            ChatXdkException ex =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareMessageDelete(p));
+            assertTrue(ex.getMessage().contains("signing_key_version"), ex.getMessage());
+
+            chat.setIdentity("1234", "1700000000123");
+            assertEquals("1700000000123", chat.prepareMessageDelete(p).publicKeyVersion);
+
+            // Restored keys carry the version passed to importKeys, and none
+            // without it.
+            byte[] keys = chat.exportKeys();
+            assertNotNull(keys);
+            restored.importKeys(keys, "1700000000456");
+            assertEquals("1700000000456", restored.prepareMessageDelete(p).publicKeyVersion);
+            restored.importKeys(keys);
+            assertThrows(ChatXdkException.class, () -> restored.prepareMessageDelete(p));
         }
     }
 

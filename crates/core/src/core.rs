@@ -124,20 +124,10 @@ impl ChatCore {
 
     /// Generate new keypairs and return the registration payload.
     ///
-    /// The key version is a millisecond timestamp read from the system clock.
-    /// On platforms without a clock (e.g. `wasm32-unknown-unknown`) call
-    /// [`Self::generate_keypairs_with_version`] and supply the timestamp.
+    /// No signing-key version is set: after registering the keys, call
+    /// [`Self::set_identity`] with the `public_key_version` the registration
+    /// returns.
     pub fn generate_keypairs(&self) -> Result<PublicKeyRegistrationPayload, SdkError> {
-        self.generate_keypairs_with_version(&now_millis())
-    }
-
-    /// Like [`Self::generate_keypairs`] but uses the caller-supplied key
-    /// version string instead of the system clock. Pass a millisecond
-    /// timestamp (e.g. from JavaScript `Date.now()` in a WASM host).
-    pub fn generate_keypairs_with_version(
-        &self,
-        version: &str,
-    ) -> Result<PublicKeyRegistrationPayload, SdkError> {
         let identity = KeyFactory::generate_keypair(KeypairPurpose::Identity)?;
         let signing = KeyFactory::generate_keypair(KeypairPurpose::Signing)?;
 
@@ -155,10 +145,6 @@ impl ChatCore {
 
         let fingerprint = Self::compute_public_key_fingerprint(&identity_spki);
 
-        // Store the key version so extract_conversation_keys can filter
-        // participant keys by version.
-        self.keypair_manager.set_key_version(version.to_string());
-
         Ok(PublicKeyRegistrationPayload {
             public_key: PublicKeyRegistration {
                 identity_public_key_signature: base64_encode(&identity_signature),
@@ -168,8 +154,6 @@ impl ChatCore {
                 signing_public_key: base64_encode(&signing_spki),
                 signing_public_key_signature: Some(base64_encode(&signing_key_signature)),
             },
-            version: Some(version.to_string()),
-            generate_version: true,
         })
     }
 
@@ -212,8 +196,9 @@ impl ChatCore {
     /// version, used as defaults wherever a method's `sender_id` /
     /// `signing_key_version` is not passed explicitly.
     ///
-    /// The key version also lets `extract_conversation_keys` filter
-    /// participant-key entries by version, avoiding decryption of keys
+    /// The signing-key version is the `public_key_version` returned when the
+    /// loaded keys were registered. It also lets `extract_conversation_keys`
+    /// filter participant-key entries by version, avoiding decryption of keys
     /// intended for other key versions.
     ///
     /// A resolved default and an explicitly passed value produce
@@ -363,6 +348,9 @@ impl ChatCore {
     }
 
     /// Import private keys from bytes (32 or 64 bytes).
+    ///
+    /// Clears the signing-key version of any previously loaded keys; use
+    /// [`Self::import_keys_with_version`] to set the imported keys' version.
     pub fn import_keys(&self, key_bytes: &[u8]) -> Result<(), SdkError> {
         use crate::crypto::keys::XChatPrivateKeys;
         let private_keys = XChatPrivateKeys::from_bytes(key_bytes).ok_or_else(|| {
@@ -6531,9 +6519,7 @@ mod tests {
             Some(vec![ConversationParticipantKey::new(
                 Some("sender-1".to_string()),
                 Some(encrypted[0].encrypted_key.clone()),
-                // Must match our identity key version so the self-decrypt
-                // path selects this entry.
-                reg.version.clone(),
+                Some("pkv-self".to_string()),
             )]),
             None,
             None,
@@ -6939,8 +6925,6 @@ mod tests {
         assert!(!payload.public_key.signing_public_key.is_empty());
         assert!(!payload.public_key.identity_public_key_signature.is_empty());
         assert_eq!(payload.public_key.registration_method, "CustomPin");
-        assert!(payload.generate_version);
-        assert!(payload.version.is_some());
         assert!(payload.public_key.public_key_fingerprint.is_some());
         assert!(payload.public_key.signing_public_key_signature.is_some());
     }
@@ -8121,8 +8105,9 @@ mod tests {
 
     /// Build a `ConversationKeyChangeEvent` (base64) that carries `ckey`
     /// self-encrypted to the loaded identity key, so that
-    /// `extract_conversation_keys` can recover it. `reg_version` must be the
-    /// loaded identity key version (`reg.version`).
+    /// `extract_conversation_keys` can recover it. `reg_version` is the
+    /// participant entry's key version, which must match the signing-key
+    /// version when one is set.
     fn build_self_keychange_event(
         core: &ChatCore,
         ckey: &XChatConversationKey,
@@ -8182,7 +8167,7 @@ mod tests {
 
         // KeyChange event seeds the conversation key for the batch.
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "4001", reg.version.clone());
+            build_self_keychange_event(&core, &ckey, ckey_version, "4001", Some("pkv".to_string()));
 
         // A signed message encrypted with that conversation key.
         let payload = core
@@ -8331,7 +8316,7 @@ mod tests {
         let ckey_version = "1001";
 
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "4001", reg.version.clone());
+            build_self_keychange_event(&core, &ckey, ckey_version, "4001", Some("pkv".to_string()));
 
         let payload = core
             .encrypt_message(
@@ -8382,7 +8367,7 @@ mod tests {
             ckey_version,
             "4001",
             "pkv",
-            reg.version.clone(),
+            Some("pkv".to_string()),
         );
 
         let payload = core
@@ -8526,8 +8511,13 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
         let ckey_version = "1001";
 
-        let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "sender-1", reg.version.clone());
+        let kc_b64 = build_self_keychange_event(
+            &core,
+            &ckey,
+            ckey_version,
+            "sender-1",
+            Some("pkv".to_string()),
+        );
 
         let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
         let result = core.decrypt_events_with(&[&kc_b64], &signing_keys);
@@ -9155,6 +9145,69 @@ mod tests {
             err.to_string().contains("signing_key_version"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn generate_keypairs_leaves_the_signing_key_version_unset() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let ckey = core.generate_conversation_key().unwrap();
+        let mut message = crate::EncryptMessageParams::new("conv-1", "hi")
+            .with_conversation_key(ckey.to_bytes(), "1");
+        message.sender_id = Some("4001".into());
+        let err = core.encrypt_message(message.clone()).unwrap_err();
+        assert!(
+            err.to_string().contains("signing_key_version"),
+            "got: {err}"
+        );
+
+        let mut delete = crate::MessageDeleteParams::new("conv-1", vec!["seq-1".into()], true);
+        delete.sender_id = Some("4001".into());
+        let err = core.prepare_message_delete(&delete).unwrap_err();
+        assert!(
+            err.to_string().contains("signing_key_version"),
+            "got: {err}"
+        );
+
+        core.set_identity("4001", "1700000000123");
+        let payload = core.encrypt_message(message).unwrap();
+        assert_eq!(payload.signature_info.public_key_version, "1700000000123");
+        let signature = core.prepare_message_delete(&delete).unwrap();
+        assert_eq!(signature.public_key_version, "1700000000123");
+    }
+
+    #[test]
+    fn generated_keys_decrypt_their_participant_entry_before_the_version_is_known() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        let pubkeys = core.get_public_keys().unwrap();
+        let ckey = core.generate_conversation_key().unwrap();
+        let recipients = [RecipientInput {
+            user_id: "sender-1".to_string(),
+            public_key: pubkeys.identity,
+            key_version: "1700000000123".to_string(),
+        }];
+        let encrypted = core
+            .encrypt_conversation_key_for_recipients(&ckey, &recipients)
+            .unwrap()[0]
+            .encrypted_key
+            .clone();
+
+        let kce = ThriftCKCE::new(
+            Some("42".to_string()),
+            Some(vec![ConversationParticipantKey::new(
+                Some("sender-1".to_string()),
+                Some(encrypted),
+                Some("1700000000123".to_string()),
+            )]),
+            None,
+            None,
+        );
+        let event_b64 = build_test_event(ThriftDetail::ConversationKeyChangeEvent(kce));
+        let result = core.extract_conversation_keys(&[&event_b64]);
+        let extracted = result.get("42").expect("own participant entry decrypts");
+        assert_eq!(extracted.encoded(), ckey.encoded());
     }
 
     #[test]

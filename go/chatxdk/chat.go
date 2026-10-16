@@ -114,7 +114,9 @@ func (c *Chat) SetRejectUnverified(reject bool) {
 // SetIdentity sets the session identity: the owner's user ID and signing-key
 // version, used as defaults wherever a params struct leaves SenderID /
 // SigningKeyVersion empty. A resolved default and an explicitly passed value
-// produce byte-identical signed output for the same logical inputs.
+// produce byte-identical signed output for the same logical inputs. The
+// signing-key version is the public_key_version returned when the keys were
+// registered.
 func (c *Chat) SetIdentity(userID, signingKeyVersion string) error {
 	defer runtime.KeepAlive(c)
 	return ffiSetIdentity(c.h, userID, signingKeyVersion)
@@ -154,6 +156,9 @@ func (c *Chat) Lock() {
 }
 
 // GenerateKeypairs generates new identity + signing keypairs.
+//
+// No signing-key version is set: after registering the keys, call
+// SetIdentity with the public_key_version the registration returns.
 func (c *Chat) GenerateKeypairs() (*PublicKeyRegistrationPayload, error) {
 	defer runtime.KeepAlive(c)
 	data, err := ffiGenerateKeypairs(c.h)
@@ -208,7 +213,8 @@ func (c *Chat) ExportKeys() ([]byte, error) {
 // ImportKeys imports private keys from a byte slice produced by ExportKeys:
 // 32 bytes (identity only) or 64 bytes (identity + signing). Unlike a string,
 // the byte slice can be zeroed by the caller once imported; the base64 copy
-// built here for the FFI transport is wiped before returning.
+// built here for the FFI transport is wiped before returning. It sets no
+// signing-key version; ImportKeysWithVersion does.
 func (c *Chat) ImportKeys(keys []byte) error {
 	defer runtime.KeepAlive(c)
 	// NUL-terminated base64 buffer handed to C by pointer (no extra C-side
@@ -221,10 +227,10 @@ func (c *Chat) ImportKeys(keys []byte) error {
 }
 
 // ImportKeysWithVersion imports private keys like ImportKeys and also records
-// the public key version they were registered under, so participant-key
-// filtering and the session signing-key version are set in one call. The raw
-// bytes are handed to the native side directly (no transport copy), so the
-// caller's slice remains the only copy to wipe.
+// the public_key_version returned when they were registered, so
+// participant-key filtering and the session signing-key version are set in
+// one call. The raw bytes are handed to the native side directly (no
+// transport copy), so the caller's slice remains the only copy to wipe.
 func (c *Chat) ImportKeysWithVersion(keys []byte, version string) error {
 	defer runtime.KeepAlive(c)
 	_, err := ffiImportKeysWithVersion(c.h, keys, version)
