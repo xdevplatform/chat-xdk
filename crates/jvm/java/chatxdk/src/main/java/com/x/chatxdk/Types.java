@@ -443,11 +443,11 @@ public final class Types {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class UrlAttachmentImageDescriptor {
-        /** Media hash key returned by the media upload for the encrypted image. */
+        /** Media hash key the image's upload started with. */
         @JsonProperty("media_hash_key")
         public String mediaHashKey = "";
 
-        /** Size of the encrypted image in bytes. Required. */
+        /** Size of the encrypted image in bytes: {@code encryptedFileSize} of the image's size. Required. */
         @JsonProperty("filesize_bytes")
         public long filesizeBytes;
 

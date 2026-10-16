@@ -227,7 +227,8 @@ type AttachmentDescriptor struct {
 //
 // FilesizeBytes and Filename are required alongside MediaHashKey: receiving
 // clients' shared ingest silently discards the whole preview image when
-// either is missing on the wire.
+// either is missing on the wire. FilesizeBytes is the encrypted image's size,
+// EncryptedFileSize of the image's size.
 type URLAttachmentImageDescriptor struct {
 	MediaHashKey  string `json:"media_hash_key"`
 	FilesizeBytes int64  `json:"filesize_bytes"`

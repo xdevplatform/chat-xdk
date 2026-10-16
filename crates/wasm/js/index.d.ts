@@ -624,8 +624,9 @@ export type AttachmentDescriptor =
 export interface UrlAttachmentImageDescriptor {
   media_hash_key: string;
   /**
-   * Size of the encrypted image in bytes. Required: receiving clients
-   * silently discard the preview image when this is missing on the wire.
+   * Size of the encrypted image in bytes: `encryptedFileSize` of the image's
+   * size. Required: receiving clients silently discard the preview image
+   * when this is missing on the wire.
    */
   filesize_bytes: number;
   /**

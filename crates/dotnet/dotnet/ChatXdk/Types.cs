@@ -448,11 +448,13 @@ namespace ChatXdk
     /// </summary>
     public sealed class UrlAttachmentImageDescriptor
     {
-        /// <summary>Media hash key returned by the media upload for the encrypted image.</summary>
+        /// <summary>Media hash key the image's upload started with.</summary>
         [JsonPropertyName("media_hash_key")]
         public string MediaHashKey { get; init; } = "";
 
-        /// <summary>Size of the encrypted image in bytes. Required.</summary>
+        /// <summary>
+        /// Size of the encrypted image in bytes: <c>EncryptedFileSize</c> of the image's size. Required.
+        /// </summary>
         [JsonPropertyName("filesize_bytes")]
         public long FilesizeBytes { get; init; }
 
