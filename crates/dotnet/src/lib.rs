@@ -24,8 +24,8 @@ use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
     DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
     EncryptReactionParams, EncryptReplyParams, EntityDescriptor, FileDecryptorParams,
-    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, MessageDeleteParams,
-    PublicKeyInput, QuickReply, SigningKeyEntry,
+    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, MarkConversationReadParams,
+    MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
 };
 
 // FFI result type
@@ -312,6 +312,18 @@ struct FfiMessageDeleteParams {
     conversation_id: String,
     sequence_ids: Vec<String>,
     delete_for_all: bool,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiMarkConversationReadParams {
+    conversation_id: String,
+    seen_until_sequence_id: String,
+    #[serde(default)]
+    seen_at_msec: Option<i64>,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
@@ -1194,6 +1206,47 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_message_delete(&params) {
+            Ok(signature) => match serde_json::to_string(&signature) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_result(&e.to_string()),
+            },
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// Build the signed action for marking a conversation read.
+///
+/// `params_json` — single JSON document: `conversation_id`,
+/// `seen_until_sequence_id` (the sequence id of the newest event read), plus
+/// optional `seen_at_msec` (when it was read, in milliseconds since the Unix
+/// epoch; absent takes the current time) and `sender_id` /
+/// `signing_key_version` (absent resolves from the session identity).
+///
+/// Returns JSON `ActionSignature` to submit alongside the mark-read request;
+/// the SDK-generated `message_id` is a field on it.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiMarkConversationReadParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+
+        let mut params =
+            MarkConversationReadParams::new(p.conversation_id, p.seen_until_sequence_id);
+        params.seen_at_msec = p.seen_at_msec;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+
+        match h.inner.prepare_mark_conversation_read(&params) {
             Ok(signature) => match serde_json::to_string(&signature) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),

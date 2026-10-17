@@ -136,7 +136,10 @@ public final class Types {
         public boolean shouldNotify;
     }
 
-    /** Signed action payload authenticating a conversation key change, member add, or message delete. */
+    /**
+     * Signed action payload authenticating a conversation key change, member
+     * add, message delete, or read receipt.
+     */
     public static final class ActionSignature {
         /** ID of the message carrying the action. */
         @JsonProperty("message_id")
@@ -1190,6 +1193,41 @@ public final class Types {
             this.conversationId = conversationId;
             this.sequenceIds = sequenceIds;
             this.deleteForAll = deleteForAll;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#prepareMarkConversationRead}.
+     *
+     * <p>A read receipt is a signed plaintext event, not an encrypted message,
+     * so no conversation key is involved: the result is an action signature
+     * the caller submits alongside the mark-read request.
+     */
+    public static final class MarkConversationReadParams {
+        /** ID of the conversation being marked read. */
+        public final String conversationId;
+
+        /** Sequence ID of the newest event read. */
+        public final String seenUntilSequenceId;
+
+        /** When the conversation was read, in milliseconds since the Unix epoch; the current time when null. */
+        public Long seenAtMsec;
+
+        /** User ID of the sender signing the read receipt; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param conversationId ID of the conversation being marked read.
+         * @param seenUntilSequenceId Sequence ID of the newest event read.
+         */
+        public MarkConversationReadParams(String conversationId, String seenUntilSequenceId) {
+            this.conversationId = conversationId;
+            this.seenUntilSequenceId = seenUntilSequenceId;
         }
     }
 }

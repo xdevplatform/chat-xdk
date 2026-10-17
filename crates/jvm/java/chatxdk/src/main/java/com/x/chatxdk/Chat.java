@@ -548,6 +548,26 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    /**
+     * Build the signed action for marking a conversation read, ready to submit
+     * alongside the mark-read request.
+     *
+     * <p>A read receipt is a signed plaintext event, not an encrypted message,
+     * so no conversation key is involved. The SDK generates the action's
+     * message id; read it back from the result.
+     */
+    public ActionSignature prepareMarkConversationRead(MarkConversationReadParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        try (Memory j = FfiStrings.utf8(buildPrepareMarkConversationReadJson(parameters))) {
+            String resultJson = FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_prepare_mark_conversation_read(handle, j));
+            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
     private PreparedConversationChange callPrepare(String paramsJson, ParamsJsonFn fn) throws Exception {
         try (Memory j = FfiStrings.utf8(paramsJson)) {
             String resultJson = FfiStrings.consume(fn.apply(handle, j));
@@ -1034,6 +1054,18 @@ public final class Chat implements AutoCloseable {
         n.set("sequence_ids", ChatJson.MAPPER.valueToTree(
                 p.sequenceIds == null ? List.of() : p.sequenceIds));
         n.put("delete_for_all", p.deleteForAll);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareMarkConversationReadJson(MarkConversationReadParams p)
+            throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("seen_until_sequence_id", p.seenUntilSequenceId);
+        if (p.seenAtMsec != null) {
+            n.put("seen_at_msec", p.seenAtMsec);
+        }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

@@ -267,6 +267,21 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Build the signed action for marking a conversation read.
+        ///
+        ///  `params_json` — single JSON document: `conversation_id`,
+        ///  `seen_until_sequence_id` (the sequence id of the newest event read), plus
+        ///  optional `seen_at_msec` (when it was read, in milliseconds since the Unix
+        ///  epoch; absent takes the current time) and `sender_id` /
+        ///  `signing_key_version` (absent resolves from the session identity).
+        ///
+        ///  Returns JSON `ActionSignature` to submit alongside the mark-read request;
+        ///  the SDK-generated `message_id` is a field on it.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_mark_conversation_read", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_mark_conversation_read(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Decrypt a webhook event.
         ///
         ///  `params_json` — single JSON document: `event_b64` (the base64 event),

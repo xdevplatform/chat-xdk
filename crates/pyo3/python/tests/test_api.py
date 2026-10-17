@@ -142,6 +142,7 @@ class TestParams(unittest.TestCase):
             "GroupMembersChangeParams",
             "GroupCreateParams",
             "MessageDeleteParams",
+            "MarkConversationReadParams",
             "DecryptEventParams",
             "DecryptEventsParams",
             "EncryptFileParams",
@@ -199,6 +200,7 @@ class TestParams(unittest.TestCase):
             FileEncryptorParams,
             GroupCreateParams,
             GroupMembersChangeParams,
+            MarkConversationReadParams,
             MessageDeleteParams,
         )
 
@@ -211,6 +213,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
+            lambda: MarkConversationReadParams("conv-1"),
             lambda: DecryptEventParams("event"),
             lambda: DecryptEventsParams(),
             lambda: EncryptFileParams(b"file", "event", {}),
@@ -231,6 +234,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], [], [], "1001"),
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
+            lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
             lambda: DecryptEventParams("event", {}, []),
             lambda: DecryptEventsParams([], []),
         ]
@@ -796,6 +800,74 @@ class TestApiShapes(unittest.TestCase):
             sig["signature_payload"],
             f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1",
         )
+
+    def test_prepare_mark_conversation_read_shape(self):
+        from chat_xdk import MarkConversationReadParams
+
+        chat, v = self._unlocked_chat()
+
+        # A 1:1 id is signed in its canonical colon form, followed by the
+        # read point and its time.
+        sig = chat.prepare_mark_conversation_read(
+            MarkConversationReadParams(
+                "222-111",
+                "2011626338877079553",
+                seen_at_msec=1700000000123,
+                sender_id="111",
+                signing_key_version="1",
+            )
+        )
+
+        self.assertTrue(sig["message_id"])
+        self.assertTrue(sig["encoded_message_event_detail"])
+        self.assertEqual(sig["public_key_version"], "1")
+        self.assertEqual(
+            sig["signature_payload"],
+            f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
+            "2011626338877079553,1700000000123",
+        )
+        signature = sig["signature"]
+        self.assertTrue(
+            chat.verify(
+                v["signing_public_b64"],
+                base64.b64decode(signature + "=" * (-len(signature) % 4)),
+                sig["signature_payload"].encode(),
+            )
+        )
+
+    def test_prepare_mark_conversation_read_defaults_seen_at_to_now(self):
+        import time
+
+        from chat_xdk import MarkConversationReadParams
+
+        chat, v = self._unlocked_chat()
+        chat.set_identity("111", "7")
+
+        before = int(time.time() * 1000)
+        sig = chat.prepare_mark_conversation_read(MarkConversationReadParams("g999", "seq-1"))
+        after = int(time.time() * 1000)
+
+        # The session identity signs; the unset time is the current time.
+        self.assertEqual(sig["public_key_version"], "7")
+        prefix = f"MarkConversationReadEvent,{sig['message_id']},111,g999,seq-1,"
+        self.assertTrue(sig["signature_payload"].startswith(prefix))
+        seen_at = int(sig["signature_payload"][len(prefix) :])
+        self.assertGreaterEqual(seen_at, before)
+        self.assertLessEqual(seen_at, after)
+
+    def test_prepare_mark_conversation_read_rejects_empty_ids(self):
+        from chat_xdk import MarkConversationReadParams
+
+        chat, v = self._unlocked_chat()
+
+        with self.assertRaisesRegex(ValueError, "conversation_id is empty"):
+            chat.prepare_mark_conversation_read(
+                MarkConversationReadParams("", "seq-1", sender_id="111", signing_key_version="1")
+            )
+        with self.assertRaisesRegex(ValueError, "seen_until_sequence_id is empty"):
+            chat.prepare_mark_conversation_read(
+                MarkConversationReadParams("g999", "", sender_id="111", signing_key_version="1")
+            )
 
     def test_prepare_conversation_key_change_derives_one_to_one_id(self):
         from chat_xdk import ConversationKeyChangeParams

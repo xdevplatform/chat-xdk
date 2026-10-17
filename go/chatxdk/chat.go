@@ -389,6 +389,29 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 	return &out, nil
 }
 
+// PrepareMarkConversationRead builds the signed action for marking a
+// conversation read, ready to submit alongside the mark-read request.
+//
+// A read receipt is a signed plaintext event, not an encrypted message, so
+// no conversation key is involved. The SDK generates the action's message
+// id; read it back from the result.
+func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*ActionSignature, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiPrepareMarkConversationRead(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out ActionSignature
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DecryptEvent decrypts a single webhook event and errors on failure.
 //
 // Nil (or empty) ConversationKeys fall back to the opt-in conversation-key

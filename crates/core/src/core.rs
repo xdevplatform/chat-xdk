@@ -17,7 +17,7 @@ use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, MessageDeleteParams,
+    GroupMembersChangeParams, MarkConversationReadParams, MessageDeleteParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -2086,6 +2086,69 @@ impl ChatCore {
         Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
     }
 
+    /// Build the signed action for marking a conversation read.
+    ///
+    /// A read receipt is a plaintext `MarkConversationReadEvent`, not an
+    /// encrypted message: the result carries the encoded event detail and its
+    /// signature, ready to submit alongside the mark-read request. The SDK
+    /// generates the action's message id; read it back from the result. An
+    /// unset `seen_at_msec` reads the system clock.
+    pub fn prepare_mark_conversation_read(
+        &self,
+        params: &MarkConversationReadParams,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        if params.conversation_id.is_empty() {
+            return Err(SdkError::InvalidState(
+                "conversation_id is empty: pass the conversation being marked read".into(),
+            ));
+        }
+        if params.seen_until_sequence_id.is_empty() {
+            return Err(SdkError::InvalidState(
+                "seen_until_sequence_id is empty: pass the sequence_id of the newest event read"
+                    .into(),
+            ));
+        }
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let conversation_id =
+            crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
+        let signing_key = self.get_signing_private_key()?;
+        let seen_at_msec = params.seen_at_msec.unwrap_or_else(now_msec);
+
+        let message_id = Self::generate_message_id();
+        let mut signature = crate::signatures::build_mark_conversation_read_signature(
+            &signing_key,
+            &signing_key_version,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &params.seen_until_sequence_id,
+            seen_at_msec,
+        )?;
+        signature.encoded_message_event_detail = Self::encode_mark_conversation_read_detail(
+            &params.seen_until_sequence_id,
+            seen_at_msec,
+        )?;
+        Ok(signature)
+    }
+
+    /// Serialize the `MarkConversationReadEvent` as a base64
+    /// `MessageEventDetail` carrying the read point and its time.
+    fn encode_mark_conversation_read_detail(
+        seen_until_sequence_id: &str,
+        seen_at_msec: i64,
+    ) -> Result<String, SdkError> {
+        let detail = crate::thrift::event::MessageEventDetail::MarkConversationReadEvent(
+            crate::thrift::event::MarkConversationReadEvent {
+                seen_until_sequence_id: Some(seen_until_sequence_id.to_string()),
+                seen_at_millis: Some(seen_at_msec),
+                is_grok: None,
+            },
+        );
+        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+    }
+
     /// Resolve a reaction's conversation id and target sequence id from the
     /// explicit fields or, when unset, from the parsed `target_event`.
     fn resolve_reaction_target(
@@ -3049,11 +3112,18 @@ fn base64_decode_or_empty(s: &str) -> Vec<u8> {
 /// Reads the system clock, which panics on `wasm32-unknown-unknown`; WASM hosts
 /// call the `*_with_version` variants and supply the timestamp from JavaScript.
 fn now_millis() -> String {
+    now_msec().to_string()
+}
+
+/// Current time in milliseconds since the Unix epoch.
+///
+/// Reads the system clock, which panics on `wasm32-unknown-unknown`; WASM hosts
+/// supply the time from JavaScript instead.
+fn now_msec() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis()
-        .to_string()
+        .as_millis() as i64
 }
 pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError> {
     let cursor = Cursor::new(data);
@@ -7399,6 +7469,122 @@ mod tests {
         let err = core.prepare_message_delete(&empty_member).unwrap_err();
         assert!(
             err.to_string().contains("empty id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mark_conversation_read_decrypts_as_a_verified_read_receipt() {
+        let core = ChatCore::new(); // default reject_unverified = true
+        let reg = core.generate_keypairs().unwrap();
+        core.set_identity("111", "pkv");
+
+        let mut params = crate::MarkConversationReadParams::new("222-111", "2011626338877079553");
+        params.seen_at_msec = Some(1_700_000_000_123);
+        let sig = core.prepare_mark_conversation_read(&params).unwrap();
+
+        // The session identity's signing key version signs the receipt, and
+        // the 1:1 conversation id is signed in canonical colon form.
+        assert_eq!(sig.public_key_version, "pkv");
+        assert_eq!(
+            sig.signature_payload,
+            format!(
+                "MarkConversationReadEvent,{},111,111:222,2011626338877079553,1700000000123",
+                sig.message_id
+            )
+        );
+        assert_action_signature_round_trips(&core, &sig, "111", "111:222", None);
+
+        let event = MessageEvent::new(
+            Some("2011626338877079560".to_string()),
+            Some(sig.message_id.clone()),
+            Some("111".to_string()),
+            Some("111:222".to_string()),
+            None::<String>,
+            Some("1700000000123".to_string()),
+            Some(decode_detail(&sig.encoded_message_event_detail)),
+            None::<crate::thrift::event::MessageEventRelaySource>,
+            Some(crate::thrift::event::MessageEventSignature::new(
+                Some(sig.signature.clone()),
+                Some(sig.public_key_version.clone()),
+                Some(sig.signature_version.clone()),
+                None::<String>,
+                None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
+            )),
+            None::<String>,
+            None::<bool>,
+            None::<String>,
+        );
+        let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
+        let signing_keys = vec![signing_key_entry_for(&reg, "111")];
+
+        match core
+            .decrypt_event(
+                DecryptEventParams::new(event_b64, Default::default())
+                    .with_signing_keys(signing_keys),
+            )
+            .unwrap()
+        {
+            Event::ReadReceipt(read) => {
+                assert!(read.verified);
+                assert_eq!(read.seen_until_id.as_deref(), Some("2011626338877079553"));
+                assert_eq!(read.seen_at_msec, Some(1_700_000_000_123));
+            }
+            other => panic!("expected Event::ReadReceipt, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn mark_conversation_read_defaults_seen_at_to_now() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let params =
+            crate::MarkConversationReadParams::new("g999", "seq-1").with_identity("111", "1");
+        let before = now_msec();
+        let sig = core.prepare_mark_conversation_read(&params).unwrap();
+        let after = now_msec();
+
+        let seen_at = match decode_detail(&sig.encoded_message_event_detail) {
+            MessageEventDetail::MarkConversationReadEvent(read) => {
+                assert_eq!(read.seen_until_sequence_id.as_deref(), Some("seq-1"));
+                read.seen_at_millis.expect("seen_at_millis is set")
+            }
+            other => panic!("expected MarkConversationReadEvent, got {:?}", other),
+        };
+        assert!((before..=after).contains(&seen_at));
+        assert_eq!(
+            sig.signature_payload,
+            format!(
+                "MarkConversationReadEvent,{},111,g999,seq-1,{seen_at}",
+                sig.message_id
+            )
+        );
+        assert_action_signature_round_trips(&core, &sig, "111", "g999", None);
+    }
+
+    #[test]
+    fn prepare_mark_conversation_read_rejects_empty_ids() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+
+        let empty_conversation =
+            crate::MarkConversationReadParams::new("", "seq-1").with_identity("111", "1");
+        let err = core
+            .prepare_mark_conversation_read(&empty_conversation)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("conversation_id is empty"),
+            "unexpected error: {err}"
+        );
+
+        let empty_seen_until =
+            crate::MarkConversationReadParams::new("g999", "").with_identity("111", "1");
+        let err = core
+            .prepare_mark_conversation_read(&empty_seen_until)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("seen_until_sequence_id is empty"),
             "unexpected error: {err}"
         );
     }

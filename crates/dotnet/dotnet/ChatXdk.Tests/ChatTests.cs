@@ -681,6 +681,66 @@ namespace ChatXdk.Tests
                 sig.SignaturePayload);
         }
 
+        // PrepareMarkConversationRead
+
+        [Fact]
+        public void PrepareMarkConversationRead_SignsCanonicalPayload()
+        {
+            using var chat = CreateUnlocked();
+
+            // A 1:1 id is signed in its canonical colon form, followed by the
+            // read point and its time.
+            var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams(
+                "222-111", "2011626338877079553")
+            {
+                SeenAtMsec = 1700000000123,
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+
+            Assert.NotEmpty(sig.MessageId);
+            Assert.NotEmpty(sig.EncodedMessageEventDetail);
+            Assert.Equal("1", sig.PublicKeyVersion);
+            Assert.Equal(
+                $"MarkConversationReadEvent,{sig.MessageId},111,111:222,2011626338877079553,1700000000123",
+                sig.SignaturePayload);
+            var signature = Convert.FromBase64String(
+                sig.Signature.PadRight(sig.Signature.Length + (4 - sig.Signature.Length % 4) % 4, '='));
+            Assert.True(chat.Verify(
+                chat.GetPublicKeys().Signing, signature, System.Text.Encoding.UTF8.GetBytes(sig.SignaturePayload)));
+        }
+
+        [Fact]
+        public void PrepareMarkConversationRead_DefaultsToSessionIdentityAndNow()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity("111", "7");
+
+            var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams("g999", "seq-1"));
+            var after = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            Assert.Equal("7", sig.PublicKeyVersion);
+            var prefix = $"MarkConversationReadEvent,{sig.MessageId},111,g999,seq-1,";
+            Assert.StartsWith(prefix, sig.SignaturePayload);
+            var seenAt = long.Parse(sig.SignaturePayload.Substring(prefix.Length));
+            Assert.InRange(seenAt, before, after);
+        }
+
+        [Fact]
+        public void PrepareMarkConversationRead_RejectsEmptySeenUntil()
+        {
+            using var chat = CreateUnlocked();
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareMarkConversationRead(
+                new MarkConversationReadParams("g999", "")
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                }));
+            Assert.Contains("seen_until_sequence_id is empty", ex.Message);
+        }
+
         // Conversation key encrypt / decrypt
 
         [Fact]

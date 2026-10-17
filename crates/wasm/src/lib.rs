@@ -610,6 +610,28 @@ impl Chat {
         to_js_value(&js_signature)
     }
 
+    /// Build the signed action for marking a conversation read.
+    ///
+    /// Takes a single params object with camelCase keys: `conversationId`,
+    /// `seenUntilSequenceId` (the sequence id of the newest event read), plus
+    /// optional `seenAtMsec` (when it was read, in milliseconds since the
+    /// Unix epoch; the current time when omitted) and `senderId` /
+    /// `signingKeyVersion` (resolved from the session identity when omitted).
+    /// Returns the action signature to submit alongside the mark-read
+    /// request; the SDK generates the action's message id (`messageId` on
+    /// the result).
+    #[wasm_bindgen(js_name = prepareMarkConversationRead)]
+    pub fn prepare_mark_conversation_read(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsMarkConversationReadParams =
+            from_js_params("prepareMarkConversationRead", params)?;
+        let signature = self
+            .inner
+            .prepare_mark_conversation_read(&p.into_core())
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let js_signature: JsActionSignature = signature.into();
+        to_js_value(&js_signature)
+    }
+
     /// Encrypt a file of an outgoing message, after the message is built.
     ///
     /// Takes a single params object: `file` (Uint8Array); `eventB64`, the
@@ -1228,6 +1250,31 @@ impl JsMessageDeleteParams {
             self.sequence_ids,
             self.delete_for_all,
         );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsMarkConversationReadParams {
+    conversation_id: String,
+    seen_until_sequence_id: String,
+    seen_at_msec: Option<f64>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsMarkConversationReadParams {
+    /// An omitted `seenAtMsec` takes the JavaScript clock, so the core never
+    /// falls back to the system clock `wasm32-unknown-unknown` lacks.
+    fn into_core(self) -> chat_xdk_core::MarkConversationReadParams {
+        let mut params = chat_xdk_core::MarkConversationReadParams::new(
+            self.conversation_id,
+            self.seen_until_sequence_id,
+        );
+        params.seen_at_msec = Some(self.seen_at_msec.unwrap_or_else(js_sys::Date::now) as i64);
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
