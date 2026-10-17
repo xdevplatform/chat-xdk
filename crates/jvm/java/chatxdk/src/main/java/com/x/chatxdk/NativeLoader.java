@@ -61,7 +61,7 @@ final class NativeLoader {
         return out;
     }
 
-    /** RID labels aligned with the .NET / CI matrix: osx-arm64, osx-x64, linux-x64, win-x64. */
+    /** RID labels aligned with the .NET / CI matrix: osx-arm64, osx-x64, linux-x64, linux-arm64, win-x64. */
     static String detectRid() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
@@ -76,6 +76,9 @@ final class NativeLoader {
                 return "osx-x64";
             }
         } else if (os.contains("linux")) {
+            if (arm) {
+                return "linux-arm64";
+            }
             if (x64) {
                 return "linux-x64";
             }
