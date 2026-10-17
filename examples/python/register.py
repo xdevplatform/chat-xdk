@@ -67,15 +67,14 @@ def _write_marker(marker: dict) -> None:
     MARKER_PATH.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
 
 
-def _registration_body(chat: Chat) -> tuple[dict, str]:
-    """Generate a fresh identity and return its POST body plus key version.
+def _registration_body(chat: Chat) -> dict:
+    """Generate a fresh identity and return its POST body.
 
     The body carries only public material, so it is safe to persist and re-send
     on a later run.
     """
     reg = chat.generate_keypairs()
-    version = str(reg.version) if reg.version is not None else "1"
-    body = {
+    return {
         "public_key": {
             "public_key": reg.public_key.public_key,
             "signing_public_key": reg.public_key.signing_public_key,
@@ -83,10 +82,7 @@ def _registration_body(chat: Chat) -> tuple[dict, str]:
             "signing_public_key_signature": reg.public_key.signing_public_key_signature,
             "registration_method": reg.public_key.registration_method,
         },
-        "version": version,
-        "generate_version": bool(reg.generate_version),
     }
-    return body, version
 
 
 def _save_blob(chat: Chat) -> None:
@@ -125,12 +121,11 @@ def register(*, force: bool) -> None:
     if resuming:
         chat.import_keys(base64.b64decode(BLOB_PATH.read_text(encoding="utf-8").strip()))
         body = marker["body"]
-        version = str(marker.get("version") or "1")
         print(f"Resuming the saved identity ({BLOB_PATH}).")
     else:
-        body, version = _registration_body(chat)
+        body = _registration_body(chat)
         _save_blob(chat)
-        _write_marker({"registered": False, "user_id": user_id, "version": version, "body": body})
+        _write_marker({"registered": False, "user_id": user_id, "body": body})
         print(f"Generated a new identity; private keys saved to {BLOB_PATH}.")
 
     our_public_key = body["public_key"]["public_key"]
@@ -143,10 +138,10 @@ def register(*, force: bool) -> None:
         None,
     )
     if already:
-        version = str(already.get("public_key_version") or version)
-        print(f"Public key already registered on the account (version {version}); skipping POST.")
+        version = already.get("public_key_version")
+        print("Public key already registered on the account; skipping POST.")
     else:
-        print(f"Registering public key version {version} …")
+        print("Registering the public key …")
         try:
             resp = api.add_user_public_key(user_id, body)
         except XChatClient.RateLimited as limited:
@@ -162,8 +157,14 @@ def register(*, force: bool) -> None:
         data = resp.get("data") or {}
         if isinstance(data, list):
             data = data[0] if data else {}
-        version = str(data.get("public_key_version") or version)
+        version = data.get("public_key_version")
 
+    if not version:
+        raise SystemExit(
+            "The X API did not return a public_key_version for the key. Re-run to "
+            "look it up on the account; the saved identity resumes."
+        )
+    version = str(version)
     chat.set_identity(user_id, version)
     _write_marker(
         {

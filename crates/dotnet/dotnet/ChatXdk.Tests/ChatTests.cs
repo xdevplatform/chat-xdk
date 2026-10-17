@@ -265,11 +265,36 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(payload.PublicKey.SigningPublicKey);
             Assert.NotEmpty(payload.PublicKey.IdentityPublicKeySignature);
             Assert.Equal("CustomPin", payload.PublicKey.RegistrationMethod);
-            Assert.True(payload.GenerateVersion);
 
             // Fingerprint: SHA-256 → 32 bytes → 43 URL-safe base64 chars (no padding)
             Assert.NotNull(payload.PublicKey.PublicKeyFingerprint);
             Assert.Equal(43, payload.PublicKey.PublicKeyFingerprint!.Length);
+        }
+
+        [Fact]
+        public void GeneratedKeys_SignOnlyWithTheRegisteredVersion()
+        {
+            using var chat = new Chat();
+            chat.GenerateKeypairs();
+            var deleteParams = new MessageDeleteParams(
+                "1234-5678", new[] { "seq-1" }, deleteForAll: false)
+            {
+                SenderId = "1234",
+            };
+            var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareMessageDelete(deleteParams));
+            Assert.Contains("signing_key_version", ex.Message);
+
+            chat.SetIdentity("1234", "1700000000123");
+            Assert.Equal("1700000000123", chat.PrepareMessageDelete(deleteParams).PublicKeyVersion);
+
+            // Restored keys carry the version passed to ImportKeys, and none
+            // without it.
+            var keys = chat.ExportKeys()!;
+            using var restored = new Chat();
+            restored.ImportKeys(keys, "1700000000456");
+            Assert.Equal("1700000000456", restored.PrepareMessageDelete(deleteParams).PublicKeyVersion);
+            restored.ImportKeys(keys);
+            Assert.Throws<ChatXdkException>(() => restored.PrepareMessageDelete(deleteParams));
         }
 
         [Fact]

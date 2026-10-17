@@ -72,7 +72,7 @@ impl ChatCore {
     pub fn new() -> Self {
         Self {
             inner: SdkCore::new(),
-            signing_key_version: "1".to_string(),
+            signing_key_version: String::new(),
         }
     }
 
@@ -91,6 +91,16 @@ impl ChatCore {
             .import_keys_with_version(&bytes, signing_key_version)?;
         self.signing_key_version = signing_key_version.to_string();
         Ok(())
+    }
+
+    /// Like [`ChatCore::load_keys`], for keys whose registered version is not
+    /// known yet; [`ChatCore::set_registered_version`] records it once the X
+    /// API reports it.
+    pub fn load_keys_without_version(&mut self, private_keys_b64: &str) -> Result<(), SdkError> {
+        let bytes = B64
+            .decode(private_keys_b64)
+            .map_err(|e| SdkError::Parse(format!("invalid base64 private keys: {e}")))?;
+        self.inner.import_keys(&bytes)
     }
 
     /// Generate a fresh identity. Returns the registration payload to POST to
@@ -116,8 +126,16 @@ impl ChatCore {
 
     /// Set the session identity once; every signed action then defaults its
     /// `sender_id` and `signing_key_version` to these values.
-    pub fn set_identity(&self, user_id: &str) {
+    pub fn set_identity(&self, user_id: &str) -> Result<(), SdkError> {
+        if self.signing_key_version.is_empty() {
+            return Err(SdkError::InvalidState(
+                "signing key version unknown: pass load_keys or set_registered_version the \
+                 public_key_version the X API returned when the keys were registered"
+                    .into(),
+            ));
+        }
         self.inner.set_identity(user_id, &self.signing_key_version);
+        Ok(())
     }
 
     // -- Conversation keys --------------------------------------------------

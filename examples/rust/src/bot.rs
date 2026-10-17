@@ -7,6 +7,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use chat_xdk_core::crypto::keys::XChatConversationKey;
+use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{Event, SigningKeyEntry};
 
 use crate::chat_core::{message_text, ChatCore, ReplyOptions};
@@ -37,16 +38,16 @@ pub struct Bot<A: ChatApi> {
 }
 
 impl<A: ChatApi> Bot<A> {
-    pub fn new(core: ChatCore, api: A, bot_user_id: String) -> Self {
+    pub fn new(core: ChatCore, api: A, bot_user_id: String) -> Result<Self, SdkError> {
         // One identity per bot instance: signed actions default their
         // sender_id and signing_key_version to these values.
-        core.set_identity(&bot_user_id);
-        Self {
+        core.set_identity(&bot_user_id)?;
+        Ok(Self {
             core,
             api,
             bot_user_id,
             state: HashMap::new(),
-        }
+        })
     }
 
     fn signing_keys_for(&self, events: &[EventItem]) -> Vec<SigningKeyEntry> {

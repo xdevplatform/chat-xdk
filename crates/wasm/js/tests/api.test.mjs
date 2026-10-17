@@ -90,9 +90,32 @@ async function main() {
     assert.ok(payload.publicKey.signingPublicKey.length > 0);
     assert.ok(payload.publicKey.identityPublicKeySignature.length > 0);
     assert.equal(payload.publicKey.registrationMethod, "CustomPin");
-    assert.equal(payload.generateVersion, true);
     // Fingerprint: SHA-256 → 32 bytes → 43 URL-safe base64 chars (no padding)
     assert.equal(payload.publicKey.publicKeyFingerprint.length, 43);
+
+    // Generated keys have no signing-key version until setIdentity.
+    const deleteParams = {
+      senderId: "1234",
+      conversationId: "1234-5678",
+      sequenceIds: ["seq-1"],
+      deleteForAll: false,
+    };
+    assert.throws(() => fresh.prepareMessageDelete(deleteParams), /signing_key_version is not set/);
+    fresh.setIdentity("1234", "1700000000123");
+    assert.equal(fresh.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000123");
+
+    // Restored keys carry the version passed to importKeys, and none
+    // without it.
+    const keys = new Uint8Array(fresh.exportKeys());
+    const restored = new Chat();
+    restored.importKeys(keys, "1700000000456");
+    assert.equal(restored.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000456");
+    restored.importKeys(keys);
+    assert.throws(
+      () => restored.prepareMessageDelete(deleteParams),
+      /signing_key_version is not set/,
+    );
+    restored.free();
     fresh.free();
   }
 

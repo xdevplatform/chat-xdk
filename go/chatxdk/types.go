@@ -22,9 +22,7 @@ type PublicKeyRegistration struct {
 
 // PublicKeyRegistrationPayload is returned by GenerateKeypairs().
 type PublicKeyRegistrationPayload struct {
-	PublicKey       PublicKeyRegistration `json:"public_key"`
-	Version         *string               `json:"version,omitempty"`
-	GenerateVersion bool                  `json:"generate_version"`
+	PublicKey PublicKeyRegistration `json:"public_key"`
 }
 
 // SendPayload contains the encrypted message ready to send to the X API.

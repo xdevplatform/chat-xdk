@@ -30,10 +30,19 @@ if (string.IsNullOrEmpty(privateKeys))
     Console.WriteLine(JsonSerializer.Serialize(registration.PublicKey, new JsonSerializerOptions { WriteIndented = true }));
     Console.WriteLine("\n2) Save this in your .env so the bot reuses the identity:");
     Console.WriteLine($"CHAT_PRIVATE_KEYS_B64={blob}");
+    Console.WriteLine("\n3) Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API returns.");
     return;
 }
 
-core.LoadKeys(privateKeys, EnvOr("CHAT_SIGNING_KEY_VERSION") ?? "1");
+var signingKeyVersion = EnvOr("CHAT_SIGNING_KEY_VERSION");
+if (string.IsNullOrEmpty(signingKeyVersion))
+{
+    Console.WriteLine("Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API returned when "
+        + "the bot's public key was registered (dotnet run --project ChatBot register prints it).");
+    Environment.ExitCode = 1;
+    return;
+}
+core.LoadKeys(privateKeys, signingKeyVersion);
 
 var accessToken = EnvOr("X_ACCESS_TOKEN");
 var conversationId = EnvOr("CHAT_CONVERSATION_ID");

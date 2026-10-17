@@ -99,9 +99,9 @@ public final class XChatClient {
      * Register a public key: POST /2/users/{id}/public_keys.
      *
      * <p>{@code body} is the registration object from {@code generateKeypairs}
-     * in its snake_case wire form ({@code public_key} object, {@code version},
-     * {@code generate_version}). Throws {@link RateLimited} on 429 so the caller
-     * can stop instead of burning the strict daily budget.
+     * in its snake_case wire form (the {@code public_key} object). Throws
+     * {@link RateLimited} on 429 so the caller can stop instead of burning the
+     * strict daily budget.
      */
     public JsonNode addUserPublicKey(String userId, JsonNode body) throws Exception {
         HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/2/users/" + enc(userId) + "/public_keys"))
@@ -157,7 +157,7 @@ public final class XChatClient {
             throw new RuntimeException("no juicebox_config on the account");
         }
         // Passed to the SDK as-is: it reads `key_store_token_map_json` verbatim.
-        return new JuiceboxConfigResult(cfg.toString(), latest.path("public_key_version").asText("1"));
+        return new JuiceboxConfigResult(cfg.toString(), latest.path("public_key_version").asText(""));
     }
 
     /** GET the raw (encrypted) events for a conversation. */

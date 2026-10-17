@@ -125,7 +125,7 @@ fn e2e_live() {
     let mut core = ChatCore::new();
     core.load_keys(&blob, &ver).expect("load_keys");
     let my_id = api.get_my_user_id().expect("get_my_user_id");
-    core.set_identity(&my_id);
+    core.set_identity(&my_id).expect("set_identity");
 
     // -- 1. Inbound history: batch decrypt (+ pagination when available) ----
     let (mut raw, mut key_events, next_token) =

@@ -34,8 +34,6 @@ export interface PublicKeyRegistration {
  */
 export interface PublicKeyRegistrationPayload {
   publicKey: PublicKeyRegistration;
-  version?: string;
-  generateVersion: boolean;
 }
 
 /**
@@ -929,7 +927,11 @@ interface ChatCrypto {
    */
   setRejectUnverified(reject: boolean): void;
 
-  /** Generate new keypairs and return the registration payload. */
+  /**
+   * Generate new keypairs and return the registration payload. No
+   * signing-key version is set: after registering the keys, call
+   * `setIdentity` with the `public_key_version` the registration returns.
+   */
   generateKeypairs(): PublicKeyRegistrationPayload;
 
   /**

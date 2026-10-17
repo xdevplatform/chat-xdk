@@ -164,14 +164,11 @@ impl Chat {
     }
 
     /// Generate new keypairs and return the registration payload.
-    ///
-    /// The key version is read from the JS clock (`Date.now()`) because the
-    /// `wasm32-unknown-unknown` target has no system clock.
     #[wasm_bindgen(js_name = generateKeypairs)]
     pub fn generate_keypairs_impl(&mut self) -> Result<JsValue, JsError> {
         let payload = self
             .inner
-            .generate_keypairs_with_version(&now_millis())
+            .generate_keypairs()
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         let js_payload: JsPublicKeyRegistrationPayload = payload.into();
         to_js_value(&js_payload)
@@ -998,7 +995,7 @@ impl FileDecryptor {
 
 /// Current time as a millisecond-timestamp string, read from the JS clock.
 ///
-/// The `wasm32-unknown-unknown` target has no system clock, so key/conversation
+/// The `wasm32-unknown-unknown` target has no system clock, so conversation key
 /// versions come from JavaScript's `Date.now()` instead.
 fn now_millis() -> String {
     (js_sys::Date::now() as u64).to_string()

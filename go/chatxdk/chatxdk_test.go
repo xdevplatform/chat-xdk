@@ -3124,6 +3124,63 @@ func TestSetIdentityResolvesEncryptDefaults(t *testing.T) {
 	}
 }
 
+// TestGeneratedKeysSignOnlyWithTheRegisteredVersion pins that generated keys
+// have no signing-key version: signing fails until SetIdentity or
+// ImportKeysWithVersion supplies it.
+func TestGeneratedKeysSignOnlyWithTheRegisteredVersion(t *testing.T) {
+	chat := New()
+	defer chat.Close()
+
+	if _, err := chat.GenerateKeypairs(); err != nil {
+		t.Fatalf("GenerateKeypairs failed: %v", err)
+	}
+	deleteParams := MessageDeleteParams{
+		SenderID:       "1234",
+		ConversationID: "1234-5678",
+		SequenceIDs:    []string{"seq-1"},
+	}
+	_, err := chat.PrepareMessageDelete(deleteParams)
+	if err == nil || !strings.Contains(err.Error(), "signing_key_version") {
+		t.Fatalf("expected an error naming signing_key_version, got: %v", err)
+	}
+
+	if err := chat.SetIdentity("1234", "1700000000123"); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	sig, err := chat.PrepareMessageDelete(deleteParams)
+	if err != nil {
+		t.Fatalf("PrepareMessageDelete after SetIdentity failed: %v", err)
+	}
+	if sig.PublicKeyVersion != "1700000000123" {
+		t.Errorf("expected public_key_version %q, got %q", "1700000000123", sig.PublicKeyVersion)
+	}
+
+	// Restored keys carry the version passed to ImportKeysWithVersion, and
+	// none after a plain ImportKeys.
+	keys, err := chat.ExportKeys()
+	if err != nil {
+		t.Fatalf("ExportKeys failed: %v", err)
+	}
+	restored := New()
+	defer restored.Close()
+	if err := restored.ImportKeysWithVersion(keys, "1700000000456"); err != nil {
+		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	}
+	sig, err = restored.PrepareMessageDelete(deleteParams)
+	if err != nil {
+		t.Fatalf("PrepareMessageDelete after ImportKeysWithVersion failed: %v", err)
+	}
+	if sig.PublicKeyVersion != "1700000000456" {
+		t.Errorf("expected public_key_version %q, got %q", "1700000000456", sig.PublicKeyVersion)
+	}
+	if err := restored.ImportKeys(keys); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if _, err := restored.PrepareMessageDelete(deleteParams); err == nil {
+		t.Fatal("expected an error after ImportKeys without a version")
+	}
+}
+
 // TestSetCacheKeysResolvesConversationKey drives the opt-in key cache: after
 // batch-decrypting the fixture key change, EncryptMessage needs no explicit
 // conversation key and encrypts under the cached version; with the cache off

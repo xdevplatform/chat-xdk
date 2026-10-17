@@ -214,6 +214,10 @@ impl Chat {
     // Juicebox key storage
 
     /// Generate new keypairs and return the registration payload.
+    ///
+    /// No signing-key version is set: after registering the keys, call
+    /// [`Self::set_identity`] with the `public_key_version` the registration
+    /// returns.
     pub fn generate_keypairs(&self) -> Result<PublicKeyRegistrationPayload, SdkError> {
         self.inner.generate_keypairs()
     }
@@ -482,7 +486,8 @@ impl Chat {
     pub fn export_keys(&self) -> Result<Vec<u8>, SdkError> {
         self.inner.export_keys()
     }
-    /// Import private keys from bytes (32 or 64 bytes).
+    /// Import private keys from bytes (32 or 64 bytes). Clears the
+    /// signing-key version of any previously loaded keys.
     pub fn import_keys(&self, key_bytes: &[u8]) -> Result<(), SdkError> {
         self.inner.import_keys(key_bytes)
     }
@@ -1261,8 +1266,6 @@ mod tests {
         let payload = chat.generate_keypairs().unwrap();
 
         assert_eq!(payload.public_key.registration_method, "CustomPin");
-        assert!(payload.generate_version);
-        assert!(payload.version.is_some());
         assert!(!payload.public_key.identity_public_key_signature.is_empty());
         assert!(!payload.public_key.public_key.is_empty());
         assert!(!payload.public_key.signing_public_key.is_empty());

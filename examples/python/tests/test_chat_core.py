@@ -59,6 +59,16 @@ class TestChatCore(unittest.TestCase):
         self.assertEqual(keys["identity"], self.vectors["identity_public_b64"])
         self.assertEqual(keys["signing"], self.vectors["signing_public_b64"])
 
+    def test_set_identity_needs_the_registered_version(self):
+        # Freshly generated keys have no registered version yet, so the bot
+        # cannot sign as itself until load_keys / unlock provide one.
+        from chat_core import ChatCore
+
+        core = ChatCore()
+        core.generate_and_register()
+        with self.assertRaisesRegex(ValueError, "signing key version unknown"):
+            core.set_identity("12345")
+
     def test_generic_encrypt_decrypt_roundtrip(self):
         # A real round-trip through the SDK: encrypt then decrypt must return
         # the original plaintext (not a hardcoded echo).

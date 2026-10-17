@@ -413,7 +413,6 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.public_key.signing_public_key)
         self.assertTrue(payload.public_key.identity_public_key_signature)
         self.assertIsInstance(payload.public_key.registration_method, str)
-        self.assertIsInstance(payload.generate_version, bool)
 
     def test_encrypt_message_signs_at_version_10(self):
         from chat_xdk import EncryptMessageParams
@@ -1312,6 +1311,36 @@ class TestApiShapes(unittest.TestCase):
                     )
                 )
             self.assertIn("sender_id", str(ctx.exception))
+
+    def test_generated_keys_sign_only_with_the_registered_version(self):
+        from chat_xdk import Chat, MessageDeleteParams
+
+        chat = Chat()
+        chat.generate_keypairs()
+        with self.assertRaises(ValueError) as ctx:
+            chat.prepare_message_delete(
+                MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+            )
+        self.assertIn("signing_key_version", str(ctx.exception))
+
+        chat.set_identity("1234", "1700000000123")
+        sig = chat.prepare_message_delete(MessageDeleteParams("1234-5678", ["seq-1"], False))
+        self.assertEqual(sig["public_key_version"], "1700000000123")
+
+        # Restored keys carry the version passed to import_keys, and none
+        # without it.
+        keys = bytes(chat.export_keys())
+        restored = Chat()
+        restored.import_keys(keys, version="1700000000456")
+        sig = restored.prepare_message_delete(
+            MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+        )
+        self.assertEqual(sig["public_key_version"], "1700000000456")
+        restored.import_keys(keys)
+        with self.assertRaises(ValueError):
+            restored.prepare_message_delete(
+                MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+            )
 
 
 if __name__ == "__main__":

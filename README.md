@@ -36,8 +36,9 @@ Python/Rust, PascalCase in .NET/Go):
 
 1. **Load keys** — import a private-key blob, or recover from Juicebox (below).
 2. **Set identity** — `setIdentity(userId, signingKeyVersion)` once per
-   instance; every signed action defaults its sender and signing-key version
-   to these values. Optionally `setCacheKeys(true)` and
+   instance, where `signingKeyVersion` is the `public_key_version` returned
+   when your keys were registered; every signed action defaults its sender and
+   signing-key version to these values. Optionally `setCacheKeys(true)` and
    `setSigningKeys(signingKeys)` so the decrypt/encrypt calls below need no
    per-call key plumbing.
 3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,

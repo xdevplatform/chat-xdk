@@ -29,7 +29,8 @@ fn loaded_core(v: &Value) -> ChatCore {
     let mut core = ChatCore::new();
     core.load_keys(v["private_keys_concat_b64"].as_str().unwrap(), "1")
         .expect("load_keys");
-    core.set_identity(v["event_sender_id"].as_str().unwrap());
+    core.set_identity(v["event_sender_id"].as_str().unwrap())
+        .expect("set_identity");
     core
 }
 
@@ -47,6 +48,20 @@ fn load_keys_matches_fixture_public_keys() {
     let keys = core.public_keys().expect("public_keys");
     assert_eq!(keys.identity, v["identity_public_b64"].as_str().unwrap());
     assert_eq!(keys.signing, v["signing_public_b64"].as_str().unwrap());
+}
+
+#[test]
+fn set_identity_needs_the_registered_version() {
+    // Freshly generated keys have no registered version yet, so the bot
+    // cannot sign as itself until load_keys or set_registered_version
+    // provides one.
+    let core = ChatCore::new();
+    core.generate_and_register().expect("generate_and_register");
+    let err = core.set_identity("12345").unwrap_err();
+    assert!(
+        err.to_string().contains("signing key version unknown"),
+        "{err}"
+    );
 }
 
 #[test]

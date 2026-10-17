@@ -155,7 +155,9 @@ public final class Chat implements AutoCloseable {
      * Set the session identity: the owner's user id and signing-key version, used
      * as the defaults wherever a params class' {@code senderId} / {@code signingKeyVersion}
      * is left null. A resolved default and an explicitly passed value produce
-     * byte-identical signed output for the same logical inputs.
+     * byte-identical signed output for the same logical inputs. The signing-key
+     * version is the {@code public_key_version} returned when the keys were
+     * registered.
      */
     public void setIdentity(String userId, String signingKeyVersion) {
         throwIfDisposed();
@@ -286,7 +288,10 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Generate new identity + signing keypairs and return the registration payload.
-     * POST the payload to {@code POST /2/chat/keys} before calling {@link #setup}.
+     * POST the payload to {@code POST /2/users/:id/public_keys} before calling
+     * {@link #setup}. No signing-key version is set: after registering the keys,
+     * call {@link #setIdentity} with the {@code public_key_version} the
+     * registration returns.
      */
     public PublicKeyRegistrationPayload generateKeypairs() throws Exception {
         throwIfDisposed();
@@ -349,6 +354,7 @@ public final class Chat implements AutoCloseable {
     /**
      * Import private keys from a byte array produced by {@link #exportKeys}.
      * Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
+     * No signing-key version is set; {@link #importKeys(byte[], String)} sets it.
      */
     public void importKeys(byte[] keys) {
         throwIfDisposed();
@@ -361,9 +367,10 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Like {@link #importKeys(byte[])} but also records the public key version
-     * the keys were registered under, so participant-key filtering and the
-     * session signing-key version are set in one call.
+     * Like {@link #importKeys(byte[])} but also records the
+     * {@code public_key_version} returned when the keys were registered, so
+     * participant-key filtering and the session signing-key version are set in
+     * one call.
      */
     public void importKeys(byte[] keys, String version) {
         throwIfDisposed();

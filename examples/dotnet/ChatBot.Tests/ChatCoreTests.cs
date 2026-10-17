@@ -82,6 +82,17 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void SetIdentity_Needs_The_Registered_Version()
+    {
+        // Freshly generated keys have no registered version yet, so the bot
+        // cannot sign as itself until LoadKeys provides one.
+        using var core = new ChatCore();
+        core.GenerateAndRegister();
+        var err = Assert.Throws<InvalidOperationException>(() => core.SetIdentity("12345"));
+        Assert.Contains("signing key version unknown", err.Message);
+    }
+
+    [Fact]
     public void Generic_Encrypt_Decrypt_Roundtrip()
     {
         var v = LoadVectors();

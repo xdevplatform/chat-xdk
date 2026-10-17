@@ -52,7 +52,7 @@ export class XChatClient {
    * Register a public key: POST /2/users/{id}/public_keys.
    *
    * `payload` is the registration object from `generateKeypairs` in its
-   * snake_case wire form (`public_key` object, `version`, `generate_version`).
+   * snake_case wire form (the `public_key` object).
    * Sent with a direct fetch — chat auth is a plain OAuth2 bearer token, so
    * this is equivalent to what the XDK would send. Throws `RateLimited` on 429
    * so the caller can stop instead of burning the strict daily budget.
@@ -106,7 +106,7 @@ export class XChatClient {
     // Passed to the SDK as-is: it reads `key_store_token_map_json` verbatim.
     return {
       configJson: JSON.stringify(config),
-      version: String(latest.publicKeyVersion ?? latest.public_key_version ?? "1"),
+      version: String(latest.publicKeyVersion ?? latest.public_key_version ?? ""),
     };
   }
 

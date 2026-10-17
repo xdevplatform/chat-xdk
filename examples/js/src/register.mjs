@@ -163,7 +163,6 @@ async function register({ force }) {
     await applyJuiceboxConfig(api, chat, userId);
     await chat.unlock(pin);
     body = marker.body;
-    version = String(marker.version ?? "1");
     console.log("Resuming the saved identity (recovered from Juicebox).");
   } else {
     const weak = weakPinReason(pin);
@@ -175,7 +174,6 @@ async function register({ force }) {
       process.exit(1);
     }
     const reg = chat.generateKeypairs();
-    version = String(reg.version ?? "1");
     // Snake_case wire form — the exact body the X API public-key endpoint takes.
     body = {
       public_key: {
@@ -185,8 +183,6 @@ async function register({ force }) {
         signing_public_key_signature: reg.publicKey.signingPublicKeySignature,
         registration_method: reg.publicKey.registrationMethod,
       },
-      version,
-      generate_version: Boolean(reg.generateVersion),
     };
     minted = true;
     console.log("Generated a new identity.");
@@ -198,15 +194,15 @@ async function register({ force }) {
   const existing = await api.getPublicKeys(userId);
   const already = existing.find((k) => (k.publicKey ?? k.public_key) === ourPublicKey);
   if (already) {
-    version = String(already.publicKeyVersion ?? already.public_key_version ?? version);
-    console.log(`Public key already registered on the account (version ${version}); skipping POST.`);
+    version = already.publicKeyVersion ?? already.public_key_version;
+    console.log("Public key already registered on the account; skipping POST.");
   } else {
-    console.log(`Registering public key version ${version} …`);
+    console.log("Registering the public key …");
     try {
       const resp = await api.addUserPublicKey(userId, body);
       let data = resp.data ?? {};
       if (Array.isArray(data)) data = data[0] ?? {};
-      version = String(data.public_key_version ?? version);
+      version = data.public_key_version;
     } catch (err) {
       if (err instanceof XChatClient.RateLimited) {
         const when = err.resetEpoch
@@ -250,8 +246,8 @@ async function register({ force }) {
     }
     if (!stored) {
       console.error(
-        `Storing the keys in Juicebox failed AFTER public key version ${version} was ` +
-          "registered on the account. This binding has no key export, so that key is " +
+        "Storing the keys in Juicebox failed AFTER the public key was registered " +
+          "on the account. This binding has no key export, so that key is " +
           "now unusable; re-run with --force to mint and register a replacement " +
           "(this consumes registration budget).",
       );
@@ -259,6 +255,18 @@ async function register({ force }) {
     }
     console.log("Keys stored in Juicebox under your PIN.");
   }
+
+  // The identity is recoverable from Juicebox here, so a re-run resumes it and
+  // looks the version up on the account.
+  if (!version) {
+    await writeMarker({ registered: false, user_id: userId, body });
+    console.error(
+      "The X API did not return a public_key_version for the key. Re-run to " +
+        "look it up on the account; the saved identity resumes.",
+    );
+    process.exit(1);
+  }
+  version = String(version);
 
   // Records the registered key version and the session identity in one call.
   chat.setIdentity(userId, version);
