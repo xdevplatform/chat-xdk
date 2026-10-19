@@ -1074,6 +1074,11 @@ pub struct SendPayload {
     /// Whether to send push notification.
     #[serde(default = "default_true")]
     pub should_notify: bool,
+
+    /// Version of the Chat XDK that built this payload. Send it as the
+    /// message's optional `xdk_version` field.
+    #[serde(default)]
+    pub xdk_version: String,
 }
 
 fn default_true() -> bool {
@@ -1563,12 +1568,19 @@ mod tests {
             },
             conversation_key_version: "v1".to_string(),
             should_notify: true,
+            xdk_version: "0.6.0".to_string(),
         };
         let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"xdk_version\":\"0.6.0\""));
         let decoded: SendPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.event_b64, "ev");
         assert_eq!(decoded.encrypted_content, "enc");
         assert_eq!(decoded.signature_info.signature_version, "4");
+        assert_eq!(decoded.xdk_version, "0.6.0");
+
+        let without: SendPayload =
+            serde_json::from_str(&json.replace(",\"xdk_version\":\"0.6.0\"", "")).unwrap();
+        assert_eq!(without.xdk_version, "");
     }
 
     #[test]

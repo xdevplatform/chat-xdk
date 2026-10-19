@@ -298,6 +298,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         },
         conversation_key_version: params.conversation_key_version.to_string(),
         should_notify,
+        xdk_version: crate::XDK_VERSION.to_string(),
     })
 }
 
@@ -1698,6 +1699,7 @@ mod tests {
         assert_eq!(payload.signature_info.signature_version, "7");
         assert_eq!(payload.conversation_key_version, "5");
         assert!(payload.should_notify); // default
+        assert_eq!(payload.xdk_version, crate::XDK_VERSION);
 
         let params = EncryptAndSignParams::new(
             &ckey,

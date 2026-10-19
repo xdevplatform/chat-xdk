@@ -303,3 +303,13 @@ fn files_of_a_v0_message_use_the_conversation_key() {
     crate::crypto::encryption::decrypt_file(&ckey, encrypted.as_slice(), &mut opened).unwrap();
     assert_eq!(opened, b"hello");
 }
+
+#[test]
+fn every_payload_carries_the_sdk_version() {
+    let party = author();
+    let ckey = key(3);
+    for (what, payload) in every_send(&party, &ckey) {
+        assert_eq!(payload.xdk_version, crate::XDK_VERSION, "{what}");
+        assert!(!payload.xdk_version.is_empty(), "{what}");
+    }
+}
