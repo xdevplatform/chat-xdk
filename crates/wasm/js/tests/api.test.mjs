@@ -366,7 +366,8 @@ async function main() {
     assert.throws(() => truncated.finish(), /truncated/);
   }
 
-  // 4. encryptMessage returns a SendPayload with signatureVersion === "10"
+  // 4. encryptMessage returns a SendPayload with signatureVersion === "7"
+  //    (v0) until the v1_send feature switch is on.
   const payload = chat.encryptMessage({
     senderId: "111",
     conversationId: "conv-1",
@@ -381,8 +382,10 @@ async function main() {
   assert.equal(typeof payload.encryptedContent, "string");
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
-  assert.equal(payload.signatureInfo.signatureVersion, "10");
+  assert.equal(payload.signatureInfo.signatureVersion, "7");
   assert.equal(payload.conversationKeyVersion, "1");
+  assert.equal(typeof payload.xdkVersion, "string");
+  assert.ok(payload.xdkVersion.length > 0);
 
   // 4b. encryptReply produces a signed payload like encryptMessage
   const replyPayload = chat.encryptReply({
@@ -399,8 +402,23 @@ async function main() {
   assert.ok(replyPayload.encryptedContent.length > 0);
   assert.ok(replyPayload.signature.length > 0);
   assert.ok(replyPayload.encodedEventSignature.length > 0);
-  assert.equal(replyPayload.signatureInfo.signatureVersion, "10");
+  assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
   assert.equal(replyPayload.conversationKeyVersion, "1");
+
+  // 4c. With v1_send on, sends switch to v1 (signature version 10).
+  assert.equal(chat.isEnabled("v1_send"), false);
+  chat.applyFeatureConfig('{"features":{"v1_send":true}}', chat.featureBucket(), false);
+  assert.equal(chat.isEnabled("v1_send"), true);
+  const v1Payload = chat.encryptMessage({
+    senderId: "111",
+    conversationId: "conv-1",
+    conversationKey: convKey,
+    text: "hello v1",
+    conversationKeyVersion: "1",
+    signingKeyVersion: "1",
+  });
+  assert.equal(v1Payload.signatureInfo.signatureVersion, "10");
+  chat.applyFeatureConfig('{"features":{}}', chat.featureBucket(), false);
 
   // Own sends decrypt through their eventB64, verified against the fixture
   // signing key registered to sender 111.

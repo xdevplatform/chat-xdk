@@ -67,6 +67,8 @@ export interface SendPayload {
   conversationKeyVersion: string;
   /** Whether the X API should send a push notification for this message. */
   shouldNotify: boolean;
+  /** Version of the Chat XDK that built this payload. Send it as the message's optional `xdk_version` field. */
+  xdkVersion: string;
 }
 
 /**
@@ -822,6 +824,19 @@ export interface AttachmentInfo {
 /**
  * Options for creating a Chat instance with Juicebox integration.
  */
+/** Options for `loadFeatureConfig`. */
+export interface LoadFeatureConfigParams {
+  /** URL of `GET /2/chat/features` (default `FEATURES_ENDPOINT`). */
+  endpoint?: string;
+  /** Timeout of each request in milliseconds (default 2000). */
+  timeoutMs?: number;
+  /** Interval of the background re-check, which can only turn flags off (default 300; 0 disables it). */
+  refreshSeconds?: number;
+}
+
+/** Default URL of the feature-switch endpoint, `GET /2/chat/features`. */
+export declare const FEATURES_ENDPOINT: string;
+
 export interface CreateChatOptions {
   /** 
    * Juicebox configuration JSON from the X API.
@@ -950,6 +965,25 @@ interface ChatCrypto {
    * `conversationKeyVersion` pair from it. Disabling clears the cache.
    */
   setCacheKeys(enabled: boolean): void;
+  /**
+   * Whether the feature switch `name` is on. Off for names the last
+   * response did not turn on, before any response applies, and while
+   * `featureRefetchDue()` holds.
+   */
+  isEnabled(name: string): boolean;
+  /**
+   * Apply a `GET /2/chat/features` response body. `bucket` is the bucket the
+   * request carried (`featureBucket()`), or null/undefined when it carried
+   * none; `downgradeOnly` only turns flags off (a periodic re-check). Throws
+   * on a body that is not a JSON object with a `features` object, changing
+   * nothing. `loadFeatureConfig` fetches and applies for you.
+   */
+  applyFeatureConfig(json: string, bucket?: number | null, downgradeOnly?: boolean): void;
+  /**
+   * Whether keys loaded after a response to a request without a bucket
+   * applied, so the flags must be fetched again with `featureBucket()`.
+   */
+  featureRefetchDue(): boolean;
 
   /**
    * Store signing keys to use when a decrypt call omits its `signingKeys`
@@ -1134,6 +1168,27 @@ declare class Chat implements ChatCrypto {
   generateKeypairs(): PublicKeyRegistrationPayload;
   setIdentity(userId: string, signingKeyVersion: string): void;
   setCacheKeys(enabled: boolean): void;
+  /**
+   * Whether the feature switch `name` is on. Off for names the last
+   * response did not turn on, before any response applies, and while
+   * `featureRefetchDue()` holds.
+   */
+  isEnabled(name: string): boolean;
+  /**
+   * Apply a `GET /2/chat/features` response body. `bucket` is the bucket the
+   * request carried (`featureBucket()`), or null/undefined when it carried
+   * none; `downgradeOnly` only turns flags off (a periodic re-check). Throws
+   * on a body that is not a JSON object with a `features` object, changing
+   * nothing. `loadFeatureConfig` fetches and applies for you.
+   */
+  applyFeatureConfig(json: string, bucket?: number | null, downgradeOnly?: boolean): void;
+  /**
+   * Whether keys loaded after a response to a request without a bucket
+   * applied, so the flags must be fetched again with `featureBucket()`.
+   */
+  featureRefetchDue(): boolean;
+  /** The feature bucket of the loaded identity key; undefined until keys load. */
+  featureBucket(): number | undefined;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   /**
    * Import private keys from raw bytes. When `version` is given it also
@@ -1211,6 +1266,42 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   generateKeypairs(): PublicKeyRegistrationPayload;
   setIdentity(userId: string, signingKeyVersion: string): void;
   setCacheKeys(enabled: boolean): void;
+  /**
+   * Whether the feature switch `name` is on. Off for names the last
+   * response did not turn on, before any response applies, and while
+   * `featureRefetchDue()` holds.
+   */
+  isEnabled(name: string): boolean;
+  /**
+   * Apply a `GET /2/chat/features` response body. `bucket` is the bucket the
+   * request carried (`featureBucket()`), or null/undefined when it carried
+   * none; `downgradeOnly` only turns flags off (a periodic re-check). Throws
+   * on a body that is not a JSON object with a `features` object, changing
+   * nothing. `loadFeatureConfig` fetches and applies for you.
+   */
+  applyFeatureConfig(json: string, bucket?: number | null, downgradeOnly?: boolean): void;
+  /**
+   * Whether keys loaded after a response to a request without a bucket
+   * applied, so the flags must be fetched again with `featureBucket()`.
+   */
+  featureRefetchDue(): boolean;
+  /**
+   * Fetch the feature switches from `GET /2/chat/features` and apply them;
+   * resolves true when a server response was applied. Call it at startup
+   * after loading keys and `setIdentity`. If keys load later, the flags are
+   * fetched once more with the key's bucket (every flag reads off until
+   * then). A timer re-checks every `refreshSeconds`; a re-check can only
+   * turn flags off. Any failure leaves the flags unchanged, so after a
+   * failed first load every flag is off and sends stay v0. `free()` stops
+   * the timer.
+   */
+  loadFeatureConfig(params?: LoadFeatureConfigParams): Promise<boolean>;
+  /**
+   * The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
+   * flags for, derived from the loaded identity public key; null until keys
+   * load.
+   */
+  featureBucket(): number | null;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;

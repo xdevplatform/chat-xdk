@@ -319,6 +319,14 @@ export class ChatWithJuicebox {
   // getter. Called before every Juicebox network operation so sequential use
   // of multiple instances presents the right tokens (last-armed wins).
   #armAuthTokenHook;
+  // Feature-switch refresher: the pending timer, the in-flight request, and
+  // a generation that stale ticks compare against to stop.
+  #featureTimer = null;
+  #featureRequest = null;
+  #featureGeneration = 0;
+  // Whether the last applied features response came from a request without
+  // a bucket, so the refresher watches for keys to load.
+  #featureBucketless = false;
 
   constructor(
     wasmChat,
@@ -465,6 +473,108 @@ export class ChatWithJuicebox {
     this.#numGuesses = resolveMaxGuessCount(configValue, this.#maxGuessCountOverride);
   }
 
+  // Feature switches (GET /2/chat/features)
+
+  /**
+   * Fetch the feature switches from `GET /2/chat/features` and apply them.
+   *
+   * Call it at startup after loading keys and `setIdentity`, so the request
+   * carries `featureBucket()`. If keys load later, the flags are fetched once
+   * more with the key's bucket, and every flag reads off until they are. A
+   * timer re-checks every `refreshSeconds`; a re-check can only turn flags
+   * off. Calling this again replaces the previous refresher; `free()` stops
+   * it.
+   *
+   * Any failure (network error, timeout, a status other than 200, or a
+   * malformed body) leaves the flags unchanged, so after a failed first load
+   * every flag is off and sends stay v0.
+   *
+   * @param {{ endpoint?: string, timeoutMs?: number, refreshSeconds?: number }} [params]
+   * @returns {Promise<boolean>} true when a server response was applied
+   */
+  async loadFeatureConfig(params = {}) {
+    this.#stopFeatureRefresh();
+    const options = featureOptions(params);
+    const generation = this.#featureGeneration;
+    const applied =
+      (await this.#fetchFeatures(options, false, generation)) ||
+      (await this.#fetchFeatures(options, false, generation));
+    if (generation === this.#featureGeneration) {
+      this.#scheduleFeatureRefresh(options, generation);
+    }
+    return applied;
+  }
+
+  isEnabled(name) { return this.#inner.isEnabled(name); }
+  featureBucket() { return this.#inner.featureBucket() ?? null; }
+  applyFeatureConfig(json, bucket, downgradeOnly) {
+    return this.#inner.applyFeatureConfig(json, bucket ?? undefined, downgradeOnly === true);
+  }
+  featureRefetchDue() { return this.#inner.featureRefetchDue(); }
+
+  async #fetchFeatures(options, downgradeOnly, generation) {
+    const bucket = this.featureBucket();
+    const request = new AbortController();
+    this.#featureRequest = request;
+    const body = await getFeatures(featuresUrl(options.endpoint, bucket), options.timeoutMs, request);
+    if (this.#featureRequest === request) this.#featureRequest = null;
+    if (body === null || generation !== this.#featureGeneration) return false;
+    try {
+      this.applyFeatureConfig(body, bucket, downgradeOnly);
+    } catch {
+      return false;
+    }
+    if (!downgradeOnly) this.#featureBucketless = bucket === null;
+    return true;
+  }
+
+  #scheduleFeatureRefresh(options, generation) {
+    const refreshMs = options.refreshSeconds * 1000;
+    let nextRecheck = Date.now() + refreshMs;
+    let retryAt = 0;
+    let backoffMs = 1000;
+    const schedule = () => {
+      const watchingKeys = this.#featureBucketless;
+      if (!watchingKeys && refreshMs <= 0) return;
+      const wait = watchingKeys ? 1000 : Math.max(0, nextRecheck - Date.now());
+      this.#featureTimer = unrefTimer(setTimeout(tick, wait));
+    };
+    const tick = async () => {
+      this.#featureTimer = null;
+      if (generation !== this.#featureGeneration) return;
+      try {
+        if (this.#inner.featureRefetchDue()) {
+          if (Date.now() >= retryAt) {
+            if (await this.#fetchFeatures(options, false, generation)) {
+              backoffMs = 1000;
+              nextRecheck = Date.now() + refreshMs;
+            } else {
+              retryAt = Date.now() + backoffMs;
+              backoffMs = Math.min(backoffMs * 2, MAX_FEATURE_REFETCH_BACKOFF_MS);
+            }
+          }
+        } else if (refreshMs > 0 && Date.now() >= nextRecheck) {
+          await this.#fetchFeatures(options, true, generation);
+          nextRecheck = Date.now() + refreshMs;
+        }
+      } catch {
+        // A failed tick changes nothing; the next one retries.
+      }
+      if (generation === this.#featureGeneration) schedule();
+    };
+    schedule();
+  }
+
+  #stopFeatureRefresh() {
+    this.#featureGeneration += 1;
+    if (this.#featureTimer !== null) {
+      clearTimeout(this.#featureTimer);
+      this.#featureTimer = null;
+    }
+    this.#featureRequest?.abort();
+    this.#featureRequest = null;
+  }
+
   // Forwarded crypto methods — delegate to inner WasmChat
 
   setRejectUnverified(reject) { return this.#inner.setRejectUnverified(reject); }
@@ -505,14 +615,61 @@ export class ChatWithJuicebox {
   prepareGroupCreate(params) { return this.#inner.prepareGroupCreate(params); }
 
   /**
-   * Release the WASM-side crypto engine: clears key material (`lock()`) and
-   * frees the underlying WASM object. The instance must not be used
-   * afterwards. When reusing the instance, `lock()` alone suffices for key
-   * hygiene.
+   * Release the WASM-side crypto engine: stops the feature refresher, clears
+   * key material (`lock()`) and frees the underlying WASM object. The
+   * instance must not be used afterwards. When reusing the instance,
+   * `lock()` alone suffices for key hygiene.
    */
   free() {
+    this.#stopFeatureRefresh();
     this.#inner.lock();
     this.#inner.free();
+  }
+}
+
+/** Default URL of the feature-switch endpoint, `GET /2/chat/features`. */
+export const FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
+
+const MAX_FEATURES_BODY = 64 * 1024;
+const MAX_FEATURE_REFETCH_BACKOFF_MS = 60_000;
+
+function featureOptions(params) {
+  const p = params ?? {};
+  const number = (value, fallback) =>
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return {
+    endpoint: p.endpoint || FEATURES_ENDPOINT,
+    timeoutMs: number(p.timeoutMs, 2000),
+    refreshSeconds: Math.max(0, number(p.refreshSeconds, 300)),
+  };
+}
+
+function featuresUrl(endpoint, bucket) {
+  if (bucket === null) return endpoint;
+  return `${endpoint}${endpoint.includes("?") ? "&" : "?"}bucket=${bucket}`;
+}
+
+/** In Node, keep a pending refresh from holding the process open. */
+function unrefTimer(timer) {
+  timer?.unref?.();
+  return timer;
+}
+
+/** The body of a 200 response from `url`, or null on any failure. */
+async function getFeatures(url, timeoutMs, request) {
+  const timer = setTimeout(() => request.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: request.signal,
+    });
+    if (response.status !== 200) return null;
+    const body = await response.text();
+    return body.length > MAX_FEATURES_BODY ? null : body;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

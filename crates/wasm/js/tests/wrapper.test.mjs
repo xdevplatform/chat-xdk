@@ -274,7 +274,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.equal(sendPayload.signatureInfo.signatureVersion, "10");
+  assert.equal(sendPayload.signatureInfo.signatureVersion, "7");
   assert.ok(sendPayload.messageId.length > 0);
   const replyPayload = chat.encryptReply({
     senderId: "111",
