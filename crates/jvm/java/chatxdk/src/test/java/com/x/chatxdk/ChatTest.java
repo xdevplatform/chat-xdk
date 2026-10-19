@@ -311,7 +311,7 @@ class ChatTest {
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
-            assertEquals("10", payload.signatureInfo.signatureVersion);
+            assertEquals("7", payload.signatureInfo.signatureVersion);
             assertTrue(payload.shouldNotify);
             // The SDK generates and returns the message id.
             assertFalse(payload.messageId.isEmpty());
@@ -416,7 +416,7 @@ class ChatTest {
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
-            assertEquals("10", payload.signatureInfo.signatureVersion);
+            assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -437,7 +437,7 @@ class ChatTest {
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("10", payload.signatureInfo.signatureVersion);
+            assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -456,7 +456,7 @@ class ChatTest {
             assertFalse(payload.encryptedContent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.encodedEventSignature.isEmpty());
-            assertEquals("10", payload.signatureInfo.signatureVersion);
+            assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
 
@@ -1245,13 +1245,14 @@ class ChatTest {
         return Types.AttachmentDescriptor.media(mediaHashKey, 4, 3, 64, mediaHashKey + ".jpg", 1, null);
     }
 
-    /** Send a message carrying {@code attachments}, check it verifies, and return its payload. */
+    /** Send a v1 message carrying {@code attachments}, check it verifies, and return its payload. */
     private static SendPayload sendFiles(Chat chat, JsonNode v, String text, Types.AttachmentDescriptor... attachments)
             throws Exception {
         EncryptMessageParams p = new EncryptMessageParams(v.get("event_conversation_id").asText(), text);
         p.conversationKey = b64(v, "conversation_key_b64");
         p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
         p.attachments = attachments.length == 0 ? null : List.of(attachments);
+        chat.applyFeatureConfig("{\"features\":{\"v1_send\":true}}", chat.featureBucket());
         SendPayload payload = chat.encryptMessage(p);
         assertEquals("10", payload.signatureInfo.signatureVersion);
         assertEquals(text, decryptOwnContent(chat, v, payload).get("text").asText());

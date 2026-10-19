@@ -30,6 +30,14 @@ public interface ChatNative extends Library {
 
     void chat_xdk_set_cache_keys(Pointer handle, int enabled);
 
+    int chat_xdk_feature_bucket(Pointer handle);
+
+    FfiResult.ByValue chat_xdk_apply_feature_config(Pointer handle, Pointer json, int bucket, int downgradeOnly);
+
+    int chat_xdk_is_enabled(Pointer handle, Pointer name);
+
+    int chat_xdk_feature_refetch_due(Pointer handle);
+
     FfiResult.ByValue chat_xdk_set_signing_keys(Pointer handle, Pointer signingKeysJson);
 
     void chat_xdk_lock(Pointer handle);

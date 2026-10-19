@@ -77,6 +77,15 @@ public final class Chat implements AutoCloseable {
     private boolean disposed;
     private final Cleaner.Cleanable cleanable;
 
+    // Orders the feature refresher's native calls against the calls that take the handle
+    // exclusively (setup, unlock, delete, changePin, updateConfig, setRejectUnverified)
+    // and against freeing it.
+    private final Object exclusive = new Object();
+
+    // Feature refresher state, owned by FeatureSwitches.
+    volatile FeatureSwitches.Refresher featureRefresher;
+    volatile boolean featureBucketless;
+
     /**
      * Create a new Chat SDK instance.
      *
@@ -97,10 +106,13 @@ public final class Chat implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (!disposed) {
-            disposed = true;
-            handle = null;
-            cleanable.clean();
+        FeatureSwitches.stop(this);
+        synchronized (exclusive) {
+            if (!disposed) {
+                disposed = true;
+                handle = null;
+                cleanable.clean();
+            }
         }
     }
 
@@ -145,7 +157,9 @@ public final class Chat implements AutoCloseable {
     public void setRejectUnverified(boolean reject) {
         throwIfDisposed();
         try {
-            ChatNative.INSTANCE.chat_xdk_set_reject_unverified(handle, reject ? 1 : 0);
+            synchronized (exclusive) {
+                ChatNative.INSTANCE.chat_xdk_set_reject_unverified(handle, reject ? 1 : 0);
+            }
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -185,6 +199,142 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    // Feature switches (GET /2/chat/features)
+
+    /** Default URL of the feature-switch endpoint, {@code GET /2/chat/features}. */
+    public static final String FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
+
+    /** {@link #loadFeatureConfig(LoadFeatureConfigParams)} with the default options. */
+    public boolean loadFeatureConfig() {
+        return loadFeatureConfig(new LoadFeatureConfigParams());
+    }
+
+    /**
+     * Fetch the feature switches from {@code GET /2/chat/features} and apply them.
+     *
+     * <p>Call it at startup after loading keys and {@link #setIdentity}, so the request
+     * carries {@link #featureBucket()}. If keys load later, the flags are fetched once more
+     * with the key's bucket, and every flag reads off until they are. A daemon thread
+     * re-checks every {@code refreshSeconds}; a re-check can only turn flags off. It holds
+     * this instance weakly; {@link #close()} and the next call stop it.
+     *
+     * <p>Any failure (network error, timeout, a status other than 200, or a malformed body)
+     * leaves the flags unchanged, so after a failed first load every flag is off and sends
+     * stay v0.
+     *
+     * @return true when a server response was applied.
+     */
+    public boolean loadFeatureConfig(LoadFeatureConfigParams params) {
+        throwIfDisposed();
+        return FeatureSwitches.load(this, params != null ? params : new LoadFeatureConfigParams());
+    }
+
+    /**
+     * Whether the feature switch {@code name} is on. Off for names the last response did not
+     * turn on, before any response applies, and while {@link #featureRefetchDue()} holds.
+     */
+    public boolean isEnabled(String name) {
+        throwIfDisposed();
+        try (Memory n = FfiStrings.utf8(name)) {
+            return ChatNative.INSTANCE.chat_xdk_is_enabled(handle, n) == 1;
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * The bucket (0-9999) {@code GET /2/chat/features} evaluates this instance's flags for,
+     * derived from the loaded identity public key; null until keys load. Send it as the
+     * request's {@code bucket} query parameter.
+     */
+    public Integer featureBucket() {
+        throwIfDisposed();
+        try {
+            int bucket = ChatNative.INSTANCE.chat_xdk_feature_bucket(handle);
+            return bucket < 0 ? null : bucket;
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /** {@link #applyFeatureConfig(String, Integer, boolean)} replacing the flags. */
+    public void applyFeatureConfig(String json, Integer bucket) {
+        applyFeatureConfig(json, bucket, false);
+    }
+
+    /**
+     * Apply a {@code GET /2/chat/features} response body. {@link #loadFeatureConfig()} fetches
+     * and applies for you; call this only when fetching through your own HTTP stack.
+     *
+     * @param json the response body.
+     * @param bucket the bucket the request carried ({@link #featureBucket()}), or null when it
+     *     carried none.
+     * @param downgradeOnly only turn flags off (a periodic re-check) instead of replacing them.
+     * @throws ChatXdkException if the body is not a JSON object with a {@code features} object;
+     *     nothing changes.
+     */
+    public void applyFeatureConfig(String json, Integer bucket, boolean downgradeOnly) {
+        throwIfDisposed();
+        try (Memory j = FfiStrings.utf8(json)) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_apply_feature_config(
+                    handle, j, bucket == null ? -1 : bucket, downgradeOnly ? 1 : 0));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Whether keys loaded after a response to a request without a bucket applied, so the flags
+     * must be fetched again with {@link #featureBucket()}. Every flag reads off until they are.
+     */
+    public boolean featureRefetchDue() {
+        throwIfDisposed();
+        try {
+            return ChatNative.INSTANCE.chat_xdk_feature_refetch_due(handle) == 1;
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    // Refresher entry points: serialized against the exclusive calls and close(), and inert
+    // once closed.
+
+    /** {@link #featureBucketForRefresh()} once the instance is closed. */
+    static final int CLOSED = Integer.MIN_VALUE;
+
+    boolean isClosed() {
+        synchronized (exclusive) {
+            return disposed;
+        }
+    }
+
+    int featureBucketForRefresh() {
+        synchronized (exclusive) {
+            return disposed ? CLOSED : ChatNative.INSTANCE.chat_xdk_feature_bucket(handle);
+        }
+    }
+
+    boolean applyFeatureConfigForRefresh(String json, int bucket, boolean downgradeOnly) {
+        synchronized (exclusive) {
+            if (disposed) {
+                return false;
+            }
+            try (Memory j = FfiStrings.utf8(json)) {
+                FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_apply_feature_config(
+                        handle, j, bucket, downgradeOnly ? 1 : 0));
+                return true;
+            } catch (ChatXdkException e) {
+                return false;
+            }
+        }
+    }
+
+    boolean featureRefetchDueForRefresh() {
+        synchronized (exclusive) {
+            return !disposed && ChatNative.INSTANCE.chat_xdk_feature_refetch_due(handle) == 1;
+        }
+    }
+
     /**
      * Store signing keys to use when a decrypt call omits its {@code signingKeys}
      * argument. Only this explicit call populates the store — a key carried inside
@@ -219,7 +369,9 @@ public final class Chat implements AutoCloseable {
     public void updateConfig(String configJson) {
         throwIfDisposed();
         try (Memory cfg = FfiStrings.utf8(configJson)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_update_config(handle, cfg));
+            synchronized (exclusive) {
+                FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_update_config(handle, cfg));
+            }
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -238,7 +390,10 @@ public final class Chat implements AutoCloseable {
         throwIfDisposed();
         try (Memory pinM = FfiStrings.utf8(pin);
                 Memory cfg = FfiStrings.utf8(configJson)) {
-            String json = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_setup(handle, pinM, cfg));
+            String json;
+            synchronized (exclusive) {
+                json = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_setup(handle, pinM, cfg));
+            }
             return ChatJson.MAPPER.readValue(json, PublicKeys.class);
         } finally {
             Reference.reachabilityFence(this);
@@ -256,7 +411,9 @@ public final class Chat implements AutoCloseable {
         throwIfDisposed();
         try (Memory pinM = FfiStrings.utf8(pin);
                 Memory cfg = FfiStrings.utf8(configJson)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_unlock(handle, pinM, cfg));
+            synchronized (exclusive) {
+                FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_unlock(handle, pinM, cfg));
+            }
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -269,7 +426,9 @@ public final class Chat implements AutoCloseable {
     public void delete() {
         throwIfDisposed();
         try {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_delete(handle));
+            synchronized (exclusive) {
+                FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_delete(handle));
+            }
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -280,7 +439,9 @@ public final class Chat implements AutoCloseable {
         throwIfDisposed();
         try (Memory o = FfiStrings.utf8(oldPin);
                 Memory n = FfiStrings.utf8(newPin)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_change_pin(handle, o, n));
+            synchronized (exclusive) {
+                FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_change_pin(handle, o, n));
+            }
         } finally {
             Reference.reachabilityFence(this);
         }

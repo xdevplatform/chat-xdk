@@ -126,6 +126,25 @@ public final class Types {
         /** Whether the X API should send a push notification. */
         @JsonProperty("should_notify")
         public boolean shouldNotify;
+
+        /**
+         * Version of the Chat XDK that built this payload. Send it as the message's optional
+         * {@code xdk_version} field.
+         */
+        @JsonProperty("xdk_version")
+        public String xdkVersion = "";
+    }
+
+    /** Options for {@link Chat#loadFeatureConfig(LoadFeatureConfigParams)}. */
+    public static final class LoadFeatureConfigParams {
+        /** URL of {@code GET /2/chat/features}; null selects {@link Chat#FEATURES_ENDPOINT}. */
+        public String endpoint;
+
+        /** Timeout of each request, in milliseconds. */
+        public int timeoutMs = 2000;
+
+        /** Interval of the background re-check, which can only turn flags off; 0 disables it. */
+        public int refreshSeconds = 300;
     }
 
     /**
