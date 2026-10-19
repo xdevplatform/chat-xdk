@@ -41,17 +41,21 @@ Python/Rust, PascalCase in .NET/Go):
    signing-key version to these values. Optionally `setCacheKeys(true)` and
    `setSigningKeys(signingKeys)` so the decrypt/encrypt calls below need no
    per-call key plumbing.
-3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
+3. **Feature switches** — `loadFeatureConfig()` fetches the server's feature
+   switches (`GET /2/chat/features`) for this user. Sends stay in the 0.5.x
+   format (v0) unless the `v1_send` switch is on; any failure keeps them v0.
+   See [Feature Switches](docs/API.md#feature-switches).
+4. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
    keys by user automatically. Never throws; per-event errors are collected in
    the result. The events endpoint returns the `KeyChange` events in
    `meta.conversation_key_events`, separate from `data` — pass both together.
-4. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
+5. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
    decrypts one event (webhook / poll). Throws on failure.
-5. **Reply** — `encryptMessage({conversationId, text})` or
+6. **Reply** — `encryptMessage({conversationId, text})` or
    `encryptReply({conversationId, text, replyToEvent})` → POST the result to
    the X Chat API.
-6. **Files** — a message with files is built first: start each upload, list
+7. **Files** — a message with files is built first: start each upload, list
    its media hash key in the message's attachments, then
    `encryptFile({file, eventB64, conversationKeys, mediaHashKey})` with the
    payload's `eventB64`. `decryptFile` opens a received file from its
@@ -75,6 +79,7 @@ from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessa
 chat = Chat()
 chat.import_keys(private_key_blob, version=key_version)  # or Chat(config).unlock(pin)
 chat.set_identity(my_user_id, key_version)
+chat.load_feature_config()  # sends stay v0 unless the server turns on v1_send
 chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)
 
@@ -95,6 +100,7 @@ import { createChat } from "@xdevplatform/chat-xdk";
 const chat = await createChat({ juiceboxConfig, getAuthToken });
 await chat.unlock("2580");
 chat.setIdentity(myUserId, signingKeyVersion);
+await chat.loadFeatureConfig(); // sends stay v0 unless the server turns on v1_send
 chat.setCacheKeys(true);
 chat.setSigningKeys(signingKeys);
 
