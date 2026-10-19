@@ -206,6 +206,31 @@ impl Chat {
     pub fn set_signing_keys(&self, entries: Vec<SigningKeyEntry>) {
         self.inner.set_signing_keys(entries);
     }
+    /// The bucket `GET /2/chat/features` evaluates this instance's flags for;
+    /// `None` until keys load. See [`crate::ChatCore::feature_bucket`].
+    pub fn feature_bucket(&self) -> Option<u16> {
+        self.inner.feature_bucket()
+    }
+    /// Apply a `GET /2/chat/features` response body for the request's
+    /// `bucket`. See [`crate::ChatCore::apply_feature_config`].
+    pub fn apply_feature_config(
+        &self,
+        json: &str,
+        mode: crate::FeatureApply,
+        bucket: Option<u16>,
+    ) -> Result<(), SdkError> {
+        self.inner.apply_feature_config(json, mode, bucket)
+    }
+    /// Whether the feature switch `name` is on. See
+    /// [`crate::ChatCore::is_enabled`].
+    pub fn is_enabled(&self, name: &str) -> bool {
+        self.inner.is_enabled(name)
+    }
+    /// Whether the flags must be fetched again with the key's bucket now that
+    /// keys loaded. See [`crate::ChatCore::feature_refetch_due`].
+    pub fn feature_refetch_due(&self) -> bool {
+        self.inner.feature_refetch_due()
+    }
     /// Replace the Juicebox configuration.
     pub fn update_config(&mut self, config: JuiceboxConfig) {
         self.config = config;
@@ -1373,8 +1398,24 @@ mod tests {
         assert!(!payload.signature.is_empty());
         assert!(!payload.encoded_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
-        assert_eq!(payload.signature_info.signature_version, "10");
+        assert_eq!(payload.signature_info.signature_version, "7");
         assert!(payload.should_notify);
+
+        let bucket = chat.feature_bucket();
+        assert!(bucket.is_some());
+        chat.apply_feature_config(
+            r#"{"features":{"v1_send":true}}"#,
+            crate::FeatureApply::Full,
+            bucket,
+        )
+        .unwrap();
+        assert!(chat.is_enabled(crate::V1_SEND));
+        assert!(!chat.feature_refetch_due());
+        let params = EncryptMessageParams::new("conv-1", "Hello again")
+            .with_identity("4001", "1")
+            .with_conversation_key(ckey.to_bytes(), "1");
+        let payload = chat.encrypt_message(params).unwrap();
+        assert_eq!(payload.signature_info.signature_version, "10");
     }
 
     // File encrypt/decrypt

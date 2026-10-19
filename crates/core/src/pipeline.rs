@@ -12,7 +12,7 @@ use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
 use crate::crypto::message_keys;
 use crate::error::SdkError;
 use crate::protocol::serialization::base64_encode;
-use crate::signatures::MESSAGE_SIGNATURE_VERSION;
+use crate::signatures::{MESSAGE_SIGNATURE_VERSION, SIGNATURE_VERSION};
 use crate::thrift::event::{
     MessageCreateEvent, MessageEvent, MessageEventDetail, MessageEventSignature,
 };
@@ -56,6 +56,20 @@ pub fn serialize_thrift<T: TSerializable>(value: &T) -> Result<Vec<u8>, SdkError
 
 // Encrypt + sign pipeline
 
+/// The wire format of an outgoing message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendVersion {
+    /// The 0.5.x format, readable by every SDK version: contents encrypted
+    /// under the conversation key, no `contents_encryption_version`, signed at
+    /// [`SIGNATURE_VERSION`].
+    #[default]
+    V0,
+    /// Per-message keys: contents encrypted under the key derived from the
+    /// conversation key, the sender id, and the message id, marked with
+    /// `contents_encryption_version` 1, signed at [`MESSAGE_SIGNATURE_VERSION`].
+    V1,
+}
+
 /// Parameters for [`encrypt_and_sign`].
 ///
 /// Use [`new()`](Self::new) for required fields, then chain optional setters.
@@ -72,10 +86,13 @@ pub struct EncryptAndSignParams<'a> {
     pub should_notify: Option<bool>,
     /// Optional TTL in milliseconds for disappearing messages.
     pub ttl_msec: Option<i64>,
+    /// Wire format to send in; defaults to [`SendVersion::V0`].
+    pub send_version: SendVersion,
 }
 
 impl<'a> EncryptAndSignParams<'a> {
-    /// Create params with required fields; optional fields default to `None`.
+    /// Create params with required fields; optional fields default to `None`
+    /// and the send version to [`SendVersion::V0`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_key: &'a XChatConversationKey,
@@ -98,7 +115,14 @@ impl<'a> EncryptAndSignParams<'a> {
             signing_key_version,
             should_notify: None,
             ttl_msec: None,
+            send_version: SendVersion::V0,
         }
+    }
+
+    /// Set the wire format to send in (default: [`SendVersion::V0`]).
+    pub fn send_version(mut self, send_version: SendVersion) -> Self {
+        self.send_version = send_version;
+        self
     }
 
     /// Set whether to send a push notification (default: `true`).
@@ -168,23 +192,42 @@ pub(crate) fn canonical_conversation_id<'a>(
 
 /// Encrypt pre-built content bytes and sign for the API.
 ///
-/// This is the shared pipeline used by all `encrypt_*` methods. It encrypts
-/// the content under the message key derived from the conversation key, the
-/// sender id, and the message id, marks the `MessageCreateEvent` with the
-/// `contents_encryption_version` that tells recipients to derive the same
-/// key, signs at [`MESSAGE_SIGNATURE_VERSION`], and returns a ready-to-send
-/// [`SendPayload`].
+/// This is the shared pipeline used by all `encrypt_*` methods, sending in
+/// the format `params.send_version` selects:
+///
+/// - [`SendVersion::V0`] encrypts the content under the conversation key and
+///   signs at [`SIGNATURE_VERSION`], exactly as 0.5.x did.
+/// - [`SendVersion::V1`] encrypts it under the message key derived from the
+///   conversation key, the sender id, and the message id, marks the
+///   `MessageCreateEvent` with the `contents_encryption_version` that tells
+///   recipients to derive the same key, and signs at
+///   [`MESSAGE_SIGNATURE_VERSION`].
+///
+/// Returns a ready-to-send [`SendPayload`].
 pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload, SdkError> {
     let should_notify = params.should_notify.unwrap_or(true);
     validate_sender_id(params.sender_id)?;
     validate_conversation_key_version(params.conversation_key_version)?;
 
-    let message_key = message_keys::derive_message_key(
-        params.conversation_key,
-        params.sender_id,
-        params.message_id,
-    )?;
-    let encrypted = encrypt_message(&message_key, params.content_bytes)?;
+    let (encrypted, contents_encryption_version, signature_version) = match params.send_version {
+        SendVersion::V0 => (
+            encrypt_message(params.conversation_key, params.content_bytes)?,
+            None,
+            SIGNATURE_VERSION.to_string(),
+        ),
+        SendVersion::V1 => {
+            let message_key = message_keys::derive_message_key(
+                params.conversation_key,
+                params.sender_id,
+                params.message_id,
+            )?;
+            (
+                encrypt_message(&message_key, params.content_bytes)?,
+                Some(message_keys::SEND_CONTENTS_ENCRYPTION_VERSION),
+                MESSAGE_SIGNATURE_VERSION.to_string(),
+            )
+        }
+    };
     let event = MessageCreateEvent::new(
         Some(encrypted),
         Some(params.conversation_key_version.to_string()),
@@ -197,7 +240,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
         None,
         None,
-        Some(message_keys::SEND_CONTENTS_ENCRYPTION_VERSION),
+        contents_encryption_version,
     );
     let event_bytes = serialize_thrift(&event)?;
 
@@ -207,7 +250,6 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     // and URL paths, or the bare recipient id the REST paths accept, so
     // normalize here to keep signatures verifiable regardless of input form.
     let conversation_id = canonical_conversation_id(params.conversation_id, params.sender_id);
-    let signature_version = MESSAGE_SIGNATURE_VERSION.to_string();
     // The payload comes from the builder verification uses, so what is signed
     // is exactly what recipients rebuild from the delivered event.
     let detail = MessageEventDetail::MessageCreateEvent(event);
@@ -1653,9 +1695,23 @@ mod tests {
         );
         let payload = encrypt_and_sign(params).unwrap();
         assert_eq!(payload.signature_info.public_key_version, "3");
-        assert_eq!(payload.signature_info.signature_version, "10");
+        assert_eq!(payload.signature_info.signature_version, "7");
         assert_eq!(payload.conversation_key_version, "5");
         assert!(payload.should_notify); // default
+
+        let params = EncryptAndSignParams::new(
+            &ckey,
+            &signing_key,
+            "msg-42",
+            "4099",
+            "conv-77",
+            &content,
+            "5",
+            "3",
+        )
+        .send_version(SendVersion::V1);
+        let payload = encrypt_and_sign(params).unwrap();
+        assert_eq!(payload.signature_info.signature_version, "10");
     }
 
     #[test]

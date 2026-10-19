@@ -121,6 +121,17 @@ pub(super) fn known_answer_media_message(author: &Party) -> ThriftEvent {
     )
 }
 
+/// Turn the `v1_send` feature switch on, as a response to a request carrying
+/// the key's bucket would.
+pub(super) fn enable_v1_send(core: &ChatCore) {
+    core.apply_feature_config(
+        r#"{"features":{"v1_send":true}}"#,
+        crate::FeatureApply::Full,
+        Some(0),
+    )
+    .unwrap();
+}
+
 pub(super) fn keys(
     version: &str,
     key: &XChatConversationKey,

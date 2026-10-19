@@ -118,6 +118,7 @@
 
 mod chat;
 mod core;
+pub mod features;
 mod params;
 mod types;
 pub mod utils;
@@ -149,6 +150,7 @@ pub mod keys;
 pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{FileDecryptor, FileEncryptor};
+pub use features::{FeatureApply, FEATURES_ENDPOINT, V1_SEND};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
