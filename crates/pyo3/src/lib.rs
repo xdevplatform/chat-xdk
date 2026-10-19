@@ -327,6 +327,7 @@ fn to_py_send_payload(payload: chat_xdk_core::SendPayload) -> SendPayload {
         },
         conversation_key_version: payload.conversation_key_version,
         should_notify: payload.should_notify,
+        xdk_version: payload.xdk_version,
     }
 }
 
@@ -417,6 +418,10 @@ pub struct SendPayload {
     /// Whether to send push notification.
     #[pyo3(get)]
     pub should_notify: bool,
+    /// Version of the Chat XDK that built this payload. Send it as the
+    /// message's optional ``xdk_version`` field.
+    #[pyo3(get)]
+    pub xdk_version: String,
 }
 
 // Params
@@ -1396,7 +1401,7 @@ impl FileDecryptorParams {
 ///                          conversation_key=key, conversation_key_version=version)
 /// )
 /// ```
-#[pyclass]
+#[pyclass(subclass)]
 pub struct Chat {
     inner: chat_xdk_core::Chat,
     runtime: tokio::runtime::Runtime,
@@ -1475,6 +1480,59 @@ impl Chat {
     /// from it. Disabling clears the cache.
     fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
+    }
+
+    /// The bucket ``GET /2/chat/features`` evaluates this instance's flags
+    /// for, derived from the loaded identity public key; ``None`` until keys
+    /// load. Send it as the request's ``bucket`` query parameter.
+    fn feature_bucket(&self) -> Option<u16> {
+        self.inner.feature_bucket()
+    }
+
+    /// Apply a ``GET /2/chat/features`` response body.
+    ///
+    /// ``load_feature_config`` fetches and applies for you; call this only
+    /// when fetching through your own HTTP stack.
+    ///
+    /// Args:
+    ///     json: The response body.
+    ///     bucket: The ``bucket`` the request carried (``feature_bucket()``),
+    ///         or ``None`` when it carried none.
+    ///     downgrade_only: Only turn flags off, never on (a periodic
+    ///         re-check), instead of replacing them.
+    ///
+    /// Raises:
+    ///     ValueError: The body is not a JSON object with a ``features``
+    ///         object. Nothing changes.
+    #[pyo3(signature = (json, bucket=None, downgrade_only=false))]
+    fn apply_feature_config(
+        &self,
+        json: &str,
+        bucket: Option<u16>,
+        downgrade_only: bool,
+    ) -> PyResult<()> {
+        let mode = if downgrade_only {
+            chat_xdk_core::FeatureApply::DowngradeOnly
+        } else {
+            chat_xdk_core::FeatureApply::Full
+        };
+        self.inner
+            .apply_feature_config(json, mode, bucket)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+
+    /// Whether the feature switch ``name`` is on. Off for names the last
+    /// response did not turn on, before any response applies, and while
+    /// ``feature_refetch_due()`` holds.
+    fn is_enabled(&self, name: &str) -> bool {
+        self.inner.is_enabled(name)
+    }
+
+    /// Whether keys loaded after a response to a request without a bucket
+    /// applied, so the flags must be fetched again with ``feature_bucket()``.
+    /// Every flag reads off until they are.
+    fn feature_refetch_due(&self) -> bool {
+        self.inner.feature_refetch_due()
     }
 
     /// Store signing keys to use when a decrypt call's ``signing_keys`` is

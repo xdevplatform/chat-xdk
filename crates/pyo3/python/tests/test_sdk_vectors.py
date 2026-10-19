@@ -693,10 +693,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertFalse(chat.verify(public_key, signature, v["payload_message_v10"].encode()))
 
     def _send_files(self, chat, v, text, attachments):
-        """Send a message with ``attachments``, check it verifies, and return
-        its payload."""
+        """Send a v1 message with ``attachments``, check it verifies, and
+        return its payload."""
         from chat_xdk import EncryptMessageParams
 
+        chat.apply_feature_config('{"features":{"v1_send":true}}', chat.feature_bucket())
         payload = chat.encrypt_message(
             EncryptMessageParams(
                 v["event_conversation_id"],

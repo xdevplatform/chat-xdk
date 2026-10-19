@@ -81,6 +81,7 @@ class SendPayload:
     signature_info: SignatureInfo
     conversation_key_version: str
     should_notify: bool
+    xdk_version: str
 
 # ---------------------------------------------------------------------------
 # Params
@@ -374,6 +375,20 @@ class FileDecryptorParams:
         media_hash_key: str,
     ) -> None: ...
 
+FEATURES_ENDPOINT: str
+
+class LoadFeatureConfigParams:
+    endpoint: Optional[str]
+    timeout_ms: int
+    refresh_seconds: float
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        timeout_ms: int = 2000,
+        refresh_seconds: float = 300,
+    ) -> None: ...
+
 class Chat:
     def __init__(self, config_json: Optional[str] = None) -> None: ...
 
@@ -385,6 +400,17 @@ class Chat:
     def set_identity(self, user_id: str, signing_key_version: str) -> None: ...
     def set_cache_keys(self, enabled: bool) -> None: ...
     def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None: ...
+
+    # Feature switches
+    def load_feature_config(
+        self, params: Optional[LoadFeatureConfigParams] = None
+    ) -> bool: ...
+    def is_enabled(self, name: str) -> bool: ...
+    def feature_bucket(self) -> Optional[int]: ...
+    def apply_feature_config(
+        self, json: str, bucket: Optional[int] = None, downgrade_only: bool = False
+    ) -> None: ...
+    def feature_refetch_due(self) -> bool: ...
 
     # Juicebox Key Storage
     def setup(self, pin: Union[str, bytes, bytearray]) -> PublicKeys: ...
