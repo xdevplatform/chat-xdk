@@ -1,0 +1,109 @@
+"""Write compatibility fixtures with a released chatxdk 0.5.x.
+
+One send of each kind (message, message with entities, reply, reaction add and
+remove, edit) and a file encrypted with encrypt_stream. The Rust compatibility
+tests check that the current SDK decrypts and verifies them, and that its v0
+sends match them on the wire.
+
+Run it with the released package installed, never the in-repo one:
+
+    python -m venv /tmp/v05 && /tmp/v05/bin/pip install chatxdk==0.5.2
+    /tmp/v05/bin/python tests/compat_v05/generate_fixtures.py tests/fixtures/compat_v0_5_2.json
+"""
+
+import base64
+import importlib.metadata
+import json
+import sys
+
+from chat_xdk import Chat
+
+SENDER = "1001"
+CONVERSATION = "1001:2002"
+KEY_VERSION = "1700000000123"
+SIGNING_KEY_VERSION = "1"
+CONVERSATION_KEY = bytes(range(32))
+TARGET_SEQUENCE_ID = "100"
+
+
+def b64(data):
+    return base64.b64encode(bytes(data)).decode()
+
+
+def send(kind, expected, payload):
+    return {
+        "kind": kind,
+        "expected": expected,
+        "message_id": payload.message_id,
+        "encrypted_content": payload.encrypted_content,
+        "signature": payload.signature,
+        "encoded_event_signature": payload.encoded_event_signature,
+        "signature_version": payload.signature_info.signature_version,
+        "public_key_version": payload.signature_info.public_key_version,
+        "conversation_key_version": payload.conversation_key_version,
+    }
+
+
+def main(out_path):
+    chat = Chat()
+    registration = chat.generate_keypairs()
+    common = dict(
+        sender_id=SENDER,
+        signing_key_version=SIGNING_KEY_VERSION,
+        conversation_key=CONVERSATION_KEY,
+        conversation_key_version=KEY_VERSION,
+    )
+    target = dict(conversation_id=CONVERSATION, target_message_sequence_id=TARGET_SEQUENCE_ID)
+    sends = [
+        send("message", "hello from 0.5", chat.encrypt_message(CONVERSATION, "hello from 0.5", **common)),
+        send(
+            "message_with_entities",
+            "see https://x.com",
+            chat.encrypt_message(CONVERSATION, "see https://x.com", entities=[(4, 17, "url")], **common),
+        ),
+        send(
+            "reply",
+            "a reply",
+            chat.encrypt_reply(
+                CONVERSATION,
+                "a reply",
+                reply_to_sequence_id=TARGET_SEQUENCE_ID,
+                reply_to_sender_id=int(SENDER),
+                reply_to_text="hello from 0.5",
+                **common,
+            ),
+        ),
+        send("reaction_add", "\U0001f44d", chat.encrypt_add_reaction(emoji="\U0001f44d", **target, **common)),
+        send("reaction_remove", "\U0001f44d", chat.encrypt_remove_reaction(emoji="\U0001f44d", **target, **common)),
+        send("edit", "edited text", chat.encrypt_edit(updated_text="edited text", **target, **common)),
+    ]
+    file_plaintext = b"chat-xdk compatibility file\n" * 90
+    fixture = {
+        "chatxdk_version": importlib.metadata.version("chatxdk"),
+        "sender_id": SENDER,
+        "conversation_id": CONVERSATION,
+        "conversation_key_b64": b64(CONVERSATION_KEY),
+        "conversation_key_version": KEY_VERSION,
+        "signing_key_version": SIGNING_KEY_VERSION,
+        "target_sequence_id": TARGET_SEQUENCE_ID,
+        "private_keys_b64": b64(chat.export_keys()),
+        "signing_key": {
+            "user_id": SENDER,
+            "public_key_version": SIGNING_KEY_VERSION,
+            "public_key": registration.public_key.signing_public_key,
+            "identity_public_key": registration.public_key.public_key,
+            "identity_public_key_signature": registration.public_key.identity_public_key_signature,
+        },
+        "sends": sends,
+        "file": {
+            "plaintext_b64": b64(file_plaintext),
+            "ciphertext_b64": b64(chat.encrypt_stream(file_plaintext, CONVERSATION_KEY)),
+        },
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(fixture, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])

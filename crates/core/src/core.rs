@@ -4353,6 +4353,9 @@ mod send_tests;
 mod send_version_tests;
 
 #[cfg(test)]
+mod compat_v05_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline::serialize_thrift;

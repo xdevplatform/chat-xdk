@@ -183,6 +183,75 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/chat-xdk/target/release
 
+  compat-v05:
+    # Hard gate for 0.6.0: the released 0.5.x packages read the v0 sends this
+    # tree makes with every feature switch off. The other direction (this tree
+    # reads 0.5.x sends, byte for byte on the wire) runs in `cargo test`
+    # against tests/fixtures/compat_v0_5_*.json.
+    name: compat with released chatxdk ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["0.5.0", "0.5.2"]
+
+    defaults:
+      run:
+        working-directory: chat-xdk
+
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+
+      # Needed for the workspace path dependency `../juicebox-sdk` (see Cargo.toml).
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            chat-xdk -> target
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Python extension (pyo3)
+        env:
+          PYO3_PYTHON: python
+        run: |
+          set -euo pipefail
+          cargo build -p chat-xdk-python
+          EXT_SUFFIX="$(python -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')"
+          cp -f target/debug/libchat_xdk.so "crates/pyo3/python/chat_xdk/_native${EXT_SUFFIX}"
+
+      - name: Write this tree's v0 sends
+        env:
+          PYTHONPATH: crates/pyo3/python
+        run: python tests/compat_v05/write_v0_sends.py "$RUNNER_TEMP/v0_sends.json"
+
+      - name: Install released chatxdk ${{ matrix.version }}
+        run: |
+          python -m venv "$RUNNER_TEMP/v05"
+          "$RUNNER_TEMP/v05/bin/pip" install "chatxdk==${{ matrix.version }}"
+
+      - name: Released chatxdk ${{ matrix.version }} reads them
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/v05/bin/python" "$GITHUB_WORKSPACE/chat-xdk/tests/compat_v05/verify_with_v05.py" "$RUNNER_TEMP/v0_sends.json"
+
   go:
     name: test go binding (ubuntu)
     runs-on: ubuntu-latest
