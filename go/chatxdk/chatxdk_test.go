@@ -806,10 +806,11 @@ func mediaAttachment(mediaHashKey string) AttachmentDescriptor {
 	}
 }
 
-// sendFiles sends a message carrying attachments, checks it verifies, and
-// returns its payload.
+// sendFiles sends a v1 message carrying attachments, checks it verifies,
+// and returns its payload.
 func sendFiles(t *testing.T, chat *Chat, v sdkVectors, text string, attachments []AttachmentDescriptor) *SendPayload {
 	t.Helper()
+	enableV1Send(t, chat)
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
 		ConversationID:         v.EventConversationID,
 		Text:                   text,
@@ -2848,7 +2849,7 @@ func TestEventUnknownType(t *testing.T) {
 	}
 }
 
-// TestEncryptMessageSignatureVersionAndRoundtrip pins the wire
+// TestEncryptMessageSignatureVersionAndRoundtrip pins the v1 wire
 // signature_version to "10" and decrypts the sent message from its framed
 // event.
 func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
@@ -2859,6 +2860,7 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
+	enableV1Send(t, chat)
 
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
 		SenderID:               v.EventSenderID,
@@ -2886,7 +2888,7 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	if payload.SignatureInfo.PublicKeyVersion != v.EventSigningKeyVersion {
 		t.Errorf("expected signature_info.public_key_version %q, got %q", v.EventSigningKeyVersion, payload.SignatureInfo.PublicKeyVersion)
 	}
-	// signature_version is pinned to the current wire format.
+	// signature_version is pinned to the v1 wire format.
 	if payload.SignatureInfo.SignatureVersion != "10" {
 		t.Errorf("expected signature_version '10', got %q", payload.SignatureInfo.SignatureVersion)
 	}

@@ -127,6 +127,31 @@ func ffiSetCacheKeys(h handle, enabled bool) {
 	C.chat_xdk_set_cache_keys(h, v)
 }
 
+func ffiFeatureBucket(h handle) int {
+	return int(C.chat_xdk_feature_bucket(h))
+}
+
+func ffiApplyFeatureConfig(h handle, json string, bucket int, downgradeOnly bool) error {
+	c := C.CString(json)
+	defer C.free(unsafe.Pointer(c))
+	d := C.int(0)
+	if downgradeOnly {
+		d = 1
+	}
+	_, err := ffiResult(C.chat_xdk_apply_feature_config(h, c, C.int(bucket), d))
+	return err
+}
+
+func ffiIsEnabled(h handle, name string) int {
+	c := C.CString(name)
+	defer C.free(unsafe.Pointer(c))
+	return int(C.chat_xdk_is_enabled(h, c))
+}
+
+func ffiFeatureRefetchDue(h handle) int {
+	return int(C.chat_xdk_feature_refetch_due(h))
+}
+
 func ffiSetSigningKeys(h handle, signingKeysJSON string) error {
 	c := C.CString(signingKeysJSON)
 	defer C.free(unsafe.Pointer(c))

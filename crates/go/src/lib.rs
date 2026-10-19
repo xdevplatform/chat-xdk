@@ -538,6 +538,82 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
     })
 }
 
+/// The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
+/// flags for, derived from the loaded identity public key; -1 until keys
+/// load (or for a null handle).
+#[no_mangle]
+pub extern "C" fn chat_xdk_feature_bucket(handle: *const ChatHandle) -> i32 {
+    catch_ffi_or(-1, || {
+        if handle.is_null() {
+            return -1;
+        }
+        let h = unsafe { &*handle };
+        h.inner.feature_bucket().map_or(-1, i32::from)
+    })
+}
+
+/// Apply a `GET /2/chat/features` response body.
+///
+/// `bucket` is the bucket the request carried, or negative when it carried
+/// none. A non-zero `downgrade_only` only turns flags off (a re-check);
+/// zero replaces them. A body that is not a JSON object with a `features`
+/// object is an error and changes nothing.
+#[no_mangle]
+pub extern "C" fn chat_xdk_apply_feature_config(
+    handle: *const ChatHandle,
+    json: *const c_char,
+    bucket: i32,
+    downgrade_only: i32,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let json = try_str!(json);
+        let bucket = u16::try_from(bucket).ok();
+        let mode = if downgrade_only != 0 {
+            chat_xdk_core::FeatureApply::DowngradeOnly
+        } else {
+            chat_xdk_core::FeatureApply::Full
+        };
+        match h.inner.apply_feature_config(json, mode, bucket) {
+            Ok(()) => ok_void(),
+            Err(e) => err_result(&e.to_string()),
+        }
+    })
+}
+
+/// Whether the feature switch `name` is on: 1 on, 0 off, -1 on a null
+/// handle or invalid name.
+#[no_mangle]
+pub extern "C" fn chat_xdk_is_enabled(handle: *const ChatHandle, name: *const c_char) -> i32 {
+    catch_ffi_or(-1, || {
+        if handle.is_null() {
+            return -1;
+        }
+        let h = unsafe { &*handle };
+        match unsafe { from_c_str(name) } {
+            Ok(name) => i32::from(h.inner.is_enabled(name)),
+            Err(_) => -1,
+        }
+    })
+}
+
+/// Whether keys loaded after a response to a request without a bucket
+/// applied, so the flags must be fetched again with the key's bucket:
+/// 1 yes, 0 no, -1 on a null handle.
+#[no_mangle]
+pub extern "C" fn chat_xdk_feature_refetch_due(handle: *const ChatHandle) -> i32 {
+    catch_ffi_or(-1, || {
+        if handle.is_null() {
+            return -1;
+        }
+        let h = unsafe { &*handle };
+        i32::from(h.inner.feature_refetch_due())
+    })
+}
+
 /// Store signing keys used when a decrypt call passes an empty
 /// `signing_keys_json`.
 ///

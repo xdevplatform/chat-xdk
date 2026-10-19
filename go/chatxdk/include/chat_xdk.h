@@ -187,6 +187,39 @@ struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle,
 void chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
 
 /**
+ * The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
+ * flags for, derived from the loaded identity public key; -1 until keys
+ * load (or for a null handle).
+ */
+int32_t chat_xdk_feature_bucket(const struct ChatHandle *handle);
+
+/**
+ * Apply a `GET /2/chat/features` response body.
+ *
+ * `bucket` is the bucket the request carried, or negative when it carried
+ * none. A non-zero `downgrade_only` only turns flags off (a re-check);
+ * zero replaces them. A body that is not a JSON object with a `features`
+ * object is an error and changes nothing.
+ */
+struct FfiResult chat_xdk_apply_feature_config(const struct ChatHandle *handle,
+                                               const char *json,
+                                               int32_t bucket,
+                                               int32_t downgrade_only);
+
+/**
+ * Whether the feature switch `name` is on: 1 on, 0 off, -1 on a null
+ * handle or invalid name.
+ */
+int32_t chat_xdk_is_enabled(const struct ChatHandle *handle, const char *name);
+
+/**
+ * Whether keys loaded after a response to a request without a bucket
+ * applied, so the flags must be fetched again with the key's bucket:
+ * 1 yes, 0 no, -1 on a null handle.
+ */
+int32_t chat_xdk_feature_refetch_due(const struct ChatHandle *handle);
+
+/**
  * Store signing keys used when a decrypt call passes an empty
  * `signing_keys_json`.
  *

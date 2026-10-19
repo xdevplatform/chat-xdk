@@ -21,6 +21,7 @@
 //	// Later: unlock with PIN and set the session identity + stores once.
 //	chat.Unlock([]byte("2580"), juiceboxConfigJSON)
 //	chat.SetIdentity(myUserID, mySigningKeyVersion)
+//	chat.LoadFeatureConfig(ctx, chatxdk.LoadFeatureConfigParams{}) // sends stay v0 until v1_send is on
 //	chat.SetCacheKeys(true)
 //	chat.SetSigningKeys(senderSigningKeys)
 //
@@ -47,6 +48,8 @@ import (
 	"encoding/json"
 	"errors"
 	"runtime"
+	"sync"
+	"sync/atomic"
 )
 
 // Chat is the main X Chat encryption SDK interface.
@@ -59,6 +62,13 @@ import (
 // sync.Mutex) or confine each instance to one goroutine.
 type Chat struct {
 	h handle
+	// mu orders the feature refresher's native calls (read) against the
+	// calls that take the handle exclusively and Close (write).
+	mu        sync.RWMutex
+	refresher *featureRefresher
+	// featureBucketless records whether the last applied features response
+	// came from a request without a bucket.
+	featureBucketless atomic.Bool
 }
 
 // New creates a new Chat SDK instance.
@@ -79,10 +89,14 @@ func New() *Chat {
 	return c
 }
 
-// Close frees the Chat SDK instance and its resources.
-// After Close, the Chat must not be used. Safe to call multiple times.
+// Close stops the feature refresher and frees the Chat SDK instance and its
+// resources. After Close, the Chat must not be used. Safe to call multiple
+// times.
 func (c *Chat) Close() {
 	defer runtime.KeepAlive(c)
+	c.stopFeatureRefresh()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.h != nil {
 		ffiFree(c.h)
 		c.h = nil
@@ -108,6 +122,8 @@ func (c *Chat) HasIdentityKey() bool {
 // signing key) instead of returning it with Verified=false.
 func (c *Chat) SetRejectUnverified(reject bool) {
 	defer runtime.KeepAlive(c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	ffiSetRejectUnverified(c.h, reject)
 }
 
