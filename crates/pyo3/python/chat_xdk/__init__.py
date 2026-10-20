@@ -108,11 +108,11 @@ def _start_feature_switches(chat):
 
 def _fetch_features(chat, endpoint, timeout, downgrade_only):
     """Fetch the flags for ``chat``'s bucket and apply them; True on success."""
-    bucket = chat._feature_bucket()
-    url = endpoint
-    if bucket is not None:
-        url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
     try:
+        bucket = chat._feature_bucket()
+        url = endpoint
+        if bucket is not None:
+            url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
         request = _urllib_request.Request(url, headers={"Accept": "application/json"})
         with _urllib_request.urlopen(request, timeout=timeout) as response:
             if response.status != 200:

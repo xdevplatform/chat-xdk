@@ -279,6 +279,9 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(len(self.server.buckets), seen)
 
     def test_a_malformed_body_is_rejected_and_changes_nothing(self):
+        # The fetch never applies anything, so only the calls below change
+        # the flags.
+        self.server.status = 503
         chat = self._chat()
         self._keyed_request(chat)
         bucket = chat._feature_bucket()
