@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
+use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 #[cfg(feature = "juicebox")]
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
@@ -538,11 +539,13 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
     })
 }
 
+/// Internal, for this repository's bindings; not part of the API.
+///
 /// The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
 /// flags for, derived from the loaded identity public key; -1 until keys
 /// load (or for a null handle).
 #[no_mangle]
-pub extern "C" fn chat_xdk_feature_bucket(handle: *const ChatHandle) -> i32 {
+pub extern "C" fn chat_xdk_internal_feature_bucket(handle: *const ChatHandle) -> i32 {
     catch_ffi_or(-1, || {
         if handle.is_null() {
             return -1;
@@ -552,6 +555,8 @@ pub extern "C" fn chat_xdk_feature_bucket(handle: *const ChatHandle) -> i32 {
     })
 }
 
+/// Internal, for this repository's bindings; not part of the API.
+///
 /// Apply a `GET /2/chat/features` response body.
 ///
 /// `bucket` is the bucket the request carried, or negative when it carried
@@ -559,7 +564,7 @@ pub extern "C" fn chat_xdk_feature_bucket(handle: *const ChatHandle) -> i32 {
 /// zero replaces them. A body that is not a JSON object with a `features`
 /// object is an error and changes nothing.
 #[no_mangle]
-pub extern "C" fn chat_xdk_apply_feature_config(
+pub extern "C" fn chat_xdk_internal_apply_feature_config(
     handle: *const ChatHandle,
     json: *const c_char,
     bucket: i32,
@@ -573,9 +578,9 @@ pub extern "C" fn chat_xdk_apply_feature_config(
         let json = try_str!(json);
         let bucket = u16::try_from(bucket).ok();
         let mode = if downgrade_only != 0 {
-            chat_xdk_core::FeatureApply::DowngradeOnly
+            FeatureApply::DowngradeOnly
         } else {
-            chat_xdk_core::FeatureApply::Full
+            FeatureApply::Full
         };
         match h.inner.apply_feature_config(json, mode, bucket) {
             Ok(()) => ok_void(),
@@ -584,10 +589,15 @@ pub extern "C" fn chat_xdk_apply_feature_config(
     })
 }
 
+/// Internal, for this repository's bindings; not part of the API.
+///
 /// Whether the feature switch `name` is on: 1 on, 0 off, -1 on a null
 /// handle or invalid name.
 #[no_mangle]
-pub extern "C" fn chat_xdk_is_enabled(handle: *const ChatHandle, name: *const c_char) -> i32 {
+pub extern "C" fn chat_xdk_internal_is_enabled(
+    handle: *const ChatHandle,
+    name: *const c_char,
+) -> i32 {
     catch_ffi_or(-1, || {
         if handle.is_null() {
             return -1;
@@ -600,11 +610,13 @@ pub extern "C" fn chat_xdk_is_enabled(handle: *const ChatHandle, name: *const c_
     })
 }
 
-/// Whether keys loaded after a response to a request without a bucket
-/// applied, so the flags must be fetched again with the key's bucket:
+/// Internal, for this repository's bindings; not part of the API.
+///
+/// Whether keys are loaded but no response to a request carrying their
+/// bucket has applied, so the flags must be fetched with the key's bucket:
 /// 1 yes, 0 no, -1 on a null handle.
 #[no_mangle]
-pub extern "C" fn chat_xdk_feature_refetch_due(handle: *const ChatHandle) -> i32 {
+pub extern "C" fn chat_xdk_internal_feature_refetch_due(handle: *const ChatHandle) -> i32 {
     catch_ffi_or(-1, || {
         if handle.is_null() {
             return -1;

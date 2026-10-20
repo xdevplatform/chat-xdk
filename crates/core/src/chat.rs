@@ -206,29 +206,26 @@ impl Chat {
     pub fn set_signing_keys(&self, entries: Vec<SigningKeyEntry>) {
         self.inner.set_signing_keys(entries);
     }
-    /// The bucket `GET /2/chat/features` evaluates this instance's flags for;
-    /// `None` until keys load. See [`crate::ChatCore::feature_bucket`].
-    pub fn feature_bucket(&self) -> Option<u16> {
+    // Feature switches, for the language bindings (see `crate::bindings`).
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn feature_bucket(&self) -> Option<u16> {
         self.inner.feature_bucket()
     }
-    /// Apply a `GET /2/chat/features` response body for the request's
-    /// `bucket`. See [`crate::ChatCore::apply_feature_config`].
-    pub fn apply_feature_config(
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn apply_feature_config(
         &self,
         json: &str,
-        mode: crate::FeatureApply,
+        mode: crate::features::FeatureApply,
         bucket: Option<u16>,
     ) -> Result<(), SdkError> {
         self.inner.apply_feature_config(json, mode, bucket)
     }
-    /// Whether the feature switch `name` is on. See
-    /// [`crate::ChatCore::is_enabled`].
-    pub fn is_enabled(&self, name: &str) -> bool {
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn is_enabled(&self, name: &str) -> bool {
         self.inner.is_enabled(name)
     }
-    /// Whether the flags must be fetched again with the key's bucket now that
-    /// keys loaded. See [`crate::ChatCore::feature_refetch_due`].
-    pub fn feature_refetch_due(&self) -> bool {
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn feature_refetch_due(&self) -> bool {
         self.inner.feature_refetch_due()
     }
     /// Replace the Juicebox configuration.
@@ -1405,11 +1402,11 @@ mod tests {
         assert!(bucket.is_some());
         chat.apply_feature_config(
             r#"{"features":{"v1_send":true}}"#,
-            crate::FeatureApply::Full,
+            crate::features::FeatureApply::Full,
             bucket,
         )
         .unwrap();
-        assert!(chat.is_enabled(crate::V1_SEND));
+        assert!(chat.is_enabled(crate::features::V1_SEND));
         assert!(!chat.feature_refetch_due());
         let params = EncryptMessageParams::new("conv-1", "Hello again")
             .with_identity("4001", "1")

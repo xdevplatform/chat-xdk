@@ -7,8 +7,8 @@ use super::test_support::{
 };
 use super::*;
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
+use crate::features::FeatureApply;
 use crate::thrift::event::{MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail};
-use crate::FeatureApply;
 
 const AUTHOR: &str = "1001";
 const KEY_VERSION: &str = "7";
@@ -163,7 +163,7 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
             .core
             .apply_feature_config(body, FeatureApply::Full, Some(1))
             .unwrap();
-        assert!(!party.core.is_enabled(crate::V1_SEND), "{body}");
+        assert!(!party.core.is_enabled(crate::features::V1_SEND), "{body}");
         let payload = party
             .core
             .encrypt_message(message_params("hi", &ckey))
@@ -186,7 +186,7 @@ fn an_unparsable_response_changes_nothing() {
             .core
             .apply_feature_config(body, FeatureApply::DowngradeOnly, Some(1))
             .is_err());
-        assert!(party.core.is_enabled(crate::V1_SEND), "{body}");
+        assert!(party.core.is_enabled(crate::features::V1_SEND), "{body}");
     }
 }
 
@@ -217,7 +217,7 @@ fn a_recheck_turns_v1_send_off_and_never_back_on() {
             Some(1),
         )
         .unwrap();
-    assert!(!party.core.is_enabled(crate::V1_SEND));
+    assert!(!party.core.is_enabled(crate::features::V1_SEND));
 }
 
 #[test]
@@ -226,13 +226,13 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     assert_eq!(core.feature_bucket(), None);
     core.apply_feature_config(r#"{"features":{"v1_send":true}}"#, FeatureApply::Full, None)
         .unwrap();
-    assert!(core.is_enabled(crate::V1_SEND));
+    assert!(core.is_enabled(crate::features::V1_SEND));
     assert!(!core.feature_refetch_due());
 
     core.generate_keypairs().unwrap();
     core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
     assert!(core.feature_refetch_due());
-    assert!(!core.is_enabled(crate::V1_SEND));
+    assert!(!core.is_enabled(crate::features::V1_SEND));
     let ckey = key(3);
     let payload = core
         .encrypt_message(message_params("pending", &ckey))
@@ -248,7 +248,7 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     )
     .unwrap();
     assert!(!core.feature_refetch_due());
-    assert!(core.is_enabled(crate::V1_SEND));
+    assert!(core.is_enabled(crate::features::V1_SEND));
     let payload = core
         .encrypt_message(message_params("refetched", &ckey))
         .unwrap();

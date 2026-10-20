@@ -1,5 +1,8 @@
 //! Feature switches served by `GET /2/chat/features`.
 //!
+//! Internal: the language bindings fetch the endpoint themselves and apply the
+//! response through `crate::bindings`; none of this is public API.
+//!
 //! The endpoint answers a flat map of booleans, `{"features": {"v1_send":
 //! true}}`, each flag backed by its own server-side decider and evaluated for
 //! the caller's bucket. A caller with keys loaded sends the bucket derived
@@ -8,8 +11,10 @@
 //!
 //! Every flag is off until a response turns it on: a missing key, a non-boolean
 //! value, a failed request, or no request at all all read as off. Unknown keys
-//! are kept, so [`crate::ChatCore::is_enabled`] can read flags this SDK version
-//! attaches no behavior to.
+//! are kept, so flags this SDK version attaches no behavior to can be read.
+
+// Without the bindings that fetch them, the flags are never applied.
+#![cfg_attr(not(feature = "bindings"), allow(dead_code))]
 
 use std::collections::HashMap;
 
@@ -28,8 +33,8 @@ const BUCKETS: u64 = 10_000;
 /// How a features response merges into the current flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatureApply {
-    /// Replace the flags with the response: the startup load, an explicit
-    /// reload, and the one re-fetch after keys load.
+    /// Replace the flags with the response: the fetch when a chat is created
+    /// and the re-fetch with the key's bucket once keys load.
     Full,
     /// Keep a flag on only while the response still turns it on, and never
     /// turn a flag on: the periodic re-check.
@@ -78,11 +83,11 @@ impl FeatureState {
         }
     }
 
-    /// Whether the flags came from an IP-bucketed response while keys are now
-    /// loaded: they must be fetched again with the key's bucket, and read off
-    /// until they are.
+    /// Whether keys are loaded but no response to a request carrying their
+    /// bucket has applied (none at all, or only an IP-bucketed one): the flags
+    /// must be fetched with the key's bucket, and read off until they are.
     pub(crate) fn refetch_due(&self, has_keys: bool) -> bool {
-        has_keys && self.bucketing == Some(Bucketing::Ip)
+        has_keys && self.bucketing != Some(Bucketing::Key)
     }
 
     pub(crate) fn is_enabled(&self, name: &str, has_keys: bool) -> bool {
@@ -160,7 +165,11 @@ mod tests {
         let state = FeatureState::default();
         assert!(!state.is_enabled(V1_SEND, false));
         assert!(!state.is_enabled(V1_SEND, true));
-        assert!(!state.refetch_due(true));
+        assert!(!state.refetch_due(false));
+        assert!(
+            state.refetch_due(true),
+            "keys without a key-bucketed response: a fetch is due"
+        );
     }
 
     #[test]

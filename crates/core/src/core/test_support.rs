@@ -126,7 +126,7 @@ pub(super) fn known_answer_media_message(author: &Party) -> ThriftEvent {
 pub(super) fn enable_v1_send(core: &ChatCore) {
     core.apply_feature_config(
         r#"{"features":{"v1_send":true}}"#,
-        crate::FeatureApply::Full,
+        crate::features::FeatureApply::Full,
         Some(0),
     )
     .unwrap();

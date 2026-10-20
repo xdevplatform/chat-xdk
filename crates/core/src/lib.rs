@@ -118,13 +118,13 @@
 
 mod chat;
 mod core;
-pub mod features;
+mod features;
 mod params;
 mod types;
 pub mod utils;
 
 /// Version of this SDK, carried in every [`SendPayload`] as `xdk_version`.
-pub const XDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const XDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Hidden support for the in-repo vector generator and fuzz targets.
 // Not part of the public API — feature-gated so the default surface
@@ -132,6 +132,13 @@ pub const XDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "internals")]
 #[doc(hidden)]
 pub mod internals;
+
+// Hidden support for this repository's language bindings, which fetch the
+// feature switches internally. Not part of the public API — feature-gated so
+// the default surface doesn't expose it; see the module docs.
+#[cfg(feature = "bindings")]
+#[doc(hidden)]
+pub mod bindings;
 
 // Internal modules — not part of the public API.
 // Users interact with ChatCore / Chat, not these directly.
@@ -153,7 +160,6 @@ pub mod keys;
 pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{FileDecryptor, FileEncryptor};
-pub use features::{FeatureApply, FEATURES_ENDPOINT, V1_SEND};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,

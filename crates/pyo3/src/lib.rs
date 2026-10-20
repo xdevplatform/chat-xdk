@@ -35,6 +35,7 @@ use pyo3::Py;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, QuickReply, SigningKeyEntry};
@@ -1482,29 +1483,15 @@ impl Chat {
         self.inner.set_cache_keys(enabled);
     }
 
-    /// The bucket ``GET /2/chat/features`` evaluates this instance's flags
-    /// for, derived from the loaded identity public key; ``None`` until keys
-    /// load. Send it as the request's ``bucket`` query parameter.
+    // Feature switches. Internal: the Python ``Chat`` fetches
+    // ``GET /2/chat/features`` itself and drives these; they are not API.
+
+    #[pyo3(name = "_feature_bucket")]
     fn feature_bucket(&self) -> Option<u16> {
         self.inner.feature_bucket()
     }
 
-    /// Apply a ``GET /2/chat/features`` response body.
-    ///
-    /// ``load_feature_config`` fetches and applies for you; call this only
-    /// when fetching through your own HTTP stack.
-    ///
-    /// Args:
-    ///     json: The response body.
-    ///     bucket: The ``bucket`` the request carried (``feature_bucket()``),
-    ///         or ``None`` when it carried none.
-    ///     downgrade_only: Only turn flags off, never on (a periodic
-    ///         re-check), instead of replacing them.
-    ///
-    /// Raises:
-    ///     ValueError: The body is not a JSON object with a ``features``
-    ///         object. Nothing changes.
-    #[pyo3(signature = (json, bucket=None, downgrade_only=false))]
+    #[pyo3(name = "_apply_feature_config", signature = (json, bucket=None, downgrade_only=false))]
     fn apply_feature_config(
         &self,
         json: &str,
@@ -1512,25 +1499,21 @@ impl Chat {
         downgrade_only: bool,
     ) -> PyResult<()> {
         let mode = if downgrade_only {
-            chat_xdk_core::FeatureApply::DowngradeOnly
+            FeatureApply::DowngradeOnly
         } else {
-            chat_xdk_core::FeatureApply::Full
+            FeatureApply::Full
         };
         self.inner
             .apply_feature_config(json, mode, bucket)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 
-    /// Whether the feature switch ``name`` is on. Off for names the last
-    /// response did not turn on, before any response applies, and while
-    /// ``feature_refetch_due()`` holds.
+    #[pyo3(name = "_is_enabled")]
     fn is_enabled(&self, name: &str) -> bool {
         self.inner.is_enabled(name)
     }
 
-    /// Whether keys loaded after a response to a request without a bucket
-    /// applied, so the flags must be fetched again with ``feature_bucket()``.
-    /// Every flag reads off until they are.
+    #[pyo3(name = "_feature_refetch_due")]
     fn feature_refetch_due(&self) -> bool {
         self.inner.feature_refetch_due()
     }

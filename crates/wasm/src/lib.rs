@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroize;
 
+use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
@@ -221,20 +222,16 @@ impl Chat {
         self.inner.set_cache_keys(enabled);
     }
 
-    /// The bucket `GET /2/chat/features` evaluates this instance's flags for,
-    /// derived from the loaded identity public key; `undefined` until keys
-    /// load. Send it as the request's `bucket` query parameter.
-    #[wasm_bindgen(js_name = featureBucket)]
+    // Feature switches. Internal: the JS wrapper fetches
+    // `GET /2/chat/features` itself and drives these; they are not API and
+    // are left out of the TypeScript declarations.
+
+    #[wasm_bindgen(js_name = __featureBucket, skip_typescript)]
     pub fn feature_bucket(&self) -> Option<u16> {
         self.inner.feature_bucket()
     }
 
-    /// Apply a `GET /2/chat/features` response body. `bucket` is the bucket
-    /// the request carried, or `undefined`/`null` when it carried none;
-    /// `downgradeOnly` only turns flags off (a periodic re-check) instead of
-    /// replacing them. Throws on a body that is not a JSON object with a
-    /// `features` object, changing nothing.
-    #[wasm_bindgen(js_name = applyFeatureConfig)]
+    #[wasm_bindgen(js_name = __applyFeatureConfig, skip_typescript)]
     pub fn apply_feature_config(
         &self,
         json: &str,
@@ -242,27 +239,21 @@ impl Chat {
         downgrade_only: Option<bool>,
     ) -> Result<(), JsError> {
         let mode = if downgrade_only.unwrap_or(false) {
-            chat_xdk_core::FeatureApply::DowngradeOnly
+            FeatureApply::DowngradeOnly
         } else {
-            chat_xdk_core::FeatureApply::Full
+            FeatureApply::Full
         };
         self.inner
             .apply_feature_config(json, mode, bucket)
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
-    /// Whether the feature switch `name` is on. Off for names the last
-    /// response did not turn on, before any response applies, and while
-    /// `featureRefetchDue()` holds.
-    #[wasm_bindgen(js_name = isEnabled)]
+    #[wasm_bindgen(js_name = __isEnabled, skip_typescript)]
     pub fn is_enabled(&self, name: &str) -> bool {
         self.inner.is_enabled(name)
     }
 
-    /// Whether keys loaded after a response to a request without a bucket
-    /// applied, so the flags must be fetched again with `featureBucket()`.
-    /// Every flag reads off until they are.
-    #[wasm_bindgen(js_name = featureRefetchDue)]
+    #[wasm_bindgen(js_name = __featureRefetchDue, skip_typescript)]
     pub fn feature_refetch_due(&self) -> bool {
         self.inner.feature_refetch_due()
     }

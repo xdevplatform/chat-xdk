@@ -5,6 +5,16 @@ package chatxdk
 #cgo darwin LDFLAGS: -framework Security -framework CoreFoundation -framework SystemConfiguration -lresolv
 #include "chat_xdk.h"
 #include <stdlib.h>
+
+// Internal entry points for this package's feature switches. They are left
+// out of chat_xdk.h because they are not part of the C API.
+int32_t chat_xdk_internal_feature_bucket(const struct ChatHandle *handle);
+struct FfiResult chat_xdk_internal_apply_feature_config(const struct ChatHandle *handle,
+                                                        const char *json,
+                                                        int32_t bucket,
+                                                        int32_t downgrade_only);
+int32_t chat_xdk_internal_is_enabled(const struct ChatHandle *handle, const char *name);
+int32_t chat_xdk_internal_feature_refetch_due(const struct ChatHandle *handle);
 */
 import "C"
 import (
@@ -128,28 +138,28 @@ func ffiSetCacheKeys(h handle, enabled bool) {
 }
 
 func ffiFeatureBucket(h handle) int {
-	return int(C.chat_xdk_feature_bucket(h))
+	return int(C.chat_xdk_internal_feature_bucket(h))
 }
 
 func ffiApplyFeatureConfig(h handle, json string, bucket int, downgradeOnly bool) error {
 	c := C.CString(json)
 	defer C.free(unsafe.Pointer(c))
-	d := C.int(0)
+	d := C.int32_t(0)
 	if downgradeOnly {
 		d = 1
 	}
-	_, err := ffiResult(C.chat_xdk_apply_feature_config(h, c, C.int(bucket), d))
+	_, err := ffiResult(C.chat_xdk_internal_apply_feature_config(h, c, C.int32_t(bucket), d))
 	return err
 }
 
 func ffiIsEnabled(h handle, name string) int {
 	c := C.CString(name)
 	defer C.free(unsafe.Pointer(c))
-	return int(C.chat_xdk_is_enabled(h, c))
+	return int(C.chat_xdk_internal_is_enabled(h, c))
 }
 
 func ffiFeatureRefetchDue(h handle) int {
-	return int(C.chat_xdk_feature_refetch_due(h))
+	return int(C.chat_xdk_internal_feature_refetch_due(h))
 }
 
 func ffiSetSigningKeys(h handle, signingKeysJSON string) error {

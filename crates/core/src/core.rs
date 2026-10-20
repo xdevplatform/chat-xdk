@@ -454,13 +454,15 @@ impl ChatCore {
         self.keypair_manager.clear();
     }
 
-    // Feature switches
+    // Feature switches. The language bindings fetch `GET /2/chat/features`
+    // and apply it through `crate::bindings`; none of this is public API.
 
     /// The bucket `GET /2/chat/features` evaluates this instance's flags for,
     /// derived from the loaded identity public key; `None` until keys load.
-    /// Send it as the request's `bucket` query parameter. Without one the
+    /// It is sent as the request's `bucket` query parameter. Without one the
     /// server buckets the request by the caller's IP.
-    pub fn feature_bucket(&self) -> Option<u16> {
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn feature_bucket(&self) -> Option<u16> {
         let identity = self.keypair_manager.get_identity_keypair().ok()?;
         let spki = Self::public_key_spki_bytes(&identity.public).ok()?;
         Some(crate::features::bucket_for_public_key(&spki))
@@ -469,17 +471,15 @@ impl ChatCore {
     /// Apply a `GET /2/chat/features` response body.
     ///
     /// `bucket` is the bucket the request carried, or `None` when it carried
-    /// none. [`FeatureApply::Full`] replaces the flags;
-    /// [`FeatureApply::DowngradeOnly`] can only turn flags off. A body that is
+    /// none. `FeatureApply::Full` replaces the flags;
+    /// `FeatureApply::DowngradeOnly` can only turn flags off. A body that is
     /// not a JSON object with a `features` object is an error and changes
     /// nothing.
-    ///
-    /// [`FeatureApply::Full`]: crate::FeatureApply::Full
-    /// [`FeatureApply::DowngradeOnly`]: crate::FeatureApply::DowngradeOnly
-    pub fn apply_feature_config(
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn apply_feature_config(
         &self,
         json: &str,
-        mode: crate::FeatureApply,
+        mode: crate::features::FeatureApply,
         bucket: Option<u16>,
     ) -> Result<(), SdkError> {
         let flags = crate::features::parse_features(json)?;
@@ -493,7 +493,7 @@ impl ChatCore {
     /// Whether the feature switch `name` is on. Off for a name the last
     /// response did not turn on, before any response applies, and while
     /// [`Self::feature_refetch_due`] holds.
-    pub fn is_enabled(&self, name: &str) -> bool {
+    pub(crate) fn is_enabled(&self, name: &str) -> bool {
         let has_keys = self.keypair_manager.has_keypair();
         self.features
             .read()
@@ -501,11 +501,12 @@ impl ChatCore {
             .is_enabled(name, has_keys)
     }
 
-    /// Whether keys loaded after a response to a request without a bucket
-    /// applied. The flags must then be fetched again with
+    /// Whether keys are loaded but no response to a request carrying their
+    /// bucket has applied. The flags must then be fetched with
     /// [`Self::feature_bucket`] and applied with `FeatureApply::Full`; every
     /// flag reads off until they are.
-    pub fn feature_refetch_due(&self) -> bool {
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn feature_refetch_due(&self) -> bool {
         let has_keys = self.keypair_manager.has_keypair();
         self.features
             .read()
