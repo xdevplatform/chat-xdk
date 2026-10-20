@@ -8,9 +8,14 @@ extension installed, as in CI). Every send must be v0, the 0.5.x format.
 
 import base64
 import json
+import os
 import sys
 
-from chat_xdk import (
+# Every chat fetches its feature switches by itself; point the fetch at a
+# closed port so no server answer can turn v1 sends on here.
+os.environ["CHAT_XDK_FEATURES_ENDPOINT"] = "http://127.0.0.1:9/2/chat/features"
+
+from chat_xdk import (  # noqa: E402
     Chat,
     EncryptEditParams,
     EncryptFileParams,
@@ -35,7 +40,7 @@ def main(out_path):
     chat = Chat()
     registration = chat.generate_keypairs()
     chat.set_identity(SENDER, SIGNING_KEY_VERSION)
-    assert not chat.is_enabled("v1_send")
+    assert not chat._is_enabled("v1_send")
     key = dict(conversation_key=CONVERSATION_KEY, conversation_key_version=KEY_VERSION)
     target = dict(conversation_id=CONVERSATION, target_message_sequence_id=TARGET_SEQUENCE_ID)
 

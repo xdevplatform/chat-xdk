@@ -4,6 +4,9 @@ import os
 import sys
 import unittest
 
+# Keep every chat's automatic feature fetch off the network.
+os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
+
 
 def _repo_root() -> str:
     # .../crates/pyo3/python/tests/test_api.py -> repo root is 4 levels up
@@ -433,10 +436,10 @@ class TestApiShapes(unittest.TestCase):
             )
 
         self.assertEqual(send().signature_info.signature_version, "7")
-        chat.apply_feature_config(
-            '{"features":{"v1_send":true}}', chat.feature_bucket()
+        chat._apply_feature_config(
+            '{"features":{"v1_send":true}}', chat._feature_bucket()
         )
-        self.assertTrue(chat.is_enabled("v1_send"))
+        self.assertTrue(chat._is_enabled("v1_send"))
         payload = send()
         self.assertEqual(payload.signature_info.signature_version, "10")
         self.assertTrue(payload.xdk_version)
