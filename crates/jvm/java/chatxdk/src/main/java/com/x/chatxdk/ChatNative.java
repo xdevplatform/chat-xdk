@@ -12,7 +12,7 @@ import com.sun.jna.ptr.PointerByReference;
  */
 public interface ChatNative extends Library {
 
-    ChatNative INSTANCE = NativeLoader.load();
+    ChatNative INSTANCE = NativeLoader.load(ChatNative.class);
 
     Pointer chat_xdk_new();
 
@@ -29,14 +29,6 @@ public interface ChatNative extends Library {
     FfiResult.ByValue chat_xdk_set_identity(Pointer handle, Pointer userId, Pointer signingKeyVersion);
 
     void chat_xdk_set_cache_keys(Pointer handle, int enabled);
-
-    int chat_xdk_feature_bucket(Pointer handle);
-
-    FfiResult.ByValue chat_xdk_apply_feature_config(Pointer handle, Pointer json, int bucket, int downgradeOnly);
-
-    int chat_xdk_is_enabled(Pointer handle, Pointer name);
-
-    int chat_xdk_feature_refetch_due(Pointer handle);
 
     FfiResult.ByValue chat_xdk_set_signing_keys(Pointer handle, Pointer signingKeysJson);
 

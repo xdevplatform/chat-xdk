@@ -135,18 +135,6 @@ public final class Types {
         public String xdkVersion = "";
     }
 
-    /** Options for {@link Chat#loadFeatureConfig(LoadFeatureConfigParams)}. */
-    public static final class LoadFeatureConfigParams {
-        /** URL of {@code GET /2/chat/features}; null selects {@link Chat#FEATURES_ENDPOINT}. */
-        public String endpoint;
-
-        /** Timeout of each request, in milliseconds. */
-        public int timeoutMs = 2000;
-
-        /** Interval of the background re-check, which can only turn flags off; 0 disables it. */
-        public int refreshSeconds = 300;
-    }
-
     /**
      * Signed action payload authenticating a conversation key change, member
      * add, message delete, or read receipt.

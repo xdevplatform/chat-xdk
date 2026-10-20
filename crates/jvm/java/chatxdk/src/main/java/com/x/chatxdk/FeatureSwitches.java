@@ -10,8 +10,15 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-/** Fetches {@code GET /2/chat/features} for a {@link Chat} and runs its refresher thread. */
+/**
+ * Feature switches ({@code GET /2/chat/features}). Internal: every {@link Chat} fetches them
+ * itself, without blocking or failing, and sends stay v0 unless a response turns {@code v1_send}
+ * on. Nothing here is API. {@code CHAT_XDK_FEATURES_ENDPOINT}, which only this repository's tests
+ * set, overrides the endpoint.
+ */
 final class FeatureSwitches {
+    private static final String DEFAULT_ENDPOINT = "https://api.x.com/2/chat/features";
+    private static final String ENDPOINT_ENV = "CHAT_XDK_FEATURES_ENDPOINT";
     private static final int MAX_BODY = 64 * 1024;
     private static final long MAX_REFETCH_BACKOFF_MS = 60_000;
     private static final HttpClient HTTP =
@@ -19,61 +26,153 @@ final class FeatureSwitches {
 
     private FeatureSwitches() {}
 
-    /** A running refresher; {@link #stop} ends it. */
-    static final class Refresher {
+    /** The endpoint and timings of a chat's feature fetches. */
+    static final class Options {
+        final String endpoint;
+        final Duration timeout;
+        final Duration refresh;
+        final Duration keyPoll;
+
+        Options(String endpoint, Duration timeout, Duration refresh, Duration keyPoll) {
+            this.endpoint = endpoint;
+            this.timeout = timeout;
+            this.refresh = refresh;
+            this.keyPoll = keyPoll;
+        }
+
+        static Options defaults() {
+            String endpoint = System.getenv(ENDPOINT_ENV);
+            return new Options(
+                    endpoint == null || endpoint.isEmpty() ? DEFAULT_ENDPOINT : endpoint,
+                    Duration.ofSeconds(2),
+                    Duration.ofSeconds(300),
+                    Duration.ofSeconds(1));
+        }
+    }
+
+    /** A chat's fetch thread; {@link #stop} ends it. */
+    static final class Runner {
         volatile boolean stopped;
         volatile Thread thread;
     }
 
-    static boolean load(Chat chat, Types.LoadFeatureConfigParams params) {
-        stop(chat);
-        String endpoint =
-                params.endpoint == null || params.endpoint.isEmpty() ? Chat.FEATURES_ENDPOINT : params.endpoint;
-        Duration timeout = Duration.ofMillis(params.timeoutMs > 0 ? params.timeoutMs : 2000);
-        long refreshMs = Math.max(0, params.refreshSeconds) * 1000L;
-
-        boolean applied = fetch(chat, endpoint, timeout, false) || fetch(chat, endpoint, timeout, false);
-
-        if (!chat.isClosed()) {
-            Refresher refresher = new Refresher();
-            WeakReference<Chat> ref = new WeakReference<>(chat);
-            Thread thread = new Thread(
-                    () -> refresh(ref, refresher, endpoint, timeout, refreshMs), "chat-xdk-features");
-            thread.setDaemon(true);
-            refresher.thread = thread;
-            chat.featureRefresher = refresher;
-            thread.start();
-        }
-        return applied;
+    /**
+     * Fetch the flags for {@code chat} now (retrying once), again with the key's bucket once keys
+     * load (retrying with backoff), and re-check them every refresh interval with a fetch that can
+     * only turn flags off, until {@link #stop}. The daemon thread holds the chat weakly, so an
+     * unclosed chat is still cleaned up, and the fetches end with it.
+     */
+    static Runner start(Chat chat, Options options) {
+        Runner runner = new Runner();
+        WeakReference<Chat> ref = new WeakReference<>(chat);
+        Thread thread = new Thread(() -> run(ref, runner, options), "chat-xdk-features");
+        thread.setDaemon(true);
+        runner.thread = thread;
+        thread.start();
+        return runner;
     }
 
-    static void stop(Chat chat) {
-        Refresher refresher = chat.featureRefresher;
-        chat.featureRefresher = null;
-        if (refresher != null) {
-            refresher.stopped = true;
-            Thread thread = refresher.thread;
-            if (thread != null) {
-                thread.interrupt();
+    static void stop(Runner runner) {
+        runner.stopped = true;
+        Thread thread = runner.thread;
+        if (thread != null) {
+            thread.interrupt();
+        }
+    }
+
+    // The loop reaches the chat only through these, so it never holds it while it waits.
+
+    private static boolean alive(WeakReference<Chat> ref) {
+        Chat chat = ref.get();
+        return chat != null && !chat.isClosed();
+    }
+
+    private static boolean refetchDue(WeakReference<Chat> ref) {
+        Chat chat = ref.get();
+        return chat != null && chat.featureRefetchDueForRefresh();
+    }
+
+    private static boolean keyed(WeakReference<Chat> ref) {
+        Chat chat = ref.get();
+        return chat != null && chat.featuresKeyed();
+    }
+
+    private static int bucket(WeakReference<Chat> ref) {
+        Chat chat = ref.get();
+        return chat == null ? Chat.CLOSED : chat.featureBucketForRefresh();
+    }
+
+    private static boolean apply(WeakReference<Chat> ref, String body, int bucket, boolean downgradeOnly) {
+        Chat chat = ref.get();
+        return chat != null && chat.applyFeatureConfigForRefresh(body, bucket, downgradeOnly);
+    }
+
+    private static void run(WeakReference<Chat> ref, Runner runner, Options options) {
+        try {
+            loop(ref, runner, options);
+        } catch (LinkageError e) {
+            // A native library without the internal entry points: every flag stays off.
+        }
+    }
+
+    private static void loop(WeakReference<Chat> ref, Runner runner, Options options) {
+        try {
+            if (!fetch(ref, options, false)) {
+                fetch(ref, options, false);
+            }
+        } catch (RuntimeException e) {
+            // Every flag stays off; the loop below retries.
+        }
+        long refreshMs = options.refresh.toMillis();
+        long nextRecheck = now() + refreshMs;
+        long retryAt = 0;
+        long backoffMs = 1000;
+        while (!runner.stopped) {
+            boolean keyed = false;
+            try {
+                long now = now();
+                if (refetchDue(ref)) {
+                    if (now >= retryAt) {
+                        if (fetch(ref, options, false)) {
+                            backoffMs = 1000;
+                            nextRecheck = now() + refreshMs;
+                        } else {
+                            retryAt = now() + backoffMs;
+                            backoffMs = Math.min(backoffMs * 2, MAX_REFETCH_BACKOFF_MS);
+                        }
+                    }
+                } else if (refreshMs > 0 && now >= nextRecheck) {
+                    fetch(ref, options, true);
+                    nextRecheck = now() + refreshMs;
+                }
+                keyed = keyed(ref);
+            } catch (RuntimeException e) {
+                // A failed step changes nothing; the next one retries.
+            }
+            if (runner.stopped || !alive(ref) || (keyed && refreshMs <= 0)) {
+                return;
+            }
+            // Until a response for the key's bucket applies, watch for keys to load; afterwards,
+            // wake only for the re-check.
+            long waitMs = keyed ? Math.max(0, nextRecheck - now()) : options.keyPoll.toMillis();
+            try {
+                Thread.sleep(waitMs);
+            } catch (InterruptedException e) {
+                return;
             }
         }
     }
 
-    /** Fetch the flags for the current bucket and apply them; true on success. */
-    private static boolean fetch(Chat chat, String endpoint, Duration timeout, boolean downgradeOnly) {
-        int bucket = chat.featureBucketForRefresh();
+    /** Fetch the flags for the chat's bucket and apply them; true on success. */
+    private static boolean fetch(WeakReference<Chat> ref, Options options, boolean downgradeOnly) {
+        int bucket = bucket(ref);
         if (bucket == Chat.CLOSED) {
             return false;
         }
+        String endpoint = options.endpoint;
         String url = bucket < 0 ? endpoint : endpoint + (endpoint.contains("?") ? "&" : "?") + "bucket=" + bucket;
-        String body = get(url, timeout);
-        if (body == null || !chat.applyFeatureConfigForRefresh(body, bucket, downgradeOnly)) {
-            return false;
-        }
-        if (!downgradeOnly) {
-            chat.featureBucketless = bucket < 0;
-        }
-        return true;
+        String body = get(url, options.timeout);
+        return body != null && apply(ref, body, bucket, downgradeOnly);
     }
 
     /** The body of a 200 response from {@code url} within {@code timeout}, or null on any failure. */
@@ -100,54 +199,6 @@ final class FeatureSwitches {
         } finally {
             if (future != null) {
                 future.cancel(true);
-            }
-        }
-    }
-
-    /**
-     * Re-fetch once keys load after a bucketless response, and re-check every {@code refreshMs},
-     * until stopped, closed, or the chat is garbage-collected.
-     */
-    private static void refresh(
-            WeakReference<Chat> ref, Refresher refresher, String endpoint, Duration timeout, long refreshMs) {
-        long nextRecheck = now() + refreshMs;
-        long retryAt = 0;
-        long backoffMs = 1000;
-        while (!refresher.stopped) {
-            boolean watchingKeys;
-            Chat chat = ref.get();
-            if (chat == null || chat.isClosed()) {
-                return;
-            }
-            try {
-                long now = now();
-                if (chat.featureRefetchDueForRefresh()) {
-                    if (now >= retryAt) {
-                        if (fetch(chat, endpoint, timeout, false)) {
-                            backoffMs = 1000;
-                            nextRecheck = now() + refreshMs;
-                        } else {
-                            retryAt = now() + backoffMs;
-                            backoffMs = Math.min(backoffMs * 2, MAX_REFETCH_BACKOFF_MS);
-                        }
-                    }
-                } else if (refreshMs > 0 && now >= nextRecheck) {
-                    fetch(chat, endpoint, timeout, true);
-                    nextRecheck = now() + refreshMs;
-                }
-                watchingKeys = chat.featureBucketless;
-            } catch (RuntimeException e) {
-                watchingKeys = true;
-            }
-            chat = null;
-            if (refresher.stopped || (!watchingKeys && refreshMs <= 0)) {
-                return;
-            }
-            long waitMs = watchingKeys ? 1000 : Math.max(0, nextRecheck - now());
-            try {
-                Thread.sleep(waitMs);
-            } catch (InterruptedException e) {
-                return;
             }
         }
     }

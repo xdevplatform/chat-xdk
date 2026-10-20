@@ -91,6 +91,10 @@
         <version>3.2.5</version>
         <configuration>
           <argLine>-Djna.encoding=UTF-8</argLine>
+          <!-- Keeps the automatic feature fetch of every test chat off the network. -->
+          <environmentVariables>
+            <CHAT_XDK_FEATURES_ENDPOINT>http://127.0.0.1:9/2/chat/features</CHAT_XDK_FEATURES_ENDPOINT>
+          </environmentVariables>
         </configuration>
       </plugin>
     </plugins>
