@@ -724,54 +724,6 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 
 **Unencrypted events**: Events without a `conversationKeyVersion` carry no verifiable signature, so under the default reject-unverified policy they are **rejected** (`decryptEvent` throws; `decryptEvents` records them in `errors`). After `setRejectUnverified(false)` they are returned with `keyVersion: null` and `verified: false`.
 
-### Feature Switches
-
-`GET /2/chat/features` (default `https://api.x.com/2/chat/features`) answers
-a flat map of booleans, `{"features": {"v1_send": false}}`, each flag backed
-by its own server-side decider. Every flag is off until a response turns it
-on: a missing key, a value that is not a boolean, a failed request, or no
-request all read as off. Keys this SDK version attaches no behavior to are
-kept, so `is_enabled` reads them too. The first flag, `v1_send`, switches
-sends from v0 to v1 (see [Message Encryption](#message-encryption)).
-
-Call `load_feature_config` once at startup, after loading keys and
-`set_identity`:
-
-1. The request carries `bucket` = `feature_bucket()`, a number from 0 to
-   9999: the first 8 bytes of the SHA-256 of the identity public key (SPKI),
-   big-endian, top bit cleared, modulo 10000. The server evaluates each
-   flag's decider for that bucket, the way the backend decider evaluates a
-   user id, so a user's flags are the same on every device and restart.
-2. Called before keys load, the request carries no bucket and the server
-   buckets by IP. Once keys load, the flags are fetched once more with the
-   key's bucket and every flag reads off until then (`feature_refetch_due()`
-   is true meanwhile). This is the only time a flag can turn on after the
-   first load.
-3. A background refresher re-checks every `refresh_seconds` (default 300; 0
-   disables it). A re-check can only turn flags off, so the server can stop
-   v1 sends without a restart; turning a flag on takes a restart or another
-   `load_feature_config` call. A failed re-check changes nothing.
-
-Any failure (network error, timeout of `timeout_ms`, default 2000, a status
-other than 200, or a malformed body) leaves the flags unchanged, so after a
-failed first load every flag is off. `load_feature_config` returns whether a
-response was applied and never raises for network, HTTP or parse errors.
-
-| | Load | Read | Refresher stops with |
-|---|---|---|---|
-| JS | `await chat.loadFeatureConfig({ endpoint?, timeoutMs?, refreshSeconds? })` | `chat.isEnabled(name)` | `free()` |
-| Python | `chat.load_feature_config(LoadFeatureConfigParams(endpoint=None, timeout_ms=2000, refresh_seconds=300))` | `chat.is_enabled(name)` | garbage collection of the chat |
-| Go | `chat.LoadFeatureConfig(ctx, chatxdk.LoadFeatureConfigParams{...})` (0 selects a default; a negative `RefreshSeconds` disables the re-check) | `chat.IsEnabled(name)` | `Close()` |
-| .NET | `await chat.LoadFeatureConfigAsync(new LoadFeatureConfigParams { ... })` | `chat.IsEnabled(name)` | `Dispose()` |
-| JVM | `chat.loadFeatureConfig(params)` | `chat.isEnabled(name)` | `close()` |
-| Rust | fetch yourself, then `core.apply_feature_config(&body, FeatureApply::Full, core.feature_bucket())` | `core.is_enabled(name)` | — |
-
-To fetch through your own HTTP stack, request the endpoint with
-`?bucket=<feature_bucket()>` when it returns a value, then call
-`apply_feature_config(body, bucket, downgrade_only)`: `bucket` is the one you
-sent (none if you sent none), and `downgrade_only` is true for periodic
-re-checks. After keys load, re-fetch while `feature_refetch_due()` is true.
-
 ### Message Encryption
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
@@ -815,18 +767,16 @@ and the files encrypted for it stay valid. The text does not affect the id. A
 message without files takes a random id. Each file needs its own media hash
 key: an empty one, or one listed in more than one attachment, is rejected.
 
-**Sends are v0 until the `v1_send` feature switch is on.** Every encrypted
-send (message, reply, reaction, edit) is v0 by default: the 0.5.x format,
-with contents under the conversation key, no `contents_encryption_version`,
-signed at signature version 7, and readable by every SDK version. While
-[`v1_send`](#feature-switches) is on, sends are v1: contents encrypted under
-a key derived from the conversation key, the sender id, and the message id,
-the `MessageCreateEvent` marked with `contents_encryption_version` 1, signed
-at signature version 10, which covers that field (see
-[CRYPTO.md — Message Keys](CRYPTO.md#message-keys)). Files follow their
-message's format. The sender id must be the sender's numeric user id and the
-conversation key version an integer, as the key-change event carries it;
-anything else is rejected, since v1 recipients derive the key from the
+**The SDK picks each send's format.** An encrypted send (message, reply,
+reaction, edit) is either v0, the 0.5.x format, with contents under the
+conversation key, no `contents_encryption_version`, and signature version 7,
+or v1, with contents encrypted under a key derived from the conversation key,
+the sender id, and the message id, the `MessageCreateEvent` marked with
+`contents_encryption_version` 1, and signature version 10, which covers that
+field (see [CRYPTO.md — Message Keys](CRYPTO.md#message-keys)). Files follow
+their message's format. The sender id must be the sender's numeric user id
+and the conversation key version an integer, as the key-change event carries
+it; anything else is rejected, since v1 recipients derive the key from the
 numeric id and look the key up by the version.
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),

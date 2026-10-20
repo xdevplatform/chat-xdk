@@ -4,27 +4,23 @@
 
 ### Breaking changes
 
-#### Sends stay v0 until the server turns on v1
+#### Sends can use per-message keys
 
-Every encrypted send (message, reply, reaction and edit) is sent in one of
-two wire formats:
+Every encrypted send (message, reply, reaction and edit) is in one of two
+wire formats, and the SDK picks which:
 
-- **v0**, the default: the 0.5.x format. Contents are encrypted under the
-  conversation key, `contents_encryption_version` is unset, and the send is
-  signed at signature version 7. Every SDK version reads it. A test suite
-  checks the format against the released 0.5.0 and 0.5.2 in both directions.
+- **v0**, the 0.5.x format: contents are encrypted under the conversation
+  key, `contents_encryption_version` is unset, and the send is signed at
+  signature version 7.
 - **v1**, per-message keys: contents are encrypted under a key derived from
   the conversation key, the sender id and the message id, the
   `MessageCreateEvent` carries `contents_encryption_version` 1, and the send
   is signed at signature version 10, which covers that field.
 
-A send is v1 only while the `v1_send` feature switch is on (see "Feature
-switches" below). It is off unless `GET /2/chat/features` turns it on, so a
-missing flag, a failed request, or no request at all means v0. Readers need
-per-message-key support for v1 sends, and 0.5.x returns a decryption error
-for each of them. Upgrade readers before the server turns `v1_send` on.
-Other signed actions (conversation-key changes, group changes and deletes)
-still sign at version 7.
+Sends are v0 unless the X API turns v1 on. Readers need per-message-key
+support for v1 sends, and 0.5.x returns a decryption error for each of them,
+so upgrade readers first. Other signed actions (conversation-key changes,
+group changes and deletes) still sign at version 7.
 
 `sender_id` must be the sender's numeric user id, and
 `conversation_key_version` an integer as its key-change event carries it.
@@ -384,30 +380,8 @@ prepared = chat.prepare_conversation_key_change(
 
 ### Added
 
-- **Feature switches.** `loadFeatureConfig()` fetches `GET /2/chat/features`
-  (`https://api.x.com/2/chat/features`), a flat map of booleans such as
-  `{"features": {"v1_send": true}}`, and `isEnabled(name)` reads a flag. A
-  missing key means off, and keys this version does not know are kept and
-  readable. Call it at startup after loading keys and `setIdentity`: the
-  request carries `featureBucket()`, a 0-9999 bucket derived from the SHA-256
-  of the identity public key, which the server's per-flag deciders evaluate.
-  If it runs before keys load, the request carries no bucket (the server
-  buckets by IP), and once keys load the flags are fetched once more with
-  the key's bucket, reading off until then. A background refresher
-  re-checks every `refreshSeconds` (default 300; 0 disables it), and a
-  re-check can only turn flags off. Any failure (network error, timeout, a
-  status other than 200, or a malformed body) leaves the flags unchanged,
-  so sends stay v0. `applyFeatureConfig(json, bucket, downgradeOnly)` and
-  `featureRefetchDue()` serve apps that fetch through their own HTTP stack.
-  The refresher stops with `free()` (JS), `Close()` (Go), `Dispose()`
-  (.NET) or `close()` (JVM); in Python it ends when the chat is
-  garbage-collected. Names per binding: `load_feature_config` /
-  `is_enabled` (Python), `LoadFeatureConfig` / `IsEnabled` (Go),
-  `LoadFeatureConfigAsync` / `IsEnabled` (.NET), and
-  `ChatCore::apply_feature_config` / `is_enabled` in Rust, which fetches
-  nothing itself. The C ABI adds `chat_xdk_feature_bucket`,
-  `chat_xdk_apply_feature_config`, `chat_xdk_is_enabled` and
-  `chat_xdk_feature_refetch_due`.
+- Each chat fetches its feature switches from `GET /2/chat/features` in the
+  background, without delaying or failing anything; there is nothing to call.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
   (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Forward it as the send
   request's optional `xdk_version` field once the X API accepts it.
