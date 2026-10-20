@@ -4,216 +4,166 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"runtime"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// FeaturesEndpoint is the default URL of the feature-switch endpoint,
-// GET /2/chat/features.
-const FeaturesEndpoint = "https://api.x.com/2/chat/features"
-
-// FeatureV1Send is the feature switch that turns on v1 sends (per-message
-// keys). While it is off, sends use the v0 format (0.5.x).
-const FeatureV1Send = "v1_send"
+// Feature switches (GET /2/chat/features). Internal: every Chat fetches them
+// itself, without blocking or failing, and sends stay v0 unless a response
+// turns v1_send on. Nothing here is API. CHAT_XDK_FEATURES_ENDPOINT, which
+// only this repository's tests set, overrides the endpoint.
 
 const (
-	defaultFeatureTimeout    = 2 * time.Second
-	defaultFeatureRefresh    = 300 * time.Second
+	featuresEndpoint         = "https://api.x.com/2/chat/features"
+	featuresEndpointEnv      = "CHAT_XDK_FEATURES_ENDPOINT"
 	maxFeaturesBody          = 64 * 1024
 	maxFeatureRefetchBackoff = 60 * time.Second
 )
 
-// LoadFeatureConfigParams configures LoadFeatureConfig.
-type LoadFeatureConfigParams struct {
-	// Endpoint is the URL of GET /2/chat/features; empty selects
-	// FeaturesEndpoint.
-	Endpoint string
-	// TimeoutMs bounds each request; 0 selects 2000.
-	TimeoutMs int
-	// RefreshSeconds is the interval of the background re-check, which can
-	// only turn flags off; 0 selects 300 and a negative value disables it.
-	RefreshSeconds int
+// featureOptions configures the goroutine that fetches a chat's feature
+// switches. New uses defaultFeatureOptions; tests pass shorter timings.
+type featureOptions struct {
+	endpoint string
+	timeout  time.Duration
+	refresh  time.Duration
+	keyPoll  time.Duration
 }
 
-type featureRefresher struct {
-	stop chan struct{}
-	done chan struct{}
-}
-
-// LoadFeatureConfig fetches the feature switches from GET /2/chat/features
-// and applies them, returning true when a server response was applied.
-//
-// Call it at startup after loading keys and SetIdentity, so the request
-// carries FeatureBucket. If keys load later, the flags are fetched once
-// more with the key's bucket, and every flag reads off until they are. A
-// background goroutine re-checks every RefreshSeconds; a re-check can only
-// turn flags off. The goroutine runs until Close or the next
-// LoadFeatureConfig; ctx bounds only the first fetch.
-//
-// Any failure (network error, timeout, a status other than 200, or a
-// malformed body) leaves the flags unchanged, so after a failed first load
-// every flag is off and sends stay v0.
-func (c *Chat) LoadFeatureConfig(ctx context.Context, params LoadFeatureConfigParams) bool {
-	defer runtime.KeepAlive(c)
-	c.stopFeatureRefresh()
-	if c.h == nil {
-		return false
-	}
-
-	endpoint := params.Endpoint
+func defaultFeatureOptions() featureOptions {
+	endpoint := os.Getenv(featuresEndpointEnv)
 	if endpoint == "" {
-		endpoint = FeaturesEndpoint
+		endpoint = featuresEndpoint
 	}
-	timeout := defaultFeatureTimeout
-	if params.TimeoutMs > 0 {
-		timeout = time.Duration(params.TimeoutMs) * time.Millisecond
-	}
-	refresh := defaultFeatureRefresh
-	if params.RefreshSeconds > 0 {
-		refresh = time.Duration(params.RefreshSeconds) * time.Second
-	} else if params.RefreshSeconds < 0 {
-		refresh = 0
-	}
-	client := &http.Client{Timeout: timeout}
-
-	applied := c.fetchFeatures(ctx, client, endpoint, false) ||
-		c.fetchFeatures(ctx, client, endpoint, false)
-
-	r := &featureRefresher{stop: make(chan struct{}), done: make(chan struct{})}
-	c.refresher = r
-	go c.refreshFeatures(r, client, endpoint, refresh)
-	return applied
-}
-
-// IsEnabled reports whether the feature switch name is on. It is off for
-// names the last response did not turn on, before any response applies, and
-// while FeatureRefetchDue holds.
-func (c *Chat) IsEnabled(name string) bool {
-	defer runtime.KeepAlive(c)
-	return ffiIsEnabled(c.h, name) == 1
-}
-
-// FeatureBucket returns the bucket (0-9999) GET /2/chat/features evaluates
-// this instance's flags for, derived from the loaded identity public key,
-// or -1 until keys load. Send it as the request's bucket query parameter.
-func (c *Chat) FeatureBucket() int {
-	defer runtime.KeepAlive(c)
-	return ffiFeatureBucket(c.h)
-}
-
-// ApplyFeatureConfig applies a GET /2/chat/features response body.
-// LoadFeatureConfig fetches and applies for you; call this only when
-// fetching through your own HTTP stack. bucket is the bucket the request
-// carried (FeatureBucket), or -1 when it carried none. downgradeOnly only
-// turns flags off (a periodic re-check) instead of replacing them. A body
-// that is not a JSON object with a "features" object is an error and changes
-// nothing.
-func (c *Chat) ApplyFeatureConfig(json string, bucket int, downgradeOnly bool) error {
-	defer runtime.KeepAlive(c)
-	return ffiApplyFeatureConfig(c.h, json, bucket, downgradeOnly)
-}
-
-// FeatureRefetchDue reports whether keys loaded after a response to a
-// request without a bucket applied, so the flags must be fetched again with
-// FeatureBucket. Every flag reads off until they are.
-func (c *Chat) FeatureRefetchDue() bool {
-	defer runtime.KeepAlive(c)
-	return ffiFeatureRefetchDue(c.h) == 1
-}
-
-func (c *Chat) stopFeatureRefresh() {
-	if r := c.refresher; r != nil {
-		close(r.stop)
-		<-r.done
-		c.refresher = nil
+	return featureOptions{
+		endpoint: endpoint,
+		timeout:  2 * time.Second,
+		refresh:  300 * time.Second,
+		keyPoll:  time.Second,
 	}
 }
 
-// fetchFeatures fetches the flags for the current bucket and applies them,
+// featureSync is the part of a Chat its feature goroutine uses. The
+// goroutine holds only this, never the Chat, so an unreferenced Chat is
+// still finalized, which stops the goroutine.
+type featureSync struct {
+	// mu orders the goroutine's native calls (read) against the calls that
+	// take the handle exclusively and Close (write).
+	mu       sync.RWMutex
+	h        handle // nil once the chat is closed
+	stop     chan struct{}
+	stopOnce sync.Once
+	done     chan struct{}
+}
+
+func startFeatureSwitches(h handle, opts featureOptions) *featureSync {
+	f := &featureSync{h: h, stop: make(chan struct{}), done: make(chan struct{})}
+	go f.run(opts)
+	return f
+}
+
+// close stops the goroutine, waits for it, and drops the handle.
+func (f *featureSync) close() {
+	f.stopOnce.Do(func() { close(f.stop) })
+	<-f.done
+	f.mu.Lock()
+	f.h = nil
+	f.mu.Unlock()
+}
+
+// run fetches the flags now (retrying once), again with the key's bucket
+// once keys load (retrying with backoff), and re-checks them every refresh
+// interval with a fetch that can only turn flags off, until stop closes.
+func (f *featureSync) run(opts featureOptions) {
+	defer close(f.done)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-f.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	client := &http.Client{Timeout: opts.timeout}
+
+	if !f.fetch(ctx, client, opts.endpoint, false) {
+		f.fetch(ctx, client, opts.endpoint, false)
+	}
+	nextRecheck := time.Now().Add(opts.refresh)
+	var retryAt time.Time
+	backoff := time.Second
+	for {
+		now := time.Now()
+		if f.refetchDue() {
+			if !now.Before(retryAt) {
+				if f.fetch(ctx, client, opts.endpoint, false) {
+					backoff = time.Second
+					nextRecheck = time.Now().Add(opts.refresh)
+				} else {
+					retryAt = time.Now().Add(backoff)
+					backoff = min(backoff*2, maxFeatureRefetchBackoff)
+				}
+			}
+		} else if opts.refresh > 0 && !now.Before(nextRecheck) {
+			f.fetch(ctx, client, opts.endpoint, true)
+			nextRecheck = time.Now().Add(opts.refresh)
+		}
+
+		keyed := f.keyed()
+		if keyed && opts.refresh <= 0 {
+			return
+		}
+		// Until a response for the key's bucket applies, watch for keys to
+		// load; afterwards, wake only for the re-check.
+		wait := opts.keyPoll
+		if keyed {
+			wait = max(time.Until(nextRecheck), 0)
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-f.stop:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+// fetch fetches the flags for the current bucket and applies them,
 // reporting whether a response was applied.
-func (c *Chat) fetchFeatures(ctx context.Context, client *http.Client, endpoint string, downgradeOnly bool) bool {
-	c.mu.RLock()
-	if c.h == nil {
-		c.mu.RUnlock()
+func (f *featureSync) fetch(ctx context.Context, client *http.Client, endpoint string, downgradeOnly bool) bool {
+	f.mu.RLock()
+	if f.h == nil {
+		f.mu.RUnlock()
 		return false
 	}
-	bucket := ffiFeatureBucket(c.h)
-	c.mu.RUnlock()
+	bucket := ffiFeatureBucket(f.h)
+	f.mu.RUnlock()
 
 	body, ok := getFeatures(ctx, client, featuresURL(endpoint, bucket))
 	if !ok {
 		return false
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.h == nil || ffiApplyFeatureConfig(c.h, body, bucket, downgradeOnly) != nil {
-		return false
-	}
-	if !downgradeOnly {
-		c.featureBucketless.Store(bucket < 0)
-	}
-	return true
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.h != nil && ffiApplyFeatureConfig(f.h, body, bucket, downgradeOnly) == nil
 }
 
-func (c *Chat) featureRefetchDue() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.h != nil && ffiFeatureRefetchDue(c.h) == 1
+func (f *featureSync) refetchDue() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.h != nil && ffiFeatureRefetchDue(f.h) == 1
 }
 
-// refreshFeatures re-fetches once keys load after a bucketless response and
-// re-checks every refresh interval, until r.stop closes.
-func (c *Chat) refreshFeatures(r *featureRefresher, client *http.Client, endpoint string, refresh time.Duration) {
-	defer close(r.done)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		select {
-		case <-r.stop:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
-	nextRecheck := time.Now().Add(refresh)
-	var retryAt time.Time
-	backoff := time.Second
-	for {
-		now := time.Now()
-		if c.featureRefetchDue() {
-			if !now.Before(retryAt) {
-				if c.fetchFeatures(ctx, client, endpoint, false) {
-					backoff = time.Second
-					nextRecheck = now.Add(refresh)
-				} else {
-					retryAt = now.Add(backoff)
-					backoff = min(backoff*2, maxFeatureRefetchBackoff)
-				}
-			}
-		} else if refresh > 0 && !now.Before(nextRecheck) {
-			c.fetchFeatures(ctx, client, endpoint, true)
-			nextRecheck = now.Add(refresh)
-		}
-
-		watchingKeys := c.featureBucketless.Load()
-		if !watchingKeys && refresh <= 0 {
-			return
-		}
-		wait := time.Second
-		if !watchingKeys {
-			wait = max(time.Until(nextRecheck), 0)
-		}
-		timer := time.NewTimer(wait)
-		select {
-		case <-r.stop:
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
+// keyed reports whether a response for the loaded key's bucket applied.
+func (f *featureSync) keyed() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.h != nil && ffiFeatureBucket(f.h) >= 0 && ffiFeatureRefetchDue(f.h) == 0
 }
 
 func featuresURL(endpoint string, bucket int) string {
