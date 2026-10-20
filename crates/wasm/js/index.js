@@ -319,14 +319,8 @@ export class ChatWithJuicebox {
   // getter. Called before every Juicebox network operation so sequential use
   // of multiple instances presents the right tokens (last-armed wins).
   #armAuthTokenHook;
-  // Feature-switch refresher: the pending timer, the in-flight request, and
-  // a generation that stale ticks compare against to stop.
-  #featureTimer = null;
-  #featureRequest = null;
-  #featureGeneration = 0;
-  // Whether the last applied features response came from a request without
-  // a bucket, so the refresher watches for keys to load.
-  #featureBucketless = false;
+  // This instance's feature-switch fetches (see startFeatureSwitches).
+  #features;
 
   constructor(
     wasmChat,
@@ -344,6 +338,7 @@ export class ChatWithJuicebox {
     this.#JuiceboxConfiguration = JuiceboxConfiguration;
     this.#JuiceboxClient = JuiceboxClientCtor;
     this.#armAuthTokenHook = armAuthTokenHook ?? (() => {});
+    this.#features = startFeatureSwitches(wasmChat);
   }
 
   // Juicebox lifecycle (handled in this JS layer)
@@ -473,108 +468,6 @@ export class ChatWithJuicebox {
     this.#numGuesses = resolveMaxGuessCount(configValue, this.#maxGuessCountOverride);
   }
 
-  // Feature switches (GET /2/chat/features)
-
-  /**
-   * Fetch the feature switches from `GET /2/chat/features` and apply them.
-   *
-   * Call it at startup after loading keys and `setIdentity`, so the request
-   * carries `featureBucket()`. If keys load later, the flags are fetched once
-   * more with the key's bucket, and every flag reads off until they are. A
-   * timer re-checks every `refreshSeconds`; a re-check can only turn flags
-   * off. Calling this again replaces the previous refresher; `free()` stops
-   * it.
-   *
-   * Any failure (network error, timeout, a status other than 200, or a
-   * malformed body) leaves the flags unchanged, so after a failed first load
-   * every flag is off and sends stay v0.
-   *
-   * @param {{ endpoint?: string, timeoutMs?: number, refreshSeconds?: number }} [params]
-   * @returns {Promise<boolean>} true when a server response was applied
-   */
-  async loadFeatureConfig(params = {}) {
-    this.#stopFeatureRefresh();
-    const options = featureOptions(params);
-    const generation = this.#featureGeneration;
-    const applied =
-      (await this.#fetchFeatures(options, false, generation)) ||
-      (await this.#fetchFeatures(options, false, generation));
-    if (generation === this.#featureGeneration) {
-      this.#scheduleFeatureRefresh(options, generation);
-    }
-    return applied;
-  }
-
-  isEnabled(name) { return this.#inner.isEnabled(name); }
-  featureBucket() { return this.#inner.featureBucket() ?? null; }
-  applyFeatureConfig(json, bucket, downgradeOnly) {
-    return this.#inner.applyFeatureConfig(json, bucket ?? undefined, downgradeOnly === true);
-  }
-  featureRefetchDue() { return this.#inner.featureRefetchDue(); }
-
-  async #fetchFeatures(options, downgradeOnly, generation) {
-    const bucket = this.featureBucket();
-    const request = new AbortController();
-    this.#featureRequest = request;
-    const body = await getFeatures(featuresUrl(options.endpoint, bucket), options.timeoutMs, request);
-    if (this.#featureRequest === request) this.#featureRequest = null;
-    if (body === null || generation !== this.#featureGeneration) return false;
-    try {
-      this.applyFeatureConfig(body, bucket, downgradeOnly);
-    } catch {
-      return false;
-    }
-    if (!downgradeOnly) this.#featureBucketless = bucket === null;
-    return true;
-  }
-
-  #scheduleFeatureRefresh(options, generation) {
-    const refreshMs = options.refreshSeconds * 1000;
-    let nextRecheck = Date.now() + refreshMs;
-    let retryAt = 0;
-    let backoffMs = 1000;
-    const schedule = () => {
-      const watchingKeys = this.#featureBucketless;
-      if (!watchingKeys && refreshMs <= 0) return;
-      const wait = watchingKeys ? 1000 : Math.max(0, nextRecheck - Date.now());
-      this.#featureTimer = unrefTimer(setTimeout(tick, wait));
-    };
-    const tick = async () => {
-      this.#featureTimer = null;
-      if (generation !== this.#featureGeneration) return;
-      try {
-        if (this.#inner.featureRefetchDue()) {
-          if (Date.now() >= retryAt) {
-            if (await this.#fetchFeatures(options, false, generation)) {
-              backoffMs = 1000;
-              nextRecheck = Date.now() + refreshMs;
-            } else {
-              retryAt = Date.now() + backoffMs;
-              backoffMs = Math.min(backoffMs * 2, MAX_FEATURE_REFETCH_BACKOFF_MS);
-            }
-          }
-        } else if (refreshMs > 0 && Date.now() >= nextRecheck) {
-          await this.#fetchFeatures(options, true, generation);
-          nextRecheck = Date.now() + refreshMs;
-        }
-      } catch {
-        // A failed tick changes nothing; the next one retries.
-      }
-      if (generation === this.#featureGeneration) schedule();
-    };
-    schedule();
-  }
-
-  #stopFeatureRefresh() {
-    this.#featureGeneration += 1;
-    if (this.#featureTimer !== null) {
-      clearTimeout(this.#featureTimer);
-      this.#featureTimer = null;
-    }
-    this.#featureRequest?.abort();
-    this.#featureRequest = null;
-  }
-
   // Forwarded crypto methods — delegate to inner WasmChat
 
   setRejectUnverified(reject) { return this.#inner.setRejectUnverified(reject); }
@@ -615,33 +508,158 @@ export class ChatWithJuicebox {
   prepareGroupCreate(params) { return this.#inner.prepareGroupCreate(params); }
 
   /**
-   * Release the WASM-side crypto engine: stops the feature refresher, clears
-   * key material (`lock()`) and frees the underlying WASM object. The
-   * instance must not be used afterwards. When reusing the instance,
-   * `lock()` alone suffices for key hygiene.
+   * Release the WASM-side crypto engine: clears key material (`lock()`) and
+   * frees the underlying WASM object. The instance must not be used
+   * afterwards. When reusing the instance, `lock()` alone suffices for key
+   * hygiene.
    */
   free() {
-    this.#stopFeatureRefresh();
+    stopFeatureSwitches(this.#features);
     this.#inner.lock();
     this.#inner.free();
   }
 }
 
-/** Default URL of the feature-switch endpoint, `GET /2/chat/features`. */
-export const FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
+// Feature switches (GET /2/chat/features). Internal: every ChatWithJuicebox
+// fetches them itself, without blocking or failing, and sends stay v0 unless
+// a response turns v1_send on. Nothing here is API. The environment
+// variables read below exist for this repository's tests.
 
+const FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
 const MAX_FEATURES_BODY = 64 * 1024;
 const MAX_FEATURE_REFETCH_BACKOFF_MS = 60_000;
 
-function featureOptions(params) {
-  const p = params ?? {};
-  const number = (value, fallback) =>
-    typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return {
-    endpoint: p.endpoint || FEATURES_ENDPOINT,
-    timeoutMs: number(p.timeoutMs, 2000),
-    refreshSeconds: Math.max(0, number(p.refreshSeconds, 300)),
+/** A non-empty environment variable in Node; undefined anywhere else. */
+function envVar(name) {
+  try {
+    return globalThis.process?.env?.[name] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function featureSettings() {
+  const number = (name, fallback) => {
+    const value = Number(envVar(name));
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
   };
+  return {
+    endpoint: envVar("CHAT_XDK_FEATURES_ENDPOINT") ?? FEATURES_ENDPOINT,
+    timeoutMs: number("CHAT_XDK_FEATURES_TIMEOUT_MS", 2000),
+    refreshMs: number("CHAT_XDK_FEATURES_REFRESH_SECONDS", 300) * 1000,
+    keyPollMs: number("CHAT_XDK_FEATURES_KEY_POLL_MS", 1000),
+  };
+}
+
+/**
+ * Fetch the flags for `wasmChat` now (retrying once), again with the key's
+ * bucket once keys load (retrying with backoff), and re-check them every
+ * refresh interval with a fetch that can only turn flags off, until
+ * `stopFeatureSwitches`. The chat is held weakly so an instance dropped
+ * without `free()` can still be collected; the fetches end with it.
+ */
+function startFeatureSwitches(wasmChat) {
+  const run = {
+    chat: weakRef(wasmChat),
+    settings: featureSettings(),
+    stopped: false,
+    timer: null,
+    request: null,
+  };
+  featureLoop(run).catch(() => {});
+  return run;
+}
+
+// Its own function: a closure over `target` in startFeatureSwitches would
+// share that function's scope with the loop's catch handler and keep the
+// chat alive for as long as the loop runs.
+function weakRef(target) {
+  return typeof WeakRef === "function" ? new WeakRef(target) : { deref: () => target };
+}
+
+function stopFeatureSwitches(run) {
+  run.stopped = true;
+  clearTimeout(run.timer);
+  run.request?.abort();
+}
+
+/**
+ * `use(chat)`, or `gone` once the chat was freed or collected. The async
+ * functions below reach the chat only through this, so they never hold it
+ * across an await.
+ */
+function withChat(run, use, gone) {
+  const chat = run.stopped ? undefined : run.chat.deref();
+  return chat === undefined ? gone : use(chat);
+}
+
+async function featureLoop(run) {
+  const { refreshMs, keyPollMs } = run.settings;
+  (await fetchFeatures(run, false)) || (await fetchFeatures(run, false));
+  let nextRecheck = Date.now() + refreshMs;
+  let retryAt = 0;
+  let backoffMs = 1000;
+  for (;;) {
+    let keyed = false;
+    try {
+      const now = Date.now();
+      if (withChat(run, (chat) => chat.__featureRefetchDue(), false)) {
+        if (now >= retryAt) {
+          if (await fetchFeatures(run, false)) {
+            backoffMs = 1000;
+            nextRecheck = Date.now() + refreshMs;
+          } else {
+            retryAt = Date.now() + backoffMs;
+            backoffMs = Math.min(backoffMs * 2, MAX_FEATURE_REFETCH_BACKOFF_MS);
+          }
+        }
+      } else if (refreshMs > 0 && now >= nextRecheck) {
+        await fetchFeatures(run, true);
+        nextRecheck = Date.now() + refreshMs;
+      }
+      keyed = withChat(
+        run,
+        (chat) => chat.__featureBucket() !== undefined && !chat.__featureRefetchDue(),
+        false,
+      );
+    } catch {
+      // A failed step changes nothing; the next one retries.
+    }
+    if (!withChat(run, () => true, false) || (keyed && refreshMs <= 0)) return;
+    // Until a response for the key's bucket applies, watch for keys to load;
+    // afterwards, wake only for the re-check.
+    const waitMs = keyed ? Math.max(0, nextRecheck - Date.now()) : keyPollMs;
+    await new Promise((resolve) => {
+      run.timer = unrefTimer(setTimeout(resolve, waitMs));
+    });
+  }
+}
+
+/** Fetch the flags for the chat's bucket and apply them; true on success. */
+async function fetchFeatures(run, downgradeOnly) {
+  const bucket = withChat(run, (chat) => chat.__featureBucket() ?? null, undefined);
+  if (bucket === undefined) return false;
+  const request = new AbortController();
+  run.request = request;
+  const body = await getFeatures(
+    featuresUrl(run.settings.endpoint, bucket),
+    run.settings.timeoutMs,
+    request,
+  );
+  if (run.request === request) run.request = null;
+  if (body === null) return false;
+  try {
+    return withChat(
+      run,
+      (chat) => {
+        chat.__applyFeatureConfig(body, bucket ?? undefined, downgradeOnly);
+        return true;
+      },
+      false,
+    );
+  } catch {
+    return false;
+  }
 }
 
 function featuresUrl(endpoint, bucket) {

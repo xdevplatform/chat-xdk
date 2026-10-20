@@ -405,10 +405,11 @@ async function main() {
   assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
-  // 4c. With v1_send on, sends switch to v1 (signature version 10).
-  assert.equal(chat.isEnabled("v1_send"), false);
-  chat.applyFeatureConfig('{"features":{"v1_send":true}}', chat.featureBucket(), false);
-  assert.equal(chat.isEnabled("v1_send"), true);
+  // 4c. With v1_send on, sends switch to v1 (signature version 10). The
+  //     internal methods the JS wrapper's feature fetch drives turn it on.
+  assert.equal(chat.__isEnabled("v1_send"), false);
+  chat.__applyFeatureConfig('{"features":{"v1_send":true}}', chat.__featureBucket(), false);
+  assert.equal(chat.__isEnabled("v1_send"), true);
   const v1Payload = chat.encryptMessage({
     senderId: "111",
     conversationId: "conv-1",
@@ -418,7 +419,7 @@ async function main() {
     signingKeyVersion: "1",
   });
   assert.equal(v1Payload.signatureInfo.signatureVersion, "10");
-  chat.applyFeatureConfig('{"features":{}}', chat.featureBucket(), false);
+  chat.__applyFeatureConfig('{"features":{}}', chat.__featureBucket(), false);
 
   // Own sends decrypt through their eventB64, verified against the fixture
   // signing key registered to sender 111.

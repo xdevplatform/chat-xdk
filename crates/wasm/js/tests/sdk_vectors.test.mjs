@@ -90,7 +90,7 @@ async function main() {
   const sender = new Chat();
   sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
   sender.setIdentity(v.event_sender_id, v.event_signing_key_version);
-  sender.applyFeatureConfig('{"features":{"v1_send":true}}', sender.featureBucket(), false);
+  sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
   const media = (mediaHashKey) => ({
     attachment_type: "media",
     media_hash_key: mediaHashKey,
