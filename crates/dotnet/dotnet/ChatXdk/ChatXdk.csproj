@@ -29,6 +29,10 @@
     the release profile and copy it into the matching runtimes path.
   -->
   <ItemGroup>
+    <InternalsVisibleTo Include="ChatXdk.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />
     <None Include="../../../../THIRD_PARTY_NOTICES.md" Pack="true" PackagePath="THIRD_PARTY_NOTICES.md" />

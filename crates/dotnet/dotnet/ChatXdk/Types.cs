@@ -124,23 +124,6 @@ namespace ChatXdk
         public string XdkVersion { get; init; } = "";
     }
 
-    /// <summary>Options for <see cref="Chat.LoadFeatureConfigAsync"/>.</summary>
-    public sealed class LoadFeatureConfigParams
-    {
-        /// <summary>
-        /// URL of <c>GET /2/chat/features</c>; null selects <see cref="Chat.FeaturesEndpoint"/>.
-        /// </summary>
-        public string? Endpoint { get; init; }
-
-        /// <summary>Timeout of each request, in milliseconds.</summary>
-        public int TimeoutMs { get; init; } = 2000;
-
-        /// <summary>
-        /// Interval of the background re-check, which can only turn flags off; 0 disables it.
-        /// </summary>
-        public int RefreshSeconds { get; init; } = 300;
-    }
-
     // Action signatures (group operations)
 
     /// <summary>

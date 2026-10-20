@@ -1,16 +1,37 @@
-// Feature switches (GET /2/chat/features): LoadFeatureConfigAsync against a local server,
-// the key-bucket refetch, the downgrade-only re-check, and the v0/v1 send switch.
+// Feature switches (GET /2/chat/features). Nothing is called: every Chat fetches by itself,
+// here created through the internal constructor that points it at a local server with
+// shorter timings, and the flags are read through the internal accessors.
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Xunit;
 
 namespace ChatXdk.Tests
 {
+    internal static class FeatureTestEnvironment
+    {
+        // Keeps the automatic feature fetch of every chat made with new Chat() off the
+        // network. Tests that need a server pass it to the internal constructor rather than
+        // change the environment, because test classes run in parallel.
+#pragma warning disable CA2255 // This is the test assembly's own setup, not a library's.
+        [ModuleInitializer]
+        internal static void KeepFeatureFetchesOffTheNetwork()
+        {
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CHAT_XDK_FEATURES_ENDPOINT")))
+                Environment.SetEnvironmentVariable("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features");
+        }
+#pragma warning restore CA2255
+    }
+
     public class FeatureSwitchTests
     {
         /// <summary>A local GET /2/chat/features that records each request's bucket.</summary>
@@ -74,6 +95,8 @@ namespace ChatXdk.Tests
 
             private async Task HandleAsync(HttpListenerContext context)
             {
+                // The answer is fixed when the request is recorded, so a test that sees the
+                // request can change the next answer.
                 int status;
                 string body;
                 int delayMs;
@@ -100,15 +123,20 @@ namespace ChatXdk.Tests
                 }
             }
 
-            public LoadFeatureConfigParams Params(int refreshSeconds, int timeoutMs = 1000) =>
-                new() { Endpoint = Endpoint, TimeoutMs = timeoutMs, RefreshSeconds = refreshSeconds };
-
             public void Dispose()
             {
                 _listener.Stop();
                 _listener.Close();
             }
         }
+
+        /// <summary>A chat whose feature fetches go to <paramref name="endpoint"/>.</summary>
+        private static Chat NewChat(string endpoint, int refreshMs = 3_600_000, int timeoutMs = 500) =>
+            new(new FeatureSwitches.Options(
+                endpoint,
+                TimeSpan.FromMilliseconds(timeoutMs),
+                TimeSpan.FromMilliseconds(refreshMs),
+                TimeSpan.FromMilliseconds(20)));
 
         private static Chat WithKeys(Chat chat)
         {
@@ -117,20 +145,24 @@ namespace ChatXdk.Tests
             return chat;
         }
 
-        private static string SendVersion(Chat chat)
+        private static SendPayload Send(Chat chat)
         {
             var prep = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
                 new[] { new PublicKeyInput { UserId = "1001", PublicKey = chat.GetPublicKeys().Identity, KeyVersion = "1" } })
             {
                 ConversationId = "conv-1",
             });
-            var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "hello")
+            return chat.EncryptMessage(new EncryptMessageParams("conv-1", "hello")
             {
                 ConversationKey = prep.ConversationKey!,
                 ConversationKeyVersion = "1",
             });
-            return payload.SignatureInfo.SignatureVersion;
         }
+
+        private static string SendVersion(Chat chat) => Send(chat).SignatureInfo.SignatureVersion;
+
+        private static string Bucket(Chat chat) =>
+            chat.FeatureBucket()!.Value.ToString(CultureInfo.InvariantCulture);
 
         private static async Task WaitFor(string what, Func<bool> condition)
         {
@@ -138,32 +170,109 @@ namespace ChatXdk.Tests
             while (DateTime.UtcNow < deadline)
             {
                 if (condition()) return;
-                await Task.Delay(50);
+                await Task.Delay(20);
             }
             Assert.True(condition(), "timed out waiting for " + what);
         }
 
-        [Fact]
-        public void EveryFlagIsOff_AndSendsAreV0_BeforeAnyLoad()
+        /// <summary>Wait for a request carrying the chat's key bucket.</summary>
+        private static Task KeyedRequest(FeatureServer server, Chat chat)
         {
-            using var chat = WithKeys(new Chat());
-            Assert.False(chat.IsEnabled("v1_send"));
+            var bucket = Bucket(chat);
+            return WaitFor("a request with bucket " + bucket, () => server.Buckets.Contains(bucket));
+        }
+
+        [Fact]
+        public void FeatureSwitches_AreNotPublicApi()
+        {
+            foreach (var name in new[]
+            {
+                "LoadFeatureConfigAsync", "IsEnabled", "FeatureBucket", "ApplyFeatureConfig",
+                "FeatureRefetchDue", "FeaturesEndpoint",
+            })
+            {
+                Assert.Empty(typeof(Chat).GetMember(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static));
+            }
+            Assert.DoesNotContain(typeof(Chat).Assembly.GetExportedTypes(), type => type.Name.Contains("Feature"));
+            Assert.Single(typeof(Chat).GetConstructors());
+        }
+
+        [Fact]
+        public void CreatingAChat_NeverWaitsForTheFetch()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", 2000);
+            var started = Stopwatch.StartNew();
+            using var chat = NewChat(server.Endpoint, timeoutMs: 5000);
+            Assert.True(started.ElapsedMilliseconds < 1000, $"took {started.ElapsedMilliseconds} ms");
+            WithKeys(chat);
             Assert.Equal("7", SendVersion(chat));
         }
 
         [Fact]
-        public async Task LoadAfterKeys_SendsTheKeyBucket_AndSwitchesToV1()
+        public async Task EveryFlagIsOff_AndSendsAreV0_UntilAResponseApplies()
         {
             using var server = new FeatureServer();
-            using var chat = WithKeys(new Chat());
-            var bucket = chat.FeatureBucket();
-            Assert.NotNull(bucket);
-            Assert.InRange(bucket!.Value, 0, 9999);
+            server.Set(503, "");
+            using var chat = WithKeys(NewChat(server.Endpoint));
+            await KeyedRequest(server, chat);
+            Assert.False(chat.IsEnabled("v1_send"));
+            var payload = Send(chat);
+            Assert.Equal("7", payload.SignatureInfo.SignatureVersion);
+            Assert.NotEmpty(payload.XdkVersion);
+        }
 
-            Assert.True(await chat.LoadFeatureConfigAsync(server.Params(0)));
-            Assert.Equal(new List<string?> { bucket.Value.ToString() }, server.Buckets);
-            Assert.True(chat.IsEnabled("v1_send"));
+        [Fact]
+        public async Task AChat_FetchesOnCreation_AndAgainWithTheKeyBucket()
+        {
+            using var server = new FeatureServer();
+            using var chat = NewChat(server.Endpoint);
+            Assert.Null(chat.FeatureBucket());
+            await WaitFor("the request on creation", () => server.Buckets.Count == 1);
+            Assert.Equal(new List<string?> { null }, server.Buckets);
+
+            WithKeys(chat);
+            Assert.InRange(chat.FeatureBucket()!.Value, 0, 9999);
+            await KeyedRequest(server, chat);
+            await WaitFor("v1_send on", () => chat.IsEnabled("v1_send"));
+            Assert.False(chat.FeatureRefetchDue());
+            Assert.Equal(new List<string?> { null, Bucket(chat) }, server.Buckets);
             Assert.Equal("10", SendVersion(chat));
+        }
+
+        [Fact]
+        public async Task KeysLoadedBeforeTheFirstAnswer_StillGetTheKeyBucket()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", 200);
+            using var chat = WithKeys(NewChat(server.Endpoint));
+            await WaitFor("v1_send on", () => chat.IsEnabled("v1_send"));
+            Assert.Equal(Bucket(chat), server.Buckets.Last());
+        }
+
+        [Fact]
+        public async Task TheKeyBucketAnswer_ReplacesTheIpAnswer()
+        {
+            using var server = new FeatureServer();
+
+            // An IP-bucketed "on" reads off once keys load, and the key's own answer decides.
+            using var first = NewChat(server.Endpoint);
+            await WaitFor("the IP answer", () => first.IsEnabled("v1_send"));
+            server.Set(200, "{\"features\":{\"v1_send\":false}}");
+            WithKeys(first);
+            Assert.False(first.IsEnabled("v1_send"));
+            await KeyedRequest(server, first);
+            await WaitFor("the key answer", () => !first.FeatureRefetchDue());
+            Assert.False(first.IsEnabled("v1_send"));
+
+            // ...and the key's answer can turn a flag on that the IP answer left off.
+            server.Set(200, "{\"features\":{\"v1_send\":false,\"ip_answer\":true}}");
+            using var second = NewChat(server.Endpoint);
+            await WaitFor("the IP answer", () => second.IsEnabled("ip_answer"));
+            server.Set(200, "{\"features\":{\"v1_send\":true}}");
+            WithKeys(second);
+            await WaitFor("the key answer", () => second.IsEnabled("v1_send"));
+            Assert.False(second.IsEnabled("ip_answer"));
         }
 
         [Fact]
@@ -171,9 +280,8 @@ namespace ChatXdk.Tests
         {
             using var server = new FeatureServer();
             server.Set(200, "{\"features\":{\"later_flag\":true,\"v1_send\":\"yes\"},\"extra\":1}");
-            using var chat = WithKeys(new Chat());
-            Assert.True(await chat.LoadFeatureConfigAsync(server.Params(0)));
-            Assert.True(chat.IsEnabled("later_flag"));
+            using var chat = WithKeys(NewChat(server.Endpoint));
+            await WaitFor("later_flag on", () => chat.IsEnabled("later_flag"));
             Assert.False(chat.IsEnabled("v1_send"));
             Assert.False(chat.IsEnabled("missing"));
         }
@@ -188,81 +296,109 @@ namespace ChatXdk.Tests
         {
             using var server = new FeatureServer();
             server.Set(status, body, delayMs);
-            using var chat = WithKeys(new Chat());
-            Assert.False(await chat.LoadFeatureConfigAsync(server.Params(0, timeoutMs: 300)));
+            using var chat = WithKeys(NewChat(server.Endpoint));
+            await KeyedRequest(server, chat);
+            await Task.Delay(delayMs > 0 ? 600 : 100);
             Assert.False(chat.IsEnabled("v1_send"));
             Assert.Equal("7", SendVersion(chat));
         }
 
         [Fact]
-        public async Task LoadBeforeKeys_RefetchesOnceWithTheKeyBucket()
+        public async Task AnUnreachableEndpoint_LeavesEveryFlagOff()
         {
-            using var server = new FeatureServer();
-            using var chat = new Chat();
-            Assert.Null(chat.FeatureBucket());
-            Assert.True(await chat.LoadFeatureConfigAsync(server.Params(0)));
-            Assert.Equal(new List<string?> { null }, server.Buckets);
-            Assert.True(chat.IsEnabled("v1_send"));
-
-            server.Set(200, "{\"features\":{\"v1_send\":false}}");
-            WithKeys(chat);
+            string endpoint;
+            using (var server = new FeatureServer())
+                endpoint = server.Endpoint;
+            using var chat = WithKeys(NewChat(endpoint));
+            await Task.Delay(300);
             Assert.False(chat.IsEnabled("v1_send"));
-            var bucket = chat.FeatureBucket()!.Value.ToString();
-            await WaitFor("the key-bucketed refetch",
-                () => server.Buckets.Contains(bucket) && !chat.FeatureRefetchDue());
-            Assert.False(chat.IsEnabled("v1_send"));
-
-            using var other = new Chat();
-            Assert.True(await other.LoadFeatureConfigAsync(server.Params(0)));
-            server.Set(200, "{\"features\":{\"v1_send\":true}}");
-            WithKeys(other);
-            await WaitFor("the refetch to turn v1_send on", () => other.IsEnabled("v1_send"));
+            Assert.True(chat.FeatureRefetchDue());
+            Assert.Equal("7", SendVersion(chat));
         }
 
         [Fact]
         public async Task TheRecheck_TurnsFlagsOff_ButNeverOn()
         {
             using var server = new FeatureServer();
-            using var chat = WithKeys(new Chat());
-            Assert.True(await chat.LoadFeatureConfigAsync(server.Params(1)));
+            using var chat = WithKeys(NewChat(server.Endpoint, refreshMs: 300));
+            await WaitFor("v1_send on", () => chat.IsEnabled("v1_send"));
+
             server.Set(200, "{\"features\":{}}");
             await WaitFor("the re-check to turn v1_send off", () => !chat.IsEnabled("v1_send"));
+            Assert.Equal("7", SendVersion(chat));
 
             server.Set(200, "{\"features\":{\"v1_send\":true}}");
             var seen = server.Buckets.Count;
             await WaitFor("two more re-checks", () => server.Buckets.Count >= seen + 2);
             Assert.False(chat.IsEnabled("v1_send"));
-
-            server.Set(503, "");
-            chat.ApplyFeatureConfig("{\"features\":{\"v1_send\":true}}", chat.FeatureBucket());
-            var before = server.Buckets.Count;
-            await WaitFor("two failed re-checks", () => server.Buckets.Count >= before + 2);
-            Assert.True(chat.IsEnabled("v1_send"));
         }
 
         [Fact]
-        public async Task Dispose_StopsTheRefresher()
+        public async Task AFailedRecheck_ChangesNothing()
         {
             using var server = new FeatureServer();
-            var chat = WithKeys(new Chat());
-            Assert.True(await chat.LoadFeatureConfigAsync(server.Params(1)));
-            server.Set(200, "{\"features\":{\"v1_send\":true}}", 5000);
-            await Task.Delay(1200);
-            chat.Dispose();
+            using var chat = WithKeys(NewChat(server.Endpoint, refreshMs: 300));
+            await WaitFor("v1_send on", () => chat.IsEnabled("v1_send"));
+            server.Set(503, "");
             var seen = server.Buckets.Count;
-            await Task.Delay(2500);
-            Assert.Equal(seen, server.Buckets.Count);
-            await Assert.ThrowsAsync<ObjectDisposedException>(() => chat.LoadFeatureConfigAsync(server.Params(1)));
+            await WaitFor("two failed re-checks", () => server.Buckets.Count >= seen + 2);
+            Assert.True(chat.IsEnabled("v1_send"));
         }
 
         [Fact]
-        public void ApplyFeatureConfig_RejectsAMalformedBody()
+        public async Task Dispose_StopsTheFetches()
         {
-            using var chat = WithKeys(new Chat());
-            chat.ApplyFeatureConfig("{\"features\":{\"v1_send\":true}}", chat.FeatureBucket());
-            Assert.Throws<ChatXdkException>(() => chat.ApplyFeatureConfig("[]", chat.FeatureBucket(), true));
+            using var server = new FeatureServer();
+            var chat = WithKeys(NewChat(server.Endpoint, refreshMs: 300, timeoutMs: 10_000));
+            await WaitFor("v1_send on", () => chat.IsEnabled("v1_send"));
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", 5000);
+            await Task.Delay(400);
+            chat.Dispose();
+            var seen = server.Buckets.Count;
+            await Task.Delay(1000);
+            Assert.Equal(seen, server.Buckets.Count);
+        }
+
+        /// <summary>A keyed, re-checking chat that nothing references once this completes.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static async Task StartUnreferencedChat(string endpoint)
+        {
+            var chat = WithKeys(NewChat(endpoint, refreshMs: 300));
+            await WaitFor("v1_send on", () => chat.IsEnabled("v1_send"));
+        }
+
+        [Fact]
+        public async Task TheFetches_EndWithAnUnreferencedChat()
+        {
+            using var server = new FeatureServer();
+            await StartUnreferencedChat(server.Endpoint);
+            var running = server.Buckets.Count;
+            await WaitFor("a re-check", () => server.Buckets.Count > running);
+            for (var i = 0; i < 5; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                await Task.Delay(50);
+            }
+            await Task.Delay(800);
+            var seen = server.Buckets.Count;
+            await Task.Delay(1200);
+            Assert.Equal(seen, server.Buckets.Count);
+        }
+
+        [Fact]
+        public async Task AMalformedBody_IsRejected_AndChangesNothing()
+        {
+            using var server = new FeatureServer();
+            // The fetch never applies anything, so only the calls below change the flags.
+            server.Set(503, "");
+            using var chat = WithKeys(NewChat(server.Endpoint));
+            await KeyedRequest(server, chat);
+            var bucket = chat.FeatureBucket();
+            chat.ApplyFeatureConfig("{\"features\":{\"v1_send\":true}}", bucket);
+            Assert.Throws<ChatXdkException>(() => chat.ApplyFeatureConfig("[]", bucket, true));
             Assert.True(chat.IsEnabled("v1_send"));
-            chat.ApplyFeatureConfig("{\"features\":{}}", chat.FeatureBucket(), true);
+            chat.ApplyFeatureConfig("{\"features\":{}}", bucket, true);
             Assert.False(chat.IsEnabled("v1_send"));
         }
     }

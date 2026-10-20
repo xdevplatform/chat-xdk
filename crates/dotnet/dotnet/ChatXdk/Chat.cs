@@ -36,7 +36,6 @@ namespace ChatXdk
     /// using var chat = new Chat();
     /// chat.Unlock("2580", juiceboxConfigJson);
     /// chat.SetIdentity(myUserId, mySigningKeyVersion); // session identity, once
-    /// await chat.LoadFeatureConfigAsync();             // sends stay v0 until v1_send is on
     /// chat.SetCacheKeys(true);                         // opt-in conversation-key cache
     /// chat.SetSigningKeys(participantSigningKeys);     // default verification keys
     ///
@@ -58,14 +57,13 @@ namespace ChatXdk
         private ChatHandle* _handle;
         private bool _disposed;
 
-        // Orders the feature refresher's native calls against the calls that take the
+        // Orders the feature task's native calls against the calls that take the
         // handle exclusively (Setup, Unlock, Delete, ChangePin, UpdateConfig,
         // SetRejectUnverified) and against freeing it.
         private readonly object _exclusive = new();
 
-        // Feature refresher state, owned by FeatureSwitches.
-        internal CancellationTokenSource? FeatureRefresh;
-        internal volatile bool FeatureBucketless;
+        // Stops the task that fetches this instance's feature switches.
+        private CancellationTokenSource? _featureStop;
 
         // Shared JSON options: ignore nulls on write. Property names are
         // snake_case via explicit [JsonPropertyName] attributes on each DTO,
@@ -81,13 +79,19 @@ namespace ChatXdk
         /// <exception cref="InvalidOperationException">
         /// Thrown if the native library fails to initialise (e.g. missing shared library).
         /// </exception>
-        public Chat()
+        public Chat() : this(FeatureSwitches.Options.Default())
+        {
+        }
+
+        // Tests pass their own feature endpoint and shorter timings.
+        internal Chat(FeatureSwitches.Options featureOptions)
         {
             _handle = NativeMethods.chat_xdk_new();
             if (_handle == null)
                 throw new InvalidOperationException(
                     "chat_xdk_new() returned NULL — ensure the native library " +
                     "(chat_xdk_dotnet.dylib / .so / .dll) is on the library search path.");
+            _featureStop = FeatureSwitches.Start(this, featureOptions);
         }
 
         /// <summary>
@@ -113,7 +117,7 @@ namespace ChatXdk
             // Both the finalizer and Dispose() paths end here.
             // We only need to free the unmanaged handle; there are no managed resources.
             if (disposing)
-                FeatureSwitches.Stop(this);
+                Interlocked.Exchange(ref _featureStop, null)?.Cancel();
             lock (_exclusive)
             {
                 if (!_disposed)
@@ -272,100 +276,53 @@ namespace ChatXdk
             GC.KeepAlive(this);
         }
 
-        // Feature switches (GET /2/chat/features)
+        // Feature switches (GET /2/chat/features), fetched by FeatureSwitches. Not API.
 
-        /// <summary>Default URL of the feature-switch endpoint, <c>GET /2/chat/features</c>.</summary>
-        public const string FeaturesEndpoint = "https://api.x.com/2/chat/features";
-
-        /// <summary>
-        /// Fetch the feature switches from <c>GET /2/chat/features</c> and apply them.
-        ///
-        /// <para>Call it at startup after loading keys and <see cref="SetIdentity"/>, so the
-        /// request carries <see cref="FeatureBucket"/>. If keys load later, the flags are
-        /// fetched once more with the key's bucket, and every flag reads off until they are.
-        /// A background task re-checks every <see cref="LoadFeatureConfigParams.RefreshSeconds"/>;
-        /// a re-check can only turn flags off. <see cref="Dispose"/> and the next call stop it;
-        /// <paramref name="cancellationToken"/> bounds only the first fetch.</para>
-        ///
-        /// <para>Any failure (network error, timeout, a status other than 200, or a malformed
-        /// body) leaves the flags unchanged, so after a failed first load every flag is off and
-        /// sends stay v0.</para>
-        /// </summary>
-        /// <returns>True when a server response was applied.</returns>
-        public Task<bool> LoadFeatureConfigAsync(
-            LoadFeatureConfigParams? parameters = null,
-            CancellationToken cancellationToken = default)
-        {
-            ThrowIfDisposed();
-            return FeatureSwitches.LoadAsync(this, parameters ?? new LoadFeatureConfigParams(), cancellationToken);
-        }
-
-        /// <summary>
-        /// Whether the feature switch <paramref name="name"/> is on. Off for names the last
-        /// response did not turn on, before any response applies, and while
-        /// <see cref="FeatureRefetchDue"/> holds.
-        /// </summary>
-        public bool IsEnabled(string name)
+        /// <summary>Whether the feature switch <paramref name="name"/> is on.</summary>
+        internal bool IsEnabled(string name)
         {
             ThrowIfDisposed();
             var nameBytes = Utf8Z(name);
             int enabled;
             fixed (byte* namePtr = nameBytes)
-                enabled = NativeMethods.chat_xdk_is_enabled(_handle, namePtr);
+                enabled = NativeMethods.chat_xdk_internal_is_enabled(_handle, namePtr);
             GC.KeepAlive(this);
             return enabled == 1;
         }
 
-        /// <summary>
-        /// The bucket (0-9999) <c>GET /2/chat/features</c> evaluates this instance's flags
-        /// for, derived from the loaded identity public key; null until keys load. Send it as
-        /// the request's <c>bucket</c> query parameter.
-        /// </summary>
-        public int? FeatureBucket()
+        /// <summary>The bucket of the loaded identity key; null until keys load.</summary>
+        internal int? FeatureBucket()
         {
             ThrowIfDisposed();
-            var bucket = NativeMethods.chat_xdk_feature_bucket(_handle);
+            var bucket = NativeMethods.chat_xdk_internal_feature_bucket(_handle);
             GC.KeepAlive(this);
             return bucket < 0 ? null : bucket;
         }
 
-        /// <summary>
-        /// Apply a <c>GET /2/chat/features</c> response body. <see cref="LoadFeatureConfigAsync"/>
-        /// fetches and applies for you; call this only when fetching through your own HTTP
-        /// stack.
-        /// </summary>
-        /// <param name="json">The response body.</param>
-        /// <param name="bucket">The bucket the request carried (<see cref="FeatureBucket"/>), or
-        /// null when it carried none.</param>
-        /// <param name="downgradeOnly">Only turn flags off (a periodic re-check) instead of
-        /// replacing them.</param>
+        /// <summary>Apply a <c>GET /2/chat/features</c> response body.</summary>
         /// <exception cref="ChatXdkException">The body is not a JSON object with a
         /// <c>features</c> object; nothing changes.</exception>
-        public void ApplyFeatureConfig(string json, int? bucket = null, bool downgradeOnly = false)
+        internal void ApplyFeatureConfig(string json, int? bucket = null, bool downgradeOnly = false)
         {
             ThrowIfDisposed();
             var jsonBytes = Utf8Z(json);
             fixed (byte* jsonPtr = jsonBytes)
-                ConsumeResult(NativeMethods.chat_xdk_apply_feature_config(
+                ConsumeResult(NativeMethods.chat_xdk_internal_apply_feature_config(
                     _handle, jsonPtr, bucket ?? -1, downgradeOnly ? 1 : 0));
             GC.KeepAlive(this);
         }
 
-        /// <summary>
-        /// Whether keys loaded after a response to a request without a bucket applied, so the
-        /// flags must be fetched again with <see cref="FeatureBucket"/>. Every flag reads off
-        /// until they are.
-        /// </summary>
-        public bool FeatureRefetchDue()
+        /// <summary>Whether keys are loaded but no response for their bucket has applied.</summary>
+        internal bool FeatureRefetchDue()
         {
             ThrowIfDisposed();
-            var due = NativeMethods.chat_xdk_feature_refetch_due(_handle);
+            var due = NativeMethods.chat_xdk_internal_feature_refetch_due(_handle);
             GC.KeepAlive(this);
             return due == 1;
         }
 
-        // Refresher entry points: serialized against the exclusive calls and Dispose, and
-        // inert once disposed.
+        // The feature task's entry points: serialized against the exclusive calls and
+        // Dispose, and inert once disposed.
 
         internal bool Disposed => Volatile.Read(ref _disposed);
 
@@ -375,7 +332,7 @@ namespace ChatXdk
             {
                 bucket = -1;
                 if (_disposed) return false;
-                bucket = NativeMethods.chat_xdk_feature_bucket(_handle);
+                bucket = NativeMethods.chat_xdk_internal_feature_bucket(_handle);
                 return true;
             }
         }
@@ -388,7 +345,7 @@ namespace ChatXdk
                 var jsonBytes = Utf8Z(json);
                 FfiResult result;
                 fixed (byte* jsonPtr = jsonBytes)
-                    result = NativeMethods.chat_xdk_apply_feature_config(
+                    result = NativeMethods.chat_xdk_internal_apply_feature_config(
                         _handle, jsonPtr, bucket, downgradeOnly ? 1 : 0);
                 try
                 {
@@ -402,10 +359,19 @@ namespace ChatXdk
             }
         }
 
-        internal bool FeatureRefetchDueForRefresh()
+        internal bool FeatureRefetchDueForTask()
         {
             lock (_exclusive)
-                return !_disposed && NativeMethods.chat_xdk_feature_refetch_due(_handle) == 1;
+                return !_disposed && NativeMethods.chat_xdk_internal_feature_refetch_due(_handle) == 1;
+        }
+
+        /// <summary>Whether a response for the loaded key's bucket has applied.</summary>
+        internal bool FeaturesKeyed()
+        {
+            lock (_exclusive)
+                return !_disposed
+                    && NativeMethods.chat_xdk_internal_feature_bucket(_handle) >= 0
+                    && NativeMethods.chat_xdk_internal_feature_refetch_due(_handle) == 0;
         }
 
         /// <summary>Clear all key material from memory without touching Juicebox.</summary>
