@@ -893,7 +893,7 @@ export interface CreateChatOptions {
  * it (doing so throws). Call `free()` only when abandoning a file without
  * finishing it.
  */
-export declare class FileEncryptor {
+export interface FileEncryptor {
   /** Encrypt a chunk of the file, returning the encrypted bytes available so far. */
   push(plaintext: Uint8Array): Uint8Array;
   /** Emit the final frame; consumes and frees the encryptor. */
@@ -912,7 +912,7 @@ export declare class FileEncryptor {
  * it (doing so throws). Call `free()` only when abandoning a file without
  * finishing it.
  */
-export declare class FileDecryptor {
+export interface FileDecryptor {
   /** Decrypt a chunk of the encrypted file, returning the bytes available so far. */
   push(ciphertext: Uint8Array): Uint8Array;
   /** Decrypt the final frame; consumes and frees the decryptor. */
@@ -1303,3 +1303,6 @@ export declare function detectMimeType(bytes: Uint8Array): string | undefined;
 
 /** Detect image dimensions from file bytes. Returns { width, height } or null. */
 export declare function detectImageDimensions(bytes: Uint8Array): ImageDimensions | null;
+
+// Only the declarations marked `export` above are part of the module.
+export {};
