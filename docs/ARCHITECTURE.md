@@ -201,7 +201,9 @@ The core holds each chat's switches and picks each send's format from them.
 Only the language bindings make the request, each with its own HTTP stack:
 
 - **When:** when a chat is created; again with the identity key's bucket once
-  keys load; then a re-check every 300 s that can only turn switches off. A
+  keys load; then a re-check every 300 s that can only turn switches off, so
+  a chat that is already running picks up a switch turning on only when it
+  is created again, while one turning off reaches it within 300 s. A
   failed fetch is retried with a backoff that doubles from 1 s up to 300 s.
   Chats in one process that ask for the same bucket while a request for it is
   in flight wait for that request instead of making their own.

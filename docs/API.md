@@ -791,7 +791,11 @@ The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings fetch in the background (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
 **The Rust crate never fetches it, so `ChatCore` and `Chat` always send
-v0.** They read v1 sends like every binding.
+v0.** They read v1 sends like every binding. The fetch logs nothing; to see
+which format a send used, read the payload's
+`signature_info.signature_version`: `"7"` for v0, `"10"` for v1. A 0.5.x
+reader rejects a v1 send as a signature verification failure, so in its logs
+v1 sends look like forged messages.
 
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
