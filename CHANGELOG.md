@@ -11,17 +11,21 @@ wire formats, and the SDK picks which:
 
 - **v0**, the 0.5.x format: contents are encrypted under the conversation
   key, `contents_encryption_version` is unset, and the send is signed at
-  signature version 7.
+  signature version 7. Message ids are random, attachments carry no id, and
+  an edit does not name the message it edits, as in 0.5.x.
 - **v1**, per-message keys: contents are encrypted under a key derived from
   the conversation key, the sender id and the message id, the
   `MessageCreateEvent` carries `contents_encryption_version` 1, and the send
-  is signed at signature version 10, which covers that field.
+  is signed at signature version 10, which covers that field. A message with
+  files takes an id derived from them, each attachment carries an id, and an
+  edit names the message it edits.
 
-Sends are v0 unless the X API turns v1 on, and always v0 from the Rust crate,
-which does not fetch the switch. Readers need per-message-key
-support for v1 sends, and 0.5.x returns a decryption error for each of them,
-so upgrade readers first. Other signed actions (conversation-key changes,
-group changes and deletes) still sign at version 7.
+Sends are v0 unless the X API turns v1 on, and always v0 from the Rust
+crate, which does not fetch the switch. Readers need per-message-key support
+for v1 sends: 0.5.x rejects each one as a signature verification failure (an
+ECDSA mismatch), so upgrade readers first. Other signed actions
+(conversation-key changes, group changes and deletes) still sign at version
+7.
 
 `sender_id` must be the sender's numeric user id, and
 `conversation_key_version` an integer as its key-change event carries it.
@@ -68,8 +72,10 @@ the same way.
 
 #### A message with files is built before its files are encrypted
 
-Each file of a message is encrypted under its own key, derived from the
-message's key and the file's attachment, so the message comes first:
+In v1 each file of a message is encrypted under its own key, derived from
+the message's key and the file's attachment; in v0 every file is under the
+conversation key, as in 0.5.x. Either way the file calls take the key from
+the message, so the message comes first:
 
 1. Start each file's upload and keep its media hash key. The upload's total
    size is `encrypted_file_size` of the file's size.
@@ -396,6 +402,19 @@ prepared = chat.prepare_conversation_key_change(
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
   `SdkError::InvalidState` is left for values neither passed nor set on the
   chat, such as a missing session identity or an empty key cache.
+- Every binding but Rust now makes an outbound HTTPS request from each chat:
+  `GET https://api.x.com/2/chat/features`, in the background (see Added).
+  Allow it through egress filters for v1 sends; blocked, sends stay v0.
+  Release each chat when you're done with it (`free()` in JS, `close()` in
+  Python and the JVM, `Close()` in Go, `Dispose()` in .NET) to stop its
+  requests; a garbage-collected chat stops too. In Node 20.16 and later a
+  pending request never keeps the process alive.
+- Python: `chat_xdk.Chat` is a Python subclass of the native class, and each
+  instance runs a daemon thread for that request. The new `Chat.close()`
+  stops it.
+- JS typings export only what the module exports. `Chat` and `ChatCrypto`,
+  which the module never exported, no longer import, and `FileEncryptor` /
+  `FileDecryptor`, which it returns but does not export, are interfaces.
 
 ### Added
 
@@ -411,7 +430,7 @@ prepared = chat.prepare_conversation_key_change(
   API documents that field.
 - Messages encrypted under per-message keys (`contents_encryption_version`
   1 or more) decrypt, as do their reply previews, edits and files. A reply
-  to such a message carries the original's key, and an edit names the
+  to such a message carries the original's key, and a v1 edit names the
   message it edits.
 - Signatures verify at versions 8 through 11, in the payload layout of the
   version each carries. Versions above 11 are rejected.
