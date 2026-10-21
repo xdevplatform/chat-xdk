@@ -1,13 +1,18 @@
 package com.x.chatxdk;
 
+import java.io.ByteArrayOutputStream;
 import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -175,7 +180,10 @@ final class FeatureSwitches {
         return body != null && apply(ref, body, bucket, downgradeOnly);
     }
 
-    /** The body of a 200 response from {@code url} within {@code timeout}, or null on any failure. */
+    /**
+     * The body of a 200 response from {@code url} within {@code timeout} in all, or null on any
+     * failure.
+     */
     private static String get(String url, Duration timeout) {
         CompletableFuture<HttpResponse<byte[]>> future = null;
         try {
@@ -184,10 +192,10 @@ final class FeatureSwitches {
                     .header("Accept", "application/json")
                     .GET()
                     .build();
-            future = HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
+            future = HTTP.sendAsync(request, info -> new CappedBody());
             HttpResponse<byte[]> response = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             byte[] body = response.body();
-            if (response.statusCode() != 200 || body == null || body.length > MAX_BODY) {
+            if (response.statusCode() != 200 || body == null) {
                 return null;
             }
             return new String(body, StandardCharsets.UTF_8);
@@ -205,5 +213,50 @@ final class FeatureSwitches {
 
     private static long now() {
         return System.nanoTime() / 1_000_000;
+    }
+
+    /** Collects a body of at most {@link #MAX_BODY} bytes; a longer one is cut off as null. */
+    private static final class CappedBody implements HttpResponse.BodySubscriber<byte[]> {
+        private final CompletableFuture<byte[]> result = new CompletableFuture<>();
+        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        private Flow.Subscription subscription;
+
+        @Override
+        public CompletionStage<byte[]> getBody() {
+            return result;
+        }
+
+        @Override
+        public void onSubscribe(Flow.Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(Long.MAX_VALUE);
+        }
+
+        @Override
+        public void onNext(List<ByteBuffer> buffers) {
+            for (ByteBuffer buffer : buffers) {
+                if (result.isDone()) {
+                    return;
+                }
+                if (bytes.size() + buffer.remaining() > MAX_BODY) {
+                    subscription.cancel();
+                    result.complete(null);
+                    return;
+                }
+                byte[] chunk = new byte[buffer.remaining()];
+                buffer.get(chunk);
+                bytes.write(chunk, 0, chunk.length);
+            }
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            result.completeExceptionally(error);
+        }
+
+        @Override
+        public void onComplete() {
+            result.complete(bytes.toByteArray());
+        }
     }
 }

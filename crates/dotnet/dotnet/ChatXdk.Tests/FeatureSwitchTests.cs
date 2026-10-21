@@ -304,6 +304,10 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public Task AnOversizedBody_LeavesEveryFlagOff() =>
+            AnyFailure_LeavesEveryFlagOff(200, "{\"features\":{\"v1_send\":true}}" + new string(' ', 64 * 1024), 0);
+
+        [Fact]
         public async Task AnUnreachableEndpoint_LeavesEveryFlagOff()
         {
             string endpoint;

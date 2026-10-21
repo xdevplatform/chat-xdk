@@ -736,7 +736,10 @@ function getWithNode(http, url, timeoutMs, request) {
   });
 }
 
-/** GET `url` with `fetch`, where Node's http module is out of reach. */
+/**
+ * GET `url` with `fetch`, where Node's http module is out of reach. The
+ * timeout covers reading the body too.
+ */
 async function getWithFetch(url, timeoutMs, request) {
   const timer = unrefTimer(setTimeout(() => request.abort(), timeoutMs));
   try {
@@ -745,13 +748,40 @@ async function getWithFetch(url, timeoutMs, request) {
       signal: request.signal,
     });
     if (response.status !== 200) return null;
-    const body = await response.text();
-    return body.length > MAX_FEATURES_BODY ? null : body;
+    return await readCappedBody(response);
   } catch {
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The body as text, or null once it grows past the cap. */
+async function readCappedBody(response) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const body = new Uint8Array(await response.arrayBuffer());
+    return body.byteLength > MAX_FEATURES_BODY ? null : new TextDecoder().decode(body);
+  }
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_FEATURES_BODY) {
+      reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
 }
 
 /**

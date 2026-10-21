@@ -245,9 +245,10 @@ async function anyFailureLeavesEveryFlagOff(v, server) {
     [200, "not json", 0],
     [200, '{"v1_send":true}', 0],
     [200, '{"features":{"v1_send":true}}', 1500],
+    [200, '{"features":{"v1_send":true}}' + " ".repeat(64 * 1024), 0],
   ];
   for (const [status, body, delayMs] of cases) {
-    const label = `${status} ${body} ${delayMs}`;
+    const label = `${status} ${body.slice(0, 40)} (${body.length} bytes) ${delayMs}`;
     Object.assign(server, { status, body, delayMs });
     server.buckets.length = 0;
     const { chat, inner } = await newChat(server.endpoint);

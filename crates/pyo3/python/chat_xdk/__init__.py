@@ -123,17 +123,50 @@ def _fetch_features(chat, endpoint, timeout, downgrade_only):
         url = endpoint
         if bucket is not None:
             url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
-        request = _urllib_request.Request(url, headers={"Accept": "application/json"})
-        with _urllib_request.urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                return False
-            body = response.read(_MAX_FEATURES_BODY + 1)
-        if len(body) > _MAX_FEATURES_BODY:
+        body = _get_features(url, timeout)
+        if body is None:
             return False
-        chat._apply_feature_config(body.decode("utf-8"), bucket, downgrade_only)
+        chat._apply_feature_config(body, bucket, downgrade_only)
     except Exception:
         return False
     return True
+
+
+def _get_features(url, timeout):
+    """The body of a 200 response from ``url``, or None on any failure,
+    within ``timeout`` seconds in all. The request runs on its own daemon
+    thread, since urllib's timeout covers neither DNS nor the whole read."""
+    result = []
+    worker = _threading.Thread(
+        target=lambda: result.append(_request_features(url, timeout)),
+        name="chat-xdk-features-request",
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout)
+    return result[0] if result else None
+
+
+def _request_features(url, timeout):
+    deadline = _time.monotonic() + timeout
+    try:
+        request = _urllib_request.Request(url, headers={"Accept": "application/json"})
+        with _urllib_request.urlopen(request, timeout=timeout) as response:
+            if response.status != 200:
+                return None
+            chunks = []
+            size = 0
+            while _time.monotonic() < deadline:
+                chunk = response.read1(16 * 1024)
+                if not chunk:
+                    return b"".join(chunks).decode("utf-8")
+                size += len(chunk)
+                if size > _MAX_FEATURES_BODY:
+                    return None
+                chunks.append(chunk)
+    except Exception:
+        pass
+    return None
 
 
 def _feature_loop(chat_ref, settings, stop):

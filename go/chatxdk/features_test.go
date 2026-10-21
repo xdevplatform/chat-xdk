@@ -363,6 +363,7 @@ func TestAnyFailureLeavesEveryFlagOff(t *testing.T) {
 		{http.StatusOK, `not json`, 0},
 		{http.StatusOK, `{"v1_send":true}`, 0},
 		{http.StatusOK, `{"features":{"v1_send":true}}`, 1500 * time.Millisecond},
+		{http.StatusOK, `{"features":{"v1_send":true}}` + strings.Repeat(" ", 64*1024), 0},
 	}
 	for _, tc := range cases {
 		server := newFeatureServer(t)
@@ -377,10 +378,10 @@ func TestAnyFailureLeavesEveryFlagOff(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		if chat.isEnabled("v1_send") {
-			t.Errorf("%d %q: v1_send on", tc.status, tc.body)
+			t.Errorf("%d %.40q (%d bytes): v1_send on", tc.status, tc.body, len(tc.body))
 		}
 		if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "7" {
-			t.Errorf("%d %q: signature version %q, want 7", tc.status, tc.body, got)
+			t.Errorf("%d %.40q (%d bytes): signature version %q, want 7", tc.status, tc.body, len(tc.body), got)
 		}
 	}
 }

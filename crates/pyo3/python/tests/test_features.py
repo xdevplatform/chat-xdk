@@ -32,6 +32,7 @@ class _FeatureServer:
         self.status = 200
         self.body = '{"features":{"v1_send":true}}'
         self.delay = 0.0
+        self.drip = 0.0
         self.buckets = []
         server = self
 
@@ -49,7 +50,14 @@ class _FeatureServer:
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
-                    self.wfile.write(body)
+                    if server.drip:
+                        # One byte at a time, each well inside the timeout.
+                        for i in range(len(body)):
+                            self.wfile.write(body[i : i + 1])
+                            self.wfile.flush()
+                            time.sleep(server.drip)
+                    else:
+                        self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -216,9 +224,10 @@ class TestFeatureSwitches(unittest.TestCase):
             (200, "not json", 0.0),
             (200, '{"v1_send":true}', 0.0),
             (200, '{"features":{"v1_send":true}}', 1.5),
+            (200, '{"features":{"v1_send":true}}' + " " * (64 * 1024), 0.0),
         ]
         for status, body, delay in cases:
-            with self.subTest(status=status, body=body, delay=delay):
+            with self.subTest(status=status, body=body[:40], size=len(body), delay=delay):
                 self.server.status, self.server.body, self.server.delay = status, body, delay
                 self.server.buckets.clear()
                 chat = self._chat()
@@ -277,6 +286,14 @@ class TestFeatureSwitches(unittest.TestCase):
         seen = len(self.server.buckets)
         time.sleep(1.2)
         self.assertEqual(len(self.server.buckets), seen)
+
+    def test_a_body_still_arriving_at_the_timeout_is_dropped(self):
+        import chat_xdk
+
+        self.server.drip = 0.1
+        started = time.monotonic()
+        self.assertIsNone(chat_xdk._get_features(self.server.url, 0.5))
+        self.assertLess(time.monotonic() - started, 1.0)
 
     def _feature_threads(self):
         return [t for t in threading.enumerate() if t.name == "chat-xdk-features"]

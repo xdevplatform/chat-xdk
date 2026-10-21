@@ -281,10 +281,13 @@ class FeatureSwitchTest {
             {200, "not json", 0L},
             {200, "{\"v1_send\":true}", 0L},
             {200, "{\"features\":{\"v1_send\":true}}", 1500L},
+            {200, "{\"features\":{\"v1_send\":true}}" + " ".repeat(64 * 1024), 0L},
         };
         for (Object[] c : cases) {
             long delayMs = (Long) c[2];
-            String what = c[0] + " " + c[1] + " " + delayMs;
+            String body = (String) c[1];
+            String what = c[0] + " " + body.substring(0, Math.min(40, body.length()))
+                    + " (" + body.length() + " bytes) " + delayMs;
             try (FeatureServer server = new FeatureServer()) {
                 server.set((Integer) c[0], (String) c[1], delayMs);
                 try (Chat chat = withKeys(newChat(server.endpoint))) {
