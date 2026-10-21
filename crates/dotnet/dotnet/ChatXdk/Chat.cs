@@ -114,10 +114,14 @@ namespace ChatXdk
 
         private void Dispose(bool disposing)
         {
-            // Both the finalizer and Dispose() paths end here.
-            // We only need to free the unmanaged handle; there are no managed resources.
+            // Both the finalizer and Dispose() paths end here: stop the feature task
+            // and free the unmanaged handle. CancelAsync keeps the task's continuation
+            // off the finalizer thread.
+            var featureStop = Interlocked.Exchange(ref _featureStop, null);
             if (disposing)
-                Interlocked.Exchange(ref _featureStop, null)?.Cancel();
+                featureStop?.Cancel();
+            else
+                _ = featureStop?.CancelAsync();
             lock (_exclusive)
             {
                 if (!_disposed)

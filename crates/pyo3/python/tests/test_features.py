@@ -278,6 +278,32 @@ class TestFeatureSwitches(unittest.TestCase):
         time.sleep(1.2)
         self.assertEqual(len(self.server.buckets), seen)
 
+    def _feature_threads(self):
+        return [t for t in threading.enumerate() if t.name == "chat-xdk-features"]
+
+    def test_a_dropped_chat_stops_its_thread_without_waiting_for_the_recheck(self):
+        baseline = len(self._feature_threads())
+        chats = [self._chat() for _ in range(5)]
+        for chat in chats:
+            self.assertTrue(_wait_for(lambda chat=chat: not chat._feature_refetch_due()))
+        self.assertEqual(len(self._feature_threads()), baseline + 5)
+        # With keys answered, each thread sleeps until the hour-long re-check.
+        del chat, chats
+        gc.collect()
+        self.assertTrue(
+            _wait_for(lambda: len(self._feature_threads()) == baseline, timeout=3.0),
+            self._feature_threads(),
+        )
+
+    def test_close_stops_the_thread(self):
+        baseline = len(self._feature_threads())
+        chat = self._chat()
+        self.assertTrue(_wait_for(lambda: not chat._feature_refetch_due()))
+        self.assertEqual(len(self._feature_threads()), baseline + 1)
+        chat.close()
+        self.assertTrue(_wait_for(lambda: len(self._feature_threads()) == baseline, timeout=3.0))
+        self.assertEqual(self._send(chat).signature_info.signature_version, "10")
+
     def test_a_malformed_body_is_rejected_and_changes_nothing(self):
         # The fetch never applies anything, so only the calls below change
         # the flags.

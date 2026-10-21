@@ -50,9 +50,9 @@ public final class Chat implements AutoCloseable {
     static final Cleaner CLEANER = Cleaner.create();
 
     /**
-     * Frees a native Chat handle. Registered with {@link #CLEANER}; the cleaner
-     * runs a registered action at most once, so an explicit {@code close()} and
-     * the GC backstop can never double-free.
+     * Stops a Chat's feature thread and frees its native handle. Registered with
+     * {@link #CLEANER}; the cleaner runs a registered action at most once, so an
+     * explicit {@code close()} and the GC backstop can never double-free.
      *
      * <p>An object becomes phantom-reachable as soon as its last use passes —
      * even while one of its methods is still executing native code — so every
@@ -62,13 +62,16 @@ public final class Chat implements AutoCloseable {
      */
     private static final class FreeHandle implements Runnable {
         private final Pointer handle;
+        private final FeatureSwitches.Runner featureRunner;
 
-        FreeHandle(Pointer handle) {
+        FreeHandle(Pointer handle, FeatureSwitches.Runner featureRunner) {
             this.handle = handle;
+            this.featureRunner = featureRunner;
         }
 
         @Override
         public void run() {
+            FeatureSwitches.stop(featureRunner);
             ChatNative.INSTANCE.chat_xdk_free(handle);
         }
     }
@@ -102,8 +105,8 @@ public final class Chat implements AutoCloseable {
             throw new IllegalStateException(
                     "chat_xdk_new() returned null — ensure libchat_xdk_dotnet is on jna.library.path.");
         }
-        cleanable = CLEANER.register(this, new FreeHandle(handle));
         featureRunner = FeatureSwitches.start(this, featureOptions);
+        cleanable = CLEANER.register(this, new FreeHandle(handle, featureRunner));
     }
 
     /**

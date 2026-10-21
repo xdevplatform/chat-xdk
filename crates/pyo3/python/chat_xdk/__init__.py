@@ -87,11 +87,20 @@ class Chat(_NativeChat):
     def __init__(self, *args, **kwargs):
         # The native constructor already ran; this only starts the
         # feature-switch thread.
-        _start_feature_switches(self)
+        self._feature_stop = _start_feature_switches(self)
+
+    def close(self):
+        """Stop this chat's background work: its fetch of the X API's
+        feature switches. A chat that is garbage-collected stops it too."""
+        self._feature_stop.set()
 
 
 def _start_feature_switches(chat):
-    """Fetch the flags for ``chat`` on a daemon thread that holds it weakly."""
+    """Fetch the flags for ``chat`` on a daemon thread that holds it weakly.
+    Returns the event that stops the thread, which ``chat`` being
+    garbage-collected also sets."""
+    stop = _threading.Event()
+    _weakref.finalize(chat, stop.set)
     settings = (
         _os.environ.get(_FEATURES_ENDPOINT_ENV) or _FEATURES_ENDPOINT,
         _FEATURE_TIMEOUT_SECONDS,
@@ -100,10 +109,11 @@ def _start_feature_switches(chat):
     )
     _threading.Thread(
         target=_feature_loop,
-        args=(_weakref.ref(chat), settings),
+        args=(_weakref.ref(chat), settings, stop),
         name="chat-xdk-features",
         daemon=True,
     ).start()
+    return stop
 
 
 def _fetch_features(chat, endpoint, timeout, downgrade_only):
@@ -126,22 +136,22 @@ def _fetch_features(chat, endpoint, timeout, downgrade_only):
     return True
 
 
-def _feature_loop(chat_ref, settings):
+def _feature_loop(chat_ref, settings, stop):
     """Fetch once now (retrying once), then again with the key's bucket once
     keys load, retrying with backoff, and re-check every refresh interval
-    with a fetch that can only turn flags off. Ends with the chat."""
+    with a fetch that can only turn flags off. Ends when ``stop`` is set."""
     endpoint, timeout, refresh, key_poll = settings
     chat = chat_ref()
     if chat is None:
         return
-    _fetch_features(chat, endpoint, timeout, False) or _fetch_features(
+    _fetch_features(chat, endpoint, timeout, False) or stop.is_set() or _fetch_features(
         chat, endpoint, timeout, False
     )
     del chat
     next_recheck = _time.monotonic() + refresh
     retry_at = 0.0
     backoff = 1.0
-    while True:
+    while not stop.is_set():
         chat = chat_ref()
         if chat is None:
             return
@@ -168,7 +178,8 @@ def _feature_loop(chat_ref, settings):
         # Until a response for the key's bucket applies, watch for keys to
         # load; afterwards, wake only for the re-check.
         wait = max(0.0, next_recheck - _time.monotonic()) if keyed else key_poll
-        _time.sleep(wait)
+        if stop.wait(wait):
+            return
 
 
 class QuickReplyOption(TypedDict, total=False):

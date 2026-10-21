@@ -375,6 +375,34 @@ class FeatureSwitchTest {
         }
     }
 
+    private static long featureThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(thread -> thread.getName().equals("chat-xdk-features"))
+                .count();
+    }
+
+    /** Keyed chats that nothing references once this returns, re-checking hourly. */
+    private static void startUnreferencedKeyedChats(String endpoint, int count) throws Exception {
+        for (int i = 0; i < count; i++) {
+            Chat chat = withKeys(newChat(endpoint, 3_600_000, 500));
+            waitFor("the key answer", () -> !chat.featureRefetchDue());
+        }
+    }
+
+    @Test
+    void aCollectedChatStopsItsThreadWithoutWaitingForTheRecheck() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            long baseline = featureThreads();
+            startUnreferencedKeyedChats(server.endpoint, 3);
+            assertEquals(baseline + 3, featureThreads());
+            for (int i = 0; i < 20 && featureThreads() > baseline; i++) {
+                System.gc();
+                Thread.sleep(100);
+            }
+            waitFor("the threads to end", () -> featureThreads() == baseline);
+        }
+    }
+
     @Test
     void aMalformedBodyIsRejectedAndChangesNothing() throws Exception {
         try (FeatureServer server = new FeatureServer()) {
