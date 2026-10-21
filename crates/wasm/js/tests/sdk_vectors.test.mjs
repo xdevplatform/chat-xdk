@@ -304,10 +304,10 @@ async function main() {
   assert.equal(failure.rateLimitTier, "premium");
   assert.equal(failure.senderId, v.event_sender_id);
 
-  // Session identity + opt-in key cache: importKeys(bytes, version) records
-  // the registered key version, decryptEvents populates the cache from the
-  // verified KeyChange, and encryptMessage resolves the omitted identity and
-  // key pair from the session.
+  // Session identity + opt-in key cache: importKeys with a signingKeyVersion
+  // records the registered key version, decryptEvents populates the cache
+  // from the verified KeyChange, and encryptMessage resolves the omitted
+  // identity and key pair from the session.
   {
     const session = new Chat();
     session.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
