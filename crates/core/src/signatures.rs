@@ -14,10 +14,10 @@ pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 /// Current signature protocol version.
 pub const SIGNATURE_VERSION: &str = "7";
 
-/// Signature version of the messages this SDK sends: the first version whose
-/// payload signs `contents_encryption_version`, so the choice of key for the
-/// contents is covered by the signature.
-pub const MESSAGE_SIGNATURE_VERSION: i32 = 10;
+/// Signature version of v1 sends: the first version whose payload signs
+/// `contents_encryption_version`, so the choice of key for the contents is
+/// covered by the signature. v0 sends sign at [`SIGNATURE_VERSION`].
+pub(crate) const MESSAGE_SIGNATURE_VERSION: i32 = 10;
 
 /// Minimum signature version accepted on verification. v1 payloads omit
 /// the event-type discriminant and conversation-key version, so accepting
@@ -287,7 +287,7 @@ pub fn build_message_delete_signature(
 ///
 /// The payload is comma-joined with no escaping, so signing fails with a
 /// parse error if any component contains a comma.
-pub fn build_mark_conversation_read_signature(
+pub(crate) fn build_mark_conversation_read_signature(
     signing_key: &XChatPrivateKey,
     public_key_version: &str,
     message_id: &str,
