@@ -113,10 +113,10 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat = Chat()
         chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
 
-        public_keys = [{"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}]
+        public_keys = [{"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
-                public_keys, conversation_id="conv-1", sender_id="me", signing_key_version="1"
+                public_keys, conversation_id="conv-1", sender_id="910002", signing_key_version="1"
             )
         )
         encrypted_key_b64 = result["participant_keys"][0]["encrypted_key"]
@@ -406,7 +406,7 @@ class TestPythonSdkVectors(unittest.TestCase):
                 "Yes",
                 None,
                 reply_to_sequence_id="seq-orig",
-                reply_to_sender_id=int(v["event_sender_id"]),
+                reply_to_sender_id=v["event_sender_id"],
                 reply_to_text="Continue?",
                 conversation_key=base64.b64decode(v["conversation_key_b64"]),
                 conversation_key_version=v["event_conversation_key_version"],

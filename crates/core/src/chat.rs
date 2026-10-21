@@ -831,7 +831,7 @@ mod tests {
             .with_identity("4101", "v1")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-99".into());
-        params.reply_to_sender_id = Some(12345);
+        params.reply_to_sender_id = Some("12345".to_string());
         params.reply_to_text = Some("Original message".into());
         let payload = chat.encrypt_reply(&params).unwrap();
         assert!(!payload.encrypted_content.is_empty());
@@ -948,7 +948,7 @@ mod tests {
         let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-99".into());
-        params.reply_to_sender_id = Some(12345);
+        params.reply_to_sender_id = Some("12345".to_string());
         params.reply_to_text = Some("Original".into());
         params.attachments = Some(vec![AttachmentDescriptor::Media {
             media_hash_key: "hash123".into(),
@@ -974,12 +974,12 @@ mod tests {
 
         let public_keys = chat.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "me".into(),
+            user_id: "910002".into(),
             public_key: public_keys.identity.clone(),
             key_version: "1".into(),
         }];
 
-        let mut params = ConversationKeyChangeParams::new(input).with_identity("me", "1");
+        let mut params = ConversationKeyChangeParams::new(input).with_identity("910002", "1");
         params.conversation_id = Some("conv-1".into());
         let result = chat.prepare_conversation_key_change(&params).unwrap();
 
@@ -989,7 +989,7 @@ mod tests {
         let version: u64 = result.conversation_key_version.parse().unwrap();
         assert!(version > 1_000_000_000_000); // should be millis
         assert_eq!(result.participant_keys.len(), 1);
-        assert_eq!(result.participant_keys[0].user_id, "me");
+        assert_eq!(result.participant_keys[0].user_id, "910002");
         assert_eq!(result.participant_keys[0].public_key_version, "1");
         assert!(!result.participant_keys[0].encrypted_key.is_empty());
 
@@ -1017,18 +1017,18 @@ mod tests {
         // Same user with two key versions — should pick version "2"
         let input = vec![
             PublicKeyInput {
-                user_id: "alice".into(),
+                user_id: "910001".into(),
                 public_key: public_keys.identity.clone(),
                 key_version: "1".into(),
             },
             PublicKeyInput {
-                user_id: "alice".into(),
+                user_id: "910001".into(),
                 public_key: public_keys.identity.clone(),
                 key_version: "2".into(),
             },
         ];
 
-        let mut params = ConversationKeyChangeParams::new(input).with_identity("alice", "1");
+        let mut params = ConversationKeyChangeParams::new(input).with_identity("910001", "1");
         params.conversation_id = Some("conv-1".into());
         let result = chat.prepare_conversation_key_change(&params).unwrap();
         assert_eq!(result.participant_keys.len(), 1);
@@ -1101,7 +1101,7 @@ mod tests {
         chat.generate_keypairs().unwrap();
         chat.setup(b"2580").await.unwrap();
 
-        let mut params = ConversationKeyChangeParams::new(vec![]).with_identity("me", "1");
+        let mut params = ConversationKeyChangeParams::new(vec![]).with_identity("910002", "1");
         params.conversation_id = Some("conv-1".into());
         let result = chat.prepare_conversation_key_change(&params);
         assert!(result.is_err());
@@ -1135,7 +1135,7 @@ mod tests {
 
         let public_keys = chat.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "me".into(),
+            user_id: "910002".into(),
             public_key: public_keys.identity.clone(),
             key_version: "1".into(),
         }];
@@ -1143,12 +1143,12 @@ mod tests {
         let mut params = GroupMembersChangeParams::new(
             input,
             "g123",
-            vec!["new-1".to_string()],
-            vec!["me".to_string()],
-            vec!["me".to_string()],
+            vec!["910006".to_string()],
+            vec!["910002".to_string()],
+            vec!["910002".to_string()],
             vec![],
         )
-        .with_identity("me", "1");
+        .with_identity("910002", "1");
         params.current_title = Some("Team".into());
         let result = chat.prepare_group_members_change(&params).unwrap();
 
@@ -1177,7 +1177,7 @@ mod tests {
 
         let public_keys = chat.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "me".into(),
+            user_id: "910002".into(),
             public_key: public_keys.identity.clone(),
             key_version: "1".into(),
         }];
@@ -1185,10 +1185,10 @@ mod tests {
         let mut params = GroupCreateParams::new(
             input,
             "g123",
-            vec!["me".to_string(), "friend".to_string()],
-            vec!["me".to_string()],
+            vec!["910002".to_string(), "910005".to_string()],
+            vec!["910002".to_string()],
         )
-        .with_identity("me", "1");
+        .with_identity("910002", "1");
         params.title = Some("Team".into());
         let result = chat.prepare_group_create(&params).unwrap();
 
@@ -1328,7 +1328,7 @@ mod tests {
 
     fn make_recipient(public_key: &str) -> RecipientInput {
         RecipientInput {
-            user_id: "me".into(),
+            user_id: "910002".into(),
             public_key: public_key.to_string(),
             key_version: "1".into(),
         }
@@ -1578,7 +1578,7 @@ mod tests {
             .sign_add_members(
                 "1",
                 "msg-1",
-                "sender-1",
+                "910003",
                 "conv-1",
                 &["new-member-1".to_string()],
                 &["member-1".to_string(), "member-2".to_string()],
@@ -1605,7 +1605,7 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
         let sig = chat
             .inner
-            .sign_key_change("1", "msg-1", "sender-1", "conv-1", "2", ckey.encoded())
+            .sign_key_change("1", "msg-1", "910003", "conv-1", "2", ckey.encoded())
             .unwrap();
 
         assert!(!sig.signature.is_empty());

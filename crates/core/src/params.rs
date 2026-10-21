@@ -266,9 +266,9 @@ pub struct EncryptReplyParams {
     /// The `sequence_id` of the message being replied to; derived from
     /// `reply_to_event` when unset.
     pub reply_to_sequence_id: Option<String>,
-    /// The sender ID of the message being replied to (for preview); derived
-    /// from `reply_to_event` when unset.
-    pub reply_to_sender_id: Option<i64>,
+    /// The user ID of the message's sender, as digits (for the preview);
+    /// derived from `reply_to_event` when unset.
+    pub reply_to_sender_id: Option<String>,
     /// The text of the message being replied to (for preview); derived from
     /// `reply_to_event` when unset.
     pub reply_to_text: Option<String>,
@@ -1134,7 +1134,7 @@ mod tests {
     fn self_public_keys(core: &ChatCore) -> Vec<PublicKeyInput> {
         let pk = core.get_public_keys().unwrap();
         vec![PublicKeyInput {
-            user_id: "me".to_string(),
+            user_id: "910002".to_string(),
             public_key: pk.identity,
             key_version: "1".to_string(),
         }]
@@ -1201,7 +1201,7 @@ mod tests {
             .with_identity("1000", "2")
             .with_conversation_key(ckey, "1");
         params.reply_to_sequence_id = Some("seq-9".into());
-        params.reply_to_sender_id = Some(42);
+        params.reply_to_sender_id = Some("42".to_string());
         params.reply_to_text = Some("original".into());
 
         let payload = core.encrypt_reply(&params).unwrap();
@@ -1243,12 +1243,12 @@ mod tests {
         let public_keys = self_public_keys(&core);
 
         let mut via_new = ConversationKeyChangeParams::new(public_keys.clone());
-        via_new = via_new.with_identity("me", "1");
+        via_new = via_new.with_identity("910002", "1");
         via_new.conversation_id = Some("conv-1".into());
 
         let full = ConversationKeyChangeParams {
             public_keys,
-            sender_id: Some("me".into()),
+            sender_id: Some("910002".into()),
             signing_key_version: Some("1".into()),
             conversation_id: Some("conv-1".into()),
         };
@@ -1267,22 +1267,22 @@ mod tests {
         let mut via_new = GroupMembersChangeParams::new(
             public_keys.clone(),
             "g123",
-            vec!["new-1".into()],
-            vec!["me".into()],
-            vec!["me".into()],
+            vec!["910006".into()],
+            vec!["910002".into()],
+            vec!["910002".into()],
             vec![],
         )
-        .with_identity("me", "1");
+        .with_identity("910002", "1");
         via_new.current_title = Some("Team".into());
 
         let full = GroupMembersChangeParams {
             public_keys,
             conversation_id: "g123".into(),
-            new_member_ids: vec!["new-1".into()],
-            current_member_ids: vec!["me".into()],
-            current_admin_ids: vec!["me".into()],
+            new_member_ids: vec!["910006".into()],
+            current_member_ids: vec!["910002".into()],
+            current_admin_ids: vec!["910002".into()],
             current_pending_member_ids: vec![],
-            sender_id: Some("me".into()),
+            sender_id: Some("910002".into()),
             signing_key_version: Some("1".into()),
             current_title: Some("Team".into()),
             current_avatar_url: None,
@@ -1313,18 +1313,18 @@ mod tests {
         let mut via_new = GroupCreateParams::new(
             public_keys.clone(),
             "g123",
-            vec!["me".into(), "friend".into()],
-            vec!["me".into()],
+            vec!["910002".into(), "910005".into()],
+            vec!["910002".into()],
         )
-        .with_identity("me", "1");
+        .with_identity("910002", "1");
         via_new.title = Some("Team".into());
 
         let full = GroupCreateParams {
             public_keys,
             conversation_id: "g123".into(),
-            member_ids: vec!["me".into(), "friend".into()],
-            admin_ids: vec!["me".into()],
-            sender_id: Some("me".into()),
+            member_ids: vec!["910002".into(), "910005".into()],
+            admin_ids: vec!["910002".into()],
+            sender_id: Some("910002".into()),
             signing_key_version: Some("1".into()),
             title: Some("Team".into()),
             avatar_url: None,

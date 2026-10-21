@@ -89,9 +89,9 @@ class ChatCoreTest {
     void conversationKeyPrepareAndDecryptRoundtrip() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
-            core.setIdentity("me");
+            core.setIdentity("910002");
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = v.get("identity_public_b64").asText();
             input.keyVersion = "1";
             PreparedConversationChange prepared =

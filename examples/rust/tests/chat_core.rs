@@ -82,7 +82,7 @@ fn conversation_key_prepare_and_decrypt_roundtrip() {
     let prepared = core
         .prepare_conversation_key_change(
             &[PublicKeyInput {
-                user_id: "me".to_string(),
+                user_id: "910002".to_string(),
                 public_key: v["identity_public_b64"].as_str().unwrap().to_string(),
                 key_version: "1".to_string(),
             }],

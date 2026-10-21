@@ -295,9 +295,9 @@ func TestECIESConversationKeyRoundtrip(t *testing.T) {
 	}
 
 	// Prepare a key change for ourselves, then decrypt our own participant key.
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -513,9 +513,9 @@ func TestPrepareConversationKeyChangeGeneratesRandomKey(t *testing.T) {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -530,7 +530,7 @@ func TestPrepareConversationKeyChangeGeneratesRandomKey(t *testing.T) {
 
 	// Two prepared changes must produce different keys (random).
 	prep2, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -1394,10 +1394,10 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -1420,8 +1420,8 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	if len(prepared.ParticipantKeys) != 1 {
 		t.Fatalf("expected 1 participant key, got %d", len(prepared.ParticipantKeys))
 	}
-	if prepared.ParticipantKeys[0].UserID != "me" {
-		t.Errorf("expected user_id 'me', got %q", prepared.ParticipantKeys[0].UserID)
+	if prepared.ParticipantKeys[0].UserID != "910002" {
+		t.Errorf("expected user_id '910002', got %q", prepared.ParticipantKeys[0].UserID)
 	}
 	if len(prepared.ActionSignatures) != 1 {
 		t.Fatalf("expected 1 action signature, got %d", len(prepared.ActionSignatures))
@@ -1531,16 +1531,16 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "g123",
-		NewMemberIDs:      []string{"new-user"},
-		CurrentMemberIDs:  []string{"me"},
-		CurrentAdminIDs:   []string{"me"},
+		NewMemberIDs:      []string{"910009"},
+		CurrentMemberIDs:  []string{"910002"},
+		CurrentAdminIDs:   []string{"910002"},
 		CurrentTitle:      "Team",
 	})
 	if err != nil {
@@ -1578,15 +1578,15 @@ func TestPrepareGroupCreate(t *testing.T) {
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "g123",
-		MemberIDs:         []string{"me", "friend"},
-		AdminIDs:          []string{"me"},
+		MemberIDs:         []string{"910002", "910005"},
+		AdminIDs:          []string{"910002"},
 		Title:             "Team",
 	})
 	if err != nil {
@@ -1627,12 +1627,12 @@ func TestPrepareGroupCreateEmptyTitleSignsNullSentinel(t *testing.T) {
 	}
 
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
-		PublicKeys:        []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
+		PublicKeys:        []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
 		ConversationID:    "g123",
-		MemberIDs:         []string{"me", "friend"},
-		AdminIDs:          []string{"me"},
+		MemberIDs:         []string{"910002", "910005"},
+		AdminIDs:          []string{"910002"},
 		// Title and AvatarURL left as the zero value.
 	})
 	if err != nil {
@@ -1658,12 +1658,12 @@ func TestPrepareGroupCreateCommaTitleErrors(t *testing.T) {
 	}
 
 	_, err := chat.PrepareGroupCreate(GroupCreateParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
-		PublicKeys:        []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
+		PublicKeys:        []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
 		ConversationID:    "g123",
-		MemberIDs:         []string{"me", "friend"},
-		AdminIDs:          []string{"me"},
+		MemberIDs:         []string{"910002", "910005"},
+		AdminIDs:          []string{"910002"},
 		Title:             "Team, the sequel",
 	})
 	if err == nil {
@@ -2019,9 +2019,9 @@ func TestEncryptDecryptWithGeneratedKey(t *testing.T) {
 	}
 
 	// Get a fresh conversation key from a prepared key change and use it for encryption.
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -2092,7 +2092,7 @@ func TestEncryptMessageMixedAttachmentTypesRejected(t *testing.T) {
 	// Only image/gif/video media may appear in multiples; any other
 	// attachment type must be the message's only attachment.
 	_, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "910002",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "mixed attachments",
@@ -2205,9 +2205,9 @@ func TestDecryptWithWrongKey(t *testing.T) {
 	}
 
 	// Decrypt with a different key should fail
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	wrong, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -2257,14 +2257,13 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	replyText := "original message"
-	senderID := int64(12345)
 	payload, err := chat.EncryptReply(EncryptReplyParams{
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "replying with media",
 		ConversationKeyVersion: "1",
 		ReplyToSequenceID:      "seq-100",
-		ReplyToSenderID:        &senderID,
+		ReplyToSenderID:        "12345",
 		ReplyToText:            &replyText,
 		Attachments: []AttachmentDescriptor{
 			{
@@ -2355,16 +2354,16 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 	}
 
 	ttl := int64(86400000)
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
-		SenderID:                "me",
+		SenderID:                "910002",
 		SigningKeyVersion:       "1",
 		PublicKeys:              publicKeys,
 		ConversationID:          "g123",
-		NewMemberIDs:            []string{"user-new"},
-		CurrentMemberIDs:        []string{"me"},
-		CurrentAdminIDs:         []string{"me"},
-		CurrentPendingMemberIDs: []string{"user-pending"},
+		NewMemberIDs:            []string{"910010"},
+		CurrentMemberIDs:        []string{"910002"},
+		CurrentAdminIDs:         []string{"910002"},
+		CurrentPendingMemberIDs: []string{"910011"},
 		CurrentTitle:            "My Group Chat",
 		CurrentAvatarURL:        "https://example.com/avatar.png",
 		CurrentTTLMsec:          &ttl,
@@ -2396,15 +2395,15 @@ func TestPrepareGroupMembersChangeScreenCaptureBlocking(t *testing.T) {
 	}
 
 	enabled := true
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
-		SenderID:                            "me",
+		SenderID:                            "910002",
 		SigningKeyVersion:                   "1",
 		PublicKeys:                          publicKeys,
 		ConversationID:                      "g123",
-		NewMemberIDs:                        []string{"user-new"},
-		CurrentMemberIDs:                    []string{"me"},
-		CurrentAdminIDs:                     []string{"me"},
+		NewMemberIDs:                        []string{"910010"},
+		CurrentMemberIDs:                    []string{"910002"},
+		CurrentAdminIDs:                     []string{"910002"},
 		CurrentScreenCaptureBlockingEnabled: &enabled,
 	})
 	if err != nil {
@@ -2459,7 +2458,7 @@ func TestDecryptEventsWithSigningKeys(t *testing.T) {
 	// Pass signing keys with empty events; should succeed
 	signingKeys := []SigningKeyEntry{
 		{
-			UserID:           "me",
+			UserID:           "910002",
 			PublicKeyVersion: "1",
 			PublicKey:        v.SigningPublicB64,
 		},
@@ -2552,11 +2551,11 @@ func TestEventAsKeyChange(t *testing.T) {
 	kcJSON := `{
 		"type": "KeyChange",
 		"key_version": "2",
-		"sender_id": "user-1",
+		"sender_id": "910004",
 		"verified": true,
 		"participant_keys": [
-			{"user_id": "user-1", "encrypted_key": "abc123", "public_key_version": "1"},
-			{"user_id": "user-2", "encrypted_key": "def456", "public_key_version": "1"}
+			{"user_id": "910004", "encrypted_key": "abc123", "public_key_version": "1"},
+			{"user_id": "910007", "encrypted_key": "def456", "public_key_version": "1"}
 		]
 	}`
 	var event Event
@@ -2592,7 +2591,7 @@ func TestEventAsGroupChange(t *testing.T) {
 		"type": "GroupChange",
 		"sender_id": "admin-1",
 		"verified": true,
-		"change": {"action": "member_added", "user_id": "new-user"}
+		"change": {"action": "member_added", "user_id": "910009"}
 	}`
 	var event Event
 	if err := json.Unmarshal([]byte(gcJSON), &event); err != nil {
@@ -2617,7 +2616,7 @@ func TestEventAsGroupChange(t *testing.T) {
 func TestReadReceiptEventVerified(t *testing.T) {
 	rrJSON := `{
 		"type": "ReadReceipt",
-		"sender_id": "user-1",
+		"sender_id": "910004",
 		"seen_until_id": "seq-77",
 		"verified": true
 	}`
@@ -3510,7 +3509,6 @@ func TestEncryptReplyQuickReplyRoundTrip(t *testing.T) {
 	chat := quickReplyChat(t, v)
 	defer chat.Close()
 
-	senderID := int64(1111)
 	originalText := "Continue?"
 	payload, err := chat.EncryptReply(EncryptReplyParams{
 		ConversationID:         v.EventConversationID,
@@ -3518,7 +3516,7 @@ func TestEncryptReplyQuickReplyRoundTrip(t *testing.T) {
 		ConversationKey:        v.conversationKey(t),
 		ConversationKeyVersion: v.EventConversationKeyVersion,
 		ReplyToSequenceID:      "seq-orig",
-		ReplyToSenderID:        &senderID,
+		ReplyToSenderID:        "1111",
 		ReplyToText:            &originalText,
 		QuickReply:             quickReplyResponse(),
 	})
@@ -3743,5 +3741,31 @@ func TestKnownSignatureCoversTheContentsEncryptionVersion(t *testing.T) {
 	stripped, err := chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature, []byte(v.PayloadMessageV10))
 	if err != nil || stripped {
 		t.Fatalf("known signature verified without its contents encryption version: err=%v", err)
+	}
+}
+
+func TestUserIDsAreDigitStrings(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	err := chat.SetIdentity(SetIdentityParams{UserID: "user-1", SigningKeyVersion: "1"})
+	if err == nil || !strings.Contains(err.Error(), "Invalid user_id 'user-1'") {
+		t.Fatalf("SetIdentity with a non-numeric id: got %v", err)
+	}
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         "conv-1",
+		Text:                   "reply",
+		SenderID:               "1001",
+		SigningKeyVersion:      "1",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: "1",
+		ReplyToSequenceID:      "seq-42",
+		ReplyToSenderID:        "12x",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Invalid reply_to_sender_id '12x'") {
+		t.Fatalf("EncryptReply with a non-numeric reply sender: got %v", err)
 	}
 }

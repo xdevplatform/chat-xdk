@@ -209,6 +209,7 @@ impl ChatCore {
     /// A resolved default and an explicitly passed value produce
     /// byte-identical signed output for the same logical inputs.
     pub fn set_identity(&self, params: &SetIdentityParams) -> Result<(), SdkError> {
+        crate::pipeline::validate_user_id("user_id", &params.user_id)?;
         *self
             .owner_user_id
             .write()
@@ -252,18 +253,22 @@ impl ChatCore {
     /// Resolve the effective `sender_id`: the explicit override when present,
     /// otherwise the session identity.
     fn resolve_sender_id(&self, param: Option<&str>) -> Result<String, SdkError> {
-        if let Some(v) = param.filter(|v| !v.is_empty()) {
-            return Ok(v.to_string());
-        }
-        self.owner_user_id
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| {
-                SdkError::InvalidState(
-                    "sender_id is not set: pass it explicitly or call set_identity() first".into(),
-                )
-            })
+        let sender_id = match param.filter(|v| !v.is_empty()) {
+            Some(v) => v.to_string(),
+            None => self
+                .owner_user_id
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .ok_or_else(|| {
+                    SdkError::InvalidState(
+                        "sender_id is not set: pass it explicitly or call set_identity() first"
+                            .into(),
+                    )
+                })?,
+        };
+        crate::pipeline::validate_user_id("sender_id", &sender_id)?;
+        Ok(sender_id)
     }
 
     /// Resolve the effective `signing_key_version`: the explicit override
@@ -587,6 +592,9 @@ impl ChatCore {
         if public_keys.is_empty() {
             return Err(SdkError::Parse("public_keys must not be empty".to_string()));
         }
+        for pk in public_keys {
+            crate::pipeline::validate_user_id("public_keys user_id", &pk.user_id)?;
+        }
 
         let mut best_by_user: HashMap<String, &PublicKeyInput> = HashMap::new();
         for pk in public_keys {
@@ -894,6 +902,8 @@ impl ChatCore {
         let avatar_url = params.avatar_url.as_deref().filter(|a| !a.is_empty());
         let ttl_msec = params.ttl_msec.filter(|t| *t >= 0);
 
+        crate::pipeline::validate_user_ids("member_ids", &params.member_ids)?;
+        crate::pipeline::validate_user_ids("admin_ids", &params.admin_ids)?;
         let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
 
         // A group create needs two signed actions: the conversation-key change
@@ -978,6 +988,13 @@ impl ChatCore {
             .filter(|a| !a.is_empty());
         let current_ttl_msec = params.current_ttl_msec.filter(|t| *t >= 0);
 
+        crate::pipeline::validate_user_ids("new_member_ids", &params.new_member_ids)?;
+        crate::pipeline::validate_user_ids("current_member_ids", &params.current_member_ids)?;
+        crate::pipeline::validate_user_ids("current_admin_ids", &params.current_admin_ids)?;
+        crate::pipeline::validate_user_ids(
+            "current_pending_member_ids",
+            &params.current_pending_member_ids,
+        )?;
         let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
 
         // A member add needs two signed actions: the conversation-key change
@@ -2487,6 +2504,17 @@ impl ChatCore {
             .reply_to_sequence_id
             .clone()
             .filter(|v| !v.is_empty());
+        let explicit_sender_id = match params
+            .reply_to_sender_id
+            .as_deref()
+            .filter(|v| !v.is_empty())
+        {
+            Some(id) => {
+                crate::pipeline::validate_user_id("reply_to_sender_id", id)?;
+                id.parse::<i64>().ok()
+            }
+            None => None,
+        };
 
         let Some(raw_b64) = params.reply_to_event.as_deref().filter(|v| !v.is_empty()) else {
             let sequence_id = explicit_sequence_id.ok_or_else(|| {
@@ -2495,7 +2523,7 @@ impl ChatCore {
                 )
             })?;
             return Ok(crate::thrift::product::ReplyingToPreview::new(
-                params.reply_to_sender_id,
+                explicit_sender_id,
                 params.reply_to_text.clone(),
                 thrift_reply_entities,
                 thrift_reply_attachments,
@@ -2603,8 +2631,7 @@ impl ChatCore {
         let sequence_id = explicit_sequence_id
             .or_else(|| raw.sequence_id.clone())
             .ok_or_else(|| SdkError::Parse("reply_to_event carries no sequence_id".into()))?;
-        let sender_id = params
-            .reply_to_sender_id
+        let sender_id = explicit_sender_id
             .or_else(|| raw.sender_id.as_deref().and_then(|s| s.parse::<i64>().ok()));
         let message_text = params.reply_to_text.clone().or_else(|| match &edited {
             Some(edit) => edit.updated_text.clone(),
@@ -4413,7 +4440,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),         // sequence_id
             Some("msg-1".to_string()),         // message_id
-            Some("sender-1".to_string()),      // sender_id
+            Some("910003".to_string()),        // sender_id
             Some("conv-1".to_string()),        // conversation_id
             None::<String>,                    // conversation_token
             Some("1700000000000".to_string()), // created_at_msec
@@ -4617,7 +4644,7 @@ mod tests {
                 .with_identity("4001", "1733889755256")
                 .with_conversation_key(ckey.to_bytes(), "9001");
             params.reply_to_sequence_id = Some("seq-orig".into());
-            params.reply_to_sender_id = Some(42);
+            params.reply_to_sender_id = Some("42".to_string());
             params.reply_to_text = Some("Continue?".into());
             params.quick_reply = quick_reply;
             core.encrypt_reply(&params).unwrap()
@@ -5108,7 +5135,7 @@ mod tests {
                 assert!(msg.key_version.is_none(), "key_version should be None");
                 assert!(!msg.verified, "verified should be false");
                 assert_eq!(msg.should_notify, Some(true));
-                assert_eq!(msg.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(msg.meta.sender_id.as_deref(), Some("910003"));
                 assert_eq!(msg.meta.conversation_id.as_deref(), Some("conv-1"));
                 assert_eq!(msg.meta.id.as_deref(), Some("msg-1"));
             }
@@ -5210,7 +5237,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some("msg-1".to_string()),
-            Some("sender-1".to_string()),
+            Some("910003".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             None::<String>,
@@ -5252,7 +5279,7 @@ mod tests {
             Event::Message(msg) => {
                 assert_eq!(msg.meta.sequence_id.as_deref(), Some("seq-1"));
                 assert_eq!(msg.meta.id.as_deref(), Some("msg-1"));
-                assert_eq!(msg.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(msg.meta.sender_id.as_deref(), Some("910003"));
                 assert_eq!(msg.meta.conversation_id.as_deref(), Some("conv-1"));
                 assert_eq!(msg.meta.created_at_msec, Some(1700000000000));
             }
@@ -5302,7 +5329,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some("msg-1".to_string()),
-            Some("sender-1".to_string()),
+            Some("910003".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             Some("1700000000000".to_string()),
@@ -5526,7 +5553,7 @@ mod tests {
             .unwrap();
         match event {
             Event::Typing(t) => {
-                assert_eq!(t.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(t.meta.sender_id.as_deref(), Some("910003"));
                 assert_eq!(t.meta.conversation_id.as_deref(), Some("conv-1"));
                 assert_eq!(t.meta.sequence_id.as_deref(), Some("seq-1"));
             }
@@ -5551,7 +5578,7 @@ mod tests {
                 assert_eq!(r.seen_until_id.as_deref(), Some("seq-50"));
                 assert_eq!(r.seen_at_msec, Some(1700000050000));
                 assert!(!r.verified);
-                assert_eq!(r.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(r.meta.sender_id.as_deref(), Some("910003"));
             }
             other => panic!("Expected Event::ReadReceipt, got {:?}", other),
         }
@@ -5698,7 +5725,7 @@ mod tests {
             Event::Failure(f) => {
                 assert_eq!(f.failure, FailureType::InternalError);
                 assert_eq!(f.rate_limit_tier, None);
-                assert_eq!(f.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(f.meta.sender_id.as_deref(), Some("910003"));
             }
             other => panic!("Expected Event::Failure, got {:?}", other),
         }
@@ -5902,7 +5929,7 @@ mod tests {
         match event {
             Event::MemberDeleted(md) => {
                 assert_eq!(md.member_id, "deleted-user-42");
-                assert_eq!(md.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(md.meta.sender_id.as_deref(), Some("910003"));
             }
             other => panic!("Expected Event::MemberDeleted, got {:?}", other),
         }
@@ -6482,7 +6509,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some("msg-1".to_string()),
-            Some("sender-1".to_string()),
+            Some("910003".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             Some("1700000000000".to_string()),
@@ -6502,7 +6529,7 @@ mod tests {
         match result {
             Event::Unknown(u) => {
                 assert!(u.event_type_id.is_none());
-                assert_eq!(u.meta.sender_id.as_deref(), Some("sender-1"));
+                assert_eq!(u.meta.sender_id.as_deref(), Some("910003"));
             }
             other => panic!("Expected Event::Unknown, got {:?}", other),
         }
@@ -6543,12 +6570,12 @@ mod tests {
             Some("v42".to_string()),
             Some(vec![
                 ConversationParticipantKey::new(
-                    Some("user-1".to_string()),
+                    Some("910004".to_string()),
                     Some("encrypted-key-1".to_string()),
                     Some("pkv-1".to_string()),
                 ),
                 ConversationParticipantKey::new(
-                    Some("user-2".to_string()),
+                    Some("910007".to_string()),
                     Some("encrypted-key-2".to_string()),
                     Some("pkv-2".to_string()),
                 ),
@@ -6565,9 +6592,9 @@ mod tests {
             Event::KeyChange(kc) => {
                 assert_eq!(kc.key_version, "v42");
                 assert_eq!(kc.participant_keys.len(), 2);
-                assert_eq!(kc.participant_keys[0].user_id, "user-1");
+                assert_eq!(kc.participant_keys[0].user_id, "910004");
                 assert_eq!(kc.participant_keys[0].encrypted_key, "encrypted-key-1");
-                assert_eq!(kc.participant_keys[1].user_id, "user-2");
+                assert_eq!(kc.participant_keys[1].user_id, "910007");
                 assert!(!kc.verified);
             }
             other => panic!("Expected Event::KeyChange, got {:?}", other),
@@ -6591,7 +6618,7 @@ mod tests {
         // Encrypt the conversation key for ourselves so the SDK can
         // self-decrypt it from the event to rebuild the signed payload.
         let recipients = [RecipientInput {
-            user_id: "sender-1".to_string(),
+            user_id: "910003".to_string(),
             public_key: pubkeys.identity.clone(),
             key_version: "pkv-self".to_string(),
         }];
@@ -6604,7 +6631,7 @@ mod tests {
             .sign_key_change(
                 "pkv-self",
                 "msg-1",
-                "sender-1",
+                "910003",
                 "conv-1",
                 ckey_version,
                 ckey.encoded(),
@@ -6614,7 +6641,7 @@ mod tests {
         let kce = ThriftCKCE::new(
             Some(ckey_version.to_string()),
             Some(vec![ConversationParticipantKey::new(
-                Some("sender-1".to_string()),
+                Some("910003".to_string()),
                 Some(encrypted[0].encrypted_key.clone()),
                 Some("pkv-self".to_string()),
             )]),
@@ -6631,7 +6658,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some("msg-1".to_string()),
-            Some("sender-1".to_string()),
+            Some("910003".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             None::<String>,
@@ -6645,7 +6672,7 @@ mod tests {
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
         let signing_keys = [SigningKeyEntry {
-            user_id: "sender-1".to_string(),
+            user_id: "910003".to_string(),
             public_key_version: "pkv-self".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
@@ -6788,13 +6815,13 @@ mod tests {
         // exists, and an event with only mismatched entries yields no key.
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("sender-1", "V"))
+        core.set_identity(&SetIdentityParams::new("910003", "V"))
             .unwrap();
 
         let pubkeys = core.get_public_keys().unwrap();
         let encrypt_for_self = |ckey: &XChatConversationKey| {
             let recipients = [RecipientInput {
-                user_id: "sender-1".to_string(),
+                user_id: "910003".to_string(),
                 public_key: pubkeys.identity.clone(),
                 key_version: "unused".to_string(),
             }];
@@ -6811,7 +6838,7 @@ mod tests {
 
         let entry = |ckey_b64: String, version: &str| {
             ConversationParticipantKey::new(
-                Some("sender-1".to_string()),
+                Some("910003".to_string()),
                 Some(ckey_b64),
                 Some(version.to_string()),
             )
@@ -7063,7 +7090,8 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
 
-        let mut params = crate::ConversationKeyChangeParams::new(vec![]).with_identity("me", "1");
+        let mut params =
+            crate::ConversationKeyChangeParams::new(vec![]).with_identity("910002", "1");
         params.conversation_id = Some("conv-1".into());
         let result = core.prepare_conversation_key_change(&params);
         assert!(result.is_err());
@@ -7079,19 +7107,19 @@ mod tests {
         let public_keys = core.get_public_keys().unwrap();
         let input = vec![
             PublicKeyInput {
-                user_id: "user-1".to_string(),
+                user_id: "910004".to_string(),
                 public_key: public_keys.identity.clone(),
                 key_version: "100".to_string(),
             },
             PublicKeyInput {
-                user_id: "user-1".to_string(),
+                user_id: "910004".to_string(),
                 public_key: public_keys.identity.clone(),
                 key_version: "200".to_string(),
             },
         ];
 
         let mut params =
-            crate::ConversationKeyChangeParams::new(input).with_identity("user-1", "1");
+            crate::ConversationKeyChangeParams::new(input).with_identity("910004", "1");
         params.conversation_id = Some("conv-1".into());
         let result = core.prepare_conversation_key_change(&params).unwrap();
         assert_eq!(result.participant_keys.len(), 1);
@@ -7137,12 +7165,12 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
         let mut params =
-            crate::ConversationKeyChangeParams::new(input).with_identity("user-1", "1");
+            crate::ConversationKeyChangeParams::new(input).with_identity("910004", "1");
         params.conversation_id = Some("conv-1".into());
         let result = core.prepare_conversation_key_change(&params).unwrap();
         let sig = &result.action_signatures[0];
@@ -7182,7 +7210,7 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
@@ -7190,10 +7218,10 @@ mod tests {
         let mut params = crate::GroupCreateParams::new(
             input,
             "g999",
-            vec!["user-1".to_string(), "user-2".to_string()],
-            vec!["user-1".to_string()],
+            vec!["910004".to_string(), "910007".to_string()],
+            vec!["910004".to_string()],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         params.title = Some("Squad".into());
         params.avatar_url = Some("https://img/a.png".into());
         params.ttl_msec = Some(86400000);
@@ -7221,11 +7249,11 @@ mod tests {
                 GenGC::GroupCreate(gc) => {
                     assert_eq!(
                         gc.member_ids.as_deref(),
-                        Some(["user-1".to_string(), "user-2".to_string()].as_slice())
+                        Some(["910004".to_string(), "910007".to_string()].as_slice())
                     );
                     assert_eq!(
                         gc.admin_ids.as_deref(),
-                        Some(["user-1".to_string()].as_slice())
+                        Some(["910004".to_string()].as_slice())
                     );
                     assert_eq!(gc.title.as_deref(), Some("Squad"));
                     assert_eq!(gc.avatar_url.as_deref(), Some("https://img/a.png"));
@@ -7248,7 +7276,7 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
@@ -7256,12 +7284,12 @@ mod tests {
         let mut params = crate::GroupMembersChangeParams::new(
             input,
             "g555",
-            vec!["new-1".to_string()],
-            vec!["user-1".to_string()],
-            vec!["user-1".to_string()],
+            vec!["910006".to_string()],
+            vec!["910004".to_string()],
+            vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         params.current_title = Some("Team".into());
         let result = core.prepare_group_members_change(&params).unwrap();
 
@@ -7284,11 +7312,11 @@ mod tests {
                 GenGC::GroupMemberAdd(c) => {
                     assert_eq!(
                         c.member_ids.as_deref(),
-                        Some(["new-1".to_string()].as_slice())
+                        Some(["910006".to_string()].as_slice())
                     );
                     assert_eq!(
                         c.current_member_ids.as_deref(),
-                        Some(["user-1".to_string()].as_slice())
+                        Some(["910004".to_string()].as_slice())
                     );
                     assert_eq!(c.current_title.as_deref(), Some("Team"));
                     assert_eq!(c.screen_capture_blocking_enabled, None);
@@ -7366,7 +7394,7 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
@@ -7375,10 +7403,10 @@ mod tests {
         let mut create_params = crate::GroupCreateParams::new(
             input.clone(),
             "g999",
-            vec!["user-1".to_string(), "user-2".to_string()],
-            vec!["user-1".to_string()],
+            vec!["910004".to_string(), "910007".to_string()],
+            vec!["910004".to_string()],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         create_params.title = Some("Squad".into());
         create_params.avatar_url = Some("https://img/a.png".into());
         create_params.ttl_msec = Some(86400000);
@@ -7388,14 +7416,14 @@ mod tests {
         assert_action_signature_round_trips(
             &core,
             &created.action_signatures[0],
-            "user-1",
+            "910004",
             "g999",
             Some(&created_ckey_b64),
         );
         assert_action_signature_round_trips(
             &core,
             &created.action_signatures[1],
-            "user-1",
+            "910004",
             "g999",
             None,
         );
@@ -7404,12 +7432,12 @@ mod tests {
         let mut add_params = crate::GroupMembersChangeParams::new(
             input.clone(),
             "g555",
-            vec!["new-1".to_string()],
-            vec!["user-1".to_string()],
-            vec!["user-1".to_string()],
-            vec!["pending-1".to_string()],
+            vec!["910006".to_string()],
+            vec!["910004".to_string()],
+            vec!["910004".to_string()],
+            vec!["910008".to_string()],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         add_params.current_title = Some("Team".into());
         add_params.current_avatar_url = Some("https://img/b.png".into());
         add_params.current_ttl_msec = Some(3600000);
@@ -7419,14 +7447,14 @@ mod tests {
         assert_action_signature_round_trips(
             &core,
             &added.action_signatures[0],
-            "user-1",
+            "910004",
             "g555",
             Some(&added_ckey_b64),
         );
         assert_action_signature_round_trips(
             &core,
             &added.action_signatures[1],
-            "user-1",
+            "910004",
             "g555",
             None,
         );
@@ -7436,12 +7464,12 @@ mod tests {
         let mut blocked_params = crate::GroupMembersChangeParams::new(
             input,
             "g555",
-            vec!["new-1".to_string()],
-            vec!["user-1".to_string()],
-            vec!["user-1".to_string()],
+            vec!["910006".to_string()],
+            vec!["910004".to_string()],
+            vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         blocked_params.current_screen_capture_blocking_enabled = Some(true);
         let blocked = core.prepare_group_members_change(&blocked_params).unwrap();
         let blocked_add = &blocked.action_signatures[1];
@@ -7455,7 +7483,7 @@ mod tests {
             },
             _ => panic!("expected GroupChangeEvent"),
         }
-        assert_action_signature_round_trips(&core, blocked_add, "user-1", "g555", None);
+        assert_action_signature_round_trips(&core, blocked_add, "910004", "g555", None);
     }
 
     #[test]
@@ -7679,7 +7707,7 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
@@ -7687,10 +7715,10 @@ mod tests {
         let mut params = crate::GroupCreateParams::new(
             input,
             "g999",
-            vec!["user-1".to_string()],
-            vec!["user-1".to_string()],
+            vec!["910004".to_string()],
+            vec!["910004".to_string()],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         params.title = Some("Team, the sequel".into());
         let result = core.prepare_group_create(&params);
         assert!(matches!(result, Err(SdkError::Parse(_))));
@@ -7702,18 +7730,18 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
-        let members = vec!["user-1".to_string()];
-        let admins = vec!["user-1".to_string()];
+        let members = vec!["910004".to_string()];
+        let admins = vec!["910004".to_string()];
 
         // Empty strings and a negative TTL are the FFI encodings of "not
         // set"; they must produce the same signed bytes as None.
         let mut ffi_params =
             crate::GroupCreateParams::new(input.clone(), "g999", members.clone(), admins.clone())
-                .with_identity("user-1", "1");
+                .with_identity("910004", "1");
         ffi_params.title = Some("".into());
         ffi_params.avatar_url = Some("".into());
         ffi_params.ttl_msec = Some(-1);
@@ -7723,7 +7751,7 @@ mod tests {
         let none_form = core
             .prepare_group_create_with_version(
                 &crate::GroupCreateParams::new(input, "g999", members, admins)
-                    .with_identity("user-1", "1"),
+                    .with_identity("910004", "1"),
                 "42",
             )
             .unwrap();
@@ -7746,7 +7774,7 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
@@ -7754,12 +7782,12 @@ mod tests {
         let mut params = crate::GroupMembersChangeParams::new(
             input,
             "g999",
-            vec!["new-1".to_string()],
-            vec!["user-1".to_string()],
-            vec!["user-1".to_string()],
+            vec!["910006".to_string()],
+            vec!["910004".to_string()],
+            vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         params.current_title = Some("Team, the sequel".into());
         let result = core.prepare_group_members_change(&params);
         assert!(matches!(result, Err(SdkError::Parse(_))));
@@ -7771,13 +7799,13 @@ mod tests {
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput {
-            user_id: "user-1".to_string(),
+            user_id: "910004".to_string(),
             public_key: pk.identity.clone(),
             key_version: "1".to_string(),
         }];
-        let new_members = vec!["new-1".to_string()];
-        let members = vec!["user-1".to_string()];
-        let admins = vec!["user-1".to_string()];
+        let new_members = vec!["910006".to_string()];
+        let members = vec!["910004".to_string()];
+        let admins = vec!["910004".to_string()];
 
         // Empty strings and a negative TTL are the FFI encodings of "not
         // set"; unlike group create, title/avatar/TTL all enter the signed
@@ -7791,7 +7819,7 @@ mod tests {
             admins.clone(),
             vec![],
         )
-        .with_identity("user-1", "1");
+        .with_identity("910004", "1");
         ffi_params.current_title = Some("".into());
         ffi_params.current_avatar_url = Some("".into());
         ffi_params.current_ttl_msec = Some(-1);
@@ -7808,7 +7836,7 @@ mod tests {
                     admins,
                     vec![],
                 )
-                .with_identity("user-1", "1"),
+                .with_identity("910004", "1"),
                 "42",
             )
             .unwrap();
@@ -8514,7 +8542,7 @@ mod tests {
             let ckey = core.generate_conversation_key().unwrap();
             let pubkeys = core.get_public_keys().unwrap();
             let recipients = [RecipientInput {
-                user_id: "sender-1".to_string(),
+                user_id: "910003".to_string(),
                 public_key: pubkeys.identity.clone(),
                 key_version: "pkv-self".to_string(),
             }];
@@ -8522,14 +8550,7 @@ mod tests {
                 .encrypt_conversation_key_for_recipients(&ckey, &recipients)
                 .unwrap();
             let action_sig = core
-                .sign_key_change(
-                    "pkv",
-                    "msg-kc",
-                    "sender-1",
-                    "conv-1",
-                    "1001",
-                    ckey.encoded(),
-                )
+                .sign_key_change("pkv", "msg-kc", "910003", "conv-1", "1001", ckey.encoded())
                 .unwrap();
             let signature = if corrupt {
                 let mut raw = base64_decode(&action_sig.signature).unwrap();
@@ -8541,7 +8562,7 @@ mod tests {
             let kce = ThriftCKCE::new(
                 Some("1001".to_string()),
                 Some(vec![ConversationParticipantKey::new(
-                    Some("sender-1".to_string()),
+                    Some("910003".to_string()),
                     Some(encrypted[0].encrypted_key.clone()),
                     None,
                 )]),
@@ -8558,7 +8579,7 @@ mod tests {
             let event = ThriftMessageEvent::new(
                 Some(seq.to_string()),
                 Some("msg-kc".to_string()),
-                Some("sender-1".to_string()),
+                Some("910003".to_string()),
                 Some("conv-1".to_string()),
                 None::<String>,
                 None::<String>,
@@ -8574,7 +8595,7 @@ mod tests {
 
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         // The shipped decrypt path holds enforcement off, so a bad signature
         // is still adopted (and surfaced as an error).
@@ -8616,11 +8637,11 @@ mod tests {
             &core,
             &ckey,
             ckey_version,
-            "sender-1",
+            "910003",
             Some("pkv".to_string()),
         );
 
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
         let result = core.decrypt_events_with(&[&kc_b64], &signing_keys);
 
         assert!(
@@ -8642,7 +8663,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
         let pubkeys = core.get_public_keys().unwrap();
         let recipients = [RecipientInput {
-            user_id: "sender-1".to_string(),
+            user_id: "910003".to_string(),
             public_key: pubkeys.identity.clone(),
             key_version: "pkv-self".to_string(),
         }];
@@ -8650,14 +8671,7 @@ mod tests {
             .encrypt_conversation_key_for_recipients(&ckey, &recipients)
             .unwrap();
         let action_sig = core
-            .sign_key_change(
-                "pkv",
-                "msg-kc",
-                "sender-1",
-                conv_id,
-                version,
-                ckey.encoded(),
-            )
+            .sign_key_change("pkv", "msg-kc", "910003", conv_id, version, ckey.encoded())
             .unwrap();
         let signature = if corrupt {
             let mut raw = base64_decode(&action_sig.signature).unwrap();
@@ -8669,7 +8683,7 @@ mod tests {
         let kce = ThriftCKCE::new(
             Some(version.to_string()),
             Some(vec![ConversationParticipantKey::new(
-                Some("sender-1".to_string()),
+                Some("910003".to_string()),
                 Some(encrypted[0].encrypted_key.clone()),
                 None,
             )]),
@@ -8686,7 +8700,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-kc".to_string()),
             Some("msg-kc".to_string()),
-            Some("sender-1".to_string()),
+            Some("910003".to_string()),
             Some(conv_id.to_string()),
             None::<String>,
             None::<String>,
@@ -8704,7 +8718,7 @@ mod tests {
     fn latest_version_holds_at_newest_verified_keychange() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         // A verified key change at version 200 is reported as latest.
         let kc200 = build_freshness_keychange(&core, "conv-1", "200", false);
@@ -8729,7 +8743,7 @@ mod tests {
     fn latest_version_ignores_unverified_higher_keychange() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         // Establish a verified high-water at 100.
         let kc100 = build_freshness_keychange(&core, "conv-1", "100", false);
@@ -8752,7 +8766,7 @@ mod tests {
     fn freshness_high_water_is_per_conversation() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         // High-water for conv-1 at 500.
         let kc_a = build_freshness_keychange(&core, "conv-1", "500", false);
@@ -8803,7 +8817,7 @@ mod tests {
         let ckey =
             XChatConversationKey::from_bytes(STANDARD_NO_PAD.decode(&ckey_b64).unwrap()).unwrap();
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         let result = core.decrypt_event_with(&event_b64, &conv_keys, &signing_keys);
         let err = result.expect_err("v1 signature must be rejected");
@@ -8824,7 +8838,7 @@ mod tests {
         let ckey =
             XChatConversationKey::from_bytes(STANDARD_NO_PAD.decode(&ckey_b64).unwrap()).unwrap();
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         match core.decrypt_event_with(&event_b64, &conv_keys, &signing_keys) {
             Ok(Event::Message(msg)) => {
@@ -8884,7 +8898,7 @@ mod tests {
         let event = ThriftMessageEvent::new(
             Some("seq-1".to_string()),
             Some("msg-1".to_string()),
-            Some("sender-1".to_string()),
+            Some("910003".to_string()),
             Some("conv-1".to_string()),
             None::<String>,
             None::<String>,
@@ -9207,7 +9221,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "hi", "")
-            .with_identity("sender-1", "pkv")
+            .with_identity("910003", "pkv")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-1".into());
         params.attachments = Some(vec![
@@ -9243,7 +9257,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
         let mut params = crate::EncryptMessageParams::new("conv-1", "hi")
             .with_conversation_key(ckey.to_bytes(), "1");
-        params.sender_id = Some("sender-1".into());
+        params.sender_id = Some("910003".into());
         let err = core.encrypt_message(&params).unwrap_err();
         assert!(
             err.to_string().contains("signing_key_version"),
@@ -9289,7 +9303,7 @@ mod tests {
         let pubkeys = core.get_public_keys().unwrap();
         let ckey = core.generate_conversation_key().unwrap();
         let recipients = [RecipientInput {
-            user_id: "sender-1".to_string(),
+            user_id: "910003".to_string(),
             public_key: pubkeys.identity,
             key_version: "1700000000123".to_string(),
         }];
@@ -9302,7 +9316,7 @@ mod tests {
         let kce = ThriftCKCE::new(
             Some("42".to_string()),
             Some(vec![ConversationParticipantKey::new(
-                Some("sender-1".to_string()),
+                Some("910003".to_string()),
                 Some(encrypted),
                 Some("1700000000123".to_string()),
             )]),
@@ -9338,11 +9352,11 @@ mod tests {
     fn prepare_conversation_key_change_uses_session_identity() {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("me", "1"))
+        core.set_identity(&SetIdentityParams::new("910002", "1"))
             .unwrap();
         let pubkeys = core.get_public_keys().unwrap();
         let mut params = crate::ConversationKeyChangeParams::new(vec![PublicKeyInput {
-            user_id: "me".into(),
+            user_id: "910002".into(),
             public_key: pubkeys.identity,
             key_version: "1".into(),
         }]);
@@ -9394,7 +9408,7 @@ mod tests {
     fn cache_is_off_by_default() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("sender-1", "pkv"))
+        core.set_identity(&SetIdentityParams::new("910003", "pkv"))
             .unwrap();
 
         let ckey = core.generate_conversation_key().unwrap();
@@ -9402,11 +9416,11 @@ mod tests {
             &core,
             &ckey,
             "1001",
-            "sender-1",
+            "910003",
             "pkv",
             Some("pkv".to_string()),
         );
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
         core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
 
         let err = core
@@ -9419,15 +9433,15 @@ mod tests {
     fn unverified_key_change_never_becomes_an_encryption_key() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("sender-1", "pkv"))
+        core.set_identity(&SetIdentityParams::new("910003", "pkv"))
             .unwrap();
         core.set_cache_keys(true);
 
         // Adopted-for-decryption key change with an unverifiable signature.
         let ckey = core.generate_conversation_key().unwrap();
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, "2002", "sender-1", Some("pkv".to_string()));
-        let signing_keys = [signing_key_entry_for(&reg, "sender-1")];
+            build_self_keychange_event(&core, &ckey, "2002", "910003", Some("pkv".to_string()));
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
         let result = core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
         assert!(result.conversation_keys.keys.contains_key("2002"));
 
@@ -9620,7 +9634,7 @@ mod tests {
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
             .with_identity("4001", "pkv")
             .with_conversation_key(ckey.to_bytes(), "9001");
-        params.reply_to_sender_id = Some(424242);
+        params.reply_to_sender_id = Some("424242".to_string());
         let reply_payload = core.encrypt_reply(&params).unwrap();
 
         let msg = decrypt_reply(&core, &ckey, &reply_payload, &signing_keys);

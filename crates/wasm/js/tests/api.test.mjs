@@ -192,9 +192,9 @@ async function main() {
 
   // 2. Conversation-key change: generate + encrypt + sign, then ECIES roundtrip
   const prep = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.ok(prep.conversationKey instanceof Uint8Array);
@@ -208,9 +208,9 @@ async function main() {
   assert.deepEqual(decryptedKey, prep.conversationKey);
   // two prepared changes generate different keys (randomized)
   const prep2 = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.notDeepEqual(prep.conversationKey, prep2.conversationKey);
@@ -218,12 +218,12 @@ async function main() {
   // 2b. Group create: emits two action signatures (CKCE + GroupCreate) with
   // populated encoded event details.
   const groupPrep = chat.prepareGroupCreate({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    memberIds: ["me", "friend"],
-    adminIds: ["me"],
+    memberIds: ["910002", "910005"],
+    adminIds: ["910002"],
     title: "My Group",
   });
   assert.equal(groupPrep.conversationId, "g-1");
@@ -238,12 +238,12 @@ async function main() {
   // sentinel, exactly like omitting the field.
   for (const title of ["", undefined]) {
     const p = chat.prepareGroupCreate({
-      senderId: "me",
+      senderId: "910002",
       signingKeyVersion: "1",
-      publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+      publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
       conversationId: "g-1",
-      memberIds: ["me", "friend"],
-      adminIds: ["me"],
+      memberIds: ["910002", "910005"],
+      adminIds: ["910002"],
       title,
       avatarUrl: title,
     });
@@ -401,7 +401,7 @@ async function main() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
     replyToSequenceId: "seq-42",
-    replyToSenderId: 12345,
+    replyToSenderId: "12345",
     replyToText: "original message",
   });
   assert.ok(replyPayload.encryptedContent.length > 0);
@@ -472,23 +472,20 @@ async function main() {
     bigSenderId.toString(),
     "the decrypted reply preview must carry the exact sender id",
   );
-  // The same id as a number has already been rounded by JS — rejected.
+  // A user id is a digits-only string: numbers, which JS may already have
+  // rounded, and other strings are rejected.
   assert.throws(
     () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: Number(bigSenderId) }),
     /replyToSenderId/,
   );
-  // Non-integral numbers and non-numeric strings are rejected.
   assert.throws(
-    () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: 1.5 }),
+    () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: 12345 }),
     /replyToSenderId/,
   );
   assert.throws(
     () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: "not-a-number" }),
-    /replyToSenderId/,
+    /Invalid reply_to_sender_id 'not-a-number'/,
   );
-  // Small integral numbers remain accepted.
-  const smallNumReply = chat.encryptReply({ ...replyParamsBase, replyToSenderId: 12345 });
-  assert.ok(smallNumReply.encryptedContent.length > 0);
 
   // 4c. encryptAddReaction / encryptRemoveReaction produce signed payloads
   const reactionParams = {
@@ -623,13 +620,13 @@ async function main() {
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    newMemberIds: ["friend"],
-    currentMemberIds: ["me"],
-    currentAdminIds: ["me"],
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
     currentPendingMemberIds: [],
   });
   assert.equal(membersPrep.conversationId, "g-1");
@@ -648,13 +645,13 @@ async function main() {
 
   // 4d2. The group's screen-capture-blocking state fills the trailing signed slot.
   const membersPrepScb = chat.prepareGroupMembersChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    newMemberIds: ["friend"],
-    currentMemberIds: ["me"],
-    currentAdminIds: ["me"],
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
     currentPendingMemberIds: [],
     currentScreenCaptureBlockingEnabled: true,
   });

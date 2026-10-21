@@ -72,9 +72,9 @@ async function main() {
 
   // conversation-key change ECIES roundtrip (ciphertext randomized, key retained locally)
   const prep = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   const decryptedKey = chat.decryptConversationKey(prep.participantKeys[0].encryptedKey);

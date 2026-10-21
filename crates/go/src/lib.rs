@@ -993,7 +993,7 @@ struct FfiEncryptReplyParams {
     conversation_key_version: Option<String>,
     #[serde(default)]
     reply_to_sequence_id: Option<String>,
-    reply_to_sender_id: Option<i64>,
+    reply_to_sender_id: Option<String>,
     reply_to_text: Option<String>,
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<serde_json::Value>,

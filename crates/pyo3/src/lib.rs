@@ -568,9 +568,9 @@ pub struct EncryptReplyParams {
     /// Sequence id of the message being replied to; derived from
     /// ``reply_to_event`` when ``None``.
     reply_to_sequence_id: Option<String>,
-    /// Sender id of the message being replied to; derived from
+    /// User ID of the message's sender, as digits; derived from
     /// ``reply_to_event`` when ``None``.
-    reply_to_sender_id: Option<i64>,
+    reply_to_sender_id: Option<String>,
     /// Text of the message being replied to (for the preview); derived from
     /// ``reply_to_event`` when ``None``.
     reply_to_text: Option<String>,
@@ -610,7 +610,7 @@ impl EncryptReplyParams {
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
         reply_to_sequence_id: Option<String>,
-        reply_to_sender_id: Option<i64>,
+        reply_to_sender_id: Option<String>,
         reply_to_text: Option<String>,
         entities: Option<Py<PyAny>>,
         attachments: Option<Py<PyAny>>,
@@ -659,7 +659,7 @@ impl EncryptReplyParams {
         params.conversation_key = self.conversation_key.clone();
         params.conversation_key_version = self.conversation_key_version.clone();
         params.reply_to_sequence_id = self.reply_to_sequence_id.clone();
-        params.reply_to_sender_id = self.reply_to_sender_id;
+        params.reply_to_sender_id = self.reply_to_sender_id.clone();
         params.reply_to_text = self.reply_to_text.clone();
         params.entities = entities_field(py, &self.entities, "entities")?;
         params.attachments = attachments_field(py, &self.attachments, "attachments")?;

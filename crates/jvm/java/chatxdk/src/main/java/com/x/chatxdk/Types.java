@@ -688,8 +688,8 @@ public final class Types {
         /** Sequence ID of the message being replied to; derived from {@link #replyToEvent} when null. */
         public String replyToSequenceId;
 
-        /** Sender ID of the message being replied to (for the preview); derived from {@link #replyToEvent} when null. */
-        public Long replyToSenderId;
+        /** User ID of the message's sender, as digits (for the preview); derived from {@link #replyToEvent} when null. */
+        public String replyToSenderId;
 
         /** Text of the message being replied to (for the preview); derived from {@link #replyToEvent} when null. */
         public String replyToText;

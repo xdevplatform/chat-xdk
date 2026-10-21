@@ -554,7 +554,7 @@ impl Chat {
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
         core_params.reply_to_sequence_id = p.reply_to_sequence_id;
-        core_params.reply_to_sender_id = p.reply_to_sender_id.map(sender_id_to_i64).transpose()?;
+        core_params.reply_to_sender_id = p.reply_to_sender_id;
         core_params.reply_to_text = p.reply_to_text;
         core_params.entities = p.entities.map(entity_tuples_to_descs);
         core_params.attachments = p.attachments;
@@ -1114,43 +1114,23 @@ fn from_js_params<T: serde::de::DeserializeOwned>(
         .map_err(|e| JsError::new(&format!("Invalid {} params: {}", method, e)))
 }
 
-/// `replyToSenderId` as received from JS: a string or an integral number.
-///
-/// User-id snowflakes exceed the 2^53 range where JS numbers stay exact, so
-/// strings are the reliable form; numbers are accepted for ids that fit.
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum JsSenderId {
-    Num(f64),
-    Str(String),
-}
-
-/// Parse a [`JsSenderId`] into the exact `i64` the reply preview signs,
-/// rejecting non-integral numbers, numbers beyond `Number.MAX_SAFE_INTEGER`
-/// (already rounded by JS), and non-numeric strings.
-fn sender_id_to_i64(id: JsSenderId) -> Result<i64, JsError> {
-    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-    match id {
-        JsSenderId::Str(s) => s.parse::<i64>().map_err(|_| {
-            JsError::new(&format!(
-                "Invalid replyToSenderId: '{}' is not an integer user id",
-                s
-            ))
-        }),
-        JsSenderId::Num(n) => {
-            if !n.is_finite() || n.fract() != 0.0 {
-                return Err(JsError::new(
-                    "Invalid replyToSenderId: must be an integer or an integer string",
-                ));
-            }
-            if n.abs() > MAX_SAFE_INTEGER {
-                return Err(JsError::new(
-                    "Invalid replyToSenderId: number exceeds JavaScript's exact \
-                     integer range; pass the id as a string",
-                ));
-            }
-            Ok(n as i64)
-        }
+/// `replyToSenderId`: a user id, as a digits-only string. A number is
+/// rejected by name, since JS may already have rounded an id past 2^53.
+fn reply_to_sender_id_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Str(String),
+        Num(#[allow(dead_code)] f64),
+    }
+    match <Option<Raw> as serde::Deserialize>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(Raw::Str(id)) => Ok(Some(id)),
+        Some(Raw::Num(_)) => Err(serde::de::Error::custom(
+            "replyToSenderId must be the user id as a string of digits, not a number",
+        )),
     }
 }
 
@@ -1215,7 +1195,8 @@ struct JsEncryptReplyParams {
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
     reply_to_sequence_id: Option<String>,
-    reply_to_sender_id: Option<JsSenderId>,
+    #[serde(default, deserialize_with = "reply_to_sender_id_string")]
+    reply_to_sender_id: Option<String>,
     reply_to_text: Option<String>,
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,

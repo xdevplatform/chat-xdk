@@ -109,10 +109,10 @@ public class ChatCoreTests
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
-        core.SetIdentity("me");
+        core.SetIdentity("910002");
         var prepared = core.PrepareConversationKeyChange(new[]
         {
-            new PublicKeyInput { UserId = "me", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "910002", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
         }, "conv-1");
         Assert.Single(prepared.ParticipantKeys);
         var decrypted = core.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey);

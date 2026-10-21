@@ -250,7 +250,7 @@ struct FfiEncryptReplyParams {
     #[serde(default)]
     reply_to_sequence_id: Option<String>,
     #[serde(default)]
-    reply_to_sender_id: Option<i64>,
+    reply_to_sender_id: Option<String>,
     #[serde(default)]
     reply_to_text: Option<String>,
     #[serde(default)]

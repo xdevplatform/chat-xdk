@@ -159,6 +159,10 @@ async function delegationTests() {
 
   // Event decryption over the fixture vectors.
   chat.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_recipient_key_version });
+  assert.throws(
+    () => chat.setIdentity({ userId: "user-1", signingKeyVersion: "1" }),
+    /Invalid user_id 'user-1'/,
+  );
   const signingKeys = [
     {
       userId: v.event_sender_id,
@@ -229,9 +233,9 @@ async function delegationTests() {
 
   // Conversation-key change + ECIES decrypt through the wrapper.
   const prep = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.equal(prep.conversationKey.length, 32);
@@ -241,25 +245,25 @@ async function delegationTests() {
   );
 
   const groupPrep = chat.prepareGroupCreate({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    memberIds: ["me", "friend"],
-    adminIds: ["me"],
+    memberIds: ["910002", "910005"],
+    adminIds: ["910002"],
     title: "Wrapper Group",
   });
   assert.equal(groupPrep.actionSignatures.length, 2);
   assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
 
   const membersPrep = chat.prepareGroupMembersChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    newMemberIds: ["friend"],
-    currentMemberIds: ["me"],
-    currentAdminIds: ["me"],
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
     currentPendingMemberIds: [],
   });
   assert.equal(membersPrep.actionSignatures.length, 2);

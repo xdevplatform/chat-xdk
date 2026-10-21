@@ -112,11 +112,11 @@ class ChatTest {
     /** Produce a fresh conversation key via a prepared key change (for crypto tests). */
     private static byte[] newConvKey(Chat chat) throws Exception {
         PublicKeyInput input = new PublicKeyInput();
-        input.userId = "me";
+        input.userId = "910002";
         input.publicKey = chat.getPublicKeys().identity;
         input.keyVersion = "1";
         ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
-        params.senderId = "me";
+        params.senderId = "910002";
         params.signingKeyVersion = "1";
         params.conversationId = "conv-1";
         return chat.prepareConversationKeyChange(params).conversationKey;
@@ -409,7 +409,7 @@ class ChatTest {
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             p.replyToSequenceId = "seq-42";
-            p.replyToSenderId = 12345L;
+            p.replyToSenderId = "12345";
             p.replyToText = "Original message";
             SendPayload payload = chat.encryptReply(p);
             assertFalse(payload.encryptedContent.isEmpty());
@@ -417,6 +417,25 @@ class ChatTest {
             assertFalse(payload.encodedEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
             assertEquals("7", payload.signatureInfo.signatureVersion);
+        }
+    }
+
+    @Test
+    void userIdsAreDigitStrings() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            byte[] ckey = newConvKey(chat);
+            ChatXdkException e = assertThrows(ChatXdkException.class,
+                    () -> chat.setIdentity(new SetIdentityParams("user-1", "1")));
+            assertTrue(e.getMessage().contains("Invalid user_id 'user-1'"), e.getMessage());
+            EncryptReplyParams p = new EncryptReplyParams("conv-1", "reply", null);
+            p.senderId = "1001";
+            p.signingKeyVersion = "1";
+            p.conversationKey = ckey;
+            p.conversationKeyVersion = "1";
+            p.replyToSequenceId = "seq-42";
+            p.replyToSenderId = "12x";
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptReply(p));
+            assertTrue(e.getMessage().contains("Invalid reply_to_sender_id '12x'"), e.getMessage());
         }
     }
 
@@ -633,11 +652,11 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
-            params.senderId = "me";
+            params.senderId = "910002";
             params.signingKeyVersion = "1";
             params.conversationId = "conv-1";
             PreparedConversationChange prepared = chat.prepareConversationKeyChange(params);
@@ -669,12 +688,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
-                    List.of(input), "g123", List.of("new-1"), List.of("me"), List.of("me"), List.of());
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.currentTitle = "Test Group";
             PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
@@ -697,12 +716,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
-                    List.of(input), "g123", List.of("new-1"), List.of("me"), List.of("me"), List.of());
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.currentScreenCaptureBlockingEnabled = true;
             PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
@@ -719,12 +738,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupCreateParams p = new GroupCreateParams(
-                    List.of(input), "g123", List.of("me", "friend"), List.of("me"));
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Test Group";
             PreparedConversationChange prepared = chat.prepareGroupCreate(p);
@@ -1557,7 +1576,7 @@ class ChatTest {
     @Test
     void setIdentityAndSetRejectUnverifiedSmoke() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity(new SetIdentityParams("user-1", "12345"));
+            chat.setIdentity(new SetIdentityParams("910004", "12345"));
             chat.setRejectUnverified(false);
             chat.setRejectUnverified(true);
         }
@@ -1570,13 +1589,13 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             for (String title : new String[] {"", null}) {
                 GroupCreateParams p = new GroupCreateParams(
-                        List.of(input), "g123", List.of("me", "friend"), List.of("me"));
-                p.senderId = "me";
+                        List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
+                p.senderId = "910002";
                 p.signingKeyVersion = "1";
                 p.title = title;
                 p.avatarUrl = title;
@@ -1596,12 +1615,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupCreateParams p = new GroupCreateParams(
-                    List.of(input), "g123", List.of("me", "friend"), List.of("me"));
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Team, the sequel";
             assertThrows(ChatXdkException.class, () -> chat.prepareGroupCreate(p));
@@ -1714,7 +1733,7 @@ class ChatTest {
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
             p.replyToSequenceId = "seq-orig";
-            p.replyToSenderId = Long.parseLong(v.get("event_sender_id").asText());
+            p.replyToSenderId = v.get("event_sender_id").asText();
             p.replyToText = "Continue?";
             p.quickReply = sent;
             JsonNode content = decryptOwnContent(chat, v, chat.encryptReply(p));

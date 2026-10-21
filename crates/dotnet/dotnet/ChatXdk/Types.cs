@@ -663,8 +663,8 @@ namespace ChatXdk
         public string? ConversationKeyVersion { get; init; }
         /// <summary>Sequence ID of the message being replied to; derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToSequenceId { get; init; }
-        /// <summary>Sender ID of the message being replied to (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
-        public long? ReplyToSenderId { get; init; }
+        /// <summary>User ID of the message's sender, as digits (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
+        public string? ReplyToSenderId { get; init; }
         /// <summary>Text of the message being replied to (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToText { get; init; }
         /// <summary>Optional rich-text entities in the reply text.</summary>

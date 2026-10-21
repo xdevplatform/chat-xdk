@@ -415,6 +415,12 @@ prepared = chat.prepare_conversation_key_change(
   `chat_xdk_import_keys` and `chat_xdk_import_keys_with_version` are
   `chat_xdk_import_keys_params`, which takes the key bytes by pointer and
   the version as a params JSON document.
+- Every user id is a string of digits, validated as `sender_id` is: the
+  `set_identity` user id, `reply_to_sender_id`, the `user_id` of each public
+  key, and group member, admin and pending-member ids. Anything else fails
+  with an error naming the field. `reply_to_sender_id` is a string in every
+  binding (it was an integer: `i64`, `int`, `*int64`, `long?`, `Long`, and
+  `string | number` in JS).
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.

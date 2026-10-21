@@ -126,7 +126,7 @@ class EncryptReplyParams:
     conversation_key: Optional[bytes]
     conversation_key_version: Optional[str]
     reply_to_sequence_id: Optional[str]
-    reply_to_sender_id: Optional[int]
+    reply_to_sender_id: Optional[str]
     reply_to_text: Optional[str]
     entities: Optional[list[tuple[int, int, str]]]
     attachments: Optional[list[dict]]
@@ -148,7 +148,7 @@ class EncryptReplyParams:
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
         reply_to_sequence_id: Optional[str] = None,
-        reply_to_sender_id: Optional[int] = None,
+        reply_to_sender_id: Optional[str] = None,
         reply_to_text: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,

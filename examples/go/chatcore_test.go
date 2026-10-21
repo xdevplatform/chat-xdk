@@ -135,7 +135,7 @@ func TestConversationKeyRoundtrip(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
 	prepared, err := core.PrepareConversationKeyChange([]chatxdk.PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}, "conv-1")
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)

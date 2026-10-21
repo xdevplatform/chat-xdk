@@ -337,13 +337,10 @@ export interface EncryptReplyParams {
   /** The sequenceId of the message being replied to; derived from replyToEvent when omitted. */
   replyToSequenceId?: string | null;
   /**
-   * The sender ID of the message being replied to (for preview); derived
-   * from replyToEvent when omitted.
-   * Prefer a string: snowflake user ids exceed the range where JavaScript
-   * numbers stay exact. Numbers are accepted only while integral and within
-   * `Number.MAX_SAFE_INTEGER`.
+   * The user ID of the message's sender, as digits (for the preview);
+   * derived from replyToEvent when omitted.
    */
-  replyToSenderId?: string | number | null;
+  replyToSenderId?: string | null;
   /** The text of the message being replied to (for preview); derived from replyToEvent when omitted. */
   replyToText?: string | null;
   /** Optional rich-text entities (URLs, mentions, etc.) to embed in the outgoing message. */

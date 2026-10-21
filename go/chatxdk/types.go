@@ -327,7 +327,7 @@ type EncryptReplyParams struct {
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
 	ReplyToSequenceID      string                 `json:"reply_to_sequence_id,omitempty"`     // empty = derived from ReplyToEvent
-	ReplyToSenderID        *int64                 `json:"reply_to_sender_id,omitempty"`
+	ReplyToSenderID        string                 `json:"reply_to_sender_id,omitempty"`       // digits; empty = derived from ReplyToEvent
 	ReplyToText            *string                `json:"reply_to_text,omitempty"`
 	Entities               []EntityTuple          `json:"entities,omitempty"`
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`

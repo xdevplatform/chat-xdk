@@ -83,10 +83,10 @@ class TestChatCore(unittest.TestCase):
         # Conversation-key handling: prepare a fresh key for ourselves, then
         # ECIES-decrypt the per-participant blob back to the same raw key.
         core = self._loaded_core()
-        core.set_identity("me")
+        core.set_identity("910002")
         public_keys = [
             {
-                "user_id": "me",
+                "user_id": "910002",
                 "public_key": self.vectors["identity_public_b64"],
                 "key_version": "1",
             }

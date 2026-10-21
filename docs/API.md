@@ -791,6 +791,13 @@ and the conversation key version an integer, as the key-change event carries
 it; anything else is rejected, since v1 recipients derive the key from the
 numeric id and look the key up by the version.
 
+**Every user id is a string of digits** in every binding: the `set_identity`
+user id, `sender_id`, `reply_to_sender_id`, the `user_id` of each public key,
+and group member, admin and pending-member ids. Each must be a positive
+integer written without a sign or leading zeros, and anything else fails
+with an error naming the field (`Invalid reply_to_sender_id '…'`). JS takes
+no numbers for them: ids pass 2^53, where JS numbers stop being exact.
+
 The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings fetch in the background (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).

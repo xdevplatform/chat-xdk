@@ -302,24 +302,36 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     })
 }
 
-/// Check that a sender id is a user id in canonical decimal form. The id is
-/// signed as given, while recipients rebuild the payload from the numeric id
-/// on the delivered event and derive the message key from that number, so
-/// any other spelling yields a message no recipient can verify.
-fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
-    let canonical = sender_id
+/// Check that `user_id` is a user id in canonical decimal form: digits only,
+/// no leading zero, a positive 64-bit integer. User ids are signed as given,
+/// while recipients rebuild payloads from the numeric ids on the delivered
+/// events (and derive message keys from the sender's), so any other spelling
+/// yields something no recipient can verify. `field` names the input in the
+/// error.
+pub(crate) fn validate_user_id(field: &str, user_id: &str) -> Result<(), SdkError> {
+    let canonical = user_id
         .parse::<i64>()
         .ok()
         .filter(|id| *id > 0)
         .map(|id| id.to_string());
-    if canonical.as_deref() == Some(sender_id) {
+    if canonical.as_deref() == Some(user_id) {
         Ok(())
     } else {
         Err(SdkError::InvalidInput(format!(
-            "Invalid sender_id '{sender_id}': pass the sender's numeric user id (digits only), \
-             which message keys are derived from"
+            "Invalid {field} '{user_id}': pass a numeric user id (digits only)"
         )))
     }
+}
+
+/// Check every id of a user id list with [`validate_user_id`].
+pub(crate) fn validate_user_ids(field: &str, user_ids: &[String]) -> Result<(), SdkError> {
+    user_ids
+        .iter()
+        .try_for_each(|user_id| validate_user_id(field, user_id))
+}
+
+fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
+    validate_user_id("sender_id", sender_id)
 }
 
 /// Check that a conversation key version is an integer in canonical decimal

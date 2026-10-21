@@ -255,7 +255,7 @@ class TestParams(unittest.TestCase):
     def test_the_event_a_reply_reaction_or_edit_targets_is_optional(self):
         from chat_xdk import EncryptEditParams, EncryptReactionParams, EncryptReplyParams
 
-        reply = EncryptReplyParams("conv-1", "hi", reply_to_sequence_id="5", reply_to_sender_id=1001)
+        reply = EncryptReplyParams("conv-1", "hi", reply_to_sequence_id="5", reply_to_sender_id="1001")
         self.assertIsNone(reply.reply_to_event)
         self.assertEqual(EncryptReplyParams("conv-1", "hi", "event").reply_to_event, "event")
         self.assertEqual(
@@ -546,7 +546,7 @@ class TestApiShapes(unittest.TestCase):
             EncryptReplyParams(
                 "conv-1", "this is my reply", None,
                 reply_to_sequence_id="seq-42",
-                reply_to_sender_id=12345,
+                reply_to_sender_id="12345",
                 reply_to_text="original message",
                 sender_id="1001",
                 signing_key_version="1",
@@ -561,6 +561,27 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.encoded_event_signature)
         self.assertEqual(payload.conversation_key_version, "1")
         self.assertEqual(payload.signature_info.signature_version, "7")
+
+    def test_user_ids_are_digit_strings(self):
+        from chat_xdk import EncryptReplyParams, SetIdentityParams
+
+        chat, v = self._unlocked_chat()
+        with self.assertRaisesRegex(ValueError, "Invalid user_id 'user-1'"):
+            chat.set_identity(SetIdentityParams("user-1", "1"))
+
+        params = EncryptReplyParams(
+            "conv-1", "reply", None,
+            reply_to_sequence_id="seq-42",
+            reply_to_sender_id="12x",
+            sender_id="1001",
+            signing_key_version="1",
+            conversation_key=base64.b64decode(v["conversation_key_b64"]),
+            conversation_key_version="1",
+        )
+        with self.assertRaisesRegex(ValueError, "Invalid reply_to_sender_id '12x'"):
+            chat.encrypt_reply(params)
+        with self.assertRaises(TypeError):
+            params.reply_to_sender_id = 12345
 
     def test_encrypt_reply_without_target_rejected(self):
         from chat_xdk import EncryptReplyParams
@@ -630,11 +651,11 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
-                public_keys, conversation_id="conv-1", sender_id="me", signing_key_version="1"
+                public_keys, conversation_id="conv-1", sender_id="910002", signing_key_version="1"
             )
         )
 
@@ -647,7 +668,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertIn("participant_keys", result)
         self.assertEqual(len(result["participant_keys"]), 1)
         entry = result["participant_keys"][0]
-        self.assertEqual(entry["user_id"], "me")
+        self.assertEqual(entry["user_id"], "910002")
         self.assertTrue(entry["encrypted_key"])
         self.assertIn("public_key_version", entry)
 
@@ -672,17 +693,17 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
                 public_keys,
                 "g123",         # conversation_id
-                ["new-user"],   # new_member_ids
-                ["me"],         # current_member_ids
-                ["me"],         # current_admin_ids
+                ["910009"],   # new_member_ids
+                ["910002"],         # current_member_ids
+                ["910002"],         # current_admin_ids
                 [],             # current_pending_member_ids
-                sender_id="me",
+                sender_id="910002",
                 signing_key_version="1",
                 current_title="Team",
             )
@@ -711,17 +732,17 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
                 public_keys,
                 "g123",
-                ["new-user"],
-                ["me"],
-                ["me"],
+                ["910009"],
+                ["910002"],
+                ["910002"],
                 [],
-                sender_id="me",
+                sender_id="910002",
                 signing_key_version="1",
                 current_screen_capture_blocking_enabled=True,
             )
@@ -741,15 +762,15 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_group_create(
             GroupCreateParams(
                 public_keys,
                 "g123",            # conversation_id
-                ["me", "friend"],  # member_ids
-                ["me"],            # admin_ids
-                sender_id="me",
+                ["910002", "910005"],  # member_ids
+                ["910002"],            # admin_ids
+                sender_id="910002",
                 signing_key_version="1",
                 title="Team",
             )
@@ -776,7 +797,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         # An empty string is the "not set" encoding: it must sign the null
         # sentinel, exactly like leaving the field None.
@@ -784,9 +805,9 @@ class TestApiShapes(unittest.TestCase):
             GroupCreateParams(
                 public_keys,
                 "g123",
-                ["me", "friend"],
-                ["me"],
-                sender_id="me",
+                ["910002", "910005"],
+                ["910002"],
+                sender_id="910002",
                 signing_key_version="1",
                 title="",
                 avatar_url="",
@@ -796,9 +817,9 @@ class TestApiShapes(unittest.TestCase):
             GroupCreateParams(
                 public_keys,
                 "g123",
-                ["me", "friend"],
-                ["me"],
-                sender_id="me",
+                ["910002", "910005"],
+                ["910002"],
+                sender_id="910002",
                 signing_key_version="1",
             )
         )
@@ -1301,7 +1322,7 @@ class TestApiShapes(unittest.TestCase):
         # Missing the identity binding fields (identity_public_key /
         # identity_public_key_signature) -> raises ValueError.
         incomplete = [{
-            "user_id": "me",
+            "user_id": "910002",
             "public_key_version": "1",
             "public_key": "abc",
         }]
@@ -1314,7 +1335,7 @@ class TestApiShapes(unittest.TestCase):
         chat, _ = self._unlocked_chat()
 
         incomplete = [{
-            "user_id": "me",
+            "user_id": "910002",
             "public_key_version": "1",
             "public_key": "abc",
             "identity_public_key": "def",

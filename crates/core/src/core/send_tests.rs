@@ -1023,3 +1023,50 @@ fn a_send_needs_a_numeric_sender_and_an_integer_key_version() {
         );
     }
 }
+
+#[test]
+fn every_user_id_input_must_be_numeric() {
+    let author = author();
+    let ckey = key(3);
+
+    let err = error_text(
+        author
+            .core
+            .set_identity(&SetIdentityParams::new("user-1", SIGNING_KEY_VERSION)),
+    );
+    assert!(err.starts_with("Invalid user_id 'user-1'"), "{err}");
+
+    let mut reply = EncryptReplyParams::new(CONVERSATION, "re", "")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    reply.reply_to_sequence_id = Some("5".into());
+    reply.reply_to_sender_id = Some("0042".into());
+    let err = error_text(author.core.encrypt_reply(&reply));
+    assert!(
+        err.starts_with("Invalid reply_to_sender_id '0042'"),
+        "{err}"
+    );
+    reply.reply_to_sender_id = Some("42".into());
+    author.core.encrypt_reply(&reply).unwrap();
+
+    let public_key = author.core.get_public_keys().unwrap().identity;
+    let participant = |user_id: &str| PublicKeyInput {
+        user_id: user_id.into(),
+        public_key: public_key.clone(),
+        key_version: "1".into(),
+    };
+    let err = error_text(author.core.prepare_conversation_key_change(
+        &ConversationKeyChangeParams::new(vec![participant(AUTHOR), participant("bob")]),
+    ));
+    assert!(
+        err.starts_with("Invalid public_keys user_id 'bob'"),
+        "{err}"
+    );
+
+    let err = error_text(author.core.prepare_group_create(&GroupCreateParams::new(
+        vec![participant(AUTHOR)],
+        "g1",
+        vec![AUTHOR.into(), "bob".into()],
+        vec![AUTHOR.into()],
+    )));
+    assert!(err.starts_with("Invalid member_ids 'bob'"), "{err}");
+}
