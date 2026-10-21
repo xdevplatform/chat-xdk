@@ -173,7 +173,7 @@ unset or empty key fields and fall back to two opt-in session stores:
   default**). While enabled, `decrypt_events` caches, per conversation, the
   key whose key change carried a valid signature at the highest version seen;
   `decrypt_event` falls back to it when its params' `conversation_keys` map is
-  empty; and the `encrypt_*` methods resolve an omitted
+  omitted or empty; and the `encrypt_*` methods resolve an omitted
   `conversation_key` / `conversation_key_version` pair from it. Disabling
   clears the cache; the cached keys zeroize on drop.
 
@@ -201,7 +201,7 @@ errors are collected in the result) and `decrypt_event` throws on failure.
 **Typical flow:**
 1. Once per instance: `setSigningKeys(allParticipantKeys)` and `setCacheKeys(true)`
 2. Use `decryptEvents({ events })` on first load — it extracts conversation keys and returns them (and, with caching on, retains each conversation's latest verified key)
-3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64, conversationKeys: {} })` — the empty key map and the unset signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keys` client-side and pass it as `conversationKeys`.
+3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64 })` — the omitted key map and signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keys` client-side and pass it as `conversationKeys`.
 
 ---
 
@@ -572,7 +572,7 @@ Decrypts a single event using conversation keys you already have — cached from
 | Field | JS | Python | Rust | Go | JVM | .NET | Description |
 |---|---|---|---|---|---|---|---|
 | event_b64 | `eventB64: string` | `event_b64: str` | `event_b64: String` | `EventB64 string` | `String eventB64` | `string EventB64` | One base64-encoded raw event. |
-| conversation_keys | `conversationKeys: ConversationKeyMap` | `conversation_keys: dict[str, bytes]` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` | `IReadOnlyDictionary<string, byte[]> ConversationKeys` | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. An empty map falls back to the opt-in key cache (`setCacheKeys`); non-message events (typing, read receipts) need no keys at all. |
+| conversation_keys | `conversationKeys?: ConversationKeyMap \| null` | `conversation_keys: dict[str, bytes] \| None = None` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` (or the one-argument constructor) | `IReadOnlyDictionary<string, byte[]>? ConversationKeys` (optional constructor argument) | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. Optional everywhere but Rust, where the map may be empty: omitted or empty, the keys come from the opt-in key cache (`setCacheKeys`), and non-message events (typing, read receipts) need no keys at all. |
 | signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **the event's sender**. The SDK matches by `publicKeyVersion` against the version in the event's signature. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails with an error. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
 **Returns: `Event`** directly — or **throws/raises** on failure (unlike `decryptEvents` which collects errors).
@@ -581,7 +581,7 @@ Decrypts a single event using conversation keys you already have — cached from
 // JS — returns Event, throws on error
 interface DecryptEventParams {
   eventB64: string;
-  conversationKeys: ConversationKeyMap;  // {} ⇒ opt-in key cache (setCacheKeys)
+  conversationKeys?: ConversationKeyMap | null;  // omitted ⇒ opt-in key cache (setCacheKeys)
   signingKeys?: SigningKeyEntry[] | null;  // unset ⇒ keys from setSigningKeys; if
                                            // none stored, signed events throw,
                                            // unless setRejectUnverified(false)
@@ -593,8 +593,8 @@ decryptEvent(params: DecryptEventParams): Event
 # Python — returns dict, raises on error
 DecryptEventParams(
     event_b64: str,
-    conversation_keys: dict[str, bytes],  # { version: bytes }; {} ⇒ opt-in
-                                          # key cache (set_cache_keys)
+    conversation_keys: dict[str, bytes] | None = None,  # { version: bytes };
+                                          # None ⇒ opt-in key cache (set_cache_keys)
     *,
     signing_keys: list[dict] | None = None,  # None ⇒ keys from set_signing_keys;
                                              # if none stored, signed events raise,
@@ -1226,7 +1226,7 @@ for (const dm of result.messages) {
 // ── New event arrives (webhook / poll): use decryptEvent ──
 // The empty key map and unset signing keys resolve from the key cache and
 // the signing-key store.
-const event = chat.decryptEvent({ eventB64: webhookEventB64, conversationKeys: {} });
+const event = chat.decryptEvent({ eventB64: webhookEventB64 });
 if (event.type === "message") {
   console.log(event.content.text);
 }
@@ -1316,7 +1316,7 @@ for dm in result["messages"]:
 # ── New event arrives: use decrypt_event ──
 # The empty key map and unset signing keys resolve from the key cache and
 # the signing-key store.
-event = chat.decrypt_event(DecryptEventParams(event_b64, {}))
+event = chat.decrypt_event(DecryptEventParams(event_b64))
 if event["type"] == "Message":
     print(event["content"]["text"])
 

@@ -404,9 +404,9 @@ type DecryptEventParams struct {
 	// EventB64 is the base64 event, as delivered.
 	EventB64 string `json:"event_b64"`
 	// ConversationKeys maps key version to the raw 32-byte conversation key,
-	// from DecryptEvents or ExtractConversationKeys. Events without message
-	// contents need no keys; an empty map also falls back to the opt-in key
-	// cache (SetCacheKeys).
+	// from DecryptEvents or ExtractConversationKeys. Leave it nil for events
+	// without message contents, or to take the keys from the opt-in key cache
+	// (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// SigningKeys verify the event; nil or empty uses the keys stored via
 	// SetSigningKeys.

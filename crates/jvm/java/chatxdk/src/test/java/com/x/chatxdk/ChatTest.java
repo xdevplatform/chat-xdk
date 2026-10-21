@@ -971,6 +971,12 @@ class ChatTest {
             keyChange.signingKeys = eventSigningKeys(v);
             chat.decryptEvents(keyChange);
 
+            // With no conversation keys, decryptEvent takes the key from the cache.
+            DecryptEventParams fromCache = new DecryptEventParams(v.get("event_message_b64").asText());
+            fromCache.signingKeys = eventSigningKeys(v);
+            assertEquals(v.get("event_message_text").asText(),
+                    chat.decryptEvent(fromCache).get("content").get("text").asText());
+
             SendPayload payload =
                     chat.encryptMessage(new EncryptMessageParams(conversationId, "from the key cache"));
             assertEquals(v.get("event_conversation_key_version").asText(), payload.conversationKeyVersion);

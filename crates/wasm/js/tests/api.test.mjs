@@ -842,14 +842,21 @@ async function main() {
     /Invalid decryptEvent params.*missing field `identityPublicKey`/,
   );
 
-  // 5b. decryptEvent takes the key map as given: it is required, and an
-  // entry that is not a 32-byte key is an error.
+  // 5b. decryptEvent's key map is optional: omitted or null, it reads as an
+  // empty map. A value that is not an object, or an entry that is not a
+  // 32-byte key, is an error.
+  const outcome = (params) => {
+    try {
+      return chat.decryptEvent(params);
+    } catch (e) {
+      return String(e);
+    }
+  };
+  const withEmptyMap = outcome({ eventB64: v.event_message_b64, conversationKeys: {} });
+  assert.deepEqual(outcome({ eventB64: v.event_message_b64 }), withEmptyMap);
+  assert.deepEqual(outcome({ eventB64: v.event_message_b64, conversationKeys: null }), withEmptyMap);
   assert.throws(
-    () => chat.decryptEvent({ eventB64: v.event_message_b64 }),
-    /Invalid decryptEvent params.*missing field `conversationKeys`/,
-  );
-  assert.throws(
-    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys: null }),
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys: "keys" }),
     /conversationKeys must be an object/,
   );
   assert.throws(

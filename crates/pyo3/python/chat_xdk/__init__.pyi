@@ -307,12 +307,12 @@ class MarkConversationReadParams:
 
 class DecryptEventParams:
     event_b64: str
-    conversation_keys: dict[str, bytes]
+    conversation_keys: Optional[dict[str, bytes]]
     signing_keys: Optional[list[dict[str, str]]]
     def __init__(
         self,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
+        conversation_keys: Optional[dict[str, bytes]] = None,
         *,
         signing_keys: Optional[list[dict[str, str]]] = None,
     ) -> None: ...

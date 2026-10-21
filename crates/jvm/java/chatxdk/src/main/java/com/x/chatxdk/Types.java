@@ -979,8 +979,8 @@ public final class Types {
 
         /**
          * Version &#8594; raw 32-byte conversation key, from {@link Chat#decryptEvents} or
-         * {@link Chat#extractConversationKeys}. Events without message contents need no keys; an
-         * empty map also falls back to the opt-in key cache ({@link Chat#setCacheKeys}).
+         * {@link Chat#extractConversationKeys}. Null for events without message contents, or to
+         * take the keys from the opt-in key cache ({@link Chat#setCacheKeys}).
          */
         public final Map<String, byte[]> conversationKeys;
 
@@ -1000,6 +1000,16 @@ public final class Types {
         public DecryptEventParams(String eventB64, Map<String, byte[]> conversationKeys) {
             this.eventB64 = eventB64;
             this.conversationKeys = conversationKeys;
+        }
+
+        /**
+         * Create params without conversation keys, for events without message contents, or to
+         * take the keys from the opt-in key cache.
+         *
+         * @param eventB64 The base64 event, as delivered.
+         */
+        public DecryptEventParams(String eventB64) {
+            this(eventB64, null);
         }
     }
 

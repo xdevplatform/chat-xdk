@@ -275,9 +275,9 @@ FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(eventB64, c
 
 `decrypt_events` takes `DecryptEventsParams` (`events`, optional
 `signing_keys`) and `decrypt_event` takes `DecryptEventParams` (`event_b64`,
-`conversation_keys`, optional `signing_keys`), named the same in every
-binding. The conversation key map is required: pass an empty map to fall
-back to the opt-in key cache. The .NET and JVM `decryptEvent` overloads that
+optional `conversation_keys`, optional `signing_keys`), named the same in
+every binding. Omitted (or, in Rust, empty), the conversation keys come from
+the opt-in key cache. The .NET and JVM `decryptEvent` overloads that
 took a `ConversationKeyBundle` are removed; pass `bundle.Keys` /
 `bundle.keys`. The contracts are as before: `decrypt_events` never throws
 and `decrypt_event` throws on failure.
@@ -295,7 +295,7 @@ let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_sig
 result = chat.decrypt_events(events, signing_keys)  # before
 result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))  # after
 event = chat.decrypt_event(event_b64)  # before
-event = chat.decrypt_event(DecryptEventParams(event_b64, {}))  # after
+event = chat.decrypt_event(DecryptEventParams(event_b64))  # after
 ```
 
 ```js

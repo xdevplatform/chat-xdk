@@ -544,11 +544,11 @@ export interface DecryptEventParams {
   eventB64: string;
   /**
    * The conversation's key map, from decryptEvents or
-   * extractConversationKeys (its `keys`). Events without message contents
-   * need no keys, so pass `{}` for them; an empty map also falls back to the
-   * opt-in key cache (setCacheKeys).
+   * extractConversationKeys (its `keys`). Omit it, or pass `{}`, for events
+   * without message contents, or to take the keys from the opt-in key cache
+   * (setCacheKeys).
    */
-  conversationKeys: ConversationKeyMap;
+  conversationKeys?: ConversationKeyMap | null;
   /** Signing keys to verify the event with; the keys stored via setSigningKeys are used when omitted or empty. */
   signingKeys?: SigningKeyEntry[] | null;
 }

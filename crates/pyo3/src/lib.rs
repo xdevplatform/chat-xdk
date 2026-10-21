@@ -1156,9 +1156,9 @@ pub struct DecryptEventParams {
     event_b64: String,
     /// The conversation's key map: key version to raw 32-byte key
     /// (``bytes``), from ``decrypt_events`` or ``extract_conversation_keys``.
-    /// Events without message contents need no keys, so pass ``{}`` for
-    /// them; an empty map also falls back to the opt-in key cache.
-    conversation_keys: Py<PyAny>,
+    /// Leave it ``None``, or pass ``{}``, for events without message
+    /// contents, or to take the keys from the opt-in key cache.
+    conversation_keys: Option<Py<PyAny>>,
     /// Signing-key dicts ``{"user_id", "public_key_version", "public_key",
     /// "identity_public_key", "identity_public_key_signature"}``, straight
     /// from the X API public keys response. ``None`` or empty uses the keys
@@ -1169,10 +1169,10 @@ pub struct DecryptEventParams {
 #[pymethods]
 impl DecryptEventParams {
     #[new]
-    #[pyo3(signature = (event_b64, conversation_keys, *, signing_keys=None))]
+    #[pyo3(signature = (event_b64, conversation_keys=None, *, signing_keys=None))]
     fn new(
         event_b64: String,
-        conversation_keys: Py<PyAny>,
+        conversation_keys: Option<Py<PyAny>>,
         signing_keys: Option<Py<PyAny>>,
     ) -> Self {
         Self {
@@ -1185,10 +1185,12 @@ impl DecryptEventParams {
 
 impl DecryptEventParams {
     fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::DecryptEventParams> {
-        let mut params = chat_xdk_core::DecryptEventParams::new(
-            self.event_b64.as_str(),
-            conversation_keys_field(py, &self.conversation_keys)?,
-        );
+        let conversation_keys = match &self.conversation_keys {
+            Some(keys) => conversation_keys_field(py, keys)?,
+            None => HashMap::new(),
+        };
+        let mut params =
+            chat_xdk_core::DecryptEventParams::new(self.event_b64.as_str(), conversation_keys);
         params.signing_keys = signing_keys_field(py, &self.signing_keys)?;
         Ok(params)
     }

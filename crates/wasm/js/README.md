@@ -106,7 +106,7 @@ for (const dm of result.messages) {
 // Individual events after the initial load: the empty key map resolves from
 // the cache and the unset signing keys from the store (pass either
 // explicitly to override).
-const event = chat.decryptEvent({ eventB64: webhookEventB64, conversationKeys: {} });
+const event = chat.decryptEvent({ eventB64: webhookEventB64 });
 
 // Sending resolves the identity and conversation key from the session too.
 const payload = chat.encryptMessage({ conversationId: event.conversationId, text: "hi!" });

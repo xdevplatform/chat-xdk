@@ -889,10 +889,10 @@ namespace ChatXdk
         /// <param name="eventB64">The base64 event, as delivered.</param>
         /// <param name="conversationKeys">
         /// Version → raw 32-byte conversation key, from <see cref="Chat.DecryptEvents"/> or
-        /// <see cref="Chat.ExtractConversationKeys"/>. Events without message contents need no
-        /// keys; an empty map also falls back to the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
+        /// <see cref="Chat.ExtractConversationKeys"/>. Leave it null for events without message
+        /// contents, or to take the keys from the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
         /// </param>
-        public DecryptEventParams(string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys)
+        public DecryptEventParams(string eventB64, IReadOnlyDictionary<string, byte[]>? conversationKeys = null)
         {
             EventB64 = eventB64;
             ConversationKeys = conversationKeys;
@@ -900,8 +900,8 @@ namespace ChatXdk
 
         /// <summary>The base64 event, as delivered.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
-        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>Version → raw 32-byte conversation key; null when none were passed.</summary>
+        public IReadOnlyDictionary<string, byte[]>? ConversationKeys { get; }
         /// <summary>
         /// Signing keys to verify the event with; null or empty uses the keys stored via
         /// <see cref="Chat.SetSigningKeys"/>. The SDK picks the sender's key for the version the

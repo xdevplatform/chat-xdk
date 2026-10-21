@@ -216,6 +216,9 @@ async function delegationTests() {
   chat.setIdentity(v.event_sender_id, v.event_signing_key_version);
   chat.setCacheKeys(true);
   chat.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
+  // With no conversationKeys, decryptEvent takes the key from the cache.
+  const fromCache = chat.decryptEvent({ eventB64: v.event_message_b64, signingKeys });
+  assert.equal(fromCache.content.text, v.event_message_text);
   const sessionPayload = chat.encryptMessage({
     conversationId: v.event_conversation_id,
     text: "hello from the session",

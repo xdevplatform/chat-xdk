@@ -217,7 +217,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
             lambda: MarkConversationReadParams("conv-1"),
-            lambda: DecryptEventParams("event"),
+            lambda: DecryptEventParams(),
             lambda: DecryptEventsParams(),
             lambda: EncryptFileParams(b"file", "event", {}),
             lambda: FileEncryptorParams("event", {}),

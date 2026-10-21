@@ -388,6 +388,7 @@ struct FfiGroupCreateParams {
 #[derive(serde::Deserialize)]
 struct FfiDecryptEventParams {
     event_b64: String,
+    #[serde(default)]
     conversation_keys: HashMap<String, String>,
     #[serde(default)]
     signing_keys: Option<Vec<SigningKeyEntry>>,

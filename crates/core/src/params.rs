@@ -830,8 +830,9 @@ pub struct DecryptEventParams {
     /// The base64 event, as delivered.
     pub event_b64: String,
     /// The conversation's key map (`key version → key`), from
-    /// `decrypt_events` or `extract_conversation_keys`. Events without
-    /// message contents need no keys, so the map may be empty for them.
+    /// `decrypt_events` or `extract_conversation_keys`. Leave it empty for
+    /// events without message contents, or to take the keys from the opt-in
+    /// key cache.
     pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// Signing keys to verify the event with; the keys stored via
     /// `set_signing_keys` are used when unset or empty.

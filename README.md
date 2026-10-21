@@ -102,7 +102,7 @@ const result = chat.decryptEvents({ events: rawEvents });
 for (const dm of result.messages) {
   if (dm.event.type === "message") console.log(dm.event.senderId, dm.event.content.text);
 }
-const event = chat.decryptEvent({ eventB64: newEventB64, conversationKeys: {} });
+const event = chat.decryptEvent({ eventB64: newEventB64 });
 const payload = chat.encryptMessage({ conversationId, text: "hello" });
 ```
 
