@@ -763,10 +763,10 @@ public final class Chat implements AutoCloseable {
     /**
      * Encrypt a message for the X API.
      * POST the returned {@link SendPayload} fields to
-     * {@code POST /2/chat/conversations/{id}/messages}. A message with files takes an id derived
-     * from its files, so building it again gives the same id; encrypt each file afterwards with
-     * {@link #encryptFile} or {@link #fileEncryptor} and the payload's
-     * {@link SendPayload#eventB64}.
+     * {@code POST /2/chat/conversations/{id}/messages}. A v1 message with files takes an id
+     * derived from its files, so building it again gives the same id; other messages take a random
+     * id. Encrypt each file afterwards with {@link #encryptFile} or {@link #fileEncryptor} and the
+     * payload's {@link SendPayload#eventB64}.
      */
     public SendPayload encryptMessage(EncryptMessageParams parameters) throws Exception {
         throwIfDisposed();

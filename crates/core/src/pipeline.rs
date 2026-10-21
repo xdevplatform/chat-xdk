@@ -585,10 +585,25 @@ pub fn build_thrift_attachments(
         .collect()
 }
 
-/// Convert an outgoing message's own [`AttachmentDescriptor`]s, giving each
-/// the id its key derives from: the message id for the first attachment and
-/// `<message id>#<index>` for later ones, the ids recipients resolve for an
-/// attachment that carries none.
+/// Convert an outgoing message's own [`AttachmentDescriptor`]s for
+/// `send_version`: v1 names each attachment by the id its key derives from
+/// ([`build_message_attachments`]); v0 sends them without ids, as 0.5.x did.
+#[allow(clippy::vec_box)]
+pub fn build_outgoing_attachments(
+    descs: &[AttachmentDescriptor],
+    message_id: &str,
+    send_version: SendVersion,
+) -> Vec<Box<ThriftMessageAttachment>> {
+    match send_version {
+        SendVersion::V0 => build_thrift_attachments(descs),
+        SendVersion::V1 => build_message_attachments(descs, message_id),
+    }
+}
+
+/// Convert an outgoing v1 message's own [`AttachmentDescriptor`]s, giving
+/// each the id its key derives from: the message id for the first attachment
+/// and `<message id>#<index>` for later ones, the ids recipients resolve for
+/// an attachment that carries none.
 #[allow(clippy::vec_box)]
 pub fn build_message_attachments(
     descs: &[AttachmentDescriptor],

@@ -361,11 +361,11 @@ struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle, const c
  * (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
  * of decrypted text content), `should_notify`, and `ttl_msec`.
  *
- * Returns JSON `SendPayload`, whose `message_id` is the message's id. A
+ * Returns JSON `SendPayload`, whose `message_id` is the message's id. A v1
  * message with files takes an id derived from its files, so building it
- * again gives the same id; encrypt each file afterwards with
- * `chat_xdk_encrypt_file` or a file encryptor and the payload's
- * `event_b64`.
+ * again gives the same id; other messages take a random id. Encrypt each
+ * file afterwards with `chat_xdk_encrypt_file` or a file encryptor and the
+ * payload's `event_b64`.
  */
 struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const char *params_json);
 

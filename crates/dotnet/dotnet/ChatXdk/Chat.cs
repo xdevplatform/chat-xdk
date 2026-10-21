@@ -813,10 +813,10 @@ namespace ChatXdk
         /// <summary>
         /// Encrypt a message for the X API.
         /// POST the returned <see cref="SendPayload"/> fields to
-        /// <c>POST /2/chat/conversations/{id}/messages</c>. A message with files takes an id
-        /// derived from its files, so building it again gives the same id; encrypt each file
-        /// afterwards with <see cref="EncryptFile"/> or <see cref="FileEncryptor"/> and the
-        /// payload's <see cref="SendPayload.EventB64"/>.
+        /// <c>POST /2/chat/conversations/{id}/messages</c>. A v1 message with files takes an
+        /// id derived from its files, so building it again gives the same id; other messages
+        /// take a random id. Encrypt each file afterwards with <see cref="EncryptFile"/> or
+        /// <see cref="FileEncryptor"/> and the payload's <see cref="SendPayload.EventB64"/>.
         /// </summary>
         public SendPayload EncryptMessage(EncryptMessageParams parameters)
         {

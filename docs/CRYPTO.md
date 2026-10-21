@@ -361,7 +361,7 @@ attachment's id into the message explicitly — the message id for the first
 and `{message_id}#{index}` for later ones — so recipients derive the same keys
 whatever their fallback.
 
-A message with files takes its id from them:
+A v1 message with files takes its id from them:
 
 ```
 info       = len(conversation_key_version) ‖ conversation_key_version
@@ -384,7 +384,8 @@ favicon). Every upload has its own media hash key, so the id is unique to
 the message, and building the same message again (same files, sender,
 conversation and key) gives the same id, which keeps the files already
 encrypted for it valid. The text does not affect the id. A message without
-files takes a random version-4 UUID. A message that lists an empty media hash
+files, and every v0 message, takes a random version-4 UUID: v0 files use the
+conversation key, so their keys don't depend on the id. A message that lists an empty media hash
 key, or lists one in more than one attachment, is rejected: each file is
 uploaded once and encrypted under the key of the one attachment that names it
 (a URL card's banner and favicon share the card's key, so they may share an
@@ -479,9 +480,9 @@ of the XSalsa20-Poly1305 ciphertext. Signing the surrounding metadata (sender,
 conversation, key version) binds the signature to its context and prevents a
 signature from being replayed onto a different message or conversation.
 
-`message_id` is a version-4 UUID the encrypt entry point generates — random
-for a message without files, derived from its files for a message with files
-(see [Media Keys](#media-keys)) — bound into the signature the same way and
+`message_id` is a version-4 UUID the encrypt entry point generates — derived
+from its files for a v1 message with files (see [Media Keys](#media-keys)),
+random otherwise — bound into the signature the same way and
 returned in the `SendPayload`. Reuse the returned payload on retries so one
 logical message is never sent under two ids.
 

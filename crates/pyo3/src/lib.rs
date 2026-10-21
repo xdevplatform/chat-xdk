@@ -1780,10 +1780,11 @@ impl Chat {
 
     /// Encrypt a message for the X API.
     ///
-    /// The message id comes back in ``payload.message_id``. A message with
-    /// files takes an id derived from its files, so building it again gives
-    /// the same id; encrypt each file afterwards with ``encrypt_file`` or
-    /// ``file_encryptor`` and ``payload.event_b64``.
+    /// The message id comes back in ``payload.message_id``. A v1 message
+    /// with files takes an id derived from its files, so building it again
+    /// gives the same id; other messages take a random id. Encrypt each file
+    /// afterwards with ``encrypt_file`` or ``file_encryptor`` and
+    /// ``payload.event_b64``.
     ///
     /// Args:
     ///     params: An ``EncryptMessageParams``.

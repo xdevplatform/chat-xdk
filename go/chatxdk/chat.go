@@ -468,10 +468,10 @@ func (c *Chat) DecryptEvent(params DecryptEventParams) (*Event, error) {
 
 // EncryptMessage encrypts a message for the X API.
 //
-// The message id comes back in the payload's MessageID. A message with files
-// takes an id derived from its files, so building it again gives the same
-// id; encrypt each file afterwards with EncryptFile or FileEncryptor and the
-// payload's EventB64.
+// The message id comes back in the payload's MessageID. A v1 message with
+// files takes an id derived from its files, so building it again gives the
+// same id; other messages take a random id. Encrypt each file afterwards
+// with EncryptFile or FileEncryptor and the payload's EventB64.
 func (c *Chat) EncryptMessage(params EncryptMessageParams) (*SendPayload, error) {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)

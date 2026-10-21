@@ -498,10 +498,11 @@ impl Chat {
     /// `attachments` (array of attachment objects), `quickReply` (the same
     /// shape decrypted text content carries), `shouldNotify`, and `ttlMsec`.
     ///
-    /// The message id comes back as `messageId` on the result. A message with
-    /// files takes an id derived from its files, so building it again gives
-    /// the same id; encrypt each file afterwards with `encryptFile` or
-    /// `fileEncryptor` and the result's `eventB64`.
+    /// The message id comes back as `messageId` on the result. A v1 message
+    /// with files takes an id derived from its files, so building it again
+    /// gives the same id; other messages take a random id. Encrypt each file
+    /// afterwards with `encryptFile` or `fileEncryptor` and the result's
+    /// `eventB64`.
     #[wasm_bindgen(js_name = encryptMessage)]
     pub fn encrypt_message(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsEncryptMessageParams = from_js_params("encryptMessage", params)?;

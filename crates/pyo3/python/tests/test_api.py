@@ -1113,7 +1113,7 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             encryptor.finish()
 
-    def test_a_message_with_files_takes_the_id_its_files_derive(self):
+    def _sender_of_files(self):
         from chat_xdk import EncryptMessageParams
 
         chat, v = self._unlocked_chat()
@@ -1130,10 +1130,21 @@ class TestApiShapes(unittest.TestCase):
                 )
             ).message_id
 
+        return chat, send
+
+    def test_a_v1_message_with_files_takes_the_id_its_files_derive(self):
+        chat, send = self._sender_of_files()
+        chat._apply_feature_config('{"features":{"v1_send":true}}', chat._feature_bucket())
+
         first = send("draft", ["photo-a", "photo-b"])
         self.assertEqual(send("final text", ["photo-a", "photo-b"]), first)
         self.assertNotEqual(send("draft", ["photo-b", "photo-a"]), first)
         self.assertNotEqual(send("draft", []), send("draft", []))
+
+    def test_a_v0_message_with_files_takes_a_random_id(self):
+        _, send = self._sender_of_files()
+
+        self.assertNotEqual(send("draft", ["photo-a", "photo-b"]), send("draft", ["photo-a", "photo-b"]))
 
     def test_file_errors_say_what_to_pass(self):
         from chat_xdk import EncryptFileParams, EncryptMessageParams

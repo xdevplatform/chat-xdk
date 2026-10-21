@@ -759,13 +759,14 @@ below), together with `event_b64`: the message as recipients receive it.
 a media attachment, or a link card's banner or favicon image — names the
 `media_hash_key` its upload started with. Encrypt the message first, then
 encrypt each file from the payload's `event_b64` and its `media_hash_key`
-(see [Files (Media)](#files-media)). The SDK derives the id of a message
-with files from the conversation key and its version, the sender, the
-conversation, and the files' media hash keys in order, so building the same
-message again (same files, sender, conversation and key) gives the same id,
-and the files encrypted for it stay valid. The text does not affect the id. A
-message without files takes a random id. Each file needs its own media hash
-key: an empty one, or one listed in more than one attachment, is rejected.
+(see [Files (Media)](#files-media)). In v1 (see below) the SDK derives the id
+of a message with files from the conversation key and its version, the
+sender, the conversation, and the files' media hash keys in order, so
+building the same message again (same files, sender, conversation and key)
+gives the same id, and the files encrypted for it stay valid. The text does
+not affect the id. v0 messages, and messages without files, take a random
+id, as in 0.5.x. Each file needs its own media hash key: an empty one, or one
+listed in more than one attachment, is rejected.
 
 **The SDK picks each send's format.** An encrypted send (message, reply,
 reaction, edit) is either v0, the 0.5.x format, with contents under the
@@ -1827,8 +1828,8 @@ For reactions and edits, `targetMessageId` is the message **sequenceId**.
 Returned by `encrypt_message()` and all `encrypt_*()` methods.
 
 The SDK generates the `message_id` (a UUID) and embeds it in the signed
-event: random for a message without files, and derived from its files for a
-message with files (see [Message Encryption](#message-encryption)). Send it as
+event: derived from its files for a v1 message with files (see
+[Message Encryption](#message-encryption)), random otherwise. Send it as
 the message's `message_id`, keep it to dedup and to anchor replies, and reuse
 the same encrypted payload on retries so a message is never sent twice under
 two ids.

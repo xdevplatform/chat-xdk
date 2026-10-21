@@ -300,11 +300,16 @@ async function main() {
   assert.equal(fileCt1.length, encryptedFileSize(plaintext.length));
   assert.deepEqual(chat.decryptFile({ ...fileParams, encrypted: fileCt1 }), plaintext);
 
-  // A message with files takes the id its files derive: building it again
+  // A v0 message, the default, takes a random id, as 0.5.x did.
+  assert.notEqual(sendPhotos("a photo", [mediaHashKey]).messageId, photoPayload.messageId);
+
+  // A v1 message with files takes the id its files derive: building it again
   // gives the same id, so files already encrypted stay valid.
-  assert.equal(sendPhotos("another caption", [mediaHashKey]).messageId, photoPayload.messageId);
-  assert.notEqual(sendPhotos("a photo", ["other"]).messageId, photoPayload.messageId);
-  assert.match(photoPayload.messageId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
+  const v1PhotoPayload = sendPhotos("a photo", [mediaHashKey]);
+  assert.equal(sendPhotos("another caption", [mediaHashKey]).messageId, v1PhotoPayload.messageId);
+  assert.notEqual(sendPhotos("a photo", ["other"]).messageId, v1PhotoPayload.messageId);
+  assert.match(v1PhotoPayload.messageId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 
   // Each file needs its own media hash key.
   assert.throws(
