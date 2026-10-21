@@ -334,18 +334,30 @@ fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
     validate_user_id("sender_id", sender_id)
 }
 
-/// Check that a conversation key version is an integer in canonical decimal
-/// form: recipients look the key up by the version as carried, while the
-/// signature covers its integer value.
-fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
-    if version.parse::<i64>().map(|v| v.to_string()).as_deref() == Ok(version) {
+/// Check that `version` is a key version as the X API returns it: a
+/// non-negative integer in canonical decimal form (digits only, no leading
+/// zero). Signing-key versions (`public_key_version`) and conversation key
+/// versions both take this form; recipients look keys up by the version as
+/// carried, while signatures cover its integer value. `field` names the input
+/// in the error.
+pub(crate) fn validate_key_version(field: &str, version: &str) -> Result<(), SdkError> {
+    let canonical = version
+        .parse::<i64>()
+        .ok()
+        .filter(|v| *v >= 0)
+        .map(|v| v.to_string());
+    if canonical.as_deref() == Some(version) {
         Ok(())
     } else {
         Err(SdkError::InvalidInput(format!(
-            "Invalid conversation_key_version '{version}': pass the key version as the integer \
-             its key-change event carries"
+            "Invalid {field} '{version}': pass the key version as the X API returns it, \
+             an integer in digits"
         )))
     }
+}
+
+fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
+    validate_key_version("conversation_key_version", version)
 }
 
 // Content builders

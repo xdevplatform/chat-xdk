@@ -210,6 +210,7 @@ impl ChatCore {
     /// byte-identical signed output for the same logical inputs.
     pub fn set_identity(&self, params: &SetIdentityParams) -> Result<(), SdkError> {
         crate::pipeline::validate_user_id("user_id", &params.user_id)?;
+        crate::pipeline::validate_key_version("signing_key_version", &params.signing_key_version)?;
         *self
             .owner_user_id
             .write()
@@ -274,15 +275,18 @@ impl ChatCore {
     /// Resolve the effective `signing_key_version`: the explicit override
     /// when present, otherwise the session identity.
     fn resolve_signing_key_version(&self, param: Option<&str>) -> Result<String, SdkError> {
-        if let Some(v) = param.filter(|v| !v.is_empty()) {
-            return Ok(v.to_string());
-        }
-        self.keypair_manager.get_key_version().ok_or_else(|| {
-            SdkError::InvalidState(
-                "signing_key_version is not set: pass it explicitly or call set_identity() first"
-                    .into(),
-            )
-        })
+        let version = match param.filter(|v| !v.is_empty()) {
+            Some(v) => v.to_string(),
+            None => self.keypair_manager.get_key_version().ok_or_else(|| {
+                SdkError::InvalidState(
+                    "signing_key_version is not set: pass it explicitly or call set_identity() \
+                     first"
+                        .into(),
+                )
+            })?,
+        };
+        crate::pipeline::validate_key_version("signing_key_version", &version)?;
+        Ok(version)
     }
 
     /// Resolve the conversation key + version for an encrypt call: the
@@ -367,6 +371,9 @@ impl ChatCore {
     /// version are set in one call.
     pub fn import_keys(&self, params: &ImportKeysParams) -> Result<(), SdkError> {
         use crate::crypto::keys::XChatPrivateKeys;
+        if let Some(version) = params.signing_key_version.as_deref() {
+            crate::pipeline::validate_key_version("signing_key_version", version)?;
+        }
         let private_keys = XChatPrivateKeys::from_bytes(&params.keys).ok_or_else(|| {
             SdkError::Crypto(CryptoError::DecryptionFailed(
                 "Invalid key format: expected 32 or 64 bytes".into(),
@@ -594,6 +601,7 @@ impl ChatCore {
         }
         for pk in public_keys {
             crate::pipeline::validate_user_id("public_keys user_id", &pk.user_id)?;
+            crate::pipeline::validate_key_version("public_keys key_version", &pk.key_version)?;
         }
 
         let mut best_by_user: HashMap<String, &PublicKeyInput> = HashMap::new();
@@ -727,6 +735,10 @@ impl ChatCore {
         let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
         let signing_key_version =
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        crate::pipeline::validate_key_version(
+            "conversation_key_version",
+            conversation_key_version,
+        )?;
         // An empty id means "derive": FFI layers cannot express Option and
         // send "" for "not set".
         let conversation_id = match params
@@ -895,6 +907,10 @@ impl ChatCore {
         let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
         let signing_key_version =
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        crate::pipeline::validate_key_version(
+            "conversation_key_version",
+            conversation_key_version,
+        )?;
         // Normalize absent-value encodings so every binding signs identical
         // bytes: FFI layers cannot express Option and pass "" / a negative
         // TTL for "not set".
@@ -978,6 +994,10 @@ impl ChatCore {
         let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
         let signing_key_version =
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        crate::pipeline::validate_key_version(
+            "conversation_key_version",
+            conversation_key_version,
+        )?;
         // Normalize absent-value encodings so every binding signs identical
         // bytes: FFI layers cannot express Option and pass "" / a negative
         // TTL for "not set".
@@ -4758,7 +4778,7 @@ mod tests {
         let encrypt = || {
             core.encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "hello")
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap()
@@ -4913,7 +4933,7 @@ mod tests {
         let payload = attacker
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "forged")
-                    .with_identity("4003", "attacker-pkv")
+                    .with_identity("4003", "62")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -4966,7 +4986,7 @@ mod tests {
             },
             SigningKeyEntry {
                 user_id: "4004".to_string(),
-                public_key_version: "attacker-pkv".to_string(),
+                public_key_version: "62".to_string(),
                 public_key: attacker_reg.public_key.signing_public_key.clone(),
                 identity_public_key: attacker_reg.public_key.public_key.clone(),
                 identity_public_key_signature: attacker_reg
@@ -6577,7 +6597,7 @@ mod tests {
                 ConversationParticipantKey::new(
                     Some("910007".to_string()),
                     Some("encrypted-key-2".to_string()),
-                    Some("pkv-2".to_string()),
+                    Some("63".to_string()),
                 ),
             ]),
             None,
@@ -6815,7 +6835,7 @@ mod tests {
         // exists, and an event with only mismatched entries yields no key.
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("910003", "V"))
+        core.set_identity(&SetIdentityParams::new("910003", "64"))
             .unwrap();
 
         let pubkeys = core.get_public_keys().unwrap();
@@ -6848,7 +6868,7 @@ mod tests {
             Some("42".to_string()),
             Some(vec![
                 entry(encrypt_for_self(&ckey_mismatch), "not-V"),
-                entry(encrypt_for_self(&ckey_match), "V"),
+                entry(encrypt_for_self(&ckey_match), "64"),
             ]),
             None,
             None,
@@ -7588,7 +7608,7 @@ mod tests {
     fn mark_conversation_read_decrypts_as_a_verified_read_receipt() {
         let core = ChatCore::new(); // default reject_unverified = true
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("111", "pkv"))
+        core.set_identity(&SetIdentityParams::new("111", "61"))
             .unwrap();
 
         let mut params = crate::MarkConversationReadParams::new("222-111", "2011626338877079553");
@@ -7597,7 +7617,7 @@ mod tests {
 
         // The session identity's signing key version signs the receipt, and
         // the 1:1 conversation id is signed in canonical colon form.
-        assert_eq!(sig.public_key_version, "pkv");
+        assert_eq!(sig.public_key_version, "61");
         assert_eq!(
             sig.signature_payload,
             format!(
@@ -8296,13 +8316,13 @@ mod tests {
 
         // KeyChange event seeds the conversation key for the batch.
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "4001", Some("pkv".to_string()));
+            build_self_keychange_event(&core, &ckey, ckey_version, "4001", Some("61".to_string()));
 
         // A signed message encrypted with that conversation key.
         let payload = core
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "binding check")
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), ckey_version),
             )
             .unwrap();
@@ -8310,7 +8330,7 @@ mod tests {
 
         let good_key = SigningKeyEntry {
             user_id: "4001".to_string(),
-            public_key_version: "pkv".to_string(),
+            public_key_version: "61".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
             identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
@@ -8425,7 +8445,7 @@ mod tests {
     fn signing_key_entry_for(reg: &PublicKeyRegistrationPayload, user_id: &str) -> SigningKeyEntry {
         SigningKeyEntry {
             user_id: user_id.to_string(),
-            public_key_version: "pkv".to_string(),
+            public_key_version: "61".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
             identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
@@ -8445,12 +8465,12 @@ mod tests {
         let ckey_version = "1001";
 
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, ckey_version, "4001", Some("pkv".to_string()));
+            build_self_keychange_event(&core, &ckey, ckey_version, "4001", Some("61".to_string()));
 
         let payload = core
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "hello")
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), ckey_version),
             )
             .unwrap();
@@ -8495,14 +8515,14 @@ mod tests {
             &ckey,
             ckey_version,
             "4001",
-            "pkv",
-            Some("pkv".to_string()),
+            "61",
+            Some("61".to_string()),
         );
 
         let payload = core
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "hello verified")
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), ckey_version),
             )
             .unwrap();
@@ -8550,7 +8570,7 @@ mod tests {
                 .encrypt_conversation_key_for_recipients(&ckey, &recipients)
                 .unwrap();
             let action_sig = core
-                .sign_key_change("pkv", "msg-kc", "910003", "conv-1", "1001", ckey.encoded())
+                .sign_key_change("61", "msg-kc", "910003", "conv-1", "1001", ckey.encoded())
                 .unwrap();
             let signature = if corrupt {
                 let mut raw = base64_decode(&action_sig.signature).unwrap();
@@ -8638,7 +8658,7 @@ mod tests {
             &ckey,
             ckey_version,
             "910003",
-            Some("pkv".to_string()),
+            Some("61".to_string()),
         );
 
         let signing_keys = [signing_key_entry_for(&reg, "910003")];
@@ -8671,7 +8691,7 @@ mod tests {
             .encrypt_conversation_key_for_recipients(&ckey, &recipients)
             .unwrap();
         let action_sig = core
-            .sign_key_change("pkv", "msg-kc", "910003", conv_id, version, ckey.encoded())
+            .sign_key_change("61", "msg-kc", "910003", conv_id, version, ckey.encoded())
             .unwrap();
         let signature = if corrupt {
             let mut raw = base64_decode(&action_sig.signature).unwrap();
@@ -8790,7 +8810,7 @@ mod tests {
         let payload = core
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "downgrade probe")
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -8890,7 +8910,7 @@ mod tests {
         );
         let sig_struct = crate::thrift::event::MessageEventSignature::new(
             Some("AAAA".to_string()),
-            Some("pkv".to_string()),
+            Some("61".to_string()),
             Some("7".to_string()),
             None,
             None,
@@ -8945,7 +8965,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut reply_params = crate::EncryptReplyParams::new("conv-1", "a reply", "")
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         reply_params.reply_to_sequence_id = Some("seq-99".into());
         let payload = core.encrypt_reply(&reply_params).unwrap();
@@ -8954,7 +8974,7 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
             user_id: "4001".to_string(),
-            public_key_version: "pkv".to_string(),
+            public_key_version: "61".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
             identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
@@ -8979,7 +8999,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptReactionParams::new("", "thumbs")
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
@@ -8989,7 +9009,7 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
             user_id: "4001".to_string(),
-            public_key_version: "pkv".to_string(),
+            public_key_version: "61".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
             identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
@@ -9023,7 +9043,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptReactionParams::new("", "thumbs")
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
@@ -9033,7 +9053,7 @@ mod tests {
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
         let signing_keys = [SigningKeyEntry {
             user_id: "4001".to_string(),
-            public_key_version: "pkv".to_string(),
+            public_key_version: "61".to_string(),
             public_key: reg.public_key.signing_public_key.clone(),
             identity_public_key: reg.public_key.public_key.clone(),
             identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
@@ -9111,7 +9131,7 @@ mod tests {
     fn session_identity_signs_the_same_values_as_explicit_params() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("4001", "pkv"))
+        core.set_identity(&SetIdentityParams::new("4001", "61"))
             .unwrap();
         let ckey = core.generate_conversation_key().unwrap();
 
@@ -9121,7 +9141,7 @@ mod tests {
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
-        assert_eq!(payload.signature_info.public_key_version, "pkv");
+        assert_eq!(payload.signature_info.public_key_version, "61");
 
         // Verifying against the session sender_id and signing_key_version
         // proves the signature covers exactly the values an explicit call
@@ -9162,7 +9182,7 @@ mod tests {
     fn encrypt_message_rejects_disallowed_attachment_combos() {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("4001", "pkv"))
+        core.set_identity(&SetIdentityParams::new("4001", "61"))
             .unwrap();
         let ckey = core.generate_conversation_key().unwrap();
 
@@ -9221,7 +9241,7 @@ mod tests {
         let ckey = core.generate_conversation_key().unwrap();
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "hi", "")
-            .with_identity("910003", "pkv")
+            .with_identity("910003", "61")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-1".into());
         params.attachments = Some(vec![
@@ -9336,16 +9356,14 @@ mod tests {
         let exported = source.export_keys().unwrap();
 
         let core = ChatCore::new();
-        core.import_keys(
-            &ImportKeysParams::new(exported.to_vec()).with_signing_key_version("pkv-2"),
-        )
-        .unwrap();
+        core.import_keys(&ImportKeysParams::new(exported.to_vec()).with_signing_key_version("63"))
+            .unwrap();
         let ckey = core.generate_conversation_key().unwrap();
         let mut params = crate::EncryptMessageParams::new("conv-1", "hi")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.sender_id = Some("4001".into());
         let payload = core.encrypt_message(&params).unwrap();
-        assert_eq!(payload.signature_info.public_key_version, "pkv-2");
+        assert_eq!(payload.signature_info.public_key_version, "63");
     }
 
     #[test]
@@ -9371,7 +9389,7 @@ mod tests {
     fn cache_resolves_verified_latest_key_for_encrypt() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("4001", "pkv"))
+        core.set_identity(&SetIdentityParams::new("4001", "61"))
             .unwrap();
         core.set_cache_keys(true);
 
@@ -9381,8 +9399,8 @@ mod tests {
             &ckey,
             "1001",
             "4001",
-            "pkv",
-            Some("pkv".to_string()),
+            "61",
+            Some("61".to_string()),
         );
         let signing_keys = [signing_key_entry_for(&reg, "4001")];
         core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
@@ -9408,7 +9426,7 @@ mod tests {
     fn cache_is_off_by_default() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("910003", "pkv"))
+        core.set_identity(&SetIdentityParams::new("910003", "61"))
             .unwrap();
 
         let ckey = core.generate_conversation_key().unwrap();
@@ -9417,8 +9435,8 @@ mod tests {
             &ckey,
             "1001",
             "910003",
-            "pkv",
-            Some("pkv".to_string()),
+            "61",
+            Some("61".to_string()),
         );
         let signing_keys = [signing_key_entry_for(&reg, "910003")];
         core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
@@ -9433,14 +9451,14 @@ mod tests {
     fn unverified_key_change_never_becomes_an_encryption_key() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("910003", "pkv"))
+        core.set_identity(&SetIdentityParams::new("910003", "61"))
             .unwrap();
         core.set_cache_keys(true);
 
         // Adopted-for-decryption key change with an unverifiable signature.
         let ckey = core.generate_conversation_key().unwrap();
         let kc_b64 =
-            build_self_keychange_event(&core, &ckey, "2002", "910003", Some("pkv".to_string()));
+            build_self_keychange_event(&core, &ckey, "2002", "910003", Some("61".to_string()));
         let signing_keys = [signing_key_entry_for(&reg, "910003")];
         let result = core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
         assert!(result.conversation_keys.keys.contains_key("2002"));
@@ -9455,7 +9473,7 @@ mod tests {
     fn cache_never_moves_below_the_verified_high_water() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("4001", "pkv"))
+        core.set_identity(&SetIdentityParams::new("4001", "61"))
             .unwrap();
         core.set_cache_keys(true);
         let signing_keys = [signing_key_entry_for(&reg, "4001")];
@@ -9466,8 +9484,8 @@ mod tests {
             &newer,
             "2000",
             "4001",
-            "pkv",
-            Some("pkv".to_string()),
+            "61",
+            Some("61".to_string()),
         );
         core.decrypt_events_with(&[kc_newer.as_str()], &signing_keys);
 
@@ -9479,8 +9497,8 @@ mod tests {
             &older,
             "1000",
             "4001",
-            "pkv",
-            Some("pkv".to_string()),
+            "61",
+            Some("61".to_string()),
         );
         core.decrypt_events_with(&[kc_older.as_str()], &signing_keys);
 
@@ -9494,7 +9512,7 @@ mod tests {
     fn signing_key_store_is_used_when_the_argument_is_omitted() {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        core.set_identity(&SetIdentityParams::new("4001", "pkv"))
+        core.set_identity(&SetIdentityParams::new("4001", "61"))
             .unwrap();
         let ckey = core.generate_conversation_key().unwrap();
         let payload = core
@@ -9550,7 +9568,7 @@ mod tests {
         let payload = core
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", text)
-                    .with_identity("4002", "pkv")
+                    .with_identity("4002", "61")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9582,7 +9600,7 @@ mod tests {
         let reply_payload = core
             .encrypt_reply(
                 &crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9614,7 +9632,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "what was actually said");
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_text = Some("words never sent".into());
         let reply_payload = core.encrypt_reply(&params).unwrap();
@@ -9632,7 +9650,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "hello");
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_sender_id = Some("424242".to_string());
         let reply_payload = core.encrypt_reply(&params).unwrap();
@@ -9653,7 +9671,7 @@ mod tests {
         let payload = core
             .encrypt_message(
                 &crate::EncryptMessageParams::new("conv-1", "genuine text")
-                    .with_identity("4002", "pkv")
+                    .with_identity("4002", "61")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9666,7 +9684,7 @@ mod tests {
         let reply_payload = core
             .encrypt_reply(
                 &crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-                    .with_identity("4001", "pkv")
+                    .with_identity("4001", "61")
                     .with_conversation_key(ckey.to_bytes(), "9001"),
             )
             .unwrap();
@@ -9684,7 +9702,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "a long original message body");
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_text = Some("a long original".into());
         let reply_payload = core.encrypt_reply(&params).unwrap();
@@ -9701,7 +9719,7 @@ mod tests {
         let (core, ckey, signing_keys) = reply_test_setup();
 
         let mut orig_params = crate::EncryptMessageParams::new("conv-1", "#topic original")
-            .with_identity("4002", "pkv")
+            .with_identity("4002", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         orig_params.entities = Some(vec![crate::EntityDescriptor {
             start: 0,
@@ -9714,7 +9732,7 @@ mod tests {
         // A prefix text override must not suppress deriving the remaining
         // preview fields from the decrypted original.
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_text = Some("#topic".into());
         let reply_payload = core.encrypt_reply(&params).unwrap();
@@ -9742,7 +9760,7 @@ mod tests {
         let (core, ckey, signing_keys) = reply_test_setup();
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", "")
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_sequence_id = Some("seq-orig".into());
         params.reply_to_text = Some("whatever".into());
@@ -9784,7 +9802,7 @@ mod tests {
                 "conv-1",
                 &content_bytes,
                 "9001",
-                "pkv",
+                "61",
             ))
             .unwrap();
         wrap_signed_payload_with_seq(&payload, sender, "conv-1", edit_seq)
@@ -9804,7 +9822,7 @@ mod tests {
         );
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_edit_event = Some(edit_b64);
         let reply_payload = core.encrypt_reply(&params).unwrap();
@@ -9842,7 +9860,7 @@ mod tests {
         // A preview that embeds the edit but quotes the pre-edit text is
         // misattributing the message's current contents.
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_edit_event = Some(edit_b64);
         params.reply_to_text = Some("the first wording".into());
@@ -9870,7 +9888,7 @@ mod tests {
         );
 
         let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.reply_to_edit_event = Some(edit_b64);
         let reply_payload = core.encrypt_reply(&params).unwrap();
@@ -9888,7 +9906,7 @@ mod tests {
         let orig_b64 = original_event_b64(&core, &ckey, "react to me");
 
         let params = crate::EncryptReactionParams::new(orig_b64, "👍")
-            .with_identity("4001", "pkv")
+            .with_identity("4001", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
         let payload = core.encrypt_add_reaction(&params).unwrap();
 

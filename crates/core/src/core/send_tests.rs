@@ -1070,3 +1070,55 @@ fn every_user_id_input_must_be_numeric() {
     )));
     assert!(err.starts_with("Invalid member_ids 'bob'"), "{err}");
 }
+
+#[test]
+fn every_key_version_input_takes_the_api_form() {
+    let author = author();
+    let ckey = key(3);
+
+    let err = error_text(
+        author
+            .core
+            .set_identity(&SetIdentityParams::new(AUTHOR, "v1")),
+    );
+    assert!(err.starts_with("Invalid signing_key_version 'v1'"), "{err}");
+
+    let blob = author.core.export_keys().unwrap();
+    let err = error_text(
+        author
+            .core
+            .import_keys(&ImportKeysParams::new(blob).with_signing_key_version("01")),
+    );
+    assert!(err.starts_with("Invalid signing_key_version '01'"), "{err}");
+
+    let err = error_text(
+        author
+            .core
+            .encrypt_message(&message_params("text", &ckey).with_identity(AUTHOR, "s1")),
+    );
+    assert!(err.starts_with("Invalid signing_key_version 's1'"), "{err}");
+
+    let err = error_text(
+        author.core.encrypt_message(
+            &EncryptMessageParams::new(CONVERSATION, "text")
+                .with_conversation_key(ckey.to_bytes(), "-1"),
+        ),
+    );
+    assert!(
+        err.starts_with("Invalid conversation_key_version '-1'"),
+        "{err}"
+    );
+
+    let public_key = author.core.get_public_keys().unwrap().identity;
+    let mut key_change = ConversationKeyChangeParams::new(vec![PublicKeyInput {
+        user_id: AUTHOR.into(),
+        public_key,
+        key_version: "v2".into(),
+    }]);
+    key_change.conversation_id = Some(CONVERSATION.into());
+    let err = error_text(author.core.prepare_conversation_key_change(&key_change));
+    assert!(
+        err.starts_with("Invalid public_keys key_version 'v2'"),
+        "{err}"
+    );
+}

@@ -386,7 +386,7 @@ namespace ChatXdk.Tests
             Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "bad attachment")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 Attachments = new List<AttachmentDescriptor>
@@ -407,7 +407,7 @@ namespace ChatXdk.Tests
             var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "mixed attachments")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 Attachments = new List<AttachmentDescriptor>
@@ -430,7 +430,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Hello from .NET!")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
@@ -455,7 +455,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Silent message")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 ShouldNotify = false,
@@ -473,7 +473,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Disappearing!")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 TtlMsec = 30_000,
@@ -491,7 +491,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Hello @world https://x.com")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 Entities = new List<EntityDescriptor>
@@ -508,7 +508,7 @@ namespace ChatXdk.Tests
         public void EncryptMessage_WithMediaAttachment_Succeeds()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity(new SetIdentityParams("1001", "s1"));
+            chat.SetIdentity(new SetIdentityParams("1001", "66"));
             var ckey = NewConvKey(chat);
 
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
@@ -559,7 +559,7 @@ namespace ChatXdk.Tests
                 Assert.Contains(key, json);
             }
 
-            chat.SetIdentity(new SetIdentityParams("1001", "s1"));
+            chat.SetIdentity(new SetIdentityParams("1001", "66"));
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
             {
                 ConversationKey = ckey,
@@ -584,7 +584,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptReply(new EncryptReplyParams("conv-1", "This is a reply", replyToEvent: null)
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 ReplyToSequenceId = "seq-42",
@@ -631,7 +631,7 @@ namespace ChatXdk.Tests
                 ConversationId = "conv-1",
                 TargetMessageSequenceId = "seq-99",
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
@@ -650,7 +650,7 @@ namespace ChatXdk.Tests
                 ConversationId = "conv-1",
                 TargetMessageSequenceId = "seq-99",
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
@@ -674,7 +674,7 @@ namespace ChatXdk.Tests
                 TargetMessageSequenceId = "seq-99",
                 Entities = new[] { new EntityDescriptor { Start = 4, End = 23, EntityType = "url" } },
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
@@ -1768,7 +1768,7 @@ namespace ChatXdk.Tests
         public void EncryptMessage_MediaAttachment_ZeroDimensions_Succeeds()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity(new SetIdentityParams("1001", "s1"));
+            chat.SetIdentity(new SetIdentityParams("1001", "66"));
             var ckey = NewConvKey(chat);
 
             // Width=0 and Height=0 are unusual but must not cause a serialization bug.

@@ -72,21 +72,21 @@ await chat.unlock("2580");
 // Set the session once: your user id + the public_key_version of your
 // registered keys, the participants' signing keys, and the opt-in
 // conversation-key cache.
-chat.setIdentity({ userId: "111", signingKeyVersion: "v1" });
+chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
 chat.setCacheKeys(true);
 // Each signing-key entry carries all five fields from the X API
 // public keys response.
 chat.setSigningKeys([
   {
     userId: "111",
-    publicKeyVersion: "v1",
+    publicKeyVersion: "1",
     publicKey: "BASE64...",
     identityPublicKey: "BASE64...",
     identityPublicKeySignature: "BASE64...",
   },
   {
     userId: "222",
-    publicKeyVersion: "v1",
+    publicKeyVersion: "1",
     publicKey: "BASE64...",
     identityPublicKey: "BASE64...",
     identityPublicKeySignature: "BASE64...",

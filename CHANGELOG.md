@@ -421,6 +421,12 @@ prepared = chat.prepare_conversation_key_change(
   with an error naming the field. `reply_to_sender_id` is a string in every
   binding (it was an integer: `i64`, `int`, `*int64`, `long?`, `Long`, and
   `string | number` in JS).
+- Every key version takes one form, a non-negative integer as a string of
+  digits, as the X API returns it: signing-key versions (in `set_identity`,
+  `import_keys`, per-call `signing_key_version`, and each public key's
+  `key_version`) are now checked as `conversation_key_version` is, and
+  `conversation_key_version` no longer accepts a negative value. Anything
+  else fails with an error naming the field.
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.

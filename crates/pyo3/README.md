@@ -61,19 +61,19 @@ chat.unlock("2580")
 # the opt-in conversation-key cache, and the participants' signing keys.
 # Each signing-key entry must include the identity public key and its binding
 # signature so the SDK can verify the signing key is authentic.
-chat.set_identity(SetIdentityParams("111", "v1"))
+chat.set_identity(SetIdentityParams("111", "1"))
 chat.set_cache_keys(True)
 chat.set_signing_keys([
     {
         "user_id": "111",
-        "public_key_version": "v1",
+        "public_key_version": "1",
         "public_key": "BASE64...",
         "identity_public_key": "BASE64...",
         "identity_public_key_signature": "BASE64...",
     },
     {
         "user_id": "222",
-        "public_key_version": "v1",
+        "public_key_version": "1",
         "public_key": "BASE64...",
         "identity_public_key": "BASE64...",
         "identity_public_key_signature": "BASE64...",

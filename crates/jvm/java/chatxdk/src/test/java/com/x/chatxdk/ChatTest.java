@@ -303,7 +303,7 @@ class ChatTest {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Hello from JVM!");
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptMessage(p);
@@ -324,7 +324,7 @@ class ChatTest {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "bad attachment");
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             // Core requires the media fields; an attachment missing one is
@@ -343,7 +343,7 @@ class ChatTest {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "mixed attachments");
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             // Only image/gif/video media may appear in multiples; any other
@@ -360,7 +360,7 @@ class ChatTest {
     @Test
     void encryptMessageUrlAttachmentWithBannerImageSucceeds() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity(new SetIdentityParams("1001", "s1"));
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
             p.conversationKey = ckey;
@@ -405,7 +405,7 @@ class ChatTest {
             // are supplied directly (null reply target).
             EncryptReplyParams p = new EncryptReplyParams("conv-1", "This is a reply", null);
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             p.replyToSequenceId = "seq-42";
@@ -449,7 +449,7 @@ class ChatTest {
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptAddReaction(p);
@@ -468,7 +468,7 @@ class ChatTest {
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptRemoveReaction(p);
@@ -494,7 +494,7 @@ class ChatTest {
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
             p.senderId = "111";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptEdit(p);

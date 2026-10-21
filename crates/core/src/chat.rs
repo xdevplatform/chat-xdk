@@ -790,7 +790,7 @@ mod tests {
         let payload = chat
             .encrypt_message(
                 &EncryptMessageParams::new("conv-1", "Versioned message")
-                    .with_identity("4201", "s1")
+                    .with_identity("4201", "66")
                     .with_conversation_key(ckey.to_bytes(), "1"),
             )
             .unwrap();
@@ -809,7 +809,7 @@ mod tests {
         let payload = chat
             .encrypt_message(
                 &EncryptMessageParams::new("conv-1", "Hello via API!")
-                    .with_identity("4101", "v7")
+                    .with_identity("4101", "65")
                     .with_conversation_key(ckey.to_bytes(), "42"),
             )
             .unwrap();
@@ -828,7 +828,7 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         let mut params = EncryptReplyParams::new("conv-1", "This is a reply", "")
-            .with_identity("4101", "v1")
+            .with_identity("4101", "67")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-99".into());
         params.reply_to_sender_id = Some("12345".to_string());
@@ -845,7 +845,7 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
         let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("4101", "v1")
+            .with_identity("4101", "67")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
@@ -854,7 +854,7 @@ mod tests {
         assert!(!add_payload.encrypted_content.is_empty());
 
         let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("4101", "v1")
+            .with_identity("4101", "67")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());
@@ -873,7 +873,7 @@ mod tests {
 
         // should_notify=false, ttl_msec=30s
         let mut params = EncryptMessageParams::new("conv-1", "Disappearing!")
-            .with_identity("4201", "s1")
+            .with_identity("4201", "66")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.should_notify = Some(false);
         params.ttl_msec = Some(30_000);
@@ -928,7 +928,7 @@ mod tests {
             },
         ];
         let mut params = EncryptMessageParams::new("conv-1", "text with all entity types")
-            .with_identity("4201", "s1")
+            .with_identity("4201", "66")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.entities = Some(entities);
         let payload = chat.encrypt_message(&params).unwrap();
@@ -943,7 +943,7 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
-        chat.set_identity(&SetIdentityParams::new("4201", "s1"))
+        chat.set_identity(&SetIdentityParams::new("4201", "66"))
             .unwrap();
         let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
             .with_conversation_key(ckey.to_bytes(), "1");

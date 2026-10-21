@@ -296,7 +296,7 @@ interface PreparedConversationChange {
     "conversation_id": "17380288:1491585161162473473",
     "conversation_key": b"...",              # raw 32 bytes
     "conversation_key_version": "171000...", # timestamp string
-    "participant_keys": [ {"user_id": "111", "encrypted_key": "...", "public_key_version": "v1"} ],
+    "participant_keys": [ {"user_id": "111", "encrypted_key": "...", "public_key_version": "1"} ],
     "action_signatures": [ {"message_id": "...", "signature": "...", ...} ],
 }
 ```
@@ -478,9 +478,9 @@ const rawEvents: string[] = await fetchConversationEvents(conversationId);
 
 // Fetch signing keys for all participants (pass the X API response through directly)
 const signingKeys: SigningKeyEntry[] = [
-  { userId: "111", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
-  { userId: "111", publicKeyVersion: "v2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
-  { userId: "222", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "111", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "111", publicKeyVersion: "2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "222", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
 ];
 
 const result = chat.decryptEvents({ events: rawEvents, signingKeys });
@@ -617,7 +617,7 @@ const event = chat.decryptEvent({
   eventB64: webhookEventB64,
   conversationKeys: cachedKeys,
   signingKeys: [
-    { userId: "111", publicKeyVersion: "v2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+    { userId: "111", publicKeyVersion: "2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
   ],
 });
 
@@ -706,7 +706,7 @@ interface SigningKeyEntry {
 # Python
 {
   "user_id": "123",
-  "public_key_version": "v1",
+  "public_key_version": "1",
   "public_key": "BASE64...",                    # signing public key
   "identity_public_key": "BASE64...",
   "identity_public_key_signature": "BASE64...",
@@ -797,6 +797,13 @@ and group member, admin and pending-member ids. Each must be a positive
 integer written without a sign or leading zeros, and anything else fails
 with an error naming the field (`Invalid reply_to_sender_id '…'`). JS takes
 no numbers for them: ids pass 2^53, where JS numbers stop being exact.
+
+**Every key version is a string of digits**, as the X API returns it: the
+signing-key version (`signing_key_version` in `set_identity`,
+`import_keys` and per call, and each public key's `key_version`) and the
+`conversation_key_version`. Both kinds take the same check, a non-negative
+integer written without a sign or leading zeros, and anything else fails
+with an error naming the field.
 
 The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings fetch in the background (see
@@ -1252,8 +1259,8 @@ await chat.unlock("2580");
 chat.setIdentity({ userId: myUserId, signingKeyVersion: mySigningKeyVersion });
 chat.setCacheKeys(true);
 chat.setSigningKeys([
-  { userId: "111", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
-  { userId: "222", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "111", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "222", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
 ]);
 
 // ── Initial load: use decryptEvents ──
