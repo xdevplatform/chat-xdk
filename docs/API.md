@@ -883,6 +883,30 @@ The signature covers the read point and its time, so a recipient's
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
+The X API's mark-read route does not take the signature yet. Once it does,
+send the signature as an entry of the request's `action_signatures`, nested
+the way the conversation-change requests nest theirs: `ActionSignature`
+returns `signature`, `signature_version` and `public_key_version` flat, and
+the entry carries them under `message_event_signature`, with your signing
+public key. Check the X API reference for the route's other fields.
+
+```json
+{
+  "action_signatures": [
+    {
+      "message_id": "<ActionSignature.message_id>",
+      "encoded_message_event_detail": "<ActionSignature.encoded_message_event_detail>",
+      "message_event_signature": {
+        "signature": "<ActionSignature.signature>",
+        "signature_version": "<ActionSignature.signature_version>",
+        "public_key_version": "<ActionSignature.public_key_version>",
+        "signing_public_key": "<your signing public key>"
+      }
+    }
+  ]
+}
+```
+
 The Rust structs pair a `new(…required…)` constructor with public optional
 fields:
 

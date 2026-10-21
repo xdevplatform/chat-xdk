@@ -419,7 +419,7 @@ prepared = chat.prepare_conversation_key_change(
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
   (the sequence id of the newest event read) and an optional
   `seen_at_msec`, which defaults to the current time. It returns an
-  `ActionSignature`; send it with the mark-read request, as you send a
-  message delete's signature. Recipients' `decrypt_event` returns the
-  receipt as a verified `ReadReceipt`. The C ABI adds
+  `ActionSignature` to send with the mark-read request once the X API's
+  route takes it, nested as API.md shows. Recipients' `decrypt_event`
+  returns a signed receipt as a verified `ReadReceipt`. The C ABI adds
   `chat_xdk_prepare_mark_conversation_read`.
