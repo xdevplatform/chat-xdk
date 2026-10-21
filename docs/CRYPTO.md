@@ -484,7 +484,9 @@ signature from being replayed onto a different message or conversation.
 from its files for a v1 message with files (see [Media Keys](#media-keys)),
 random otherwise — bound into the signature the same way and
 returned in the `SendPayload`. Reuse the returned payload on retries so one
-logical message is never sent under two ids.
+logical message is never sent under two ids. The derivation leaves the text
+out, so two v1 messages from one sender in one conversation and key version
+that carry the same uploads share an id; each upload belongs to one message.
 
 #### Action signatures
 

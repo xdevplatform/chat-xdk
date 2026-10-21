@@ -596,7 +596,9 @@ namespace ChatXdk
         /// <summary>
         /// Optional attachments: posts, links, and files (media, and link-card images). Each
         /// file names the media hash key its upload started with; encrypt the files afterwards
-        /// with <see cref="Chat.EncryptFile"/> or <see cref="Chat.FileEncryptor"/>.
+        /// with <see cref="Chat.EncryptFile"/> or <see cref="Chat.FileEncryptor"/>. Upload each
+        /// file for one message only: reusing another message's uploads can give this message
+        /// that message's id.
         /// </summary>
         public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
         /// <summary>Optional quick reply: a request offering options, or a response selecting one.</summary>

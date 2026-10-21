@@ -611,7 +611,9 @@ public final class Types {
         /**
          * Optional attachments: posts, links, and files (media, and link-card images). Each file
          * names the media hash key its upload started with; encrypt the files afterwards with
-         * {@link Chat#encryptFile} or {@link Chat#fileEncryptor}.
+         * {@link Chat#encryptFile} or {@link Chat#fileEncryptor}. Upload each file for one
+         * message only: reusing another message's uploads can give this message that message's
+         * id.
          */
         public List<AttachmentDescriptor> attachments;
 

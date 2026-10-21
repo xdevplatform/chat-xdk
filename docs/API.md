@@ -768,6 +768,13 @@ not affect the id. v0 messages, and messages without files, take a random
 id, as in 0.5.x. Each file needs its own media hash key: an empty one, or one
 listed in more than one attachment, is rejected.
 
+**Upload each file for one message only.** Because the text does not affect
+a v1 message's id, a second message in the same conversation, from the same
+sender under the same key version, that reuses the first one's uploads gets
+the first one's id, and recipients, who deduplicate on the message id, drop
+it as a repeat. To send the same file again, upload it again: the new upload
+gets its own media hash key.
+
 **The SDK picks each send's format.** An encrypted send (message, reply,
 reaction, edit) is either v0, the 0.5.x format, with contents under the
 conversation key, no `contents_encryption_version`, and signature version 7,

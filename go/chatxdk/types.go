@@ -174,7 +174,9 @@ type GroupCreateParams struct {
 // ConversationKey and ConversationKeyVersion travel together — set both or
 // neither. Each file in Attachments names the media hash key its upload
 // started with; encrypt the files afterwards with EncryptFile or
-// FileEncryptor and the returned payload's EventB64.
+// FileEncryptor and the returned payload's EventB64. Upload each file for one
+// message only: reusing another message's uploads can give this message that
+// message's id.
 type EncryptMessageParams struct {
 	ConversationID         string                 `json:"conversation_id"`
 	Text                   string                 `json:"text"`

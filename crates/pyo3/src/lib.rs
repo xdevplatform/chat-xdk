@@ -458,7 +458,9 @@ pub struct EncryptMessageParams {
     /// (a ``"media"`` attachment, or a ``"url"`` card's ``banner_image`` or
     /// ``favicon_image``) names the media hash key its upload started with;
     /// encrypt the files afterwards with ``Chat.encrypt_file`` or
-    /// ``Chat.file_encryptor``.
+    /// ``Chat.file_encryptor``. Upload each file for one message only:
+    /// reusing another message's uploads can give this message that
+    /// message's id.
     attachments: Option<Py<PyAny>>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.

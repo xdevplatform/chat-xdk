@@ -86,8 +86,10 @@ and key version come from `event_b64`. In v1 the SDK derives the id of a
 message with files from the conversation key and its version, the sender,
 the conversation and the files' media hash keys, so building the same
 message again gives the same id and its encrypted files stay valid; v0
-messages, and messages without files, take a random id, as in 0.5.x. A
-message that lists an empty media hash
+messages, and messages without files, take a random id, as in 0.5.x. Upload
+each file for one message only: the text does not affect the id, so a second
+message that reuses the first one's uploads gets its id, and recipients drop
+it as a repeat. A message that lists an empty media hash
 key, or one media hash key in two attachments, is rejected, and the file
 calls' errors say what to pass instead.
 

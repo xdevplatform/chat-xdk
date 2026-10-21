@@ -17,7 +17,9 @@
 //! A message with files is built before its files are encrypted: each file's
 //! attachment names the media hash key its upload started with, and each
 //! file is then encrypted with [`EncryptFileParams`] or
-//! [`FileEncryptorParams`] from the returned payload's `event_b64`.
+//! [`FileEncryptorParams`] from the returned payload's `event_b64`. Upload
+//! each file for one message only: reusing another message's uploads can give
+//! this message that message's id.
 //!
 //! Identity fields (`sender_id`, `signing_key_version`) and key fields
 //! (`conversation_key`, `conversation_key_version`) are optional overrides:
