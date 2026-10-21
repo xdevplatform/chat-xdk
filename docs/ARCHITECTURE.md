@@ -5,6 +5,7 @@
 1. [Overview](#1-overview)
 2. [System Context](#2-system-context)
 3. [Module Architecture](#3-module-architecture)
+   - [Feature Switches](#feature-switches)
 4. [Component Deep Dive](#4-component-deep-dive)
    - [4.1 Crypto Module](#41-crypto-module)
    - [4.2 Keys Module](#42-keys-module)
@@ -34,7 +35,7 @@ The X Chat Rust SDK is a **cryptographic library** for encrypted direct messagin
 
 | Not Responsible For | Who Handles It |
 |--------------------|----------------|
-| **HTTP Communication** | Developer's application code |
+| **HTTP Communication** | Developer's application code; the SDK's only request is its anonymous [feature-switch fetch](#feature-switches) |
 | **REST API Calls** | Developer calls `/2/chat/*` endpoints directly |
 | **Webhook Server** | Developer hosts their own webhook endpoint |
 | **Message Persistence** | Developer's database/storage |
@@ -88,7 +89,7 @@ The X Chat Rust SDK is a **cryptographic library** for encrypted direct messagin
 │                  └─────────────────┘                                        │
 └─────────────────────────────────────────────────────────────────────────────┘
                            │
-          Developer's HTTP │ (SDK not involved)
+          Developer's HTTP │ (SDK not involved, apart from its feature-switch fetch)
                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              X Infrastructure                               │
@@ -101,7 +102,7 @@ The X Chat Rust SDK is a **cryptographic library** for encrypted direct messagin
 
 ### SDK Boundary
 
-The SDK is a **pure function library**. It transforms data but does not perform I/O (except Juicebox communication):
+The SDK is a **pure function library**. It transforms data but does not perform I/O (except Juicebox communication and the bindings' [feature-switch fetch](#feature-switches)):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -119,6 +120,7 @@ The SDK is a **pure function library**. It transforms data but does not perform 
 │  EXTERNAL I/O (SDK handles):                                                │
 │  ────────────────────────────                                               │
 │  • Juicebox SDK communication (key storage/retrieval)                       │
+│  • GET /2/chat/features, anonymous and fail-closed (bindings only)          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -189,6 +191,29 @@ crates/
 └── jvm/                          # JVM bindings (JNA over the dotnet cdylib)
     └── java/chatxdk/             # Java package
 ```
+
+### Feature Switches
+
+The X API serves boolean feature switches at `GET /2/chat/features`, for
+example `{"features":{"v1_send":false}}`. `v1_send` picks the send format: v0,
+the format 0.5.x sends, until it is on, and v1 (per-message keys) while it is.
+The core holds each chat's switches and picks each send's format from them.
+Only the language bindings make the request, each with its own HTTP stack:
+
+- **When:** when a chat is created; again with the identity key's bucket once
+  keys load; then a re-check every 300 s that can only turn switches off.
+- **What it sends:** no credentials and no user data. The only input is the
+  `bucket` query parameter, 0–9999, derived from the identity public key (the
+  first 8 bytes of the SHA-256 of its SPKI, top bit cleared, mod 10000).
+  Without keys it sends none, and the server buckets the request by IP.
+- **Fail-closed:** a network error, a timeout (2 s), a status other than 200,
+  a body over 64 KiB, malformed JSON, or a missing or non-boolean key leaves
+  every switch off, so sends stay v0. The request never blocks or fails an
+  SDK call.
+- **Lifetime:** the fetch is tied to the chat and stops when the chat is
+  freed, closed, disposed or garbage-collected.
+
+Nothing else in the SDK uses the network apart from Juicebox.
 
 ### Layer Dependencies
 

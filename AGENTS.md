@@ -8,7 +8,8 @@ small and uniform**. The rest of this file is the invariants that keep those tru
 ## 1. Crypto-only boundary
 
 This SDK turns plaintext + keys into encrypted blobs + signatures, and back. It
-does **not** do networking, messaging, or application logic. Per
+does **not** do networking (apart from the one fetch below), messaging, or
+application logic. Per
 [`crates/core/src/lib.rs`](crates/core/src/lib.rs) and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md §1), the SDK does **not** own:
 
@@ -23,6 +24,15 @@ Do not add an HTTP client, a transport, a "bot" helper, or anything that knows
 about endpoints to any crate under `crates/`. That code belongs in the caller
 (see `examples/`, which are demos — not part of the shipped SDK). If a task seems
 to need networking inside the core, it is in the wrong layer.
+
+**The one exception is the feature-switch fetch.** Each language binding (never
+`crates/core`) fetches `GET /2/chat/features` in the background so the SDK can
+pick its send format ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#feature-switches)).
+It is anonymous: no credentials, and its only input is a 0–9999 bucket derived
+from the identity public key. It is bounded (2 s per request, 64 KiB per body),
+never blocks or fails an SDK call, and is fail-closed: any failure leaves every
+switch off, so sends stay v0. Don't widen it: no other endpoint, no auth, no
+user data, and nothing whose failure can change a call's result.
 
 ## 2. Binding parity
 
