@@ -4,6 +4,7 @@
 // flags are read through the internal methods of the wasm Chat underneath,
 // which is the real SDK.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { setFlagsFromString } from "node:v8";
@@ -332,6 +333,43 @@ async function theFetchesEndWithACollectedChat(server) {
   assert.equal(server.buckets.length, seen, "no request once the chat is collected");
 }
 
+/**
+ * A Node process with a feature request still in flight exits once its own
+ * work is done, rather than when the request ends. Runtimes without
+ * `process.getBuiltinModule` fall back to fetch(), which holds the process.
+ */
+async function aPendingFetchNeverKeepsNodeRunning(server) {
+  if (typeof process.getBuiltinModule !== "function") return;
+  server.delayMs = 60_000;
+  const url = (path) => JSON.stringify(new URL(path, import.meta.url).href);
+  const script = `
+    const fs = await import("node:fs/promises");
+    const { default: init, Chat } = await import(${url("../pkg/chat_xdk_wasm.js")});
+    const { ChatWithJuicebox } = await import(${url("../index.js")});
+    await init({ module_or_path: await fs.readFile(new URL(${url("../pkg/chat_xdk_wasm_bg.wasm")})) });
+    const chat = new ChatWithJuicebox(new Chat(), null, undefined, null, null, null);
+    chat.generateKeypairs();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  `;
+  const started = Date.now();
+  const code = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      env: {
+        ...process.env,
+        ...HOOKS,
+        CHAT_XDK_FEATURES_ENDPOINT: server.endpoint,
+        CHAT_XDK_FEATURES_TIMEOUT_MS: "10000",
+      },
+      stdio: "inherit",
+    });
+    child.on("exit", resolve);
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(code, 0);
+  assert.ok(server.buckets.length >= 1, "a feature request was in flight");
+  assert.ok(elapsed < 5000, `the process exited after ${elapsed} ms`);
+}
+
 async function aMalformedBodyIsRejectedAndChangesNothing(server) {
   server.status = 503;
   const { chat, inner } = await newChat(server.endpoint);
@@ -366,6 +404,7 @@ async function main() {
     (server) => freeStopsTheFetches(server),
     (server) => theFetchesEndWithACollectedChat(server),
     (server) => aMalformedBodyIsRejectedAndChangesNothing(server),
+    (server) => aPendingFetchNeverKeepsNodeRunning(server),
   ];
   for (const test of tests) {
     const server = await featureServer();

@@ -667,15 +667,78 @@ function featuresUrl(endpoint, bucket) {
   return `${endpoint}${endpoint.includes("?") ? "&" : "?"}bucket=${bucket}`;
 }
 
-/** In Node, keep a pending refresh from holding the process open. */
+/** In Node, keep a pending timer from holding the process open. */
 function unrefTimer(timer) {
   timer?.unref?.();
   return timer;
 }
 
 /** The body of a 200 response from `url`, or null on any failure. */
-async function getFeatures(url, timeoutMs, request) {
-  const timer = setTimeout(() => request.abort(), timeoutMs);
+function getFeatures(url, timeoutMs, request) {
+  const http = nodeHttpModule(url);
+  return http ? getWithNode(http, url, timeoutMs, request) : getWithFetch(url, timeoutMs, request);
+}
+
+/**
+ * Node's own http or https module for `url`, when the runtime hands out
+ * builtins without an import (Node 20.16 and later), so bundlers for browsers
+ * never see one; undefined anywhere else.
+ */
+function nodeHttpModule(url) {
+  const getBuiltin = globalThis.process?.getBuiltinModule;
+  if (typeof getBuiltin !== "function") return undefined;
+  try {
+    return getBuiltin(new URL(url).protocol === "http:" ? "node:http" : "node:https");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * GET `url` with Node's http module. Its socket and timer are unref'd, so a
+ * pending request never keeps the process alive, and a body is dropped as
+ * soon as it grows past the cap.
+ */
+function getWithNode(http, url, timeoutMs, request) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let req = null;
+    const finish = (body) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      req?.destroy();
+      resolve(body);
+    };
+    const timer = unrefTimer(setTimeout(() => finish(null), timeoutMs));
+    try {
+      req = http.get(
+        url,
+        { headers: { Accept: "application/json" }, signal: request.signal },
+        (response) => {
+          if (response.statusCode !== 200) return finish(null);
+          const chunks = [];
+          let size = 0;
+          response.on("data", (chunk) => {
+            size += chunk.length;
+            if (size > MAX_FEATURES_BODY) finish(null);
+            else chunks.push(chunk);
+          });
+          response.on("end", () => finish(globalThis.Buffer.concat(chunks).toString("utf8")));
+          response.on("error", () => finish(null));
+        },
+      );
+      req.on("socket", (socket) => socket.unref());
+      req.on("error", () => finish(null));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/** GET `url` with `fetch`, where Node's http module is out of reach. */
+async function getWithFetch(url, timeoutMs, request) {
+  const timer = unrefTimer(setTimeout(() => request.abort(), timeoutMs));
   try {
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
