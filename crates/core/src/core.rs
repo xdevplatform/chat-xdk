@@ -317,7 +317,7 @@ impl ChatCore {
                 let cached = cache.get(canonical.as_ref()).ok_or_else(no_key)?;
                 Ok((cached.key.clone(), cached.version.to_string()))
             }
-            _ => Err(SdkError::InvalidState(
+            _ => Err(SdkError::InvalidInput(
                 "conversation_key and conversation_key_version must be passed together \
                  (or both omitted to resolve from the key cache)"
                     .into(),
@@ -2109,17 +2109,17 @@ impl ChatCore {
         params: &MessageDeleteParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         if params.sequence_ids.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "sequence_ids is empty: pass at least one message to delete".into(),
             ));
         }
         if params.sequence_ids.iter().any(String::is_empty) {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "sequence_ids contains an empty id: every entry must name a message".into(),
             ));
         }
         if params.conversation_id.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "conversation_id is empty: pass the conversation the messages belong to".into(),
             ));
         }
@@ -2180,12 +2180,12 @@ impl ChatCore {
         params: &MarkConversationReadParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         if params.conversation_id.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "conversation_id is empty: pass the conversation being marked read".into(),
             ));
         }
         if params.seen_until_sequence_id.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "seen_until_sequence_id is empty: pass the sequence_id of the newest event read"
                     .into(),
             ));
@@ -2266,7 +2266,7 @@ impl ChatCore {
                 .as_ref()
                 .and_then(|p| p.conversation_id.clone())
                 .ok_or_else(|| {
-                    SdkError::InvalidState(
+                    SdkError::InvalidInput(
                         "conversation_id is not set: pass target_event or conversation_id".into(),
                     )
                 })?,
@@ -2277,7 +2277,7 @@ impl ChatCore {
                 .as_ref()
                 .and_then(|p| p.sequence_id.clone())
                 .ok_or_else(|| {
-                    SdkError::InvalidState(
+                    SdkError::InvalidInput(
                         "target_message_sequence_id is not set: pass target_event or \
                          target_message_sequence_id"
                             .into(),
@@ -2498,7 +2498,7 @@ impl ChatCore {
 
         let Some(raw_b64) = params.reply_to_event.take().filter(|v| !v.is_empty()) else {
             let sequence_id = explicit_sequence_id.ok_or_else(|| {
-                SdkError::InvalidState(
+                SdkError::InvalidInput(
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
                 )
             })?;
@@ -9175,7 +9175,7 @@ mod tests {
         let err = core
             .encrypt_message(params_with(vec![media(Some(1)), url()]))
             .unwrap_err();
-        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
         assert!(err.to_string().contains("attachment combination"));
 
         // Two URL cards are rejected.
@@ -9223,7 +9223,7 @@ mod tests {
             },
         ]);
         let err = core.encrypt_reply(params).unwrap_err();
-        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
         assert!(err.to_string().contains("attachment combination"));
     }
 

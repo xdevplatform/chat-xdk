@@ -811,8 +811,8 @@ attachments are allowed only when every one is image/gif/video media
 (`media_type` 1/2/3, or omitted, which defaults to image), up to 10 per
 message; everything else — audio, file, svg, or unrecognized media types, URL
 cards, and posts — must be the sole attachment. Disallowed combinations fail
-with an "Invalid state: disallowed attachment combination…" (or "…too many
-attachments…") error in every binding rather than producing a message that
+with a "disallowed attachment combination…" (or "too many attachments…")
+error in every binding rather than producing a message that
 breaks receivers. This mirrors the first-party encrypted-send rules and will
 be relaxed when clients support heterogeneous attachment lists; the wire
 format already carries them.

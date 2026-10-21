@@ -28,10 +28,14 @@ pub enum SdkError {
     #[error("Parse error: {0}")]
     Parse(String),
 
-    /// A required value was neither passed nor available from session state,
-    /// or a caller-supplied input violates a send-side rule.
+    /// A required value was neither passed nor available from session state.
     #[error("Invalid state: {0}")]
     InvalidState(String),
+
+    /// A caller-supplied parameter is missing or invalid. The message names
+    /// it and says what to pass instead.
+    #[error("{0}")]
+    InvalidInput(String),
 }
 
 /// Errors related to cryptographic operations.

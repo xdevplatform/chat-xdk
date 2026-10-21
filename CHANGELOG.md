@@ -391,6 +391,11 @@ prepared = chat.prepare_conversation_key_change(
   `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
   builds it with a struct literal. A payload stored by 0.5.x still
   deserializes, with both new fields empty.
+- A missing or invalid parameter fails with the message alone, such as
+  `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
+  `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
+  `SdkError::InvalidState` is left for values neither passed nor set on the
+  chat, such as a missing session identity or an empty key cache.
 
 ### Added
 
