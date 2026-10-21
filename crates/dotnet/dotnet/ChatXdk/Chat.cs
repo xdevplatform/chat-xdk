@@ -914,8 +914,8 @@ namespace ChatXdk
         /// </summary>
         /// <returns>Encrypted bytes.</returns>
         /// <exception cref="ChatXdkException">
-        /// The event is not a message with this file, or the key map lacks its key. The message
-        /// says what to pass instead.
+        /// The event is not a message with this file, or the conversation key is not the one the
+        /// message was encrypted under. The message says what to pass instead.
         /// </exception>
         public byte[] EncryptFile(EncryptFileParams parameters)
         {
@@ -925,8 +925,9 @@ namespace ChatXdk
             {
                 ["file"] = Convert.ToBase64String(parameters.File ?? Array.Empty<byte>()),
                 ["event_b64"] = parameters.EventB64,
-                ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
                 ["media_hash_key"] = parameters.MediaHashKey,
+                ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
+                ["conversation_key_version"] = parameters.ConversationKeyVersion,
             }, JsonOpts);
             return CallFileEndpoint(json, NativeMethods.chat_xdk_encrypt_file);
         }
@@ -973,8 +974,14 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var encryptor = ChatXdk.FileEncryptor.Create(
-                _handle, FileParamsJson(parameters.EventB64, parameters.ConversationKeys, parameters.MediaHashKey));
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["event_b64"] = parameters.EventB64,
+                ["media_hash_key"] = parameters.MediaHashKey,
+                ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
+                ["conversation_key_version"] = parameters.ConversationKeyVersion,
+            }, JsonOpts);
+            var encryptor = ChatXdk.FileEncryptor.Create(_handle, json);
             GC.KeepAlive(this);
             return encryptor;
         }

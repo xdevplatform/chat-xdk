@@ -53,9 +53,10 @@ Python/Rust, PascalCase in .NET/Go):
    the X Chat API.
 6. **Files** — a message with files is built first: start each upload, list
    its media hash key in the message's attachments, then
-   `encryptFile({file, eventB64, conversationKeys, mediaHashKey})` with the
-   payload's `eventB64`. `decryptFile` opens a received file from its
-   message's event.
+   `encryptFile({file, eventB64, mediaHashKey})` with the payload's
+   `eventB64` (plus `conversationKey` and `conversationKeyVersion` unless the
+   key cache holds them, as for the message). `decryptFile` opens a received
+   file from its message's event.
 
 | Method | Use case |
 |--------|----------|

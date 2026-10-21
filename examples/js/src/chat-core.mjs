@@ -292,15 +292,16 @@ export class ChatCore {
    * Encrypt a media file of an outgoing message with the incremental API.
    *
    * `eventB64` is the `event_b64` that `encryptReply` returned for the
-   * message, and `mediaHashKey` the hash key the file's upload started
-   * with, as listed in the message's attachments; the SDK encrypts the file
-   * under that attachment's key. Feeding fixed-size chunks through `push`
-   * keeps memory bounded no matter how large the file is (the WASM heap
-   * cannot hold large files whole); `finish` emits the final frame that
-   * seals the file — decryption fails without it.
+   * message, `conversationKey` and `conversationKeyVersion` the key the
+   * message was encrypted under, and `mediaHashKey` the hash key the file's
+   * upload started with, as listed in the message's attachments; the SDK
+   * encrypts the file under that attachment's key. Feeding fixed-size chunks
+   * through `push` keeps memory bounded no matter how large the file is (the
+   * WASM heap cannot hold large files whole); `finish` emits the final frame
+   * that seals the file — decryption fails without it.
    */
-  encryptMedia(plaintext, eventB64, conversationKeys, mediaHashKey) {
-    const enc = this.#chat.fileEncryptor({ eventB64, conversationKeys, mediaHashKey });
+  encryptMedia(plaintext, eventB64, conversationKey, conversationKeyVersion, mediaHashKey) {
+    const enc = this.#chat.fileEncryptor({ eventB64, conversationKey, conversationKeyVersion, mediaHashKey });
     const parts = [];
     // A throw from push would otherwise leak the encryptor's live key state
     // in WASM memory; free() reclaims it. finish() consumes the

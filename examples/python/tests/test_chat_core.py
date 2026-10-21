@@ -261,7 +261,7 @@ class TestPreparedChanges(unittest.TestCase):
         )
         self.assertTrue(body["event_b64"])
 
-        ciphertext = core.encrypt_media(plaintext, body["event_b64"], conv_keys, "photo")
+        ciphertext = core.encrypt_media(plaintext, body["event_b64"], conv_key, "1", "photo")
         self.assertEqual(len(ciphertext), encrypted_file_size(len(plaintext)))
         self.assertEqual(
             core.decrypt_media(ciphertext, body["event_b64"], conv_keys, "photo"), plaintext

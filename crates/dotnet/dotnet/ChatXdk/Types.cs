@@ -974,27 +974,22 @@ namespace ChatXdk
     /// <summary>Parameters for <see cref="Chat.EncryptFile"/>.</summary>
     public sealed class EncryptFileParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>
+        /// Create params with the required fields; the conversation key pair defaults to the key
+        /// cache.
+        /// </summary>
         /// <param name="file">The file to encrypt.</param>
         /// <param name="eventB64">
         /// The <see cref="SendPayload.EventB64"/> of the payload that <see cref="Chat.EncryptMessage"/>
         /// or <see cref="Chat.EncryptReply"/> returned for the message carrying the file.
         /// </param>
-        /// <param name="conversationKeys">
-        /// Version → raw 32-byte conversation key; it must hold the key the message was encrypted under.
-        /// </param>
         /// <param name="mediaHashKey">
         /// The media hash key the file's upload started with, as listed in the message's attachments.
         /// </param>
-        public EncryptFileParams(
-            byte[] file,
-            string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
-            string mediaHashKey)
+        public EncryptFileParams(byte[] file, string eventB64, string mediaHashKey)
         {
             File = file;
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
             MediaHashKey = mediaHashKey;
         }
 
@@ -1002,10 +997,16 @@ namespace ChatXdk
         public byte[] File { get; }
         /// <summary>The <see cref="SendPayload.EventB64"/> of the message carrying the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
-        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The media hash key the file's upload started with.</summary>
         public string MediaHashKey { get; }
+        /// <summary>
+        /// The raw 32-byte conversation key the message was encrypted under; with
+        /// <see cref="ConversationKeyVersion"/> null too, it resolves from the key cache, as for
+        /// <see cref="EncryptMessageParams"/>.
+        /// </summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>The version of <see cref="ConversationKey"/>: the message's key version.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>
@@ -1014,30 +1015,28 @@ namespace ChatXdk
     /// </summary>
     public sealed class FileEncryptorParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>
+        /// Create params with the required fields; the conversation key pair defaults to the key
+        /// cache.
+        /// </summary>
         /// <param name="eventB64">The <see cref="SendPayload.EventB64"/> of the message carrying the file.</param>
-        /// <param name="conversationKeys">
-        /// Version → raw 32-byte conversation key; it must hold the key the message was encrypted under.
-        /// </param>
         /// <param name="mediaHashKey">
         /// The media hash key the file's upload started with, as listed in the message's attachments.
         /// </param>
-        public FileEncryptorParams(
-            string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
-            string mediaHashKey)
+        public FileEncryptorParams(string eventB64, string mediaHashKey)
         {
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
             MediaHashKey = mediaHashKey;
         }
 
         /// <summary>The <see cref="SendPayload.EventB64"/> of the message carrying the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
-        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The media hash key the file's upload started with.</summary>
         public string MediaHashKey { get; }
+        /// <summary>The raw 32-byte conversation key the message was encrypted under; null resolves it from the key cache.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>The version of <see cref="ConversationKey"/>: the message's key version.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>Parameters for <see cref="Chat.DecryptFile"/>.</summary>

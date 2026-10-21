@@ -387,12 +387,7 @@ fn e2e_live() {
             )
             .expect("encrypt media message");
         let ciphertext = core
-            .encrypt_media(
-                &plaintext,
-                &media_msg.event_b64,
-                &HashMap::from([(kv.clone(), key.clone())]),
-                &media_hash_key,
-            )
+            .encrypt_media(&plaintext, &media_msg.event_b64, &key, &kv, &media_hash_key)
             .expect("encrypt_media");
         api.finish_media_upload(&canonical_conv, &session_id, &media_hash_key, &ciphertext)
             .expect("finish_media_upload");

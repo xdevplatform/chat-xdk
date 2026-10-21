@@ -335,7 +335,7 @@ func TestE2ELive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EncryptReply (media): %v", err)
 		}
-		ciphertext, err := core.EncryptMedia(plaintext, mediaBody.EventB64, map[string][]byte{kv: key}, mediaHashKey)
+		ciphertext, err := core.EncryptMedia(plaintext, mediaBody.EventB64, key, kv, mediaHashKey)
 		if err != nil {
 			t.Fatalf("EncryptMedia: %v", err)
 		}

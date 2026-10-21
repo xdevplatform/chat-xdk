@@ -374,21 +374,28 @@ class ChatCore:
         self,
         plaintext: bytes,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
+        conversation_key: bytes,
+        conversation_key_version: str,
         media_hash_key: str,
     ) -> bytes:
         """Encrypt a media file of an outgoing message with the incremental API.
 
         ``event_b64`` is the ``event_b64`` that ``encrypt_reply`` returned for
-        the message, and ``media_hash_key`` the hash key its upload started
-        with, as listed in the message's attachments; the SDK encrypts the
-        file under that attachment's key. Feeding fixed-size chunks through
-        ``push`` keeps memory bounded no matter how large the file is;
-        ``finish`` emits the final frame that seals the file (decryption
-        fails without it).
+        the message, ``conversation_key`` and ``conversation_key_version`` the
+        key the message was encrypted under, and ``media_hash_key`` the hash
+        key its upload started with, as listed in the message's attachments;
+        the SDK encrypts the file under that attachment's key. Feeding
+        fixed-size chunks through ``push`` keeps memory bounded no matter how
+        large the file is; ``finish`` emits the final frame that seals the
+        file (decryption fails without it).
         """
         enc = self.chat.file_encryptor(
-            FileEncryptorParams(event_b64, conversation_keys, media_hash_key)
+            FileEncryptorParams(
+                event_b64,
+                media_hash_key,
+                conversation_key=conversation_key,
+                conversation_key_version=conversation_key_version,
+            )
         )
         out = bytearray()
         for offset in range(0, len(plaintext), self.MEDIA_CHUNK):

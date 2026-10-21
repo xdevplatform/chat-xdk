@@ -250,18 +250,26 @@ public final class ChatCore implements AutoCloseable {
      * Encrypt a media file of an outgoing message with the incremental file API.
      *
      * <p>{@code eventB64} is the {@code eventB64} of the body
-     * {@link #encryptReply} returned for the message, and {@code mediaHashKey}
-     * the hash key the file's upload started with, as listed in the message's
-     * attachments; the SDK encrypts the file under that attachment's key.
-     * Feeding fixed-size chunks through {@code push} keeps memory bounded no
-     * matter how large the file is; {@code finish} emits the final frame that
-     * seals the file (decryption fails without it).
+     * {@link #encryptReply} returned for the message, {@code conversationKey}
+     * and {@code conversationKeyVersion} the key the message was encrypted
+     * under, and {@code mediaHashKey} the hash key the file's upload started
+     * with, as listed in the message's attachments; the SDK encrypts the file
+     * under that attachment's key. Feeding fixed-size chunks through
+     * {@code push} keeps memory bounded no matter how large the file is;
+     * {@code finish} emits the final frame that seals the file (decryption
+     * fails without it).
      */
     public byte[] encryptMedia(
-            byte[] plaintext, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)
+            byte[] plaintext,
+            String eventB64,
+            byte[] conversationKey,
+            String conversationKeyVersion,
+            String mediaHashKey)
             throws Exception {
-        try (FileEncryptor enc = chat.fileEncryptor(
-                new FileEncryptorParams(eventB64, conversationKeys, mediaHashKey))) {
+        FileEncryptorParams params = new FileEncryptorParams(eventB64, mediaHashKey);
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        try (FileEncryptor enc = chat.fileEncryptor(params)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             for (int offset = 0; offset < plaintext.length; offset += MEDIA_CHUNK) {
                 int end = Math.min(offset + MEDIA_CHUNK, plaintext.length);

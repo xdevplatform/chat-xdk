@@ -112,7 +112,13 @@ def main(out_path):
 
     file_plaintext = b"chat-xdk compatibility file\n" * 90
     file_ciphertext = chat.encrypt_file(
-        EncryptFileParams(file_plaintext, with_file.event_b64, {KEY_VERSION: CONVERSATION_KEY}, "file-1")
+        EncryptFileParams(
+            file_plaintext,
+            with_file.event_b64,
+            "file-1",
+            conversation_key=CONVERSATION_KEY,
+            conversation_key_version=KEY_VERSION,
+        )
     )
     out = {
         "conversation_key_b64": b64(CONVERSATION_KEY),

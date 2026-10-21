@@ -74,6 +74,12 @@ QUICK_REPLY_RESPONSE = {
 }
 
 
+
+def _key_kwargs(keys):
+    """The one conversation key of a key map, as the file encrypt params take it."""
+    ((version, key),) = keys.items()
+    return {"conversation_key": key, "conversation_key_version": version}
+
 class TestPythonSdkVectors(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -206,7 +212,15 @@ class TestPythonSdkVectors(unittest.TestCase):
             )
 
     def test_key_cache_resolves_omitted_conversation_key(self):
-        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessageParams, ImportKeysParams, SetIdentityParams
+        from chat_xdk import (
+            Chat,
+            DecryptEventParams,
+            DecryptEventsParams,
+            EncryptFileParams,
+            EncryptMessageParams,
+            ImportKeysParams,
+            SetIdentityParams,
+        )
 
         v = _load_vectors()
         chat = Chat()
@@ -231,6 +245,16 @@ class TestPythonSdkVectors(unittest.TestCase):
             payload.conversation_key_version, v["event_conversation_key_version"]
         )
         self.assertTrue(payload.encrypted_content)
+
+        # A file of a message sent from the cache encrypts under the same cached key.
+        photo = chat.encrypt_message(
+            EncryptMessageParams(v["event_conversation_id"], "a photo", attachments=[_media("photo")])
+        )
+        encrypted = chat.encrypt_file(EncryptFileParams(b"photo bytes", photo.event_b64, "photo"))
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        self.assertEqual(
+            self._open_media(photo.event_b64, keys, "photo", base64.b64encode(encrypted)), b"photo bytes"
+        )
 
     def test_key_cache_off_omitted_conversation_key_raises(self):
         from chat_xdk import Chat, DecryptEventsParams, EncryptMessageParams, ImportKeysParams, SetIdentityParams
@@ -717,13 +741,13 @@ class TestPythonSdkVectors(unittest.TestCase):
 
         # A session with no identity encrypts the files from the payload.
         worker = Chat()
-        first = worker.encrypt_file(EncryptFileParams(photos[0], payload.event_b64, keys, "photo-0"))
+        first = worker.encrypt_file(EncryptFileParams(photos[0], payload.event_b64, "photo-0", **_key_kwargs(keys)))
         # Randomized nonces: two encryptions differ.
         self.assertNotEqual(
-            worker.encrypt_file(EncryptFileParams(photos[0], payload.event_b64, keys, "photo-0")),
+            worker.encrypt_file(EncryptFileParams(photos[0], payload.event_b64, "photo-0", **_key_kwargs(keys))),
             first,
         )
-        encryptor = worker.file_encryptor(FileEncryptorParams(payload.event_b64, keys, "photo-1"))
+        encryptor = worker.file_encryptor(FileEncryptorParams(payload.event_b64, "photo-1", **_key_kwargs(keys)))
         second = b"".join(
             encryptor.push(photos[1][i:i + 700]) for i in range(0, len(photos[1]), 700)
         ) + encryptor.finish()
@@ -768,7 +792,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         payload = self._send_files(chat, v, "a link", [card])
         for name, plaintext in (("banner", b"banner bytes"), ("favicon", b"favicon bytes")):
             with self.subTest(image=name):
-                encrypted = chat.encrypt_file(EncryptFileParams(plaintext, payload.event_b64, keys, name))
+                encrypted = chat.encrypt_file(EncryptFileParams(plaintext, payload.event_b64, name, **_key_kwargs(keys)))
                 self.assertEqual(
                     self._open_media(payload.event_b64, keys, name, base64.b64encode(encrypted)),
                     plaintext,
@@ -781,7 +805,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat = self._identity_chat(v)
         keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
         draft = self._send_files(chat, v, "draft", [_media("photo-0"), _media("photo-1")])
-        encrypted = chat.encrypt_file(EncryptFileParams(b"photo", draft.event_b64, keys, "photo-1"))
+        encrypted = chat.encrypt_file(EncryptFileParams(b"photo", draft.event_b64, "photo-1", **_key_kwargs(keys)))
 
         rebuilt = self._send_files(chat, v, "final text", [_media("photo-0"), _media("photo-1")])
         self.assertEqual(rebuilt.message_id, draft.message_id)
@@ -818,13 +842,13 @@ class TestPythonSdkVectors(unittest.TestCase):
                 attachments=[_media("reply-photo")],
             )
         )
-        encrypted = chat.encrypt_file(EncryptFileParams(b"mine", reply.event_b64, keys, "reply-photo"))
+        encrypted = chat.encrypt_file(EncryptFileParams(b"mine", reply.event_b64, "reply-photo", **_key_kwargs(keys)))
         self.assertEqual(
             self._open_media(reply.event_b64, keys, "reply-photo", base64.b64encode(encrypted)),
             b"mine",
         )
         with self.assertRaisesRegex(ValueError, "is media the reply quotes"):
-            chat.encrypt_file(EncryptFileParams(b"x", reply.event_b64, keys, "original-photo"))
+            chat.encrypt_file(EncryptFileParams(b"x", reply.event_b64, "original-photo", **_key_kwargs(keys)))
 
     def test_a_message_with_files_needs_an_identity(self):
         from chat_xdk import Chat, EncryptMessageParams, ImportKeysParams

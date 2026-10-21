@@ -242,7 +242,7 @@ public class ChatCoreTests
             attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, plaintext.Length, "photo.bin", 5) });
         Assert.False(string.IsNullOrEmpty(body.EventB64));
 
-        var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKeys, "photo");
+        var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKey, "1", "photo");
         Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)ciphertext.Length);
         Assert.Equal(plaintext, core.DecryptMedia(ciphertext, body.EventB64, convKeys, "photo"));
         var ex = Assert.Throws<ChatXdkException>(

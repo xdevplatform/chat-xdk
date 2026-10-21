@@ -15,6 +15,12 @@ import {
   guessesRemaining,
 } from "../index.js";
 
+/** File encrypt params from params that carry a one-key `conversationKeys` map. */
+const withKey = ({ conversationKeys, ...rest }) => {
+  const [[conversationKeyVersion, conversationKey]] = Object.entries(conversationKeys);
+  return { ...rest, conversationKey, conversationKeyVersion };
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -341,17 +347,17 @@ async function delegationTests() {
     conversationKeyVersion: v.event_conversation_key_version,
     attachments: [photo("first"), photo("second")],
   });
-  const fileCt = chat.encryptFile({
+  const fileCt = chat.encryptFile(withKey({
     file: b64ToBytes(v.plaintext_b64),
     eventB64: mediaPayload.eventB64,
     conversationKeys: mediaKeys,
     mediaHashKey: "first",
-  });
-  const enc = chat.fileEncryptor({
+  }));
+  const enc = chat.fileEncryptor(withKey({
     eventB64: mediaPayload.eventB64,
     conversationKeys: mediaKeys,
     mediaHashKey: "second",
-  });
+  }));
   const piece = enc.push(b64ToBytes(v.plaintext_b64));
   const finalPiece = enc.finish();
   const streamed = new Uint8Array([...piece, ...finalPiece]);

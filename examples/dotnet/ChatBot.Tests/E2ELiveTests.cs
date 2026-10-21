@@ -310,8 +310,7 @@ public class E2ELiveTests
                     AttachmentDescriptor.Media(mediaHashKey, 0, 0, plaintext.Length, "e2e.bin", 5),
                 },
                 ttlMsec: 24L * 60 * 60 * 1000);
-            var ciphertext = core.EncryptMedia(
-                plaintext, mediaMsg.EventB64, new Dictionary<string, byte[]> { [kv] = key }, mediaHashKey);
+            var ciphertext = core.EncryptMedia(plaintext, mediaMsg.EventB64, key, kv, mediaHashKey);
             await api.FinishMediaUploadAsync(canonicalConv, sessionId, mediaHashKey, ciphertext);
             Console.WriteLine($"encrypted media uploaded: {mediaHashKey} ({ciphertext.Length} bytes)");
             await api.SendMessageAsync(canonicalConv, mediaMsg);

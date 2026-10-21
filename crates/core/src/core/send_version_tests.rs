@@ -301,12 +301,10 @@ fn files_of_a_v0_message_use_the_conversation_key() {
     assert_v0(&party, &ckey, "message with a file", &payload);
 
     let encrypted = ChatCore::new()
-        .encrypt_file(&EncryptFileParams::new(
-            b"hello".to_vec(),
-            payload.event_b64.clone(),
-            keys(KEY_VERSION, &ckey),
-            "file-1",
-        ))
+        .encrypt_file(
+            &EncryptFileParams::new(b"hello".to_vec(), payload.event_b64.clone(), "file-1")
+                .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+        )
         .unwrap();
     let mut opened = Vec::new();
     crate::crypto::encryption::decrypt_file(&ckey, encrypted.as_slice(), &mut opened).unwrap();

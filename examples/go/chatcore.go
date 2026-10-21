@@ -296,16 +296,18 @@ const mediaChunk = 1024 * 1024
 // incremental file API.
 //
 // eventB64 is the EventB64 of the body EncryptReply returned for the message,
-// and mediaHashKey the hash key the file's upload started with, as listed in
-// the message's attachments; the SDK encrypts the file under that
-// attachment's key. Feeding fixed-size chunks through Push keeps memory
-// bounded no matter how large the file is; Finish emits the final frame that
-// seals the file (decryption fails without it).
-func (c *ChatCore) EncryptMedia(plaintext []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
+// conversationKey and conversationKeyVersion the key the message was
+// encrypted under, and mediaHashKey the hash key the file's upload started
+// with, as listed in the message's attachments; the SDK encrypts the file
+// under that attachment's key. Feeding fixed-size chunks through Push keeps
+// memory bounded no matter how large the file is; Finish emits the final
+// frame that seals the file (decryption fails without it).
+func (c *ChatCore) EncryptMedia(plaintext []byte, eventB64 string, conversationKey []byte, conversationKeyVersion, mediaHashKey string) ([]byte, error) {
 	enc, err := c.chat.FileEncryptor(chatxdk.FileEncryptorParams{
-		EventB64:         eventB64,
-		ConversationKeys: conversationKeys,
-		MediaHashKey:     mediaHashKey,
+		EventB64:               eventB64,
+		MediaHashKey:           mediaHashKey,
+		ConversationKey:        conversationKey,
+		ConversationKeyVersion: conversationKeyVersion,
 	})
 	if err != nil {
 		return nil, err

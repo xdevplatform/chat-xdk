@@ -675,22 +675,24 @@ impl Chat {
     ///
     /// Takes a single params object: `file` (Uint8Array); `eventB64`, the
     /// `eventB64` of the payload `encryptMessage` or `encryptReply` returned
-    /// for the message carrying the file; `conversationKeys`, the
-    /// conversation's `version → key bytes` map, which must hold the key the
-    /// message was encrypted under; and `mediaHashKey`, the media hash key
+    /// for the message carrying the file; `mediaHashKey`, the media hash key
     /// the file's upload started with, as listed in the message's
-    /// attachments. The SDK finds that attachment and encrypts the file under
-    /// its key. Upload the result under the same media hash key; its size is
+    /// attachments; and optionally `conversationKey` with
+    /// `conversationKeyVersion`, the key the message was encrypted under,
+    /// resolved from the key cache when both are omitted. The SDK finds that
+    /// attachment and encrypts the file under its key. Upload the result
+    /// under the same media hash key; its size is
     /// `encryptedFileSize(file.length)`. Errors say what to pass instead.
     #[wasm_bindgen(js_name = encryptFile)]
     pub fn encrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsError> {
         let p: JsEncryptFileParams = from_js_params("encryptFile", params)?;
-        let core_params = chat_xdk_core::EncryptFileParams::new(
+        let mut core_params = chat_xdk_core::EncryptFileParams::new(
             js_to_bytes("encryptFile", "file", &p.file)?,
             p.event_b64,
-            js_to_conv_keys("encryptFile", p.conversation_keys)?,
             p.media_hash_key,
         );
+        core_params.conversation_key = p.conversation_key;
+        core_params.conversation_key_version = p.conversation_key_version;
         self.inner
             .encrypt_file(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))
@@ -701,12 +703,11 @@ impl Chat {
     /// fed to the encryptor.
     #[wasm_bindgen(js_name = fileEncryptor)]
     pub fn file_encryptor(&self, params: JsValue) -> Result<FileEncryptor, JsError> {
-        let p: JsFileParams = from_js_params("fileEncryptor", params)?;
-        let core_params = chat_xdk_core::FileEncryptorParams::new(
-            p.event_b64,
-            js_to_conv_keys("fileEncryptor", p.conversation_keys)?,
-            p.media_hash_key,
-        );
+        let p: JsFileEncryptorParams = from_js_params("fileEncryptor", params)?;
+        let mut core_params =
+            chat_xdk_core::FileEncryptorParams::new(p.event_b64, p.media_hash_key);
+        core_params.conversation_key = p.conversation_key;
+        core_params.conversation_key_version = p.conversation_key_version;
         let inner = self
             .inner
             .file_encryptor(&core_params)
@@ -1380,9 +1381,18 @@ struct JsEncryptFileParams {
     #[serde(with = "serde_wasm_bindgen::preserve")]
     file: JsValue,
     event_b64: String,
-    #[serde(with = "serde_wasm_bindgen::preserve")]
-    conversation_keys: JsValue,
     media_hash_key: String,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsFileEncryptorParams {
+    event_b64: String,
+    media_hash_key: String,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1396,7 +1406,7 @@ struct JsDecryptFileParams {
     media_hash_key: String,
 }
 
-/// The params of `fileEncryptor` and `fileDecryptor`.
+/// The params of `fileDecryptor`.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsFileParams {

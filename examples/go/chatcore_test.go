@@ -327,7 +327,7 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 		t.Fatal("empty event_b64")
 	}
 
-	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, keys, "photo")
+	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, key, "1", "photo")
 	if err != nil {
 		t.Fatalf("EncryptMedia: %v", err)
 	}

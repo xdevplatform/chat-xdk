@@ -241,7 +241,7 @@ test("media encrypt -> decrypt round-trip and truncation", async () => {
   });
   assert.ok(body.event_b64);
 
-  const ciphertext = core.encryptMedia(plaintext, body.event_b64, keys, "photo");
+  const ciphertext = core.encryptMedia(plaintext, body.event_b64, key, "1", "photo");
   assert.equal(ciphertext.length, ChatCore.encryptedFileSize(plaintext.length));
   const decrypted = core.decryptMedia(ciphertext, body.event_b64, keys, "photo");
   assert.equal(decrypted.length, plaintext.length);

@@ -846,6 +846,16 @@ public final class Chat implements AutoCloseable {
         return json;
     }
 
+    /** Add an optional conversation key (base64) and its version to file params. */
+    private static void putConversationKey(ObjectNode n, byte[] conversationKey, String conversationKeyVersion) {
+        if (conversationKey != null) {
+            n.put("conversation_key", Base64.getEncoder().encodeToString(conversationKey));
+        }
+        if (conversationKeyVersion != null) {
+            n.put("conversation_key_version", conversationKeyVersion);
+        }
+    }
+
     private static String fileParamsJson(
             String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
@@ -872,8 +882,8 @@ public final class Chat implements AutoCloseable {
      * {@link ChatXdkUtilities#encryptedFileSize}.
      *
      * @return Encrypted bytes.
-     * @throws ChatXdkException if the event is not a message with this file, or the key map
-     *     lacks its key. The message says what to pass instead.
+     * @throws ChatXdkException if the event is not a message with this file, or the conversation
+     *     key is not the one the message was encrypted under. The message says what to pass instead.
      */
     public byte[] encryptFile(EncryptFileParams parameters) {
         throwIfDisposed();
@@ -881,8 +891,8 @@ public final class Chat implements AutoCloseable {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("file", Base64.getEncoder().encodeToString(parameters.file == null ? new byte[0] : parameters.file));
         n.put("event_b64", parameters.eventB64);
-        n.set("conversation_keys", conversationKeysJson(parameters.conversationKeys));
         n.put("media_hash_key", parameters.mediaHashKey);
+        putConversationKey(n, parameters.conversationKey, parameters.conversationKeyVersion);
         return callFile(n, ChatNative.INSTANCE::chat_xdk_encrypt_file);
     }
 
@@ -911,15 +921,18 @@ public final class Chat implements AutoCloseable {
      * {@link #encryptFile} apart from the file, which is fed to the encryptor.
      *
      * @return A new {@link FileEncryptor}; close it when finished.
-     * @throws ChatXdkException if the event is not a message with this file, or the key map
-     *     lacks its key. The message says what to pass instead.
+     * @throws ChatXdkException if the event is not a message with this file, or the conversation
+     *     key is not the one the message was encrypted under. The message says what to pass instead.
      */
     public FileEncryptor fileEncryptor(FileEncryptorParams parameters) {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
         try {
-            return FileEncryptor.create(
-                    handle, fileParamsJson(parameters.eventB64, parameters.conversationKeys, parameters.mediaHashKey));
+            ObjectNode n = ChatJson.MAPPER.createObjectNode();
+            n.put("event_b64", parameters.eventB64);
+            n.put("media_hash_key", parameters.mediaHashKey);
+            putConversationKey(n, parameters.conversationKey, parameters.conversationKeyVersion);
+            return FileEncryptor.create(handle, n.toString());
         } finally {
             Reference.reachabilityFence(this);
         }

@@ -352,8 +352,9 @@ URL card's banner and favicon images share the card's key.
 On send, the message is built before its files are encrypted. Each file of
 the message names the media hash key its upload started with. `encrypt_file`
 and `file_encryptor` take the message's `event_b64` (returned in the
-`SendPayload`), the conversation key map, and the file's media hash key: they
-find the attachment in the message, derive the message key and that
+`SendPayload`), the conversation key the message was encrypted under (passed
+with its version, or resolved from the key cache), and the file's media hash
+key: they find the attachment in the message, derive the message key and that
 attachment's key, and encrypt the file under it, so a file's key always
 matches the message that carries it. They need no session identity: the
 sender, message id and key version come from the event. The SDK writes each

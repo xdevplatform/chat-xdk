@@ -122,12 +122,10 @@ fn encrypt_file(
     media_hash_key: &str,
     file: &[u8],
 ) -> Result<Vec<u8>, SdkError> {
-    ChatCore::new().encrypt_file(&EncryptFileParams::new(
-        file.to_vec(),
-        payload.event_b64.clone(),
-        keys(KEY_VERSION, ckey),
-        media_hash_key,
-    ))
+    ChatCore::new().encrypt_file(
+        &EncryptFileParams::new(file.to_vec(), payload.event_b64.clone(), media_hash_key)
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+    )
 }
 
 fn open_file(
@@ -536,11 +534,10 @@ fn the_file_encryptor_and_decryptor_match_the_one_shot_calls() {
         ))
         .unwrap();
     let mut encryptor = ChatCore::new()
-        .file_encryptor(&FileEncryptorParams::new(
-            payload.event_b64.clone(),
-            keys(KEY_VERSION, &ckey),
-            "second",
-        ))
+        .file_encryptor(
+            &FileEncryptorParams::new(payload.event_b64.clone(), "second")
+                .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+        )
         .unwrap();
     let mut encrypted = Vec::new();
     for chunk in file.chunks(4093) {
@@ -798,17 +795,17 @@ fn file_encryption_errors_say_what_to_pass() {
         ..Default::default()
     });
 
-    let ok_keys = keys(KEY_VERSION, &ckey);
+    let ok_key = (ckey.clone(), KEY_VERSION);
     let cases = [
         (
             with_photo.event_b64.clone(),
-            ok_keys.clone(),
+            ok_key.clone(),
             "",
             "media_hash_key is empty".to_string(),
         ),
         (
             with_photo.event_b64.clone(),
-            ok_keys.clone(),
+            ok_key.clone(),
             "other",
             "media_hash_key 'other' is not one of the message's files, whose media hash keys are \
              photo"
@@ -816,61 +813,64 @@ fn file_encryption_errors_say_what_to_pass() {
         ),
         (
             without_files.event_b64.clone(),
-            ok_keys.clone(),
+            ok_key.clone(),
             "photo",
             "the message has no files".to_string(),
         ),
         (
             reaction.event_b64.clone(),
-            ok_keys.clone(),
+            ok_key.clone(),
             "photo",
             "is a reaction".to_string(),
         ),
         (
             edit.event_b64.clone(),
-            ok_keys.clone(),
+            ok_key.clone(),
             "photo",
             "is an edit".to_string(),
         ),
         (
             not_a_message,
-            ok_keys.clone(),
+            ok_key.clone(),
             "photo",
             "the event is not a message".to_string(),
         ),
         (
             with_photo.event_b64.clone(),
-            keys(KEY_VERSION, &key(4)),
+            (key(4), KEY_VERSION),
             "photo",
-            format!("the key for version '{KEY_VERSION}' in conversation_keys does not decrypt"),
+            format!("conversation_key (version '{KEY_VERSION}') does not decrypt"),
         ),
         (
             with_photo.event_b64.clone(),
-            keys("8", &ckey),
+            (ckey.clone(), "8"),
             "photo",
-            format!("conversation_keys has no key for version '{KEY_VERSION}'"),
+            format!(
+                "conversation_key_version '8' is not the message's key version '{KEY_VERSION}'"
+            ),
         ),
         (
             "not base64!".to_string(),
-            ok_keys.clone(),
+            ok_key.clone(),
             "photo",
             "Base64 error".to_string(),
         ),
     ];
     let core = ChatCore::new();
-    for (event_b64, conversation_keys, media_hash_key, expected) in cases {
-        let err = error_text(core.encrypt_file(&EncryptFileParams::new(
-            b"photo".to_vec(),
-            event_b64.clone(),
-            conversation_keys.clone(),
-            media_hash_key,
-        )));
+    for (event_b64, (conversation_key, version), media_hash_key, expected) in cases {
+        let err = error_text(
+            core.encrypt_file(
+                &EncryptFileParams::new(b"photo".to_vec(), event_b64.clone(), media_hash_key)
+                    .with_conversation_key(conversation_key.to_bytes(), version),
+            ),
+        );
         assert!(err.contains(&expected), "{err:?} lacks {expected:?}");
-        let err = error_text(core.file_encryptor(&FileEncryptorParams::new(
-            event_b64,
-            conversation_keys,
-            media_hash_key,
-        )));
+        let err = error_text(
+            core.file_encryptor(
+                &FileEncryptorParams::new(event_b64, media_hash_key)
+                    .with_conversation_key(conversation_key.to_bytes(), version),
+            ),
+        );
         assert!(err.contains(&expected), "{err:?} lacks {expected:?}");
     }
 }

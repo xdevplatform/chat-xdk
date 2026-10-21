@@ -2875,15 +2875,23 @@ impl ChatCore {
     ///
     /// Build the message first: its attachments name each file by the media
     /// hash key the file's upload started with. Then pass the returned
-    /// payload's `event_b64`, the conversation's key map, and the file's
-    /// media hash key. The SDK finds the file's attachment in the message
-    /// and derives its key, so files can be encrypted in any order, and a
-    /// file that is not in the message, or a key map that does not decrypt
-    /// the message, is an error.
+    /// payload's `event_b64`, the file's media hash key, and the conversation
+    /// key and version the message was encrypted under (or neither, to
+    /// resolve them from the key cache). The SDK finds the file's attachment
+    /// in the message and derives its key, so files can be encrypted in any
+    /// order, and a file that is not in the message, or a key that does not
+    /// decrypt the message, is an error.
     pub fn encrypt_file(&self, params: &EncryptFileParams) -> Result<Vec<u8>, SdkError> {
+        let conversation_key = self.outgoing_file_conversation_key(
+            &params.event_b64,
+            params.conversation_key.as_deref(),
+            params.conversation_key_version.as_deref(),
+        )?;
         let key = media::outgoing_media_key(
             &params.event_b64,
-            &params.conversation_keys,
+            conversation_key
+                .as_ref()
+                .map(|(key, version)| (key, version.as_str())),
             &params.media_hash_key,
         )?;
         let mut reader = Cursor::new(params.file.as_slice());
@@ -2896,12 +2904,55 @@ impl ChatCore {
     /// memory. Takes the params of [`Self::encrypt_file`] apart from the
     /// file, which is fed to the encryptor.
     pub fn file_encryptor(&self, params: &FileEncryptorParams) -> Result<FileEncryptor, SdkError> {
+        let conversation_key = self.outgoing_file_conversation_key(
+            &params.event_b64,
+            params.conversation_key.as_deref(),
+            params.conversation_key_version.as_deref(),
+        )?;
         let key = media::outgoing_media_key(
             &params.event_b64,
-            &params.conversation_keys,
+            conversation_key
+                .as_ref()
+                .map(|(key, version)| (key, version.as_str())),
             &params.media_hash_key,
         )?;
         Ok(FileEncryptor::new(&key)?)
+    }
+
+    /// The conversation key a file of the message in `event_b64` is
+    /// encrypted under, with its version: the explicit pair, or, both unset,
+    /// the cached key for the message's conversation, as `encrypt_message`
+    /// resolves it. The version must be the message's.
+    fn outgoing_file_conversation_key(
+        &self,
+        event_b64: &str,
+        conversation_key: Option<&[u8]>,
+        conversation_key_version: Option<&str>,
+    ) -> Result<Option<(XChatConversationKey, String)>, SdkError> {
+        let event = Self::parse_event_b64(event_b64)?;
+        let Some(MessageEventDetail::MessageCreateEvent(create)) = &event.detail else {
+            // Not a message: the file lookup reports what to pass.
+            return Ok(None);
+        };
+        if let Some(version) = conversation_key_version.filter(|v| !v.is_empty()) {
+            crate::pipeline::validate_key_version("conversation_key_version", version)?;
+        }
+        let (key, version) = self.resolve_conversation_key(
+            conversation_key,
+            conversation_key_version,
+            event.conversation_id.as_deref().unwrap_or_default(),
+            event.sender_id.as_deref().unwrap_or_default(),
+        )?;
+        if let Some(message_version) = create.conversation_key_version.as_deref() {
+            if message_version != version {
+                return Err(SdkError::InvalidInput(format!(
+                    "conversation_key_version '{version}' is not the message's key version \
+                     '{message_version}': pass the conversation key the message was \
+                     encrypted under"
+                )));
+            }
+        }
+        Ok(Some((key, version)))
     }
 
     /// Decrypt a file.
@@ -7959,12 +8010,10 @@ mod tests {
 
         let plaintext = b"file data for media encryption test";
         let encrypted = core
-            .encrypt_file(&EncryptFileParams::new(
-                plaintext.to_vec(),
-                event.clone(),
-                keys.clone(),
-                "hash-1",
-            ))
+            .encrypt_file(
+                &EncryptFileParams::new(plaintext.to_vec(), event.clone(), "hash-1")
+                    .with_conversation_key(ckey.to_bytes(), "1"),
+            )
             .unwrap();
         assert_ne!(&encrypted[..], plaintext);
 
@@ -7981,12 +8030,10 @@ mod tests {
         let (event, keys) = sent_file_message(&core, &ckey, "hash-1");
 
         let encrypted = core
-            .encrypt_file(&EncryptFileParams::new(
-                Vec::new(),
-                event.clone(),
-                keys.clone(),
-                "hash-1",
-            ))
+            .encrypt_file(
+                &EncryptFileParams::new(Vec::new(), event.clone(), "hash-1")
+                    .with_conversation_key(ckey.to_bytes(), "1"),
+            )
             .unwrap();
         let decrypted = core
             .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
@@ -9420,6 +9467,69 @@ mod tests {
             Event::Message(msg) => assert_eq!(msg.text(), Some("cached")),
             other => panic!("expected Message, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn files_take_the_messages_key_from_the_cache_too() {
+        let core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+        core.set_identity(&SetIdentityParams::new("4001", "61"))
+            .unwrap();
+        core.set_cache_keys(true);
+        let ckey = core.generate_conversation_key().unwrap();
+        let kc_b64 = build_signed_self_keychange_event(
+            &core,
+            &ckey,
+            "1001",
+            "4001",
+            "61",
+            Some("61".to_string()),
+        );
+        let signing_keys = [signing_key_entry_for(&reg, "4001")];
+        core.decrypt_events_with(&[kc_b64.as_str()], &signing_keys);
+
+        let mut params = crate::EncryptMessageParams::new("conv-1", "a photo");
+        params.attachments = Some(vec![AttachmentDescriptor::Media {
+            media_hash_key: "photo".into(),
+            width: 1,
+            height: 1,
+            filesize_bytes: 10,
+            filename: "photo.jpg".into(),
+            media_type: Some(1),
+            duration_millis: None,
+        }]);
+        let payload = core.encrypt_message(&params).unwrap();
+
+        // No key passed: the file takes the cached key, as its message did.
+        let encrypted = core
+            .encrypt_file(&EncryptFileParams::new(
+                b"photo bytes".to_vec(),
+                payload.event_b64.clone(),
+                "photo",
+            ))
+            .unwrap();
+        let keys = [("1001".to_string(), ckey.clone())].into_iter().collect();
+        let decrypted = core
+            .decrypt_file(DecryptFileParams::new(
+                encrypted,
+                payload.event_b64.clone(),
+                keys,
+                "photo",
+            ))
+            .unwrap();
+        assert_eq!(decrypted, b"photo bytes");
+
+        let err = core
+            .encrypt_file(
+                &EncryptFileParams::new(b"photo".to_vec(), payload.event_b64, "photo")
+                    .with_conversation_key(ckey.to_bytes(), "1002"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("conversation_key_version '1002' is not the message's key version '1001'"),
+            "{err}"
+        );
     }
 
     #[test]

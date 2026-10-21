@@ -716,7 +716,7 @@ interface SigningKeyEntry {
 The SDK verifies each entry's identity binding (`identityPublicKeySignature`)
 before trusting it for signature verification, so all fields are required.
 
-**ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file params, and the `keys` field of `ConversationKeyResult`:
+**ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file decrypt params, and the `keys` field of `ConversationKeyResult`:
 ```typescript
 // JS
 type ConversationKeyMap = { [version: string]: Uint8Array };
@@ -1000,22 +1000,26 @@ reaction = chat.encrypt_add_reaction(EncryptReactionParams(original_event_b64, "
 | 35 | **decrypt_file** | `decrypt_file(DecryptFileParams) → Vec<u8>` | `decryptFile(params: DecryptFileParams) → Uint8Array` | `decrypt_file(DecryptFileParams) → bytes` | `DecryptFile(DecryptFileParams) ([]byte, error)` | `decryptFile(DecryptFileParams)` → `byte[]` | `DecryptFile(DecryptFileParams)` → `byte[]` |
 | 36 | **file_decryptor** | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `fileDecryptor(params: FileDecryptorParams) → FileDecryptor` | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `FileDecryptor(FileDecryptorParams) (*FileDecryptor, error)` | `fileDecryptor(FileDecryptorParams)` → `FileDecryptor` | `FileDecryptor(FileDecryptorParams)` → `FileDecryptor` |
 
-All four take the same three fields, plus the bytes for the one-shot calls
-(names per language idiom):
+The file calls take the key the way the message calls do: a send takes the
+one key its message was encrypted under, and a receive takes the
+conversation's key map, as `decrypt_event` does (names per language idiom):
 
 | Params | Fields |
 |---|---|
-| `EncryptFileParams` | `file`, `event_b64`, `conversation_keys`, `media_hash_key` |
-| `FileEncryptorParams` | `event_b64`, `conversation_keys`, `media_hash_key` |
+| `EncryptFileParams` | `file`, `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
+| `FileEncryptorParams` | `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
 | `DecryptFileParams` | `encrypted`, `event_b64`, `conversation_keys`, `media_hash_key` |
 | `FileDecryptorParams` | `event_b64`, `conversation_keys`, `media_hash_key` |
 
-`event_b64` is the base64 event of the message that carries the file,
-`conversation_keys` the conversation's key map (version → raw 32-byte key),
-and `media_hash_key` the file's media hash key. Each file of a message is
-encrypted under its own key, derived from the message's key and the file's
-attachment (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)), so a file
-encrypted for another message or attachment does not decrypt.
+`event_b64` is the base64 event of the message that carries the file and
+`media_hash_key` the file's media hash key. On a send, `conversation_key` and
+`conversation_key_version` are the raw 32-byte key the message was encrypted
+under and its version, set together as on `EncryptMessageParams`; with both
+unset they resolve from the key cache. On a receive, `conversation_keys` is
+the conversation's key map (version → raw 32-byte key). Each file of a
+message is encrypted under its own key, derived from the message's key and
+the file's attachment (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)),
+so a file encrypted for another message or attachment does not decrypt.
 
 **Sending files.** A message with files is built before its files are
 encrypted:
@@ -1028,9 +1032,10 @@ encrypted:
 2. Encrypt the message with `encrypt_message` or `encrypt_reply`, its
    attachments naming those media hash keys.
 3. Encrypt each file with `encrypt_file` or `file_encryptor`: pass the
-   payload's `event_b64`, a key map that holds the key the message was
-   encrypted under, and the file's `media_hash_key`. The SDK finds the file in
-   the message and encrypts it under that attachment's key.
+   payload's `event_b64`, the file's `media_hash_key`, and the conversation
+   key and version the message was encrypted under (or neither, to resolve
+   them from the key cache). The SDK finds the file in the message and
+   encrypts it under that attachment's key.
 4. Upload each encrypted file and finish its upload (`append` → `finalize`),
    then send the message.
 
@@ -1051,7 +1056,8 @@ const payload = chat.encryptMessage({
 const encrypted = chat.encryptFile({
   file: photo,
   eventB64: payload.eventB64,
-  conversationKeys: { [conversationKeyVersion]: conversationKey },
+  conversationKey,
+  conversationKeyVersion,
   mediaHashKey,
 });
 await finishMediaUpload(conversationId, { sessionId, mediaHashKey }, encrypted);
@@ -1093,7 +1099,8 @@ object; call `free()` only when abandoning a file without finishing it
 
 The file calls raise an error that says what to pass instead when:
 
-- the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
+- (encrypting) `conversation_key_version` is not the message's key version, `conversation_key` is not 32 bytes, or only one of the two is set;
+- (decrypting) the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
 - `media_hash_key` is empty, or is not one of the message's files (the error lists the media hash keys that are);
 - the event is not a message, is an edit, reaction or other entry without files, or is a message with no files;
 - (encrypting) `media_hash_key` names media the reply quotes: that file belongs to the quoted message, so there is nothing to encrypt;
@@ -1329,7 +1336,6 @@ const photoMessage = chat.encryptMessage({
 const encryptedPhoto = chat.encryptFile({
   file: photo,
   eventB64: photoMessage.eventB64,
-  conversationKeys: keys,
   mediaHashKey: newMediaHashKey,
 });
 // … finish the upload with encryptedPhoto, then send photoMessage …
@@ -1403,7 +1409,7 @@ photo_message = chat.encrypt_message(
     )
 )
 encrypted_photo = chat.encrypt_file(
-    EncryptFileParams(photo, photo_message.event_b64, keys, new_media_hash_key)
+    EncryptFileParams(photo, photo_message.event_b64, new_media_hash_key)
 )
 # … finish the upload with encrypted_photo, then send photo_message …
 ```
@@ -1511,10 +1517,9 @@ func main() {
         panic(err)
     }
     encryptedPhoto, err := chat.EncryptFile(chatxdk.EncryptFileParams{
-        File:             photo,
-        EventB64:         photoMessage.EventB64,
-        ConversationKeys: result.ConversationKeys.Keys,
-        MediaHashKey:     newMediaHashKey,
+        File:         photo,
+        EventB64:     photoMessage.EventB64,
+        MediaHashKey: newMediaHashKey,
     })
     _ = encryptedPhoto // … finish the upload with it, then send photoMessage …
 }
@@ -1589,7 +1594,6 @@ let photo_message = chat.encrypt_message(&params)?;
 let encrypted_photo = chat.encrypt_file(&EncryptFileParams::new(
     photo,
     &photo_message.event_b64,
-    keys,
     new_media_hash_key,
 ))?;
 // … finish the upload with encrypted_photo, then send photo_message …
@@ -1648,7 +1652,7 @@ var photoMessage = chat.EncryptMessage(new EncryptMessageParams(conversationId, 
     },
 });
 var encryptedPhoto = chat.EncryptFile(
-    new EncryptFileParams(photo, photoMessage.EventB64, keys, newMediaHashKey));
+    new EncryptFileParams(photo, photoMessage.EventB64, newMediaHashKey));
 // … finish the upload with encryptedPhoto, then send photoMessage …
 ```
 
@@ -1716,7 +1720,7 @@ try (Chat chat = new Chat()) {
             AttachmentDescriptor.media(newMediaHashKey, width, height, size, "photo.jpg", 1, null));
     SendPayload photoMessage = chat.encryptMessage(photoParams);
     byte[] encryptedPhoto = chat.encryptFile(
-            new EncryptFileParams(photo, photoMessage.eventB64, keys, newMediaHashKey));
+            new EncryptFileParams(photo, photoMessage.eventB64, newMediaHashKey));
     // … finish the upload with encryptedPhoto, then send photoMessage …
 }
 ```

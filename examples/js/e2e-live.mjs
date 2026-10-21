@@ -297,7 +297,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     ],
     ttlMsec: 24 * 60 * 60 * 1000,
   });
-  const ciphertext = core.encryptMedia(plaintext, mediaMsg.event_b64, { [kv]: key }, mediaHashKey);
+  const ciphertext = core.encryptMedia(plaintext, mediaMsg.event_b64, key, kv, mediaHashKey);
   await api.finishMediaUpload(canonicalConv, upload, ciphertext);
   console.log(`encrypted media uploaded: ${mediaHashKey} (${ciphertext.length} bytes)`);
   await api.sendMessage(canonicalConv, mediaMsg);

@@ -453,11 +453,12 @@ struct FfiResult chat_xdk_decrypt(const struct ChatHandle *handle,
  * `params_json` — single JSON document: `file` (base64), `event_b64` (the
  * `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
  * `chat_xdk_encrypt_reply` returned for the message carrying the file),
- * `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
- * key the message was encrypted under), and `media_hash_key` (the media
- * hash key the file's upload started with, as listed in the message's
- * attachments). The SDK finds that attachment and encrypts the file under
- * its key.
+ * `media_hash_key` (the media hash key the file's upload started with, as
+ * listed in the message's attachments), and optionally `conversation_key`
+ * (base64 raw 32-byte key) with `conversation_key_version`: the key the
+ * message was encrypted under, resolved from the key cache when both are
+ * omitted. The SDK finds that attachment and encrypts the file under its
+ * key.
  *
  * Returns the encrypted file, base64.
  */

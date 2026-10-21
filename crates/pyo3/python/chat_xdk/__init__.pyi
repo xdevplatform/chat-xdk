@@ -340,25 +340,31 @@ class DecryptEventsParams:
 class EncryptFileParams:
     file: bytes
     event_b64: str
-    conversation_keys: dict[str, bytes]
     media_hash_key: str
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         file: bytes,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
         media_hash_key: str,
+        *,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class FileEncryptorParams:
     event_b64: str
-    conversation_keys: dict[str, bytes]
     media_hash_key: str
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
         media_hash_key: str,
+        *,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class DecryptFileParams:

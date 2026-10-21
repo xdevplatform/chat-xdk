@@ -1100,25 +1100,29 @@ public final class Types {
          */
         public final String eventB64;
 
-        /** Version &#8594; raw 32-byte conversation key; it must hold the key the message was encrypted under. */
-        public final Map<String, byte[]> conversationKeys;
-
         /** The media hash key the file's upload started with, as listed in the message's attachments. */
         public final String mediaHashKey;
 
         /**
-         * Create params with the required fields.
+         * The raw 32-byte conversation key the message was encrypted under; with {@link
+         * #conversationKeyVersion} null too, it resolves from the key cache, as for {@link
+         * EncryptMessageParams}.
+         */
+        public byte[] conversationKey;
+
+        /** The version of {@link #conversationKey}: the message's key version. */
+        public String conversationKeyVersion;
+
+        /**
+         * Create params with the required fields; the conversation key pair defaults to the key cache.
          *
          * @param file The file to encrypt.
          * @param eventB64 The {@link SendPayload#eventB64} of the message carrying the file.
-         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
          * @param mediaHashKey The media hash key the file's upload started with.
          */
-        public EncryptFileParams(
-                byte[] file, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+        public EncryptFileParams(byte[] file, String eventB64, String mediaHashKey) {
             this.file = file;
             this.eventB64 = eventB64;
-            this.conversationKeys = conversationKeys;
             this.mediaHashKey = mediaHashKey;
         }
     }
@@ -1131,22 +1135,23 @@ public final class Types {
         /** The {@link SendPayload#eventB64} of the message carrying the file. */
         public final String eventB64;
 
-        /** Version &#8594; raw 32-byte conversation key; it must hold the key the message was encrypted under. */
-        public final Map<String, byte[]> conversationKeys;
-
         /** The media hash key the file's upload started with, as listed in the message's attachments. */
         public final String mediaHashKey;
 
+        /** The raw 32-byte conversation key the message was encrypted under; null resolves it from the key cache. */
+        public byte[] conversationKey;
+
+        /** The version of {@link #conversationKey}: the message's key version. */
+        public String conversationKeyVersion;
+
         /**
-         * Create params with the required fields.
+         * Create params with the required fields; the conversation key pair defaults to the key cache.
          *
          * @param eventB64 The {@link SendPayload#eventB64} of the message carrying the file.
-         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
          * @param mediaHashKey The media hash key the file's upload started with.
          */
-        public FileEncryptorParams(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+        public FileEncryptorParams(String eventB64, String mediaHashKey) {
             this.eventB64 = eventB64;
-            this.conversationKeys = conversationKeys;
             this.mediaHashKey = mediaHashKey;
         }
     }

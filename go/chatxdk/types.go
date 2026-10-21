@@ -449,20 +449,25 @@ type EncryptFileParams struct {
 	// EventB64 is the EventB64 of the payload that EncryptMessage or
 	// EncryptReply returned for the message carrying the file.
 	EventB64 string `json:"event_b64"`
-	// ConversationKeys maps key version to the raw 32-byte conversation key;
-	// it must hold the key the message was encrypted under.
-	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// MediaHashKey is the media hash key the file's upload started with, as
 	// listed in the message's attachments.
 	MediaHashKey string `json:"media_hash_key"`
+	// ConversationKey is the raw 32-byte conversation key the message was
+	// encrypted under; with ConversationKeyVersion empty too, it resolves from
+	// the key cache, as for EncryptMessageParams.
+	ConversationKey []byte `json:"conversation_key,omitempty"`
+	// ConversationKeyVersion is the version of ConversationKey: the message's
+	// key version.
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
 }
 
 // FileEncryptorParams are the parameters for FileEncryptor: those of
 // EncryptFile apart from the file, which is fed to the encryptor.
 type FileEncryptorParams struct {
-	EventB64         string            `json:"event_b64"`
-	ConversationKeys map[string][]byte `json:"conversation_keys"`
-	MediaHashKey     string            `json:"media_hash_key"`
+	EventB64               string `json:"event_b64"`
+	MediaHashKey           string `json:"media_hash_key"`
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // DecryptFileParams are the parameters for DecryptFile.

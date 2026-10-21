@@ -397,7 +397,7 @@ class E2ELiveTest {
                 List.of(descriptor),
                 24L * 60 * 60 * 1000,
                 null);
-        byte[] ciphertext = core.encryptMedia(plaintext, mediaMsg.eventB64(), Map.of(kv, key), mediaHashKey);
+        byte[] ciphertext = core.encryptMedia(plaintext, mediaMsg.eventB64(), key, kv, mediaHashKey);
         api.finishMediaUpload(canonicalConv, upload, ciphertext);
         System.out.println("encrypted media uploaded: " + mediaHashKey
                 + " (" + ciphertext.length + " bytes)");

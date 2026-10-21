@@ -956,8 +956,10 @@ impl DecryptEventsParams {
 
 /// Parameters for [`crate::ChatCore::encrypt_file`].
 ///
-/// The conversation keys zeroize when the params are dropped and are
-/// redacted from `Debug` output, as is the file.
+/// The conversation key, like the one [`EncryptMessageParams`] takes, is
+/// optional: set it with its version, or leave both unset to resolve them
+/// from the opt-in key cache. It is zeroized when the params are dropped and,
+/// with the file, redacted from `Debug` output.
 #[derive(Clone)]
 pub struct EncryptFileParams {
     /// The file to encrypt.
@@ -965,28 +967,50 @@ pub struct EncryptFileParams {
     /// The `event_b64` of the payload that `encrypt_message` or
     /// `encrypt_reply` returned for the message carrying the file.
     pub event_b64: String,
-    /// The conversation's key map (`key version → key`); it must hold the
-    /// key the message was encrypted under.
-    pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// The media hash key the file's upload started with, as listed in the
     /// message's attachments.
     pub media_hash_key: String,
+    /// The raw 32-byte conversation key the message was encrypted under;
+    /// resolves from the key cache when unset, together with
+    /// `conversation_key_version`.
+    pub conversation_key: Option<Vec<u8>>,
+    /// The version of `conversation_key`: the message's key version.
+    pub conversation_key_version: Option<String>,
 }
 
 impl EncryptFileParams {
-    /// Create params; every field is required.
+    /// Create params with the required fields; the conversation key pair
+    /// defaults to the key cache.
     pub fn new(
         file: Vec<u8>,
         event_b64: impl Into<String>,
-        conversation_keys: HashMap<String, XChatConversationKey>,
         media_hash_key: impl Into<String>,
     ) -> Self {
         Self {
             file,
             event_b64: event_b64.into(),
-            conversation_keys,
             media_hash_key: media_hash_key.into(),
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the conversation key the message was encrypted under, and its
+    /// version.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = non_empty(conversation_key_version);
+        self
+    }
+}
+
+impl Drop for EncryptFileParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
     }
 }
 
@@ -995,8 +1019,12 @@ impl std::fmt::Debug for EncryptFileParams {
         f.debug_struct("EncryptFileParams")
             .field("file", &format_args!("[{} bytes]", self.file.len()))
             .field("event_b64", &self.event_b64)
-            .field("conversation_keys", &self.conversation_keys)
             .field("media_hash_key", &self.media_hash_key)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
             .finish()
     }
 }
@@ -1055,33 +1083,66 @@ impl std::fmt::Debug for DecryptFileParams {
 /// Parameters for [`crate::ChatCore::file_encryptor`]: those of
 /// [`EncryptFileParams`] apart from the file, which is fed to the encryptor.
 ///
-/// The conversation keys zeroize when the params are dropped and are
+/// The conversation key is zeroized when the params are dropped and is
 /// redacted from `Debug` output.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FileEncryptorParams {
     /// The `event_b64` of the payload that `encrypt_message` or
     /// `encrypt_reply` returned for the message carrying the file.
     pub event_b64: String,
-    /// The conversation's key map (`key version → key`); it must hold the
-    /// key the message was encrypted under.
-    pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// The media hash key the file's upload started with, as listed in the
     /// message's attachments.
     pub media_hash_key: String,
+    /// The raw 32-byte conversation key the message was encrypted under;
+    /// resolves from the key cache when unset, together with
+    /// `conversation_key_version`.
+    pub conversation_key: Option<Vec<u8>>,
+    /// The version of `conversation_key`: the message's key version.
+    pub conversation_key_version: Option<String>,
 }
 
 impl FileEncryptorParams {
-    /// Create params; every field is required.
-    pub fn new(
-        event_b64: impl Into<String>,
-        conversation_keys: HashMap<String, XChatConversationKey>,
-        media_hash_key: impl Into<String>,
-    ) -> Self {
+    /// Create params with the required fields; the conversation key pair
+    /// defaults to the key cache.
+    pub fn new(event_b64: impl Into<String>, media_hash_key: impl Into<String>) -> Self {
         Self {
             event_b64: event_b64.into(),
-            conversation_keys,
             media_hash_key: media_hash_key.into(),
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the conversation key the message was encrypted under, and its
+    /// version.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = non_empty(conversation_key_version);
+        self
+    }
+}
+
+impl Drop for FileEncryptorParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for FileEncryptorParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileEncryptorParams")
+            .field("event_b64", &self.event_b64)
+            .field("media_hash_key", &self.media_hash_key)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .finish()
     }
 }
 

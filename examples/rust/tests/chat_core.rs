@@ -307,7 +307,7 @@ fn media_encrypt_decrypt_roundtrip() {
     assert!(!body.event_b64.is_empty());
 
     let ciphertext = core
-        .encrypt_media(&plaintext, &body.event_b64, &keys, "photo")
+        .encrypt_media(&plaintext, &body.event_b64, &key, "1", "photo")
         .expect("encrypt_media");
     assert_eq!(
         Some(ciphertext.len() as u64),

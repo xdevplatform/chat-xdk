@@ -593,7 +593,6 @@ func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, er
 func (c *Chat) EncryptFile(params EncryptFileParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	params.File = orEmptyBytes(params.File)
-	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -637,7 +636,6 @@ type FileEncryptor struct {
 // which is fed to Push.
 func (c *Chat) FileEncryptor(params FileEncryptorParams) (*FileEncryptor, error) {
 	defer runtime.KeepAlive(c)
-	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err

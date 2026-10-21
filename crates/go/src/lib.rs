@@ -1145,8 +1145,21 @@ struct FfiDecryptEventsParams {
 struct FfiEncryptFileParams {
     file: String,
     event_b64: String,
-    conversation_keys: HashMap<String, String>,
     media_hash_key: String,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiFileEncryptorParams {
+    event_b64: String,
+    media_hash_key: String,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1857,11 +1870,12 @@ fn bytes_from_b64(field: &str, b64: &str) -> Result<Vec<u8>, FfiResult> {
 /// `params_json` — single JSON document: `file` (base64), `event_b64` (the
 /// `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
 /// `chat_xdk_encrypt_reply` returned for the message carrying the file),
-/// `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
-/// key the message was encrypted under), and `media_hash_key` (the media
-/// hash key the file's upload started with, as listed in the message's
-/// attachments). The SDK finds that attachment and encrypts the file under
-/// its key.
+/// `media_hash_key` (the media hash key the file's upload started with, as
+/// listed in the message's attachments), and optionally `conversation_key`
+/// (base64 raw 32-byte key) with `conversation_key_version`: the key the
+/// message was encrypted under, resolved from the key cache when both are
+/// omitted. The SDK finds that attachment and encrypts the file under its
+/// key.
 ///
 /// Returns the encrypted file, base64.
 #[no_mangle]
@@ -1882,11 +1896,13 @@ pub extern "C" fn chat_xdk_encrypt_file(
             Ok(b) => b,
             Err(e) => return e,
         };
-        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
+        let conversation_key = match decode_ckey_bytes(p.conversation_key.as_deref()) {
             Ok(k) => k,
             Err(e) => return e,
         };
-        let params = EncryptFileParams::new(file, p.event_b64, conversation_keys, p.media_hash_key);
+        let mut params = EncryptFileParams::new(file, p.event_b64, p.media_hash_key);
+        params.conversation_key = conversation_key;
+        params.conversation_key_version = p.conversation_key_version;
         match h.inner.encrypt_file(&params) {
             Ok(encrypted) => ok_data(&BASE64.encode(&encrypted)),
             Err(e) => err_from(e),
@@ -1974,15 +1990,17 @@ pub extern "C" fn chat_xdk_file_encryptor_new(
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let p: FfiFileParams = match parse_params(try_str!(params_json)) {
+        let p: FfiFileEncryptorParams = match parse_params(try_str!(params_json)) {
             Ok(p) => p,
             Err(e) => return e,
         };
-        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
+        let conversation_key = match decode_ckey_bytes(p.conversation_key.as_deref()) {
             Ok(k) => k,
             Err(e) => return e,
         };
-        let params = FileEncryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
+        let mut params = FileEncryptorParams::new(p.event_b64, p.media_hash_key);
+        params.conversation_key = conversation_key;
+        params.conversation_key_version = p.conversation_key_version;
         match h.inner.file_encryptor(&params) {
             Ok(enc) => {
                 let boxed = Box::new(FileEncryptorHandle { inner: Some(enc) });

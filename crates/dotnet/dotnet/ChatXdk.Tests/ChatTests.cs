@@ -142,6 +142,14 @@ namespace ChatXdk.Tests
         private static Dictionary<string, byte[]> ConversationKeys(SdkVectors v) =>
             new() { [v.EventConversationKeyVersion] = Convert.FromBase64String(v.ConversationKeyB64) };
 
+        /// <summary>File-encryption params under the fixture conversation key.</summary>
+        private static EncryptFileParams EncryptFileParamsFor(SdkVectors v, byte[] file, string eventB64, string mediaHashKey) =>
+            new(file, eventB64, mediaHashKey)
+            {
+                ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            };
+
         /// <summary>The key map that opens the message-key and link-card vectors.</summary>
         private static Dictionary<string, byte[]> MessageKeyConversationKeys(SdkVectors v) =>
             new() { [v.MessageKeyConversationKeyVersion] = ChatXdkUtilities.HexToBytes(v.MessageKeyConversationKeyHex) };
@@ -868,7 +876,7 @@ namespace ChatXdk.Tests
 
             // A chat with no identity encrypts the file from the payload.
             using var worker = new Chat();
-            var encrypted = worker.EncryptFile(new EncryptFileParams(plaintext, payload.EventB64, ConversationKeys(v), "photo"));
+            var encrypted = worker.EncryptFile(EncryptFileParamsFor(v, plaintext, payload.EventB64, "photo"));
             Assert.NotEqual(plaintext, encrypted);
             Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)encrypted.Length);
             Assert.Equal(plaintext, chat.DecryptFile(new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), "photo")));
@@ -894,7 +902,11 @@ namespace ChatXdk.Tests
             var plaintext = Enumerable.Repeat((byte)0xAB, 5000).ToArray();
             var payload = SendFiles(chat, v, "two photos", Photo("first"), Photo("second"));
 
-            using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, ConversationKeys(v), "second"));
+            using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, "second")
+            {
+                ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            });
             var ciphertext = new List<byte>();
             for (var i = 0; i < plaintext.Length; i += 700)
                 ciphertext.AddRange(encryptor.Push(plaintext[i..Math.Min(i + 700, plaintext.Length)]));
@@ -927,8 +939,7 @@ namespace ChatXdk.Tests
                 faviconImage: new UrlAttachmentImageDescriptor { MediaHashKey = "favicon", FilesizeBytes = 13, Filename = "favicon.png" }));
             foreach (var name in new[] { "banner", "favicon" })
             {
-                var encrypted = chat.EncryptFile(new EncryptFileParams(
-                    System.Text.Encoding.UTF8.GetBytes(name + " bytes"), payload.EventB64, ConversationKeys(v), name));
+                var encrypted = chat.EncryptFile(EncryptFileParamsFor(v, System.Text.Encoding.UTF8.GetBytes(name + " bytes"), payload.EventB64, name));
                 Assert.Equal(name + " bytes", System.Text.Encoding.UTF8.GetString(
                     chat.DecryptFile(new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), name))));
             }
@@ -941,8 +952,7 @@ namespace ChatXdk.Tests
             using var chat = QuickReplyChat(v);
             var draft = SendFiles(chat, v, "draft", Photo("photo-a"), Photo("photo-b"));
             Assert.Matches("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", draft.MessageId);
-            var encrypted = chat.EncryptFile(new EncryptFileParams(
-                System.Text.Encoding.UTF8.GetBytes("photo b"), draft.EventB64, ConversationKeys(v), "photo-b"));
+            var encrypted = chat.EncryptFile(EncryptFileParamsFor(v, System.Text.Encoding.UTF8.GetBytes("photo b"), draft.EventB64, "photo-b"));
 
             // Building the message again gives the same id, so its encrypted files stay valid.
             var rebuilt = SendFiles(chat, v, "final text", Photo("photo-a"), Photo("photo-b"));
@@ -972,10 +982,20 @@ namespace ChatXdk.Tests
 
             var payload = SendFiles(chat, v, "a photo", Photo("photo"));
             Assert.Contains("is not one of the message's files", Assert.Throws<ChatXdkException>(
-                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, ConversationKeys(v), "other"))).Message);
-            Assert.Contains("is not 32 bytes", Assert.Throws<ChatXdkException>(
-                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64,
-                    new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = new byte[3] }, "photo"))).Message);
+                () => chat.EncryptFile(EncryptFileParamsFor(v, new byte[] { 1 }, payload.EventB64, "other"))).Message);
+            Assert.Contains("expected 32 bytes", Assert.Throws<ChatXdkException>(
+                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, "photo")
+                {
+                    ConversationKey = new byte[3],
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                })).Message);
+            Assert.Contains(
+                $"conversation_key_version '9' is not the message's key version '{v.EventConversationKeyVersion}'",
+                Assert.Throws<ChatXdkException>(() => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, "photo")
+                {
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "9",
+                })).Message);
 
             // A reply needs the delivered event, which carries the sequence id; the files it
             // quotes belong to the quoted message.
@@ -992,7 +1012,7 @@ namespace ChatXdk.Tests
                 Attachments = new[] { Photo("reply-photo") },
             });
             Assert.Contains("is media the reply quotes", Assert.Throws<ChatXdkException>(
-                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, reply.EventB64, ConversationKeys(v), "photo"))).Message);
+                () => chat.EncryptFile(EncryptFileParamsFor(v, new byte[] { 1 }, reply.EventB64, "photo"))).Message);
 
             using var noIdentity = new Chat();
             noIdentity.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
@@ -1376,6 +1396,15 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "from the key cache"));
             Assert.Equal(v.EventConversationKeyVersion, payload.ConversationKeyVersion);
             Assert.NotEmpty(payload.EncryptedContent);
+
+            // A file of a message sent from the cache encrypts under the same cached key.
+            var photo = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "a photo")
+            {
+                Attachments = new[] { Photo("photo") },
+            });
+            var file = System.Text.Encoding.UTF8.GetBytes("photo bytes");
+            var encrypted = chat.EncryptFile(new EncryptFileParams(file, photo.EventB64, "photo"));
+            Assert.Equal(file, chat.DecryptFile(new DecryptFileParams(encrypted, photo.EventB64, ConversationKeys(v), "photo")));
 
             // Disabling clears the cache, so the same short form now fails.
             chat.SetCacheKeys(false);

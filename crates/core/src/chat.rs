@@ -1465,12 +1465,10 @@ mod tests {
         let (event, keys) = sent_file_message(&chat, &ckey, "hash-1");
 
         let encrypted = chat
-            .encrypt_file(&EncryptFileParams::new(
-                plaintext.to_vec(),
-                event.clone(),
-                keys.clone(),
-                "hash-1",
-            ))
+            .encrypt_file(
+                &EncryptFileParams::new(plaintext.to_vec(), event.clone(), "hash-1")
+                    .with_conversation_key(ckey.to_bytes(), "1"),
+            )
             .unwrap();
         assert_ne!(encrypted, plaintext);
         assert!(encrypted.len() > plaintext.len()); // overhead from nonce, tag, header
@@ -1490,19 +1488,16 @@ mod tests {
         let (event, keys) = sent_file_message(&chat, &ckey, "hash-1");
 
         let encrypted = chat
-            .encrypt_file(&EncryptFileParams::new(
-                plaintext.clone(),
-                event.clone(),
-                keys.clone(),
-                "hash-1",
-            ))
+            .encrypt_file(
+                &EncryptFileParams::new(plaintext.clone(), event.clone(), "hash-1")
+                    .with_conversation_key(ckey.to_bytes(), "1"),
+            )
             .unwrap();
         let mut encryptor = chat
-            .file_encryptor(&FileEncryptorParams::new(
-                event.clone(),
-                keys.clone(),
-                "hash-1",
-            ))
+            .file_encryptor(
+                &FileEncryptorParams::new(event.clone(), "hash-1")
+                    .with_conversation_key(ckey.to_bytes(), "1"),
+            )
             .unwrap();
         let mut incremental_encrypted = Vec::new();
         for chunk in plaintext.chunks(700) {
@@ -1538,25 +1533,21 @@ mod tests {
         let chat = sending_chat().await;
         let ckey1 = chat.inner.generate_conversation_key().unwrap();
         let ckey2 = chat.inner.generate_conversation_key().unwrap();
-        let (event, keys) = sent_file_message(&chat, &ckey1, "hash-1");
+        let (event, _) = sent_file_message(&chat, &ckey1, "hash-1");
         let wrong_keys: std::collections::HashMap<_, _> =
             [("1".to_string(), ckey2)].into_iter().collect();
 
         assert!(chat
-            .encrypt_file(&EncryptFileParams::new(
-                b"secret media content".to_vec(),
-                event.clone(),
-                wrong_keys.clone(),
-                "hash-1",
-            ))
+            .encrypt_file(
+                &EncryptFileParams::new(b"secret media content".to_vec(), event.clone(), "hash-1")
+                    .with_conversation_key(wrong_keys["1"].to_bytes(), "1"),
+            )
             .is_err());
         let encrypted = chat
-            .encrypt_file(&EncryptFileParams::new(
-                b"secret media content".to_vec(),
-                event.clone(),
-                keys,
-                "hash-1",
-            ))
+            .encrypt_file(
+                &EncryptFileParams::new(b"secret media content".to_vec(), event.clone(), "hash-1")
+                    .with_conversation_key(ckey1.to_bytes(), "1"),
+            )
             .unwrap();
         assert!(chat
             .decrypt_file(DecryptFileParams::new(

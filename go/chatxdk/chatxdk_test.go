@@ -875,10 +875,11 @@ func TestEncryptFileDecryptFileRoundtrip(t *testing.T) {
 	worker := New()
 	defer worker.Close()
 	encrypted, err := worker.EncryptFile(EncryptFileParams{
-		File:             plaintext,
-		EventB64:         payload.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "photo",
+		File:                   plaintext,
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo",
 	})
 	if err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
@@ -909,9 +910,10 @@ func TestFileEncryptorDecryptorRoundtrip(t *testing.T) {
 	plaintext := bytes.Repeat([]byte{0xAB}, 5000)
 	payload := sendFiles(t, chat, v, "two photos", []AttachmentDescriptor{mediaAttachment("first"), mediaAttachment("second")})
 	enc, err := chat.FileEncryptor(FileEncryptorParams{
-		EventB64:         payload.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "second",
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "second",
 	})
 	if err != nil {
 		t.Fatalf("FileEncryptor failed: %v", err)
@@ -979,10 +981,11 @@ func TestLinkCardImagesTakeTheCardsKey(t *testing.T) {
 	}})
 	for _, name := range []string{"banner", "favicon"} {
 		encrypted, err := chat.EncryptFile(EncryptFileParams{
-			File:             []byte(name + " bytes"),
-			EventB64:         payload.EventB64,
-			ConversationKeys: v.conversationKeys(t),
-			MediaHashKey:     name,
+			File:                   []byte(name + " bytes"),
+			EventB64:               payload.EventB64,
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			MediaHashKey:           name,
 		})
 		if err != nil {
 			t.Fatalf("EncryptFile (%s) failed: %v", name, err)
@@ -1010,10 +1013,11 @@ func TestAMessageWithFilesTakesTheIDItsFilesDerive(t *testing.T) {
 		t.Errorf("message id %q is not a lowercase v4 UUID", draft.MessageID)
 	}
 	encrypted, err := chat.EncryptFile(EncryptFileParams{
-		File:             []byte("photo b"),
-		EventB64:         draft.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "photo-b",
+		File:                   []byte("photo b"),
+		EventB64:               draft.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo-b",
 	})
 	if err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
@@ -1063,16 +1067,30 @@ func TestFileSendInputIsChecked(t *testing.T) {
 
 	payload := sendFiles(t, chat, v, "a photo", []AttachmentDescriptor{mediaAttachment("photo")})
 	_, err = chat.EncryptFile(EncryptFileParams{
-		File: []byte("x"), EventB64: payload.EventB64, ConversationKeys: v.conversationKeys(t), MediaHashKey: "other",
+		File:                   []byte("x"),
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "other",
 	})
 	expectError("a hash key the message lacks", err, "is not one of the message's files")
 	_, err = chat.EncryptFile(EncryptFileParams{
-		File:             []byte("x"),
-		EventB64:         payload.EventB64,
-		ConversationKeys: map[string][]byte{v.EventConversationKeyVersion: {1, 2, 3}},
-		MediaHashKey:     "photo",
+		File:                   []byte("x"),
+		EventB64:               payload.EventB64,
+		ConversationKey:        []byte{1, 2, 3},
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo",
 	})
-	expectError("a short key", err, "is not 32 bytes")
+	expectError("a short key", err, "expected 32 bytes")
+	_, err = chat.EncryptFile(EncryptFileParams{
+		File:                   []byte("x"),
+		EventB64:               payload.EventB64,
+		ConversationKey:        key,
+		ConversationKeyVersion: "9",
+		MediaHashKey:           "photo",
+	})
+	expectError("another key version", err,
+		"conversation_key_version '9' is not the message's key version '"+v.EventConversationKeyVersion+"'")
 
 	// A reply needs the delivered event, which carries the sequence id; the
 	// files it quotes belong to the quoted message.
@@ -1096,7 +1114,11 @@ func TestFileSendInputIsChecked(t *testing.T) {
 		t.Fatalf("EncryptReply failed: %v", err)
 	}
 	_, err = chat.EncryptFile(EncryptFileParams{
-		File: []byte("x"), EventB64: reply.EventB64, ConversationKeys: v.conversationKeys(t), MediaHashKey: "photo",
+		File:                   []byte("x"),
+		EventB64:               reply.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo",
 	})
 	expectError("quoted media", err, "is media the reply quotes")
 
@@ -2427,10 +2449,11 @@ func TestEncryptFileLargerPayload(t *testing.T) {
 	file := bytes.Repeat([]byte{'A'}, 100_000)
 	payload := sendFiles(t, chat, v, "a large file", []AttachmentDescriptor{mediaAttachment("large")})
 	encrypted, err := chat.EncryptFile(EncryptFileParams{
-		File:             file,
-		EventB64:         payload.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "large",
+		File:                   file,
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "large",
 	})
 	if err != nil {
 		t.Fatalf("EncryptFile (large) failed: %v", err)
@@ -3227,6 +3250,30 @@ func TestSetCacheKeysResolvesConversationKey(t *testing.T) {
 	if payload.ConversationKeyVersion != v.EventConversationKeyVersion {
 		t.Errorf("expected conversation_key_version %q, got %q",
 			v.EventConversationKeyVersion, payload.ConversationKeyVersion)
+	}
+
+	// A file of a message sent from the cache encrypts under the same cached key.
+	photo, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID: v.EventConversationID,
+		Text:           "a photo",
+		Attachments:    []AttachmentDescriptor{mediaAttachment("photo")},
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage with files and a cached key failed: %v", err)
+	}
+	file := []byte("photo bytes")
+	encrypted, err := chat.EncryptFile(EncryptFileParams{File: file, EventB64: photo.EventB64, MediaHashKey: "photo"})
+	if err != nil {
+		t.Fatalf("EncryptFile with a cached key failed: %v", err)
+	}
+	decryptedFile, err := chat.DecryptFile(DecryptFileParams{
+		Encrypted:        encrypted,
+		EventB64:         photo.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		MediaHashKey:     "photo",
+	})
+	if err != nil || !bytes.Equal(decryptedFile, file) {
+		t.Fatalf("DecryptFile = %q, %v; want %q", decryptedFile, err, file)
 	}
 
 	// Disabling the cache clears it; the omitted key errors again.

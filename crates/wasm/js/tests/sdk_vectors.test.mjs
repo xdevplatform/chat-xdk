@@ -4,6 +4,12 @@ import fs from "node:fs/promises";
 import init, { Chat } from "../../pkg/chat_xdk_wasm.js";
 import { delivered } from "./frame.mjs";
 
+/** File encrypt params from params that carry a one-key `conversationKeys` map. */
+const withKey = ({ conversationKeys, ...rest }) => {
+  const [[conversationKeyVersion, conversationKey]] = Object.entries(conversationKeys);
+  return { ...rest, conversationKey, conversationKeyVersion };
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -118,11 +124,11 @@ async function main() {
     mediaHashKey,
   });
   const plaintext = b64ToBytes(v.plaintext_b64);
-  const ct1 = sender.encryptFile({ ...fileParams("photo-0"), file: plaintext });
-  const ct2 = sender.encryptFile({ ...fileParams("photo-0"), file: plaintext });
+  const ct1 = sender.encryptFile(withKey({ ...fileParams("photo-0"), file: plaintext }));
+  const ct2 = sender.encryptFile(withKey({ ...fileParams("photo-0"), file: plaintext }));
   assert.notDeepEqual(ct1, ct2); // randomized nonces
   const second = new Uint8Array(5000).fill(0xab);
-  const secondEncryptor = sender.fileEncryptor(fileParams("photo-1"));
+  const secondEncryptor = sender.fileEncryptor(withKey(fileParams("photo-1")));
   const secondPieces = [];
   for (let i = 0; i < second.length; i += 700) {
     secondPieces.push(...secondEncryptor.push(second.subarray(i, i + 700)));
@@ -174,7 +180,7 @@ async function main() {
     ]);
     for (const name of ["banner", "favicon"]) {
       const params = { eventB64: cardPayload.eventB64, conversationKeys: fixtureKeys, mediaHashKey: name };
-      const encrypted = sender.encryptFile({ ...params, file: new TextEncoder().encode(`${name} bytes`) });
+      const encrypted = sender.encryptFile(withKey({ ...params, file: new TextEncoder().encode(`${name} bytes`) }));
       assert.equal(new TextDecoder().decode(chat.decryptFile({ ...params, encrypted })), `${name} bytes`);
     }
   }
@@ -203,11 +209,11 @@ async function main() {
       attachments: [media("reply-photo")],
     });
     const params = { eventB64: reply.eventB64, conversationKeys: fixtureKeys };
-    const encrypted = sender.encryptFile({ ...params, file: plaintext, mediaHashKey: "reply-photo" });
+    const encrypted = sender.encryptFile(withKey({ ...params, file: plaintext, mediaHashKey: "reply-photo" }));
     assert.deepEqual(chat.decryptFile({ ...params, encrypted, mediaHashKey: "reply-photo" }), plaintext);
     assert.deepEqual(chat.decryptFile({ ...params, encrypted: ct1, mediaHashKey: "photo-0" }), plaintext);
     assert.throws(
-      () => sender.encryptFile({ ...params, file: plaintext, mediaHashKey: "photo-0" }),
+      () => sender.encryptFile(withKey({ ...params, file: plaintext, mediaHashKey: "photo-0" })),
       /is media the reply quotes/,
     );
   }
@@ -320,6 +326,19 @@ async function main() {
     });
     assert.equal(cached.conversationKeyVersion, v.event_conversation_key_version);
     assert.equal(cached.signatureInfo.publicKeyVersion, v.event_signing_key_version);
+
+    // A file of a message sent from the cache encrypts under the same cached key.
+    const photo = session.encryptMessage({
+      conversationId: v.event_conversation_id,
+      text: "a photo",
+      attachments: [media("photo")],
+    });
+    const photoBytes = new TextEncoder().encode("photo bytes");
+    const photoCt = session.encryptFile({ file: photoBytes, eventB64: photo.eventB64, mediaHashKey: "photo" });
+    assert.deepEqual(
+      chat.decryptFile({ encrypted: photoCt, eventB64: photo.eventB64, conversationKeys: fixtureKeys, mediaHashKey: "photo" }),
+      photoBytes,
+    );
 
     // Replying by raw event derives the preview from the signed original.
     const reply = session.encryptReply({

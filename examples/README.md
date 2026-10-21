@@ -157,8 +157,9 @@ the heap cannot hold large files whole:
   `encryptedFileSize`/`encrypted_file_size`, returning the upload session and
   the `media_hash_key`) → `encryptReply`/`encrypt_reply` with an attachment
   descriptor naming that key → `encryptMedia`/`encrypt_media` with the
-  payload's `event_b64`, the conversation key map and the `media_hash_key`
-  (chunked `push` + `finish`) → `finishMediaUpload`/`finish_media_upload`
+  payload's `event_b64`, the conversation key and version the message was
+  encrypted under, and the `media_hash_key` (chunked `push` + `finish`) →
+  `finishMediaUpload`/`finish_media_upload`
   (3 MB appends → finalize) → send the message
 - **download + decrypt**: `downloadMedia`/`download_media` (raw **bytes** —
   never decode the body as text; that corrupts the ciphertext) →

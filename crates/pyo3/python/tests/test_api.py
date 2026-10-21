@@ -45,6 +45,12 @@ def _media(media_hash_key: str, filesize_bytes: int = 1000) -> dict:
     }
 
 
+
+def _key_kwargs(keys):
+    """The one conversation key of a key map, as the file encrypt params take it."""
+    ((version, key),) = keys.items()
+    return {"conversation_key": key, "conversation_key_version": version}
+
 class TestUtilityFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -225,8 +231,8 @@ class TestParams(unittest.TestCase):
             lambda: ImportKeysParams(),
             lambda: DecryptEventParams(),
             lambda: DecryptEventsParams(),
-            lambda: EncryptFileParams(b"file", "event", {}),
-            lambda: FileEncryptorParams("event", {}),
+            lambda: EncryptFileParams(b"file", "event"),
+            lambda: FileEncryptorParams("event"),
             lambda: DecryptFileParams(b"file", "event", {}),
             lambda: FileDecryptorParams("event", {}),
         ]
@@ -1154,12 +1160,12 @@ class TestApiShapes(unittest.TestCase):
 
         for media_hash_key, photo in photos.items():
             encrypted = chat.encrypt_file(
-                EncryptFileParams(photo, payload.event_b64, keys, media_hash_key)
+                EncryptFileParams(photo, payload.event_b64, media_hash_key, **_key_kwargs(keys))
             )
             self.assertEqual(len(encrypted), encrypted_file_size(len(photo)))
 
             encryptor = chat.file_encryptor(
-                FileEncryptorParams(payload.event_b64, keys, media_hash_key)
+                FileEncryptorParams(payload.event_b64, media_hash_key, **_key_kwargs(keys))
             )
             streamed = b"".join(encryptor.push(photo[i:i + 700]) for i in range(0, len(photo), 700))
             streamed += encryptor.finish()
@@ -1231,12 +1237,12 @@ class TestApiShapes(unittest.TestCase):
         )
         cases = [
             ({"7": conv_key}, "other", "is not one of the message's files"),
-            ({"8": conv_key}, "photo", "has no key for version '7'"),
-            ({"7": bytes(3)}, "photo", "the key for version '7' in the conversation key map is not 32 bytes"),
+            ({"8": conv_key}, "photo", "conversation_key_version '8' is not the message's key version '7'"),
+            ({"7": bytes(3)}, "photo", "Invalid conversation key (expected 32 bytes)"),
         ]
         for keys, media_hash_key, expected in cases:
             with self.assertRaises(ValueError) as ctx:
-                chat.encrypt_file(EncryptFileParams(b"x", payload.event_b64, keys, media_hash_key))
+                chat.encrypt_file(EncryptFileParams(b"x", payload.event_b64, media_hash_key, **_key_kwargs(keys)))
             self.assertIn(expected, str(ctx.exception))
 
     def test_each_file_needs_its_own_media_hash_key(self):

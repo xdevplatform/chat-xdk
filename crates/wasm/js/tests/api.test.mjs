@@ -12,6 +12,12 @@ import init, {
   encryptedFileSize,
 } from "../../pkg/chat_xdk_wasm.js";
 
+/** File encrypt params from params that carry a one-key `conversationKeys` map. */
+const withKey = ({ conversationKeys, ...rest }) => {
+  const [[conversationKeyVersion, conversationKey]] = Object.entries(conversationKeys);
+  return { ...rest, conversationKey, conversationKeyVersion };
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -294,8 +300,8 @@ async function main() {
 
   const plaintext = b64ToBytes(v.plaintext_b64);
   // A session with no identity encrypts the file.
-  const fileCt1 = new Chat().encryptFile({ ...fileParams, file: plaintext });
-  const fileCt2 = sender.encryptFile({ ...fileParams, file: plaintext });
+  const fileCt1 = new Chat().encryptFile(withKey({ ...fileParams, file: plaintext }));
+  const fileCt2 = sender.encryptFile(withKey({ ...fileParams, file: plaintext }));
   assert.notDeepEqual(fileCt1, fileCt2); // randomized nonces
   assert.equal(fileCt1.length, encryptedFileSize(plaintext.length));
   assert.deepEqual(chat.decryptFile({ ...fileParams, encrypted: fileCt1 }), plaintext);
@@ -319,19 +325,23 @@ async function main() {
 
   // File errors say what to pass instead.
   assert.throws(
-    () => sender.encryptFile({ ...fileParams, file: plaintext, mediaHashKey: "other" }),
+    () => sender.encryptFile(withKey({ ...fileParams, file: plaintext, mediaHashKey: "other" })),
     /is not one of the message's files/,
   );
   assert.throws(
-    () => sender.encryptFile({ ...fileParams, file: [1, 2, 3] }),
+    () => sender.encryptFile(withKey({ ...fileParams, file: [1, 2, 3] })),
     /Invalid encryptFile params: file must be a Uint8Array/,
   );
   assert.throws(
-    () => sender.encryptFile({ ...fileParams, file: plaintext, conversationKeys: { "1": new Uint8Array(3) } }),
-    /the key for version '1' in the conversation key map is not 32 bytes/,
+    () => sender.encryptFile(withKey({ ...fileParams, file: plaintext, conversationKeys: { "1": new Uint8Array(3) } })),
+    /Invalid conversation key \(expected 32 bytes\)/,
   );
   assert.throws(
-    () => sender.encryptFile({ eventB64: mediaEvent, conversationKeys: mediaKeys, file: plaintext }),
+    () => sender.encryptFile(withKey({ ...fileParams, file: plaintext, conversationKeys: { "9": convKey } })),
+    /conversation_key_version '9' is not the message's key version '1'/,
+  );
+  assert.throws(
+    () => sender.encryptFile(withKey({ eventB64: mediaEvent, conversationKeys: mediaKeys, file: plaintext })),
     /Invalid encryptFile params.*missing field `mediaHashKey`/,
   );
 
@@ -349,7 +359,7 @@ async function main() {
       return out;
     };
     const bigPlain = new Uint8Array(5000).fill(0xab);
-    const enc = sender.fileEncryptor(fileParams);
+    const enc = sender.fileEncryptor(withKey(fileParams));
     const ctPieces = [];
     for (let i = 0; i < bigPlain.length; i += 700) {
       ctPieces.push(enc.push(bigPlain.subarray(i, i + 700)));
@@ -757,12 +767,12 @@ async function main() {
   assert.ok(urlCardPayload.signature.length > 0);
   assert.deepEqual(
     chat.decryptFile({
-      encrypted: sender.encryptFile({
+      encrypted: sender.encryptFile(withKey({
         file: plaintext,
         eventB64: urlCardPayload.eventB64,
         conversationKeys: mediaKeys,
         mediaHashKey: "favicon-hash",
-      }),
+      })),
       eventB64: urlCardPayload.eventB64,
       conversationKeys: mediaKeys,
       mediaHashKey: "favicon-hash",

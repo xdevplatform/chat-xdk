@@ -84,7 +84,10 @@ the message, so the message comes first:
    `event_b64`: the message as recipients receive it.
 3. Encrypt each file with the new `encrypt_file` (whole file) or
    `file_encryptor` (incremental `push` / `finish`), passing the payload's
-   `event_b64`, the conversation's key map and the file's media hash key.
+   `event_b64` and the file's media hash key. As `encrypt_message` does, the
+   file calls take the conversation key the message was encrypted under and
+   its version (`conversation_key` + `conversation_key_version`, set
+   together), or resolve both from the key cache when neither is set.
 4. Finish the uploads and send the message.
 
 `encrypt_stream` and `stream_encryptor`, which took only a conversation key,
@@ -118,9 +121,7 @@ let (session, media_hash_key) = start_upload(size)?;
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
 params.attachments = Some(photo_attachments(&media_hash_key));
 let payload = chat.encrypt_message(&params)?;
-let encrypted = chat.encrypt_file(&EncryptFileParams::new(
-    photo, &payload.event_b64, conversation_keys, &media_hash_key,
-))?;
+let encrypted = chat.encrypt_file(&EncryptFileParams::new(photo, &payload.event_b64, &media_hash_key))?;
 finish_upload(session, &encrypted)?;
 ```
 
@@ -136,7 +137,7 @@ session, media_hash_key = start_upload(encrypted_file_size(len(photo)))
 payload = chat.encrypt_message(
     EncryptMessageParams(conversation_id, "a photo", attachments=photo_attachments(media_hash_key))
 )
-encrypted = chat.encrypt_file(EncryptFileParams(photo, payload.event_b64, conversation_keys, media_hash_key))
+encrypted = chat.encrypt_file(EncryptFileParams(photo, payload.event_b64, media_hash_key))
 finish_upload(session, encrypted)
 ```
 
@@ -150,7 +151,7 @@ const payload = chat.encryptMessage({ conversationId, text: "a photo", attachmen
 // After
 const { session, mediaHashKey } = await startUpload(encryptedFileSize(photo.length));
 const payload = chat.encryptMessage({ conversationId, text: "a photo", attachments: photoAttachments(mediaHashKey) });
-const encrypted = chat.encryptFile({ file: photo, eventB64: payload.eventB64, conversationKeys, mediaHashKey });
+const encrypted = chat.encryptFile({ file: photo, eventB64: payload.eventB64, mediaHashKey });
 await finishUpload(session, encrypted);
 ```
 
@@ -170,7 +171,7 @@ payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
     ConversationID: conversationID, Text: "a photo", Attachments: photoAttachments(mediaHashKey),
 })
 encrypted, err := chat.EncryptFile(chatxdk.EncryptFileParams{
-    File: photo, EventB64: payload.EventB64, ConversationKeys: conversationKeys, MediaHashKey: mediaHashKey,
+    File: photo, EventB64: payload.EventB64, MediaHashKey: mediaHashKey,
 })
 err = finishUpload(session, encrypted)
 ```
@@ -185,7 +186,7 @@ var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a ph
 // After
 var (session, mediaHashKey) = await StartUploadAsync(ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length));
 var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo") { Attachments = PhotoAttachments(mediaHashKey) });
-var encrypted = chat.EncryptFile(new EncryptFileParams(photo, payload.EventB64, conversationKeys, mediaHashKey));
+var encrypted = chat.EncryptFile(new EncryptFileParams(photo, payload.EventB64, mediaHashKey));
 await FinishUploadAsync(session, encrypted);
 ```
 
@@ -203,14 +204,13 @@ Upload upload = startUpload(ChatXdkUtilities.encryptedFileSize(photo.length));
 EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo");
 params.attachments = photoAttachments(upload.mediaHashKey());
 SendPayload payload = chat.encryptMessage(params);
-byte[] encrypted = chat.encryptFile(
-        new EncryptFileParams(photo, payload.eventB64, conversationKeys, upload.mediaHashKey()));
+byte[] encrypted = chat.encryptFile(new EncryptFileParams(photo, payload.eventB64, upload.mediaHashKey()));
 finishUpload(upload, encrypted);
 ```
 
 For a large file, replace `encrypt_file` with
-`file_encryptor(FileEncryptorParams(event_b64, conversation_keys, media_hash_key))`
-and feed it with `push` / `finish` as before. See
+`file_encryptor(FileEncryptorParams(event_b64, media_hash_key))` and feed it
+with `push` / `finish` as before. See
 [docs/API.md — Files (Media)](docs/API.md#files-media).
 
 #### Files are decrypted from the message that carries them

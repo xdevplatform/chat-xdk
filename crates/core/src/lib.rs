@@ -36,11 +36,11 @@
 //! // POST payload to X API
 //!
 //! // A message with a file: start the upload to get its media hash key, list
-//! // it in the attachments, then encrypt the file from the payload's event.
+//! // it in the attachments, then encrypt the file from the payload's event
+//! // (its conversation key resolves from the cache, as for the message).
 //! let encrypted = chat.encrypt_file(&EncryptFileParams::new(
 //!     photo,
 //!     payload.event_b64.clone(),
-//!     keys,
 //!     media_hash_key,
 //! ))?;
 //! ```

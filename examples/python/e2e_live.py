@@ -269,7 +269,7 @@ def main() -> None:
             ],
             ttl_msec=24 * 60 * 60 * 1000,
         )
-        ciphertext = core.encrypt_media(plaintext, media_msg["event_b64"], {kv: key}, media_hash_key)
+        ciphertext = core.encrypt_media(plaintext, media_msg["event_b64"], key, kv, media_hash_key)
         api.finish_media_upload(canonical_conv, session_id, media_hash_key, ciphertext)
         print(f"encrypted media uploaded: {media_hash_key} ({len(ciphertext)} bytes)")
         api.send_message(canonical_conv, media_msg)

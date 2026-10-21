@@ -579,10 +579,16 @@ export interface EncryptFileParams {
   file: Uint8Array;
   /** The `eventB64` of the payload that encryptMessage or encryptReply returned for the message carrying the file. */
   eventB64: string;
-  /** The conversation's key map; it must hold the key the message was encrypted under. */
-  conversationKeys: ConversationKeyMap;
   /** The media hash key the file's upload started with, as listed in the message's attachments. */
   mediaHashKey: string;
+  /**
+   * The raw 32-byte conversation key the message was encrypted under; with
+   * conversationKeyVersion omitted too, it resolves from the opt-in key
+   * cache (setCacheKeys), as for encryptMessage.
+   */
+  conversationKey?: Uint8Array | null;
+  /** The version of conversationKey: the message's key version. */
+  conversationKeyVersion?: string | null;
 }
 
 /**
@@ -592,10 +598,16 @@ export interface EncryptFileParams {
 export interface FileEncryptorParams {
   /** The `eventB64` of the payload that encryptMessage or encryptReply returned for the message carrying the file. */
   eventB64: string;
-  /** The conversation's key map; it must hold the key the message was encrypted under. */
-  conversationKeys: ConversationKeyMap;
   /** The media hash key the file's upload started with, as listed in the message's attachments. */
   mediaHashKey: string;
+  /**
+   * The raw 32-byte conversation key the message was encrypted under; with
+   * conversationKeyVersion omitted too, it resolves from the opt-in key
+   * cache (setCacheKeys), as for encryptMessage.
+   */
+  conversationKey?: Uint8Array | null;
+  /** The version of conversationKey: the message's key version. */
+  conversationKeyVersion?: string | null;
 }
 
 /**

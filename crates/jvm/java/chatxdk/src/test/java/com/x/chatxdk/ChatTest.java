@@ -71,6 +71,22 @@ class ChatTest {
         return Map.of(v.get("event_conversation_key_version").asText(), b64(v, "conversation_key_b64"));
     }
 
+    /** File-encryption params under the fixture conversation key. */
+    private static EncryptFileParams encryptFileParams(JsonNode v, byte[] file, String eventB64, String mediaHashKey) {
+        EncryptFileParams params = new EncryptFileParams(file, eventB64, mediaHashKey);
+        params.conversationKey = b64(v, "conversation_key_b64");
+        params.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+        return params;
+    }
+
+    /** File-encryptor params under the fixture conversation key. */
+    private static FileEncryptorParams fileEncryptorParams(JsonNode v, String eventB64, String mediaHashKey) {
+        FileEncryptorParams params = new FileEncryptorParams(eventB64, mediaHashKey);
+        params.conversationKey = b64(v, "conversation_key_b64");
+        params.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+        return params;
+    }
+
     /** The key map that opens the message-key and link-card vectors. */
     private static Map<String, byte[]> messageKeyConversationKeys(JsonNode v) {
         return Map.of(
@@ -1004,6 +1020,15 @@ class ChatTest {
             assertEquals(v.get("event_conversation_key_version").asText(), payload.conversationKeyVersion);
             assertFalse(payload.encryptedContent.isEmpty());
 
+            // A file of a message sent from the cache encrypts under the same cached key.
+            EncryptMessageParams withPhoto = new EncryptMessageParams(conversationId, "a photo");
+            withPhoto.attachments = List.of(photo("photo"));
+            SendPayload photoPayload = chat.encryptMessage(withPhoto);
+            byte[] file = "photo bytes".getBytes(StandardCharsets.UTF_8);
+            byte[] encrypted = chat.encryptFile(new EncryptFileParams(file, photoPayload.eventB64, "photo"));
+            assertArrayEquals(file, chat.decryptFile(
+                    new DecryptFileParams(encrypted, photoPayload.eventB64, conversationKeys(v), "photo")));
+
             // Disabling clears the cache, so the same short form now fails.
             chat.setCacheKeys(false);
             ChatXdkException ex = assertThrows(ChatXdkException.class, () ->
@@ -1304,8 +1329,7 @@ class ChatTest {
             SendPayload payload = sendFiles(chat, v, "a photo", photo("photo"));
 
             // A chat with no identity encrypts the file from the payload.
-            byte[] encrypted = worker.encryptFile(
-                    new EncryptFileParams(plaintext, payload.eventB64, conversationKeys(v), "photo"));
+            byte[] encrypted = worker.encryptFile(encryptFileParams(v, plaintext, payload.eventB64, "photo"));
             assertFalse(java.util.Arrays.equals(plaintext, encrypted));
             assertEquals(ChatXdkUtilities.encryptedFileSize(plaintext.length), encrypted.length);
             assertArrayEquals(plaintext, chat.decryptFile(
@@ -1337,8 +1361,7 @@ class ChatTest {
             SendPayload payload = sendFiles(chat, v, "two photos", photo("first"), photo("second"));
 
             ByteArrayOutputStream ciphertext = new ByteArrayOutputStream();
-            try (FileEncryptor enc = chat.fileEncryptor(
-                    new FileEncryptorParams(payload.eventB64, conversationKeys(v), "second"))) {
+            try (FileEncryptor enc = chat.fileEncryptor(fileEncryptorParams(v, payload.eventB64, "second"))) {
                 for (int i = 0; i < plaintext.length; i += 700) {
                     int end = Math.min(i + 700, plaintext.length);
                     ciphertext.write(enc.push(java.util.Arrays.copyOfRange(plaintext, i, end)));
@@ -1372,10 +1395,11 @@ class ChatTest {
 
     /** The file calls throw only the unchecked ChatXdkException, so no throws clause is needed. */
     private static byte[] roundTripWithoutThrowsClause(
-            Chat chat, SendPayload payload, Map<String, byte[]> keys, String mediaHashKey, byte[] file) {
-        byte[] whole = chat.encryptFile(new EncryptFileParams(file, payload.eventB64, keys, mediaHashKey));
+            Chat chat, JsonNode v, SendPayload payload, String mediaHashKey, byte[] file) {
+        Map<String, byte[]> keys = conversationKeys(v);
+        byte[] whole = chat.encryptFile(encryptFileParams(v, file, payload.eventB64, mediaHashKey));
         byte[] streamed;
-        try (FileEncryptor enc = chat.fileEncryptor(new FileEncryptorParams(payload.eventB64, keys, mediaHashKey))) {
+        try (FileEncryptor enc = chat.fileEncryptor(fileEncryptorParams(v, payload.eventB64, mediaHashKey))) {
             byte[] head = enc.push(file);
             byte[] tail = enc.finish();
             streamed = java.util.Arrays.copyOf(head, head.length + tail.length);
@@ -1394,7 +1418,7 @@ class ChatTest {
         try (Chat chat = quickReplyChat(v)) {
             SendPayload payload = sendFiles(chat, v, "a photo", photo("only"));
             byte[] file = "photo bytes".getBytes(StandardCharsets.UTF_8);
-            assertArrayEquals(file, roundTripWithoutThrowsClause(chat, payload, conversationKeys(v), "only", file));
+            assertArrayEquals(file, roundTripWithoutThrowsClause(chat, v, payload, "only", file));
         }
     }
 
@@ -1408,8 +1432,8 @@ class ChatTest {
                     Types.UrlAttachmentImageDescriptor.of("banner", 12L, "banner.png"),
                     Types.UrlAttachmentImageDescriptor.of("favicon", 13L, "favicon.png")));
             for (String name : new String[] {"banner", "favicon"}) {
-                byte[] encrypted = chat.encryptFile(new EncryptFileParams(
-                        (name + " bytes").getBytes(StandardCharsets.UTF_8), payload.eventB64, conversationKeys(v), name));
+                byte[] encrypted = chat.encryptFile(encryptFileParams(
+                        v, (name + " bytes").getBytes(StandardCharsets.UTF_8), payload.eventB64, name));
                 assertEquals(name + " bytes", new String(chat.decryptFile(
                         new DecryptFileParams(encrypted, payload.eventB64, conversationKeys(v), name)),
                         StandardCharsets.UTF_8));
@@ -1424,8 +1448,8 @@ class ChatTest {
             SendPayload draft = sendFiles(chat, v, "draft", photo("photo-a"), photo("photo-b"));
             assertTrue(draft.messageId.matches("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"),
                     draft.messageId);
-            byte[] encrypted = chat.encryptFile(new EncryptFileParams(
-                    "photo b".getBytes(StandardCharsets.UTF_8), draft.eventB64, conversationKeys(v), "photo-b"));
+            byte[] encrypted = chat.encryptFile(encryptFileParams(
+                    v, "photo b".getBytes(StandardCharsets.UTF_8), draft.eventB64, "photo-b"));
 
             // Building the message again gives the same id, so its encrypted files stay valid.
             SendPayload rebuilt = sendFiles(chat, v, "final text", photo("photo-a"), photo("photo-b"));
@@ -1456,11 +1480,18 @@ class ChatTest {
 
             SendPayload payload = sendFiles(chat, v, "a photo", photo("photo"));
             e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(
-                    new EncryptFileParams(new byte[] {1}, payload.eventB64, conversationKeys(v), "other")));
+                    encryptFileParams(v, new byte[] {1}, payload.eventB64, "other")));
             assertTrue(e.getMessage().contains("is not one of the message's files"), e.getMessage());
-            e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(
-                    new EncryptFileParams(new byte[] {1}, payload.eventB64, Map.of(keyVersion, new byte[3]), "photo")));
-            assertTrue(e.getMessage().contains("is not 32 bytes"), e.getMessage());
+            EncryptFileParams shortKey = new EncryptFileParams(new byte[] {1}, payload.eventB64, "photo");
+            shortKey.conversationKey = new byte[3];
+            shortKey.conversationKeyVersion = keyVersion;
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(shortKey));
+            assertTrue(e.getMessage().contains("expected 32 bytes"), e.getMessage());
+            EncryptFileParams otherVersion = encryptFileParams(v, new byte[] {1}, payload.eventB64, "photo");
+            otherVersion.conversationKeyVersion = "9";
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(otherVersion));
+            assertTrue(e.getMessage().contains(
+                    "conversation_key_version '9' is not the message's key version '" + keyVersion + "'"), e.getMessage());
 
             // A reply needs the delivered event, which carries the sequence id; the files it
             // quotes belong to the quoted message.
@@ -1476,7 +1507,7 @@ class ChatTest {
             replyParams.attachments = List.of(photo("reply-photo"));
             SendPayload reply = chat.encryptReply(replyParams);
             e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(
-                    new EncryptFileParams(new byte[] {1}, reply.eventB64, conversationKeys(v), "photo")));
+                    encryptFileParams(v, new byte[] {1}, reply.eventB64, "photo")));
             assertTrue(e.getMessage().contains("is media the reply quotes"), e.getMessage());
 
             try (Chat noIdentity = new Chat()) {

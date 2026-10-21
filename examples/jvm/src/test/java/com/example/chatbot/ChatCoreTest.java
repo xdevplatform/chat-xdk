@@ -261,7 +261,7 @@ class ChatCoreTest {
                     null);
             assertFalse(body.eventB64().isEmpty());
 
-            byte[] ciphertext = core.encryptMedia(plaintext, body.eventB64(), convKeys, "photo");
+            byte[] ciphertext = core.encryptMedia(plaintext, body.eventB64(), key, "1", "photo");
             assertEquals(ChatXdkUtilities.encryptedFileSize(plaintext.length), ciphertext.length);
             assertArrayEquals(plaintext, core.decryptMedia(ciphertext, body.eventB64(), convKeys, "photo"));
             byte[] truncated = Arrays.copyOf(ciphertext, ciphertext.length - 4);

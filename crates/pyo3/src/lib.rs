@@ -1283,40 +1283,48 @@ pub struct EncryptFileParams {
     /// The ``event_b64`` of the payload that ``encrypt_message`` or
     /// ``encrypt_reply`` returned for the message carrying the file.
     event_b64: String,
-    /// The conversation's key map: key version to raw 32-byte key
-    /// (``bytes``). It must hold the key the message was encrypted under.
-    conversation_keys: Py<PyAny>,
     /// The media hash key the file's upload started with, as listed in the
     /// message's attachments.
     media_hash_key: String,
+    /// The raw 32-byte conversation key the message was encrypted under;
+    /// with ``conversation_key_version`` left ``None`` too, it resolves from
+    /// the key cache, as for ``EncryptMessageParams``.
+    conversation_key: Option<Vec<u8>>,
+    /// The version of ``conversation_key``: the message's key version.
+    conversation_key_version: Option<String>,
 }
 
 #[pymethods]
 impl EncryptFileParams {
     #[new]
+    #[pyo3(signature = (file, event_b64, media_hash_key, *, conversation_key=None, conversation_key_version=None))]
     fn new(
         file: Vec<u8>,
         event_b64: String,
-        conversation_keys: Py<PyAny>,
         media_hash_key: String,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
     ) -> Self {
         Self {
             file,
             event_b64,
-            conversation_keys,
             media_hash_key,
+            conversation_key,
+            conversation_key_version,
         }
     }
 }
 
 impl EncryptFileParams {
-    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::EncryptFileParams> {
-        Ok(chat_xdk_core::EncryptFileParams::new(
+    fn to_core(&self) -> chat_xdk_core::EncryptFileParams {
+        let mut params = chat_xdk_core::EncryptFileParams::new(
             self.file.clone(),
             self.event_b64.as_str(),
-            conversation_keys_field(py, &self.conversation_keys)?,
             self.media_hash_key.as_str(),
-        ))
+        );
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
+        params
     }
 }
 
@@ -1327,33 +1335,44 @@ pub struct FileEncryptorParams {
     /// The ``event_b64`` of the payload that ``encrypt_message`` or
     /// ``encrypt_reply`` returned for the message carrying the file.
     event_b64: String,
-    /// The conversation's key map: key version to raw 32-byte key
-    /// (``bytes``). It must hold the key the message was encrypted under.
-    conversation_keys: Py<PyAny>,
     /// The media hash key the file's upload started with, as listed in the
     /// message's attachments.
     media_hash_key: String,
+    /// The raw 32-byte conversation key the message was encrypted under;
+    /// resolves from the key cache when left ``None``.
+    conversation_key: Option<Vec<u8>>,
+    /// The version of ``conversation_key``: the message's key version.
+    conversation_key_version: Option<String>,
 }
 
 #[pymethods]
 impl FileEncryptorParams {
     #[new]
-    fn new(event_b64: String, conversation_keys: Py<PyAny>, media_hash_key: String) -> Self {
+    #[pyo3(signature = (event_b64, media_hash_key, *, conversation_key=None, conversation_key_version=None))]
+    fn new(
+        event_b64: String,
+        media_hash_key: String,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
+    ) -> Self {
         Self {
             event_b64,
-            conversation_keys,
             media_hash_key,
+            conversation_key,
+            conversation_key_version,
         }
     }
 }
 
 impl FileEncryptorParams {
-    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::FileEncryptorParams> {
-        Ok(chat_xdk_core::FileEncryptorParams::new(
+    fn to_core(&self) -> chat_xdk_core::FileEncryptorParams {
+        let mut params = chat_xdk_core::FileEncryptorParams::new(
             self.event_b64.as_str(),
-            conversation_keys_field(py, &self.conversation_keys)?,
             self.media_hash_key.as_str(),
-        ))
+        );
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
+        params
     }
 }
 
@@ -1990,14 +2009,15 @@ impl Chat {
     ///     Encrypted bytes.
     ///
     /// Raises:
-    ///     ValueError: The event is not a message with this file, or the key
-    ///         map lacks its key. The message says what to pass instead.
+    ///     ValueError: The event is not a message with this file, or the
+    ///         conversation key is not the one the message was encrypted
+    ///         under. The message says what to pass instead.
     fn encrypt_file<'py>(
         &self,
         py: Python<'py>,
         params: PyRef<'_, EncryptFileParams>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let params = params.to_core(py)?;
+        let params = params.to_core();
         // Release the GIL for the file crypto; only Rust data crosses into
         // the closure.
         let output = py
@@ -2009,14 +2029,10 @@ impl Chat {
     /// Create an incremental encryptor for a file too large to hold in
     /// memory. Takes the params of ``encrypt_file`` apart from the file,
     /// which is fed to the encryptor.
-    fn file_encryptor(
-        &self,
-        py: Python<'_>,
-        params: PyRef<'_, FileEncryptorParams>,
-    ) -> PyResult<FileEncryptor> {
+    fn file_encryptor(&self, params: PyRef<'_, FileEncryptorParams>) -> PyResult<FileEncryptor> {
         let inner = self
             .inner
-            .file_encryptor(&params.to_core(py)?)
+            .file_encryptor(&params.to_core())
             .map_err(to_py_err)?;
         Ok(FileEncryptor { inner: Some(inner) })
     }

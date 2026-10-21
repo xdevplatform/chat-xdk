@@ -318,24 +318,25 @@ impl ChatCore {
     /// API.
     ///
     /// `event_b64` is the `event_b64` of the body [`ChatCore::encrypt_reply`]
-    /// returned for the message, and `media_hash_key` the hash key the file's
-    /// upload started with, as listed in the message's attachments; the SDK
-    /// encrypts the file under that attachment's key. Feeding fixed-size
-    /// chunks through `push` keeps memory bounded no matter how large the
-    /// file is; `finish` emits the final frame that seals the file
-    /// (decryption fails without it).
+    /// returned for the message, `conversation_key` and
+    /// `conversation_key_version` the key the message was encrypted under,
+    /// and `media_hash_key` the hash key the file's upload started with, as
+    /// listed in the message's attachments; the SDK encrypts the file under
+    /// that attachment's key. Feeding fixed-size chunks through `push` keeps
+    /// memory bounded no matter how large the file is; `finish` emits the
+    /// final frame that seals the file (decryption fails without it).
     pub fn encrypt_media(
         &self,
         plaintext: &[u8],
         event_b64: &str,
-        conversation_keys: &HashMap<String, XChatConversationKey>,
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
         media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut enc = self.inner.file_encryptor(&FileEncryptorParams::new(
-            event_b64,
-            conversation_keys.clone(),
-            media_hash_key,
-        ))?;
+        let mut enc = self.inner.file_encryptor(
+            &FileEncryptorParams::new(event_b64, media_hash_key)
+                .with_conversation_key(conversation_key.to_bytes(), conversation_key_version),
+        )?;
         let mut out = Vec::new();
         for chunk in plaintext.chunks(Self::MEDIA_CHUNK) {
             out.extend(enc.push(chunk)?);
