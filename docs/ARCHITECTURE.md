@@ -215,6 +215,14 @@ Only the language bindings make the request, each with its own HTTP stack:
   SDK call.
 - **Lifetime:** the fetch is tied to the chat and stops when the chat is
   freed, closed, disposed or garbage-collected.
+- **Browsers:** the request is a simple cross-origin GET (an `Accept` header
+  and nothing else, so no preflight). A browser app reads the answer only
+  while the endpoint sends `Access-Control-Allow-Origin: *`; without it the
+  app stays on v0 and logs a CORS error on every retry.
+
+**Release gate:** before each release, check that
+`GET https://api.x.com/2/chat/features` still answers with
+`Access-Control-Allow-Origin: *`, so web clients can read the switches.
 
 Nothing else in the SDK uses the network apart from Juicebox.
 
