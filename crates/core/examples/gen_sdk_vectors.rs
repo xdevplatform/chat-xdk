@@ -174,7 +174,7 @@ fn main() {
         .expect("import keys");
     let payload = core
         .encrypt_message(
-            EncryptMessageParams::new(EVENT_CONVERSATION_ID, EVENT_MESSAGE_TEXT)
+            &EncryptMessageParams::new(EVENT_CONVERSATION_ID, EVENT_MESSAGE_TEXT)
                 .with_identity(EVENT_SENDER_ID, EVENT_SIGNING_KEY_VERSION)
                 .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION),
         )
@@ -197,7 +197,7 @@ fn main() {
     .unwrap();
     let reply_valid = core
         .encrypt_reply(
-            chat_xdk_core::EncryptReplyParams::new(
+            &chat_xdk_core::EncryptReplyParams::new(
                 EVENT_CONVERSATION_ID,
                 EVENT_REPLY_TEXT,
                 event_message_b64.clone(),
@@ -221,7 +221,7 @@ fn main() {
     .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION);
     forged_params.reply_to_text = Some(EVENT_REPLY_FORGED_PREVIEW_TEXT.to_string());
     let reply_forged = core
-        .encrypt_reply(forged_params)
+        .encrypt_reply(&forged_params)
         .expect("encrypt forged reply");
     let event_reply_forged_b64 = internals::frame_send_payload(
         &reply_forged,
@@ -347,7 +347,7 @@ fn main() {
         duration_millis: None,
     }]);
     let ckey_media_payload = core
-        .encrypt_message(ckey_media_params)
+        .encrypt_message(&ckey_media_params)
         .expect("encrypt conversation-key media message");
     let event_conversation_key_media_b64 = internals::frame_send_payload(
         &ckey_media_payload,
@@ -405,7 +405,7 @@ fn main() {
     assert!(cached.errors.is_empty(), "{:?}", cached.errors);
     let reply_message_key = replier
         .encrypt_reply(
-            chat_xdk_core::EncryptReplyParams::new(
+            &chat_xdk_core::EncryptReplyParams::new(
                 EVENT_CONVERSATION_ID,
                 MK_REPLY_TEXT,
                 event_message_key_b64.clone(),
