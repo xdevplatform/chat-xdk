@@ -135,9 +135,9 @@ wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
 | 17 | **decrypt_conversation_key** | `(encrypted_b64: &str) → XChatConversationKey` | `decryptConversationKey(b64: string) → Uint8Array` | `decrypt_conversation_key(b64: str) → bytes` | `DecryptConversationKey(encryptedKeyB64 string) ([]byte, error)` | `decryptConversationKey(String)` → `byte[]` | `DecryptConversationKey(string)` → `byte[]` |
-| 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change(ConversationKeyChangeParams) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
-| 19 | **prepare_group_members_change** | `prepare_group_members_change(GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change(GroupMembersChangeParams) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
-| 20 | **prepare_group_create** | `prepare_group_create(GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create(GroupCreateParams) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
+| 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(&ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change(ConversationKeyChangeParams) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
+| 19 | **prepare_group_members_change** | `prepare_group_members_change(&GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change(GroupMembersChangeParams) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
+| 20 | **prepare_group_create** | `prepare_group_create(&GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create(GroupCreateParams) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
 single params value, named the same in every language: Rust
@@ -728,8 +728,8 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(EncryptMessageParams) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
-| 27 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(EncryptReplyParams) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
+| 26 | **encrypt_message** | `encrypt_message(&EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(EncryptMessageParams) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 27 | **encrypt_reply** | `encrypt_reply(&EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(EncryptReplyParams) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(EncryptReactionParams) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(EncryptReactionParams) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
 | 30 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(EncryptEditParams) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
@@ -921,11 +921,11 @@ chat.set_cache_keys(true); // filled by decrypt_events
 
 let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 params.ttl_msec = Some(86_400_000);
-let payload = chat.encrypt_message(params)?;
+let payload = chat.encrypt_message(&params)?;
 let message_id = payload.message_id; // generated by the SDK
 
 // Reply / react by handing back the raw event being answered
-let reply = chat.encrypt_reply(EncryptReplyParams::new(
+let reply = chat.encrypt_reply(&EncryptReplyParams::new(
     conversation_id, "pong", original_event_b64,
 ))?;
 let reaction =
@@ -972,8 +972,8 @@ reaction = chat.encrypt_add_reaction(EncryptReactionParams(original_event_b64, "
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 33 | **encrypt_file** | `encrypt_file(EncryptFileParams) → Vec<u8>` | `encryptFile(params: EncryptFileParams) → Uint8Array` | `encrypt_file(EncryptFileParams) → bytes` | `EncryptFile(EncryptFileParams) ([]byte, error)` | `encryptFile(EncryptFileParams)` → `byte[]` | `EncryptFile(EncryptFileParams)` → `byte[]` |
-| 34 | **file_encryptor** | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `fileEncryptor(params: FileEncryptorParams) → FileEncryptor` | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `FileEncryptor(FileEncryptorParams) (*FileEncryptor, error)` | `fileEncryptor(FileEncryptorParams)` → `FileEncryptor` | `FileEncryptor(FileEncryptorParams)` → `FileEncryptor` |
+| 33 | **encrypt_file** | `encrypt_file(&EncryptFileParams) → Vec<u8>` | `encryptFile(params: EncryptFileParams) → Uint8Array` | `encrypt_file(EncryptFileParams) → bytes` | `EncryptFile(EncryptFileParams) ([]byte, error)` | `encryptFile(EncryptFileParams)` → `byte[]` | `EncryptFile(EncryptFileParams)` → `byte[]` |
+| 34 | **file_encryptor** | `file_encryptor(&FileEncryptorParams) → FileEncryptor` | `fileEncryptor(params: FileEncryptorParams) → FileEncryptor` | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `FileEncryptor(FileEncryptorParams) (*FileEncryptor, error)` | `fileEncryptor(FileEncryptorParams)` → `FileEncryptor` | `FileEncryptor(FileEncryptorParams)` → `FileEncryptor` |
 | 35 | **decrypt_file** | `decrypt_file(DecryptFileParams) → Vec<u8>` | `decryptFile(params: DecryptFileParams) → Uint8Array` | `decrypt_file(DecryptFileParams) → bytes` | `DecryptFile(DecryptFileParams) ([]byte, error)` | `decryptFile(DecryptFileParams)` → `byte[]` | `DecryptFile(DecryptFileParams)` → `byte[]` |
 | 36 | **file_decryptor** | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `fileDecryptor(params: FileDecryptorParams) → FileDecryptor` | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `FileDecryptor(FileDecryptorParams) (*FileDecryptor, error)` | `fileDecryptor(FileDecryptorParams)` → `FileDecryptor` | `FileDecryptor(FileDecryptorParams)` → `FileDecryptor` |
 
@@ -1530,8 +1530,8 @@ for dm in &result.messages {
 let event = chat.decrypt_event(DecryptEventParams::new(event_b64, HashMap::new()))?;
 
 // ── Send: identity and conversation key resolve from the session ──
-let payload = chat.encrypt_message(EncryptMessageParams::new(conversation_id, "hi!"))?;
-let reply = chat.encrypt_reply(EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
+let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "hi!"))?;
+let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
 let reaction = chat.encrypt_add_reaction(&EncryptReactionParams::new(event_b64, "👍"))?;
 
 // ── Metadata (group name, avatar, description) ──
@@ -1561,8 +1561,8 @@ params.attachments = Some(vec![AttachmentDescriptor::Media {
     media_type: Some(1),
     duration_millis: None,
 }]);
-let photo_message = chat.encrypt_message(params)?;
-let encrypted_photo = chat.encrypt_file(EncryptFileParams::new(
+let photo_message = chat.encrypt_message(&params)?;
+let encrypted_photo = chat.encrypt_file(&EncryptFileParams::new(
     photo,
     &photo_message.event_b64,
     keys,

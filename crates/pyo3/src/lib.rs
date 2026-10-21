@@ -1812,7 +1812,7 @@ impl Chat {
     ) -> PyResult<SendPayload> {
         let payload = self
             .inner
-            .encrypt_message(params.to_core(py)?)
+            .encrypt_message(&params.to_core(py)?)
             .map_err(to_py_err)?;
         Ok(to_py_send_payload(payload))
     }
@@ -1835,7 +1835,7 @@ impl Chat {
     ) -> PyResult<SendPayload> {
         let payload = self
             .inner
-            .encrypt_reply(params.to_core(py)?)
+            .encrypt_reply(&params.to_core(py)?)
             .map_err(to_py_err)?;
         Ok(to_py_send_payload(payload))
     }
@@ -1950,7 +1950,7 @@ impl Chat {
         // Release the GIL for the file crypto; only Rust data crosses into
         // the closure.
         let output = py
-            .detach(|| self.inner.encrypt_file(params))
+            .detach(|| self.inner.encrypt_file(&params))
             .map_err(to_py_err)?;
         Ok(PyBytes::new(py, &output))
     }
@@ -1965,7 +1965,7 @@ impl Chat {
     ) -> PyResult<FileEncryptor> {
         let inner = self
             .inner
-            .file_encryptor(params.to_core(py)?)
+            .file_encryptor(&params.to_core(py)?)
             .map_err(to_py_err)?;
         Ok(FileEncryptor { inner: Some(inner) })
     }
@@ -2076,7 +2076,7 @@ impl Chat {
     ) -> PyResult<Py<PyAny>> {
         let result = self
             .inner
-            .prepare_conversation_key_change(params.to_core(py)?)
+            .prepare_conversation_key_change(&params.to_core(py)?)
             .map_err(to_py_err)?;
         prepared_change_to_pydict(py, &result)
     }
@@ -2101,7 +2101,7 @@ impl Chat {
     ) -> PyResult<Py<PyAny>> {
         let result = self
             .inner
-            .prepare_group_members_change(params.to_core(py)?)
+            .prepare_group_members_change(&params.to_core(py)?)
             .map_err(to_py_err)?;
         prepared_change_to_pydict(py, &result)
     }
@@ -2127,7 +2127,7 @@ impl Chat {
     ) -> PyResult<Py<PyAny>> {
         let result = self
             .inner
-            .prepare_group_create(params.to_core(py)?)
+            .prepare_group_create(&params.to_core(py)?)
             .map_err(to_py_err)?;
         prepared_change_to_pydict(py, &result)
     }

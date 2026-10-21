@@ -119,7 +119,7 @@ fn encrypt_file(
     media_hash_key: &str,
     file: &[u8],
 ) -> Result<Vec<u8>, SdkError> {
-    ChatCore::new().encrypt_file(EncryptFileParams::new(
+    ChatCore::new().encrypt_file(&EncryptFileParams::new(
         file.to_vec(),
         payload.event_b64.clone(),
         keys(KEY_VERSION, ckey),
@@ -162,7 +162,7 @@ fn every_kind_of_send_uses_its_message_key_and_signs_at_v10() {
     let ckey = key(3);
     let original = author
         .core
-        .encrypt_message(message_params("original", &ckey))
+        .encrypt_message(&message_params("original", &ckey))
         .unwrap();
     let original_event = frame(&delivered(&original, "100"));
     let reply = EncryptReplyParams::new(CONVERSATION, "reply", original_event.clone())
@@ -174,7 +174,7 @@ fn every_kind_of_send_uses_its_message_key_and_signs_at_v10() {
 
     let sends = [
         ("message", original),
-        ("reply", author.core.encrypt_reply(reply).unwrap()),
+        ("reply", author.core.encrypt_reply(&reply).unwrap()),
         (
             "reaction add",
             author.core.encrypt_add_reaction(&reaction).unwrap(),
@@ -219,7 +219,7 @@ fn the_signature_covers_the_contents_encryption_version() {
     let ckey = key(3);
     let payload = author
         .core
-        .encrypt_message(message_params("bound", &ckey))
+        .encrypt_message(&message_params("bound", &ckey))
         .unwrap();
     let event = delivered(&payload, "100");
     let contents = create_event(&event).contents.clone().unwrap();
@@ -267,7 +267,7 @@ fn event_b64_is_the_sent_message_as_recipients_receive_it() {
     let ckey = key(3);
     let original = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("original", &ckey),
             vec![image("photo")],
         ))
@@ -284,7 +284,7 @@ fn event_b64_is_the_sent_message_as_recipients_receive_it() {
 
     let sends = [
         ("message", original),
-        ("reply", author.core.encrypt_reply(reply).unwrap()),
+        ("reply", author.core.encrypt_reply(&reply).unwrap()),
         (
             "reaction add",
             author.core.encrypt_add_reaction(&reaction).unwrap(),
@@ -296,7 +296,7 @@ fn event_b64_is_the_sent_message_as_recipients_receive_it() {
         ("edit", author.core.encrypt_edit(&edit).unwrap()),
         (
             "hyphenated conversation id",
-            author.core.encrypt_message(hyphenated).unwrap(),
+            author.core.encrypt_message(&hyphenated).unwrap(),
         ),
     ];
     for (what, payload) in sends {
@@ -340,7 +340,7 @@ fn a_message_without_files_takes_a_random_id() {
         let send = || {
             author
                 .core
-                .encrypt_message(with_attachments(
+                .encrypt_message(&with_attachments(
                     message_params("same text", &ckey),
                     attachments.clone(),
                 ))
@@ -362,7 +362,7 @@ fn a_message_with_files_takes_the_id_its_files_derive() {
         let attachments = files.iter().map(|hash| image(hash)).collect();
         author
             .core
-            .encrypt_message(with_attachments(params, attachments))
+            .encrypt_message(&with_attachments(params, attachments))
             .unwrap()
             .message_id
     };
@@ -453,14 +453,14 @@ fn a_reply_with_files_takes_the_id_its_files_derive() {
     let ckey = key(3);
     let original = author
         .core
-        .encrypt_message(message_params("original", &ckey))
+        .encrypt_message(&message_params("original", &ckey))
         .unwrap();
     let original_event = frame(&delivered(&original, "100"));
     let send = |text: &str| {
         let mut params = EncryptReplyParams::new(CONVERSATION, text, original_event.clone())
             .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
         params.attachments = Some(vec![image("reply-photo")]);
-        author.core.encrypt_reply(params).unwrap().message_id
+        author.core.encrypt_reply(&params).unwrap().message_id
     };
     let id = send("a photo");
     assert_eq!(id, send("another caption"));
@@ -486,7 +486,7 @@ fn files_encrypted_from_the_payload_open_from_the_sent_message() {
     let files: Vec<Vec<u8>> = (0..3u8).map(|i| vec![i; 3000 + usize::from(i)]).collect();
     let payload = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("three photos", &ckey),
             vec![image("photo-0"), image("photo-1"), image("photo-2")],
         ))
@@ -527,13 +527,13 @@ fn the_file_encryptor_and_decryptor_match_the_one_shot_calls() {
     let file: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
     let payload = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("two photos", &ckey),
             vec![image("first"), image("second")],
         ))
         .unwrap();
     let mut encryptor = ChatCore::new()
-        .file_encryptor(FileEncryptorParams::new(
+        .file_encryptor(&FileEncryptorParams::new(
             payload.event_b64.clone(),
             keys(KEY_VERSION, &ckey),
             "second",
@@ -579,7 +579,7 @@ fn an_empty_file_encrypts_and_opens() {
     let ckey = key(3);
     let payload = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("empty", &ckey),
             vec![image("empty")],
         ))
@@ -599,7 +599,7 @@ fn a_link_cards_banner_and_favicon_take_the_cards_key() {
     let ckey = key(3);
     let payload = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("a link", &ckey),
             vec![link_card(Some("banner"), Some("favicon"))],
         ))
@@ -631,7 +631,7 @@ fn a_reply_encrypts_its_own_files_and_quotes_the_originals() {
     let ckey = key(3);
     let original = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("a photo", &ckey),
             vec![image("original-photo")],
         ))
@@ -646,7 +646,7 @@ fn a_reply_encrypts_its_own_files_and_quotes_the_originals() {
     )
     .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
     params.attachments = Some(vec![image("reply-photo")]);
-    let reply = author.core.encrypt_reply(params).unwrap();
+    let reply = author.core.encrypt_reply(&params).unwrap();
     let reply_photo = encrypt_file(&reply, &ckey, "reply-photo", b"reply photo").unwrap();
     let err = error_text(encrypt_file(
         &reply,
@@ -701,7 +701,7 @@ fn a_rebuilt_message_keeps_its_encrypted_files_valid() {
     let build = |party: &Party, text: &str| {
         party
             .core
-            .encrypt_message(with_attachments(
+            .encrypt_message(&with_attachments(
                 message_params(text, &ckey),
                 vec![image("photo-a"), image("photo-b")],
             ))
@@ -736,14 +736,14 @@ fn a_file_encrypted_for_another_attachment_or_message_does_not_open() {
     let ckey = key(3);
     let payload = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("two photos", &ckey),
             vec![image("photo-a"), image("photo-b")],
         ))
         .unwrap();
     let other = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("another photo", &ckey),
             vec![image("photo-c")],
         ))
@@ -762,14 +762,14 @@ fn file_encryption_errors_say_what_to_pass() {
     let ckey = key(3);
     let with_photo = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("a photo", &ckey),
             vec![image("photo")],
         ))
         .unwrap();
     let without_files = author
         .core
-        .encrypt_message(message_params("text", &ckey))
+        .encrypt_message(&message_params("text", &ckey))
         .unwrap();
     let photo_event = frame(&delivered(&with_photo, "100"));
     let reaction = author
@@ -853,14 +853,14 @@ fn file_encryption_errors_say_what_to_pass() {
     ];
     let core = ChatCore::new();
     for (event_b64, conversation_keys, media_hash_key, expected) in cases {
-        let err = error_text(core.encrypt_file(EncryptFileParams::new(
+        let err = error_text(core.encrypt_file(&EncryptFileParams::new(
             b"photo".to_vec(),
             event_b64.clone(),
             conversation_keys.clone(),
             media_hash_key,
         )));
         assert!(err.contains(&expected), "{err:?} lacks {expected:?}");
-        let err = error_text(core.file_encryptor(FileEncryptorParams::new(
+        let err = error_text(core.file_encryptor(&FileEncryptorParams::new(
             event_b64,
             conversation_keys,
             media_hash_key,
@@ -885,7 +885,7 @@ fn each_file_needs_its_own_media_hash_key() {
         ),
     ];
     for (attachments, expected) in cases {
-        let err = error_text(author.core.encrypt_message(with_attachments(
+        let err = error_text(author.core.encrypt_message(&with_attachments(
             message_params("files", &ckey),
             attachments.clone(),
         )));
@@ -895,13 +895,13 @@ fn each_file_needs_its_own_media_hash_key() {
             .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
         params.reply_to_sequence_id = Some("100".to_string());
         params.attachments = Some(attachments);
-        let err = error_text(author.core.encrypt_reply(params));
+        let err = error_text(author.core.encrypt_reply(&params));
         assert!(err.contains(expected), "{err}");
     }
 
     let shared = author
         .core
-        .encrypt_message(with_attachments(
+        .encrypt_message(&with_attachments(
             message_params("a link", &ckey),
             vec![link_card(Some("image"), Some("image"))],
         ))
@@ -927,7 +927,7 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
 
     let anonymous = Party::new(AUTHOR);
     for params in sends("no identity") {
-        let err = error_text(anonymous.core.encrypt_message(params));
+        let err = error_text(anonymous.core.encrypt_message(&params));
         assert!(
             err.contains("sender_id is not set: pass it explicitly or call set_identity() first"),
             "{err}"
@@ -937,7 +937,7 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
         .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
     reply.reply_to_sequence_id = Some("100".to_string());
     reply.attachments = Some(vec![image("photo")]);
-    let err = error_text(anonymous.core.encrypt_reply(reply));
+    let err = error_text(anonymous.core.encrypt_reply(&reply));
     assert!(err.contains("call set_identity() first"), "{err}");
 
     let author = author();
@@ -962,7 +962,7 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
                 None => params,
             };
             let has_file = params.attachments.is_some();
-            let payload = party.core.encrypt_message(params).unwrap();
+            let payload = party.core.encrypt_message(&params).unwrap();
             let event = ChatCore::parse_event_b64(&payload.event_b64).unwrap();
             assert_eq!(event.sender_id, Some(signing_key.user_id.clone()));
             assert_eq!(
@@ -998,14 +998,14 @@ fn a_send_needs_a_numeric_sender_and_an_integer_key_version() {
     let author = author();
     let ckey = key(3);
     for attachments in [Vec::new(), vec![image("photo")]] {
-        let err = error_text(author.core.encrypt_message(with_attachments(
+        let err = error_text(author.core.encrypt_message(&with_attachments(
             message_params("text", &ckey).with_identity("me", "1"),
             attachments.clone(),
         )));
         assert!(err.contains("Invalid sender_id 'me'"), "{err}");
 
         let err = error_text(
-            author.core.encrypt_message(with_attachments(
+            author.core.encrypt_message(&with_attachments(
                 EncryptMessageParams::new(CONVERSATION, "text")
                     .with_conversation_key(ckey.to_bytes(), "v7"),
                 attachments,

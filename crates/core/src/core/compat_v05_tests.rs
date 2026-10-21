@@ -130,7 +130,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
     };
     let payload = match kind {
         "message" => core.encrypt_message(
-            EncryptMessageParams::new(conversation.clone(), "hello from 0.5")
+            &EncryptMessageParams::new(conversation.clone(), "hello from 0.5")
                 .with_conversation_key(key.clone(), version),
         ),
         "message_with_entities" => {
@@ -141,7 +141,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
                 end: 17,
                 entity_type: "url".to_string(),
             }]);
-            core.encrypt_message(params)
+            core.encrypt_message(&params)
         }
         "reaction_add" => core.encrypt_add_reaction(&reaction("\u{1f44d}")),
         "reaction_remove" => core.encrypt_remove_reaction(&reaction("\u{1f44d}")),
@@ -160,7 +160,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
                 fixture["media_attachment"].clone(),
             )
             .unwrap()]);
-            core.encrypt_message(params)
+            core.encrypt_message(&params)
         }
         "reply" => {
             let mut params = EncryptReplyParams::new(conversation.clone(), "a reply", "")
@@ -168,10 +168,10 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
             params.reply_to_sequence_id = Some(target.clone());
             params.reply_to_sender_id = Some(text(fixture, "sender_id").parse().unwrap());
             params.reply_to_text = Some("hello from 0.5".to_string());
-            core.encrypt_reply(params)
+            core.encrypt_reply(&params)
         }
         "reply_from_event" => core.encrypt_reply(
-            EncryptReplyParams::new(conversation.clone(), "a reply to the event", target_event)
+            &EncryptReplyParams::new(conversation.clone(), "a reply to the event", target_event)
                 .with_conversation_key(key.clone(), version),
         ),
         "edit_from_event" => core.encrypt_edit(

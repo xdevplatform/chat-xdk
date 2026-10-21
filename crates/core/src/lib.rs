@@ -32,12 +32,12 @@
 //! // Send messages. The SDK generates the message id and returns it in the
 //! // payload (payload.message_id); sender, signing-key version, and the
 //! // conversation key resolve from the session and cache.
-//! let payload = chat.encrypt_message(EncryptMessageParams::new("conv-1", "Hello!"))?;
+//! let payload = chat.encrypt_message(&EncryptMessageParams::new("conv-1", "Hello!"))?;
 //! // POST payload to X API
 //!
 //! // A message with a file: start the upload to get its media hash key, list
 //! // it in the attachments, then encrypt the file from the payload's event.
-//! let encrypted = chat.encrypt_file(EncryptFileParams::new(
+//! let encrypted = chat.encrypt_file(&EncryptFileParams::new(
 //!     photo,
 //!     payload.event_b64.clone(),
 //!     keys,

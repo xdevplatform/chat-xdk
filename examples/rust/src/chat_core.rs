@@ -147,7 +147,7 @@ impl ChatCore {
     ) -> Result<PreparedConversationChange, SdkError> {
         let mut params = ConversationKeyChangeParams::new(public_keys.to_vec());
         params.conversation_id = conversation_id.map(String::from);
-        self.inner.prepare_conversation_key_change(params)
+        self.inner.prepare_conversation_key_change(&params)
     }
 
     pub fn decrypt_conversation_key(
@@ -213,7 +213,7 @@ impl ChatCore {
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
-                self.inner.encrypt_message(params)?
+                self.inner.encrypt_message(&params)?
             }
             Some(reply_to_event) => {
                 let mut params =
@@ -227,7 +227,7 @@ impl ChatCore {
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
-                self.inner.encrypt_reply(params)?
+                self.inner.encrypt_reply(&params)?
             }
         };
         Ok(SendBody {
@@ -277,7 +277,7 @@ impl ChatCore {
         member_ids: &[String],
         admin_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
-        self.inner.prepare_group_create(GroupCreateParams::new(
+        self.inner.prepare_group_create(&GroupCreateParams::new(
             public_keys.to_vec(),
             conversation_id,
             member_ids.to_vec(),
@@ -295,7 +295,7 @@ impl ChatCore {
         current_admin_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
         self.inner
-            .prepare_group_members_change(GroupMembersChangeParams::new(
+            .prepare_group_members_change(&GroupMembersChangeParams::new(
                 public_keys.to_vec(),
                 conversation_id,
                 new_member_ids.to_vec(),
@@ -327,7 +327,7 @@ impl ChatCore {
         conversation_keys: &HashMap<String, XChatConversationKey>,
         media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut enc = self.inner.file_encryptor(FileEncryptorParams::new(
+        let mut enc = self.inner.file_encryptor(&FileEncryptorParams::new(
             event_b64,
             conversation_keys.clone(),
             media_hash_key,

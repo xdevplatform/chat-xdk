@@ -1168,7 +1168,7 @@ pub extern "C" fn chat_xdk_prepare_conversation_key_change(
         // Core treats an absent or empty id as "derive the one-to-one id".
         params.conversation_id = p.conversation_id;
 
-        match h.inner.prepare_conversation_key_change(params) {
+        match h.inner.prepare_conversation_key_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
                 Err(e) => err_result(&e.to_string()),
@@ -1217,7 +1217,7 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
         params.current_ttl_msec = p.current_ttl_msec;
         params.current_screen_capture_blocking_enabled = p.current_screen_capture_blocking_enabled;
 
-        match h.inner.prepare_group_members_change(params) {
+        match h.inner.prepare_group_members_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
                 Err(e) => err_result(&e.to_string()),
@@ -1256,7 +1256,7 @@ pub extern "C" fn chat_xdk_prepare_group_create(
         params.avatar_url = p.avatar_url;
         params.ttl_msec = p.ttl_msec;
 
-        match h.inner.prepare_group_create(params) {
+        match h.inner.prepare_group_create(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
                 Err(e) => err_result(&e.to_string()),
@@ -1446,7 +1446,7 @@ pub extern "C" fn chat_xdk_encrypt_message(
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
 
-        match h.inner.encrypt_message(params) {
+        match h.inner.encrypt_message(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
@@ -1527,7 +1527,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
 
-        match h.inner.encrypt_reply(params) {
+        match h.inner.encrypt_reply(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
@@ -1810,7 +1810,7 @@ pub extern "C" fn chat_xdk_encrypt_file(
             Err(e) => return e,
         };
         let params = EncryptFileParams::new(file, p.event_b64, conversation_keys, p.media_hash_key);
-        match h.inner.encrypt_file(params) {
+        match h.inner.encrypt_file(&params) {
             Ok(encrypted) => ok_data(&BASE64.encode(&encrypted)),
             Err(e) => err_from(e),
         }
@@ -1906,7 +1906,7 @@ pub extern "C" fn chat_xdk_file_encryptor_new(
             Err(e) => return e,
         };
         let params = FileEncryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
-        match h.inner.file_encryptor(params) {
+        match h.inner.file_encryptor(&params) {
             Ok(enc) => {
                 let boxed = Box::new(FileEncryptorHandle { inner: Some(enc) });
                 unsafe { *out_encryptor = Box::into_raw(boxed) };

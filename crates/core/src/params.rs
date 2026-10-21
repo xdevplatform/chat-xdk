@@ -10,7 +10,7 @@
 //! let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 //! params.ttl_msec = Some(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
-//! let payload = chat.encrypt_message(params)?;
+//! let payload = chat.encrypt_message(&params)?;
 //! let message_id = payload.message_id;
 //! ```
 //!
@@ -1117,7 +1117,7 @@ mod tests {
         };
         assert_message_params_eq(&via_new, &full);
 
-        let payload = core.encrypt_message(via_new).unwrap();
+        let payload = core.encrypt_message(&via_new).unwrap();
         assert!(!payload.should_notify);
         assert_eq!(payload.conversation_key_version, "1");
     }
@@ -1136,7 +1136,7 @@ mod tests {
         params.reply_to_sender_id = Some(42);
         params.reply_to_text = Some("original".into());
 
-        let payload = core.encrypt_reply(params).unwrap();
+        let payload = core.encrypt_reply(&params).unwrap();
         assert!(
             payload.should_notify,
             "unset should_notify defaults to true"
@@ -1186,7 +1186,7 @@ mod tests {
         };
         assert_eq!(via_new, full);
 
-        let prepared = core.prepare_conversation_key_change(via_new).unwrap();
+        let prepared = core.prepare_conversation_key_change(&via_new).unwrap();
         assert_eq!(prepared.conversation_id, "conv-1");
         assert_eq!(prepared.action_signatures.len(), 1);
     }
@@ -1226,10 +1226,10 @@ mod tests {
         // Both constructions encode identical member-add event details for
         // the same conversation-key version (the detail is deterministic).
         let a = core
-            .prepare_group_members_change_with_version(via_new, "42")
+            .prepare_group_members_change_with_version(&via_new, "42")
             .unwrap();
         let b = core
-            .prepare_group_members_change_with_version(full, "42")
+            .prepare_group_members_change_with_version(&full, "42")
             .unwrap();
         assert_eq!(
             a.action_signatures[1].encoded_message_event_detail,
@@ -1267,9 +1267,9 @@ mod tests {
         // Both constructions encode identical group-create event details for
         // the same conversation-key version (the detail is deterministic).
         let a = core
-            .prepare_group_create_with_version(via_new, "42")
+            .prepare_group_create_with_version(&via_new, "42")
             .unwrap();
-        let b = core.prepare_group_create_with_version(full, "42").unwrap();
+        let b = core.prepare_group_create_with_version(&full, "42").unwrap();
         assert_eq!(
             a.action_signatures[1].encoded_message_event_detail,
             b.action_signatures[1].encoded_message_event_detail,

@@ -117,8 +117,8 @@ let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64).unwrap(
 let (session, media_hash_key) = start_upload(size)?;
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
 params.attachments = Some(photo_attachments(&media_hash_key));
-let payload = chat.encrypt_message(params)?;
-let encrypted = chat.encrypt_file(EncryptFileParams::new(
+let payload = chat.encrypt_message(&params)?;
+let encrypted = chat.encrypt_file(&EncryptFileParams::new(
     photo, &payload.event_b64, conversation_keys, &media_hash_key,
 ))?;
 finish_upload(session, &encrypted)?;
@@ -397,6 +397,12 @@ prepared = chat.prepare_conversation_key_change(
   `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
   builds it with a struct literal. A payload stored by 0.5.x still
   deserializes, with both new fields empty.
+- Rust: every encrypt and prepare method takes its params by reference:
+  `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
+  edit, delete and mark-read methods, and also `encrypt_file`,
+  `file_encryptor`, `prepare_conversation_key_change`, `prepare_group_create`
+  and `prepare_group_members_change` (and their `_with_version` forms). Add
+  `&` at each call.
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.

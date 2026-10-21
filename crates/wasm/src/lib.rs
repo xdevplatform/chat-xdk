@@ -522,7 +522,7 @@ impl Chat {
         core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
         let payload = self
             .inner
-            .encrypt_message(core_params)
+            .encrypt_message(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
@@ -565,7 +565,7 @@ impl Chat {
         core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
         let payload = self
             .inner
-            .encrypt_reply(core_params)
+            .encrypt_reply(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
@@ -692,7 +692,7 @@ impl Chat {
             p.media_hash_key,
         );
         self.inner
-            .encrypt_file(core_params)
+            .encrypt_file(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
@@ -709,7 +709,7 @@ impl Chat {
         );
         let inner = self
             .inner
-            .file_encryptor(core_params)
+            .file_encryptor(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         Ok(FileEncryptor { inner })
     }
@@ -807,7 +807,7 @@ impl Chat {
 
         let result = self
             .inner
-            .prepare_conversation_key_change_with_version(core_params, &now_millis())
+            .prepare_conversation_key_change_with_version(&core_params, &now_millis())
             .map_err(|e| JsError::new(&format!("{}", e)))?;
 
         prepared_change_to_js(result)
@@ -843,7 +843,7 @@ impl Chat {
 
         let result = self
             .inner
-            .prepare_group_members_change_with_version(core_params, &now_millis())
+            .prepare_group_members_change_with_version(&core_params, &now_millis())
             .map_err(|e| JsError::new(&format!("{}", e)))?;
 
         prepared_change_to_js(result)
@@ -875,7 +875,7 @@ impl Chat {
 
         let result = self
             .inner
-            .prepare_group_create_with_version(core_params, &now_millis())
+            .prepare_group_create_with_version(&core_params, &now_millis())
             .map_err(|e| JsError::new(&format!("{}", e)))?;
 
         prepared_change_to_js(result)

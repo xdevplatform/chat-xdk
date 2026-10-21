@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_marshalling"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "ciborium",
  "curve25519-dalek",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_networking"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "http",
@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_noise"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "blake2",
  "chacha20poly1305",
@@ -1347,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_oprf"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "curve25519-dalek",
  "digest",
@@ -1361,7 +1361,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_realm_api"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "blake2",
  "curve25519-dalek",
@@ -1379,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_realm_auth"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "hex",
  "juicebox_realm_api",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_sdk"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "juicebox_secret_sharing"
-version = "0.3.7"
+version = "0.3.4"
 dependencies = [
  "curve25519-dalek",
  "rand_core",
