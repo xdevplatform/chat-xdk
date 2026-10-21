@@ -786,6 +786,13 @@ their message's format. The sender id must be the sender's numeric user id
 and the conversation key version an integer, as the key-change event carries
 it; anything else is rejected, since v1 recipients derive the key from the
 numeric id and look the key up by the version.
+
+The format follows the X API's `v1_send` feature switch, which the JS,
+Python, Go, .NET and JVM bindings fetch in the background (see
+[ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
+**The Rust crate never fetches it, so `ChatCore` and `Chat` always send
+v0.** They read v1 sends like every binding.
+
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
 while **JS, Python, and Go** take positional `[start, end, type]` tuples

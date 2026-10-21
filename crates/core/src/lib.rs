@@ -93,6 +93,13 @@
 //! - **Signing**: ECDSA signatures
 //! - **Protocol**: Thrift message parsing/serialization
 //!
+//! ## Send format
+//!
+//! Encrypted sends from this crate are always v0, the format 0.5.x sends.
+//! The language bindings move sends to v1 (per-message keys) when the X API's
+//! `v1_send` feature switch turns on, but this crate never fetches the
+//! switches. It reads v1 sends like every binding.
+//!
 //! ## What This SDK Does NOT Do
 //!
 //! - HTTP communication (you handle API calls)

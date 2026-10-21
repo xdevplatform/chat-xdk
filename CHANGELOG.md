@@ -17,7 +17,8 @@ wire formats, and the SDK picks which:
   `MessageCreateEvent` carries `contents_encryption_version` 1, and the send
   is signed at signature version 10, which covers that field.
 
-Sends are v0 unless the X API turns v1 on. Readers need per-message-key
+Sends are v0 unless the X API turns v1 on, and always v0 from the Rust crate,
+which does not fetch the switch. Readers need per-message-key
 support for v1 sends, and 0.5.x returns a decryption error for each of them,
 so upgrade readers first. Other signed actions (conversation-key changes,
 group changes and deletes) still sign at version 7.
