@@ -384,6 +384,13 @@ prepared = chat.prepare_conversation_key_change(
   `chat_xdk_file_encryptor_new` / `chat_xdk_file_decryptor_new` return a
   result and write the handle to an out-parameter.
 
+#### Other breaking changes
+
+- Rust: `SendPayload` gains `event_b64` and `xdk_version` and is
+  `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
+  builds it with a struct literal. A payload stored by 0.5.x still
+  deserializes, with both new fields empty.
+
 ### Added
 
 - Each chat fetches its feature switches from `GET /2/chat/features` in the
