@@ -146,6 +146,8 @@ class TestParams(unittest.TestCase):
             "GroupCreateParams",
             "MessageDeleteParams",
             "MarkConversationReadParams",
+            "SetIdentityParams",
+            "ImportKeysParams",
             "DecryptEventParams",
             "DecryptEventsParams",
             "EncryptFileParams",
@@ -203,8 +205,10 @@ class TestParams(unittest.TestCase):
             FileEncryptorParams,
             GroupCreateParams,
             GroupMembersChangeParams,
+            ImportKeysParams,
             MarkConversationReadParams,
             MessageDeleteParams,
+            SetIdentityParams,
         )
 
         missing_required = [
@@ -217,6 +221,8 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
             lambda: MarkConversationReadParams("conv-1"),
+            lambda: SetIdentityParams("1001"),
+            lambda: ImportKeysParams(),
             lambda: DecryptEventParams(),
             lambda: DecryptEventsParams(),
             lambda: EncryptFileParams(b"file", "event", {}),
@@ -238,6 +244,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
+            lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
             lambda: DecryptEventsParams([], []),
         ]
@@ -314,11 +321,11 @@ class TestApiShapes(unittest.TestCase):
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
 
     def _unlocked_chat(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
         return chat, v
 
     def _signing_key(self, user_id: str, version: str) -> dict:
@@ -886,10 +893,10 @@ class TestApiShapes(unittest.TestCase):
     def test_prepare_mark_conversation_read_defaults_seen_at_to_now(self):
         import time
 
-        from chat_xdk import MarkConversationReadParams
+        from chat_xdk import MarkConversationReadParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("111", "7")
+        chat.set_identity(SetIdentityParams("111", "7"))
 
         before = int(time.time() * 1000)
         sig = chat.prepare_mark_conversation_read(MarkConversationReadParams("g999", "seq-1"))
@@ -947,6 +954,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(chat.decrypt(ciphertext, conv_key), plaintext)
 
     def test_export_lock_reimport_roundtrip(self):
+        from chat_xdk import ImportKeysParams
         chat, v = self._unlocked_chat()
 
         exported = chat.export_keys()
@@ -959,20 +967,20 @@ class TestApiShapes(unittest.TestCase):
         # Locked: export returns None instead of raising.
         self.assertIsNone(chat.export_keys())
 
-        chat.import_keys(bytes(exported))
+        chat.import_keys(ImportKeysParams(bytes(exported)))
         self.assertTrue(chat.is_unlocked())
         keys = chat.get_public_keys()
         self.assertEqual(keys.identity, v["identity_public_b64"])
         self.assertEqual(keys.signing, v["signing_public_b64"])
 
     def test_export_keys_identity_only_round_trip(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ImportKeysParams
 
         v = _load_vectors()
         identity_only = base64.b64decode(v["private_keys_concat_b64"])[:32]
 
         chat = Chat()
-        chat.import_keys(identity_only)
+        chat.import_keys(ImportKeysParams(identity_only))
         # Identity-only sessions can export (32 bytes), matching core; only
         # a session with no identity key at all returns None.
         exported = chat.export_keys()
@@ -1027,10 +1035,10 @@ class TestApiShapes(unittest.TestCase):
             )
 
     def test_url_attachment_with_banner_image_encrypts(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("123", "1")
+        chat.set_identity(SetIdentityParams("123", "1"))
 
         payload = chat.encrypt_message(
             EncryptMessageParams(
@@ -1104,10 +1112,11 @@ class TestApiShapes(unittest.TestCase):
             FileDecryptorParams,
             FileEncryptorParams,
             encrypted_file_size,
+            SetIdentityParams,
         )
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
         keys = {"7": conv_key}
         photos = {"photo-a": bytes(range(256)) * 40, "photo-b": b"second photo"}
@@ -1151,10 +1160,10 @@ class TestApiShapes(unittest.TestCase):
             encryptor.finish()
 
     def _sender_of_files(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
         def send(text, hashes):
@@ -1184,10 +1193,10 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotEqual(send("draft", ["photo-a", "photo-b"]), send("draft", ["photo-a", "photo-b"]))
 
     def test_file_errors_say_what_to_pass(self):
-        from chat_xdk import EncryptFileParams, EncryptMessageParams
+        from chat_xdk import EncryptFileParams, EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
         payload = chat.encrypt_message(
             EncryptMessageParams(
@@ -1208,10 +1217,10 @@ class TestApiShapes(unittest.TestCase):
             self.assertIn(expected, str(ctx.exception))
 
     def test_each_file_needs_its_own_media_hash_key(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         with self.assertRaisesRegex(ValueError, "media_hash_key 'photo' is in more than one attachment"):
             chat.encrypt_message(
                 EncryptMessageParams(
@@ -1323,12 +1332,12 @@ class TestApiShapes(unittest.TestCase):
         self.assertIn("the key for version '1' in the conversation key map is not 32 bytes", str(ctx.exception))
 
     def test_session_identity_is_the_default_sender(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
-        chat.set_identity("1001", "7")
+        chat.set_identity(SetIdentityParams("1001", "7"))
         payload = chat.encrypt_message(
             EncryptMessageParams(
                 "conv-1", "hi",
@@ -1373,7 +1382,7 @@ class TestApiShapes(unittest.TestCase):
             self.assertIn("sender_id", str(ctx.exception))
 
     def test_generated_keys_sign_only_with_the_registered_version(self):
-        from chat_xdk import Chat, MessageDeleteParams
+        from chat_xdk import Chat, MessageDeleteParams, SetIdentityParams, ImportKeysParams
 
         chat = Chat()
         chat.generate_keypairs()
@@ -1383,7 +1392,7 @@ class TestApiShapes(unittest.TestCase):
             )
         self.assertIn("signing_key_version", str(ctx.exception))
 
-        chat.set_identity("1234", "1700000000123")
+        chat.set_identity(SetIdentityParams("1234", "1700000000123"))
         sig = chat.prepare_message_delete(MessageDeleteParams("1234-5678", ["seq-1"], False))
         self.assertEqual(sig["public_key_version"], "1700000000123")
 
@@ -1391,12 +1400,12 @@ class TestApiShapes(unittest.TestCase):
         # without it.
         keys = bytes(chat.export_keys())
         restored = Chat()
-        restored.import_keys(keys, version="1700000000456")
+        restored.import_keys(ImportKeysParams(keys, signing_key_version="1700000000456"))
         sig = restored.prepare_message_delete(
             MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
         )
         self.assertEqual(sig["public_key_version"], "1700000000456")
-        restored.import_keys(keys)
+        restored.import_keys(ImportKeysParams(keys))
         with self.assertRaises(ValueError):
             restored.prepare_message_delete(
                 MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")

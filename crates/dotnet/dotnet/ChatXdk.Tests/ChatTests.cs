@@ -115,7 +115,7 @@ namespace ChatXdk.Tests
             // ExportKeys + ImportKeys is the round-trip that bypasses Juicebox.
             var exported = chat.ExportKeys();
             Assert.NotNull(exported);
-            chat.ImportKeys(exported!);
+            chat.ImportKeys(new ImportKeysParams(exported!));
             return chat;
         }
 
@@ -284,16 +284,16 @@ namespace ChatXdk.Tests
             var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareMessageDelete(deleteParams));
             Assert.Contains("signing_key_version", ex.Message);
 
-            chat.SetIdentity("1234", "1700000000123");
+            chat.SetIdentity(new SetIdentityParams("1234", "1700000000123"));
             Assert.Equal("1700000000123", chat.PrepareMessageDelete(deleteParams).PublicKeyVersion);
 
             // Restored keys carry the version passed to ImportKeys, and none
             // without it.
             var keys = chat.ExportKeys()!;
             using var restored = new Chat();
-            restored.ImportKeys(keys, "1700000000456");
+            restored.ImportKeys(new ImportKeysParams(keys) { SigningKeyVersion = "1700000000456" });
             Assert.Equal("1700000000456", restored.PrepareMessageDelete(deleteParams).PublicKeyVersion);
-            restored.ImportKeys(keys);
+            restored.ImportKeys(new ImportKeysParams(keys));
             Assert.Throws<ChatXdkException>(() => restored.PrepareMessageDelete(deleteParams));
         }
 
@@ -344,7 +344,7 @@ namespace ChatXdk.Tests
             chat.Lock();
             Assert.False(chat.IsUnlocked);
 
-            chat.ImportKeys(exported);
+            chat.ImportKeys(new ImportKeysParams(exported));
             Assert.True(chat.IsUnlocked);
 
             var reimported = chat.GetPublicKeys();
@@ -356,8 +356,8 @@ namespace ChatXdk.Tests
         public void ImportInvalidKeys_Throws()
         {
             using var chat = new Chat();
-            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(new byte[16]));
-            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(Array.Empty<byte>()));
+            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(new ImportKeysParams(new byte[16])));
+            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(new ImportKeysParams(Array.Empty<byte>())));
         }
 
         [Fact]
@@ -369,7 +369,7 @@ namespace ChatXdk.Tests
             // Identity-only sessions can export (32 bytes), matching core;
             // only a session with no identity key at all returns null.
             using var chat = new Chat();
-            chat.ImportKeys(identityOnly);
+            chat.ImportKeys(new ImportKeysParams(identityOnly));
             var exported = chat.ExportKeys();
             Assert.NotNull(exported);
             Assert.Equal(identityOnly, exported);
@@ -508,7 +508,7 @@ namespace ChatXdk.Tests
         public void EncryptMessage_WithMediaAttachment_Succeeds()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity("1001", "s1");
+            chat.SetIdentity(new SetIdentityParams("1001", "s1"));
             var ckey = NewConvKey(chat);
 
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
@@ -559,7 +559,7 @@ namespace ChatXdk.Tests
                 Assert.Contains(key, json);
             }
 
-            chat.SetIdentity("1001", "s1");
+            chat.SetIdentity(new SetIdentityParams("1001", "s1"));
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
             {
                 ConversationKey = ckey,
@@ -740,7 +740,7 @@ namespace ChatXdk.Tests
         public void PrepareMarkConversationRead_DefaultsToSessionIdentityAndNow()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity("111", "7");
+            chat.SetIdentity(new SetIdentityParams("111", "7"));
 
             var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams("g999", "seq-1"));
@@ -971,7 +971,7 @@ namespace ChatXdk.Tests
                 () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, reply.EventB64, ConversationKeys(v), "photo"))).Message);
 
             using var noIdentity = new Chat();
-            noIdentity.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            noIdentity.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
             Assert.Contains("set_identity", Assert.Throws<ChatXdkException>(
                 () => noIdentity.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "a photo")
                 {
@@ -1168,7 +1168,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
             Assert.True(chat.IsUnlocked);
 
             var keys = chat.GetPublicKeys();
@@ -1190,7 +1190,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
 
             Assert.True(chat.VerifyKeyBinding(
                 v.IdentityPublicB64, v.SigningPublicB64, v.IdentityPublicKeySignatureB64));
@@ -1230,7 +1230,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat(); // default reject-unverified policy
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             var signingKeys = EventSigningKeys(v);
 
@@ -1309,7 +1309,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             // No identity set: the error names the missing sender_id.
             var ex = Assert.Throws<ChatXdkException>(() =>
@@ -1320,7 +1320,7 @@ namespace ChatXdk.Tests
                 }));
             Assert.Contains("sender_id", ex.Message);
 
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "session identity")
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
@@ -1339,8 +1339,8 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
 
             chat.SetCacheKeys(true);
             chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }) { SigningKeys = EventSigningKeys(v) });
@@ -1367,7 +1367,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat(); // default reject-unverified policy
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
             chat.SetSigningKeys(EventSigningKeys(v));
 
             var result = chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }));
@@ -1387,7 +1387,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             var result = chat.DecryptEvents(
                 new DecryptEventsParams(new[] { v.EventKeyChangeB64, v.EventReplyValidB64, v.EventReplyForgedB64 })
@@ -1417,8 +1417,8 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
 
             var payload = chat.EncryptReply(new EncryptReplyParams(v.EventConversationId, "a reply", v.EventMessageB64)
             {
@@ -1540,7 +1540,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             var result = chat.DecryptEvents(
                 new DecryptEventsParams(new[] { v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64 })
@@ -1747,7 +1747,7 @@ namespace ChatXdk.Tests
         public void EncryptMessage_MediaAttachment_ZeroDimensions_Succeeds()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity("1001", "s1");
+            chat.SetIdentity(new SetIdentityParams("1001", "s1"));
             var ckey = NewConvKey(chat);
 
             // Width=0 and Height=0 are unusual but must not cause a serialization bug.
@@ -1978,8 +1978,8 @@ namespace ChatXdk.Tests
         private static Chat QuickReplyChat(SdkVectors v)
         {
             var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
             return chat;
         }
 

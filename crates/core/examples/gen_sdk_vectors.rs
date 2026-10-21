@@ -15,6 +15,7 @@ use chat_xdk_core::internals::{self, FixtureAttachment};
 use chat_xdk_core::keys::conversation_keys::encrypt_conversation_key;
 use chat_xdk_core::signatures::build_ckey_change_signature;
 use chat_xdk_core::{AttachmentDescriptor, ChatCore, EncryptMessageParams};
+use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::json;
 
 // Identities and versions embedded in the event vectors. Verifiers need the
@@ -169,7 +170,8 @@ fn main() {
     .expect("frame key change event");
 
     let core = ChatCore::new();
-    core.import_keys(&private_concat).expect("import keys");
+    core.import_keys(&ImportKeysParams::new(private_concat.to_vec()))
+        .expect("import keys");
     let payload = core
         .encrypt_message(
             EncryptMessageParams::new(EVENT_CONVERSATION_ID, EVENT_MESSAGE_TEXT)
@@ -188,7 +190,11 @@ fn main() {
     // Reply vectors: a reply embedding the raw original event, once with the
     // derived (matching) preview and once with a forged preview text, so
     // binding suites can check both validation outcomes.
-    core.set_identity(EVENT_SENDER_ID, EVENT_SIGNING_KEY_VERSION);
+    core.set_identity(&SetIdentityParams::new(
+        EVENT_SENDER_ID,
+        EVENT_SIGNING_KEY_VERSION,
+    ))
+    .unwrap();
     let reply_valid = core
         .encrypt_reply(
             chat_xdk_core::EncryptReplyParams::new(
@@ -373,9 +379,17 @@ fn main() {
     // no key change.
     let replier = ChatCore::new();
     replier
-        .import_keys_with_version(&private_concat, EVENT_RECIPIENT_KEY_VERSION)
+        .import_keys(
+            &ImportKeysParams::new(private_concat.to_vec())
+                .with_signing_key_version(EVENT_RECIPIENT_KEY_VERSION),
+        )
         .expect("import keys");
-    replier.set_identity(EVENT_SENDER_ID, EVENT_SIGNING_KEY_VERSION);
+    replier
+        .set_identity(&SetIdentityParams::new(
+            EVENT_SENDER_ID,
+            EVENT_SIGNING_KEY_VERSION,
+        ))
+        .unwrap();
     replier.set_cache_keys(true);
     let fixture_signing_keys = [chat_xdk_core::SigningKeyEntry {
         user_id: EVENT_SENDER_ID.to_string(),

@@ -22,6 +22,7 @@ from chat_xdk import (  # noqa: E402
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
+    SetIdentityParams,
 )
 
 SENDER = "1001"
@@ -39,7 +40,7 @@ def b64(data):
 def main(out_path):
     chat = Chat()
     registration = chat.generate_keypairs()
-    chat.set_identity(SENDER, SIGNING_KEY_VERSION)
+    chat.set_identity(SetIdentityParams(SENDER, SIGNING_KEY_VERSION))
     assert not chat._is_enabled("v1_send")
     key = dict(conversation_key=CONVERSATION_KEY, conversation_key_version=KEY_VERSION)
     target = dict(conversation_id=CONVERSATION, target_message_sequence_id=TARGET_SEQUENCE_ID)

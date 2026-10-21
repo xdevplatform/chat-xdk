@@ -26,7 +26,7 @@ class ChatTest {
         chat.generateKeypairs();
         byte[] exported = chat.exportKeys();
         assertNotNull(exported);
-        chat.importKeys(exported);
+        chat.importKeys(new ImportKeysParams(exported));
         return chat;
     }
 
@@ -289,7 +289,7 @@ class ChatTest {
             assertEquals(64, exported.length);
             chat.lock();
             assertFalse(chat.isUnlocked());
-            chat.importKeys(exported);
+            chat.importKeys(new ImportKeysParams(exported));
             assertTrue(chat.isUnlocked());
             PublicKeys reimported = chat.getPublicKeys();
             assertEquals(original.identity, reimported.identity);
@@ -360,7 +360,7 @@ class ChatTest {
     @Test
     void encryptMessageUrlAttachmentWithBannerImageSucceeds() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity("1001", "s1");
+            chat.setIdentity(new SetIdentityParams("1001", "s1"));
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
             p.conversationKey = ckey;
@@ -546,7 +546,7 @@ class ChatTest {
     @Test
     void prepareMarkConversationReadDefaultsToSessionIdentityAndNow() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity("111", "7");
+            chat.setIdentity(new SetIdentityParams("111", "7"));
             long before = System.currentTimeMillis();
             ActionSignature sig = chat.prepareMarkConversationRead(
                     new MarkConversationReadParams("g999", "seq-1"));
@@ -582,16 +582,16 @@ class ChatTest {
                     assertThrows(ChatXdkException.class, () -> chat.prepareMessageDelete(p));
             assertTrue(ex.getMessage().contains("signing_key_version"), ex.getMessage());
 
-            chat.setIdentity("1234", "1700000000123");
+            chat.setIdentity(new SetIdentityParams("1234", "1700000000123"));
             assertEquals("1700000000123", chat.prepareMessageDelete(p).publicKeyVersion);
 
             // Restored keys carry the version passed to importKeys, and none
             // without it.
             byte[] keys = chat.exportKeys();
             assertNotNull(keys);
-            restored.importKeys(keys, "1700000000456");
+            restored.importKeys(new ImportKeysParams(keys, "1700000000456"));
             assertEquals("1700000000456", restored.prepareMessageDelete(p).publicKeyVersion);
-            restored.importKeys(keys);
+            restored.importKeys(new ImportKeysParams(keys));
             assertThrows(ChatXdkException.class, () -> restored.prepareMessageDelete(p));
         }
     }
@@ -833,7 +833,7 @@ class ChatTest {
     void vectorsPublicKeysAndSignatureMatchFixture() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"));
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
             assertTrue(chat.isUnlocked());
 
             PublicKeys keys = chat.getPublicKeys();
@@ -857,7 +857,7 @@ class ChatTest {
     void vectorsDecryptEventsBatchAndSingleEventContracts() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) { // default reject-unverified policy
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             List<SigningKeyEntry> signingKeys = eventSigningKeys(v);
             String ckVersion = v.get("event_conversation_key_version").asText();
 
@@ -933,7 +933,7 @@ class ChatTest {
     void vectorsSetIdentityResolvesSenderAndSigningVersion() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             String conversationId = v.get("event_conversation_id").asText();
 
             // No identity set: the error names the missing sender_id.
@@ -944,7 +944,7 @@ class ChatTest {
                     assertThrows(ChatXdkException.class, () -> chat.encryptMessage(withoutIdentity));
             assertTrue(ex.getMessage().contains("sender_id"), ex.getMessage());
 
-            chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+            chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
             EncryptMessageParams p = new EncryptMessageParams(conversationId, "session identity");
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
@@ -962,8 +962,8 @@ class ChatTest {
     void vectorsSetCacheKeysResolvesConversationKeyFromDecryptedKeyChange() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
-            chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+            chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
             String conversationId = v.get("event_conversation_id").asText();
 
             chat.setCacheKeys(true);
@@ -996,7 +996,7 @@ class ChatTest {
     void vectorsSetSigningKeysDecryptWithoutExplicitKeysVerifies() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) { // default reject-unverified policy
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             chat.setSigningKeys(eventSigningKeys(v));
 
             DecryptEventsResult result =
@@ -1018,7 +1018,7 @@ class ChatTest {
     void vectorsReplyPreviewValidationValidAndForged() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
 
             DecryptEventsParams replies = new DecryptEventsParams(List.of(
                     v.get("event_key_change_b64").asText(),
@@ -1047,8 +1047,8 @@ class ChatTest {
     void vectorsEncryptReplyByRawEventSucceeds() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
-            chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+            chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
 
             EncryptReplyParams p = new EncryptReplyParams(
                     v.get("event_conversation_id").asText(), "a reply", v.get("event_message_b64").asText());
@@ -1151,7 +1151,7 @@ class ChatTest {
     void vectorsMessageKeyEventDecryptsInABatchWithItsKeyChange() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             DecryptEventsParams batch = new DecryptEventsParams(List.of(
                     v.get("event_key_change_message_key_b64").asText(),
                     v.get("event_message_key_b64").asText()));
@@ -1458,7 +1458,7 @@ class ChatTest {
             assertTrue(e.getMessage().contains("is media the reply quotes"), e.getMessage());
 
             try (Chat noIdentity = new Chat()) {
-                noIdentity.importKeys(b64(v, "private_keys_concat_b64"));
+                noIdentity.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
                 EncryptMessageParams withPhoto = new EncryptMessageParams(conversationId, "a photo");
                 withPhoto.conversationKey = ckey;
                 withPhoto.conversationKeyVersion = keyVersion;
@@ -1520,8 +1520,8 @@ class ChatTest {
     @Test
     void importInvalidKeysThrows() {
         try (Chat chat = new Chat()) {
-            assertThrows(ChatXdkException.class, () -> chat.importKeys(new byte[16]));
-            assertThrows(ChatXdkException.class, () -> chat.importKeys(new byte[0]));
+            assertThrows(ChatXdkException.class, () -> chat.importKeys(new ImportKeysParams(new byte[16])));
+            assertThrows(ChatXdkException.class, () -> chat.importKeys(new ImportKeysParams(new byte[0])));
         }
     }
 
@@ -1544,7 +1544,7 @@ class ChatTest {
         // Identity-only sessions can export (32 bytes), matching core; only
         // a session with no identity key at all returns null.
         try (Chat chat = new Chat()) {
-            chat.importKeys(identityOnly);
+            chat.importKeys(new ImportKeysParams(identityOnly));
             byte[] exported = chat.exportKeys();
             assertNotNull(exported);
             assertArrayEquals(identityOnly, exported);
@@ -1557,7 +1557,7 @@ class ChatTest {
     @Test
     void setIdentityAndSetRejectUnverifiedSmoke() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity("user-1", "12345");
+            chat.setIdentity(new SetIdentityParams("user-1", "12345"));
             chat.setRejectUnverified(false);
             chat.setRejectUnverified(true);
         }
@@ -1650,8 +1650,8 @@ class ChatTest {
 
     private static Chat quickReplyChat(JsonNode v) throws Exception {
         Chat chat = new Chat();
-        chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
-        chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+        chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+        chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
         return chat;
     }
 

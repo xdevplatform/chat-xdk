@@ -15,7 +15,7 @@
 //!
 //! // On startup: unlock keys and set the session identity once.
 //! chat.unlock(b"2580").await?;
-//! chat.set_identity("1876543210", signing_key_version);
+//! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! chat.set_cache_keys(true);
 //! chat.set_signing_keys(signing_keys);
 //!
@@ -175,7 +175,8 @@ pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, MarkConversationReadParams, MessageDeleteParams,
+    GroupMembersChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    SetIdentityParams,
 };
 pub use types::*;
 
@@ -246,7 +247,7 @@ pub mod prelude {
     pub use crate::params::{
         ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
         EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-        MarkConversationReadParams, MessageDeleteParams,
+        ImportKeysParams, MarkConversationReadParams, MessageDeleteParams, SetIdentityParams,
     };
 
     // Types (always available)

@@ -80,7 +80,7 @@ public static class Register
             && !force;
         if (resuming)
         {
-            chat.ImportKeys(Convert.FromBase64String(File.ReadAllText(BlobPath).Trim()));
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(File.ReadAllText(BlobPath).Trim())));
             var savedBody = marker.GetProperty("body");
             bodyToPost = savedBody;
             ourPublicKey = savedBody.GetProperty("public_key").GetProperty("public_key").GetString() ?? "";
@@ -157,7 +157,7 @@ public static class Register
             return;
         }
 
-        chat.SetIdentity(userId, version);
+        chat.SetIdentity(new SetIdentityParams(userId, version));
         WriteMarker(new Dictionary<string, object?>
         {
             ["registered"] = true,

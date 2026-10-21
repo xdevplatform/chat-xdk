@@ -972,6 +972,58 @@ public final class Types {
         }
     }
 
+    /** Parameters for {@link Chat#setIdentity}. */
+    public static final class SetIdentityParams {
+        /** Your user ID: the sender of everything this chat signs. */
+        public final String userId;
+
+        /** The {@code public_key_version} the X API returned when your keys were registered. */
+        public final String signingKeyVersion;
+
+        /**
+         * Create params with both fields.
+         *
+         * @param userId Your user ID.
+         * @param signingKeyVersion Your registered {@code public_key_version}.
+         */
+        public SetIdentityParams(String userId, String signingKeyVersion) {
+            this.userId = userId;
+            this.signingKeyVersion = signingKeyVersion;
+        }
+    }
+
+    /** Parameters for {@link Chat#importKeys}. */
+    public static final class ImportKeysParams {
+        /** The key blob {@link Chat#exportKeys} returned: 32 or 64 bytes. */
+        public final byte[] keys;
+
+        /**
+         * The {@code public_key_version} the X API returned when the keys were registered; null
+         * leaves the signing-key version unset.
+         */
+        public String signingKeyVersion;
+
+        /**
+         * Create params with the key blob; {@link #signingKeyVersion} defaults to null.
+         *
+         * @param keys The key blob {@link Chat#exportKeys} returned.
+         */
+        public ImportKeysParams(byte[] keys) {
+            this.keys = keys;
+        }
+
+        /**
+         * Create params with the key blob and its registered {@code public_key_version}.
+         *
+         * @param keys The key blob {@link Chat#exportKeys} returned.
+         * @param signingKeyVersion The {@code public_key_version} the keys were registered under.
+         */
+        public ImportKeysParams(byte[] keys, String signingKeyVersion) {
+            this.keys = keys;
+            this.signingKeyVersion = signingKeyVersion;
+        }
+    }
+
     /** Parameters for {@link Chat#decryptEvent}. */
     public static final class DecryptEventParams {
         /** The base64 event, as delivered. */

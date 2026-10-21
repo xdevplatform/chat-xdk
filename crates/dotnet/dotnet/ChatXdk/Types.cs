@@ -882,6 +882,45 @@ namespace ChatXdk
         public long? TtlMsec { get; init; }
     }
 
+    /// <summary>Parameters for <see cref="Chat.SetIdentity"/>.</summary>
+    public sealed class SetIdentityParams
+    {
+        /// <summary>Create params with both fields.</summary>
+        /// <param name="userId">Your user ID: the sender of everything this chat signs.</param>
+        /// <param name="signingKeyVersion">
+        /// The <c>public_key_version</c> the X API returned when your keys were registered.
+        /// </param>
+        public SetIdentityParams(string userId, string signingKeyVersion)
+        {
+            UserId = userId;
+            SigningKeyVersion = signingKeyVersion;
+        }
+
+        /// <summary>Your user ID: the sender of everything this chat signs.</summary>
+        public string UserId { get; }
+        /// <summary>The <c>public_key_version</c> the X API returned when your keys were registered.</summary>
+        public string SigningKeyVersion { get; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.ImportKeys"/>.</summary>
+    public sealed class ImportKeysParams
+    {
+        /// <summary>Create params with the key blob; <see cref="SigningKeyVersion"/> defaults to null.</summary>
+        /// <param name="keys">The key blob <see cref="Chat.ExportKeys"/> returned.</param>
+        public ImportKeysParams(byte[] keys)
+        {
+            Keys = keys;
+        }
+
+        /// <summary>The key blob <see cref="Chat.ExportKeys"/> returned: 32 or 64 bytes.</summary>
+        public byte[] Keys { get; }
+        /// <summary>
+        /// The <c>public_key_version</c> the X API returned when the keys were registered; null
+        /// leaves the signing-key version unset.
+        /// </summary>
+        public string? SigningKeyVersion { get; init; }
+    }
+
     /// <summary>Parameters for <see cref="Chat.DecryptEvent"/>.</summary>
     public sealed class DecryptEventParams
     {

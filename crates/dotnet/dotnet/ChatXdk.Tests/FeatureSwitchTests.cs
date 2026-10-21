@@ -141,7 +141,7 @@ namespace ChatXdk.Tests
         private static Chat WithKeys(Chat chat)
         {
             chat.GenerateKeypairs();
-            chat.SetIdentity("1001", "1");
+            chat.SetIdentity(new SetIdentityParams("1001", "1"));
             return chat;
         }
 
@@ -321,7 +321,7 @@ namespace ChatXdk.Tests
                 chats[0].GenerateKeypairs();
                 var keys = chats[0].ExportKeys()!;
                 foreach (var chat in chats.Skip(1))
-                    chat.ImportKeys(keys);
+                    chat.ImportKeys(new ImportKeysParams(keys));
                 await WaitFor("the key answer", () => chats.All(c => !c.FeatureRefetchDue()));
                 Assert.Equal(new List<string?> { null, Bucket(chats[0]) }, server.Buckets);
             }

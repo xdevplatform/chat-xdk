@@ -88,11 +88,11 @@ class TestPythonSdkVectors(unittest.TestCase):
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
 
     def test_public_keys_and_signature_match_fixture(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
 
         keys = chat.get_public_keys()
         self.assertEqual(keys.identity, v["identity_public_b64"])
@@ -107,11 +107,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertFalse(chat.verify(v["signing_public_b64"], sig_bytes, (v["message_utf8"] + "!").encode("utf-8")))
 
     def test_ecies_conversation_key_roundtrip(self):
-        from chat_xdk import Chat, ConversationKeyChangeParams
+        from chat_xdk import Chat, ConversationKeyChangeParams, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
 
         public_keys = [{"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}]
         result = chat.prepare_conversation_key_change(
@@ -125,16 +125,16 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(decrypted_ckey, result["conversation_key"])
 
     def test_encrypt_message_smoke_and_invalid_import(self):
-        from chat_xdk import Chat, EncryptMessageParams
+        from chat_xdk import Chat, EncryptMessageParams, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
 
         # Invalid import payload (not 32 or 64 bytes)
         with self.assertRaises(Exception):
-            chat.import_keys(b"\x00")
+            chat.import_keys(ImportKeysParams(b"\x00"))
 
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
         payload = chat.encrypt_message(
@@ -154,14 +154,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(payload.signature_info.public_key_version is not None)
 
     def test_decrypt_events_fixture_vectors_batch_and_single(self):
-        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()  # default reject-unverified policy
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
 
         signing_keys = _fixture_signing_keys(v)
 
@@ -209,15 +206,12 @@ class TestPythonSdkVectors(unittest.TestCase):
             )
 
     def test_key_cache_resolves_omitted_conversation_key(self):
-        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessageParams
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessageParams, ImportKeysParams, SetIdentityParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
-        chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
+        chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
         chat.set_cache_keys(True)
 
         result = chat.decrypt_events(
@@ -239,15 +233,12 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(payload.encrypted_content)
 
     def test_key_cache_off_omitted_conversation_key_raises(self):
-        from chat_xdk import Chat, DecryptEventsParams, EncryptMessageParams
+        from chat_xdk import Chat, DecryptEventsParams, EncryptMessageParams, ImportKeysParams, SetIdentityParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
-        chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
+        chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
 
         # Same decrypt, but the cache is off (the default): nothing to resolve.
         result = chat.decrypt_events(
@@ -258,14 +249,11 @@ class TestPythonSdkVectors(unittest.TestCase):
             chat.encrypt_message(EncryptMessageParams(v["event_conversation_id"], "hi"))
 
     def test_signing_key_store_verifies_when_arg_omitted(self):
-        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
         chat.set_signing_keys(_fixture_signing_keys(v))
 
         # No signing_keys anywhere: both decrypt paths fall back to the store
@@ -283,14 +271,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(event["verified"])
 
     def test_reply_preview_validation_valid_and_forged(self):
-        from chat_xdk import Chat, DecryptEventsParams
+        from chat_xdk import Chat, DecryptEventsParams, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
 
         result = chat.decrypt_events(
             DecryptEventsParams(
@@ -323,15 +308,12 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(event["sender_id"], v["event_sender_id"])
 
     def test_encrypt_reply_derives_preview_from_raw_event(self):
-        from chat_xdk import Chat, EncryptReplyParams
+        from chat_xdk import Chat, EncryptReplyParams, ImportKeysParams, SetIdentityParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
-        chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
+        chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
 
         payload = chat.encrypt_reply(
             EncryptReplyParams(
@@ -361,11 +343,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         return event["content"]
 
     def _identity_chat(self, v):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ImportKeysParams, SetIdentityParams
 
         chat = Chat()
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
-        chat.set_identity(v["event_sender_id"], v["event_signing_key_version"])
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
+        chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
         return chat
 
     def test_encrypt_message_quick_reply_round_trips(self):
@@ -617,14 +599,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertIn("no key for version", str(ctx.exception))
 
     def test_message_key_event_decrypts_in_a_batch_with_its_key_change(self):
-        from chat_xdk import Chat, DecryptEventsParams, hex_to_bytes
+        from chat_xdk import Chat, DecryptEventsParams, hex_to_bytes, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(
-            base64.b64decode(v["private_keys_concat_b64"]),
-            version=v["event_recipient_key_version"],
-        )
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
         result = chat.decrypt_events(
             DecryptEventsParams(
                 [v["event_key_change_message_key_b64"], v["event_message_key_b64"]],
@@ -848,11 +827,11 @@ class TestPythonSdkVectors(unittest.TestCase):
             chat.encrypt_file(EncryptFileParams(b"x", reply.event_b64, keys, "original-photo"))
 
     def test_a_message_with_files_needs_an_identity(self):
-        from chat_xdk import Chat, EncryptMessageParams
+        from chat_xdk import Chat, EncryptMessageParams, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
         key = base64.b64decode(v["conversation_key_b64"])
         with self.assertRaisesRegex(ValueError, "call set_identity\\(\\) first"):
             chat.encrypt_message(

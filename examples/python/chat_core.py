@@ -32,6 +32,8 @@ from chat_xdk import (
     GroupCreateParams,
     GroupMembersChangeParams,
     QuickReply,
+    ImportKeysParams,
+    SetIdentityParams,
 )
 
 
@@ -73,7 +75,9 @@ class ChatCore:
         This is the quickstart key-storage path. For production key storage see
         ``unlock`` / ``setup`` (Juicebox).
         """
-        self.chat.import_keys(_b64decode(private_keys_b64), version=signing_key_version)
+        self.chat.import_keys(
+            ImportKeysParams(_b64decode(private_keys_b64), signing_key_version=signing_key_version)
+        )
         self.signing_key_version = signing_key_version
 
     def unlock(self, juicebox_config_json: str, pin: str, signing_key_version: str) -> None:
@@ -99,7 +103,7 @@ class ChatCore:
                 "signing key version unknown: pass load_keys or unlock the "
                 "public_key_version the X API returned when the keys were registered"
             )
-        self.chat.set_identity(user_id, self.signing_key_version)
+        self.chat.set_identity(SetIdentityParams(user_id, self.signing_key_version))
 
     def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None:
         """Store participants' signing keys for decrypt calls that omit them.

@@ -250,6 +250,14 @@ export interface QuickReplyOption {
   description?: string | null;
 }
 
+/** Params for `setIdentity`. */
+export interface SetIdentityParams {
+  /** Your user ID: the sender of everything this chat signs. */
+  userId: string;
+  /** The `public_key_version` the X API returned when your keys were registered. */
+  signingKeyVersion: string;
+}
+
 /**
  * Parameters for encryptMessage.
  */
@@ -947,7 +955,7 @@ interface ChatCrypto {
    * used as defaults wherever a params object omits `senderId` /
    * `signingKeyVersion`.
    */
-  setIdentity(userId: string, signingKeyVersion: string): void;
+  setIdentity(params: SetIdentityParams): void;
 
   /**
    * Enable or disable the conversation-key cache (off by default).
@@ -1140,7 +1148,7 @@ declare class Chat implements ChatCrypto {
 
   setRejectUnverified(reject: boolean): void;
   generateKeypairs(): PublicKeyRegistrationPayload;
-  setIdentity(userId: string, signingKeyVersion: string): void;
+  setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   /**
@@ -1217,7 +1225,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
 
   setRejectUnverified(reject: boolean): void;
   generateKeypairs(): PublicKeyRegistrationPayload;
-  setIdentity(userId: string, signingKeyVersion: string): void;
+  setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   getPublicKeys(): PublicKeys;

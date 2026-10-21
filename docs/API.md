@@ -74,8 +74,8 @@ accounts keep passing `juiceboxConfig` at creation, unchanged.
 | 12 | **get_public_keys** | `→ PublicKeys` | `getPublicKeys() → object` | `get_public_keys() → PublicKeys` | `GetPublicKeys() (*PublicKeys, error)` | `getPublicKeys()` | `GetPublicKeys()` |
 | 13 | **get_public_key_fingerprint** | `→ String` | `getPublicKeyFingerprint() → string` | `get_public_key_fingerprint() → str` | `GetPublicKeyFingerprint() (string, error)` | `getPublicKeyFingerprint()` | `GetPublicKeyFingerprint()` |
 | 14 | **export_keys** | `→ Vec<u8>` | not exposed¹ | `export_keys() → Optional[bytearray]` | `ExportKeys() ([]byte, error)` | `exportKeys()` → `byte[]` | `ExportKeys()` → `byte[]?` |
-| 15 | **import_keys** | `import_keys(&[u8])`; `import_keys_with_version(&[u8], version: &str)` | not exposed¹ | `import_keys(keys: bytes, version: str \| None = None)` | `ImportKeys([]byte) error`; `ImportKeysWithVersion(keys []byte, version string) error` | `importKeys(byte[])`; `importKeys(byte[], String version)` | `ImportKeys(byte[], string? version = null)` |
-| 16 | **set_identity** | `set_identity(user_id, signing_key_version)` | `setIdentity(userId: string, signingKeyVersion: string)` | `set_identity(user_id: str, signing_key_version: str)` | `SetIdentity(userID, signingKeyVersion string) error` | `setIdentity(String userId, String signingKeyVersion)` | `SetIdentity(string userId, string signingKeyVersion)` |
+| 15 | **import_keys** | `import_keys(&ImportKeysParams)` | not exposed¹ | `import_keys(ImportKeysParams)` | `ImportKeys(ImportKeysParams) error` | `importKeys(ImportKeysParams)` | `ImportKeys(ImportKeysParams)` |
+| 16 | **set_identity** | `set_identity(&SetIdentityParams) → Result<()>` | `setIdentity(params: SetIdentityParams)` | `set_identity(SetIdentityParams)` | `SetIdentity(SetIdentityParams) error` | `setIdentity(SetIdentityParams)` | `SetIdentity(SetIdentityParams)` |
 
 ¹ By design: the public JS surface (`createChat()`/`ChatWithJuicebox`) does
 not expose raw key export/import, so raw private key material stays inside
@@ -87,15 +87,19 @@ use). It requires a loaded identity key (the signing key is optional,
 giving a 32-byte export); Python/Go/.NET/JVM return `None`/`nil`/`null`
 when no identity key is loaded, while Rust errors.
 
+Both calls take a params object, as every call with more than one input
+does. `ImportKeysParams` holds the key blob (`keys`) and an optional
+`signing_key_version`; `SetIdentityParams` holds `user_id` and
+`signing_key_version`.
+
 The SDK needs to know the version the X API reports for your registered
 public key, so KeyChange participant entries targeting other key versions are
-skipped. Set it in either of two equivalent ways: pass the optional `version`
-to `import_keys` (Python/.NET/JVM) or call `import_keys_with_version`
-(Rust/Go); or call `set_identity`, which sets it together with the user id.
-After registering the keys from `generate_keypairs`, call `set_identity` with
-the `public_key_version` the registration returns.
+skipped. Set it in either of two equivalent ways: pass `signing_key_version`
+in `ImportKeysParams`, or call `set_identity`, which sets it together with the
+user id. After registering the keys from `generate_keypairs`, call
+`set_identity` with the `public_key_version` the registration returns.
 
-`set_identity(user_id, signing_key_version)` stores the **session identity**.
+`set_identity` stores the **session identity**.
 Every method with optional `sender_id` / `signing_key_version` fields — the
 `encrypt_*` family and the three `prepare_*` methods — resolves omitted values
 from it. An explicit per-call value always overrides, and an omitted value and
@@ -916,7 +920,7 @@ fields:
 
 ```rust
 // Rust — session identity + key cache resolve the omitted fields
-chat.set_identity(my_user_id, signing_key_version);
+chat.set_identity(&SetIdentityParams::new(my_user_id, signing_key_version))?;
 chat.set_cache_keys(true); // filled by decrypt_events
 
 let mut params = EncryptMessageParams::new(conversation_id, "Hello");
@@ -934,7 +938,7 @@ let reaction =
 
 ```typescript
 // JS
-chat.setIdentity(myUserId, signingKeyVersion);
+chat.setIdentity({ userId: myUserId, signingKeyVersion });
 chat.setCacheKeys(true);
 
 const payload = chat.encryptMessage({
@@ -954,9 +958,14 @@ const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: originalE
 
 ```python
 # Python — params classes: required fields positional, optionals as keywords
-from chat_xdk import EncryptMessageParams, EncryptReactionParams, EncryptReplyParams
+from chat_xdk import (
+    EncryptMessageParams,
+    EncryptReactionParams,
+    EncryptReplyParams,
+    SetIdentityParams,
+)
 
-chat.set_identity(my_user_id, signing_key_version)
+chat.set_identity(SetIdentityParams(my_user_id, signing_key_version))
 chat.set_cache_keys(True)
 
 payload = chat.encrypt_message(
@@ -1233,7 +1242,7 @@ await chat.unlock("2580");
 // ── Set the session once ──
 // Identity (sender + signing-key version), signing keys for all
 // participants, and the opt-in conversation-key cache.
-chat.setIdentity(myUserId, mySigningKeyVersion);
+chat.setIdentity({ userId: myUserId, signingKeyVersion: mySigningKeyVersion });
 chat.setCacheKeys(true);
 chat.setSigningKeys([
   { userId: "111", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
@@ -1324,6 +1333,7 @@ from chat_xdk import (
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
+    SetIdentityParams,
     encrypted_file_size,
 )
 
@@ -1331,7 +1341,7 @@ chat = Chat(config_json)
 chat.unlock("2580")
 
 # ── Set the session once ──
-chat.set_identity(my_user_id, my_signing_key_version)
+chat.set_identity(SetIdentityParams(my_user_id, my_signing_key_version))
 chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)  # all participants
 
@@ -1400,7 +1410,7 @@ func main() {
     _ = chat.Unlock([]byte("2580"), juiceboxConfigJSON)
 
     // ── Set the session once ──
-    chat.SetIdentity(myUserID, mySigningKeyVersion)
+    chat.SetIdentity(chatxdk.SetIdentityParams{UserID: myUserID, SigningKeyVersion: mySigningKeyVersion})
     chat.SetCacheKeys(true)
     _ = chat.SetSigningKeys(signingKeys) // all participants
 
@@ -1512,7 +1522,7 @@ let chat = Chat::new(config);
 chat.unlock(b"2580").await?;
 
 // ── Set the session once ──
-chat.set_identity(my_user_id, my_signing_key_version);
+chat.set_identity(&SetIdentityParams::new(my_user_id, my_signing_key_version))?;
 chat.set_cache_keys(true);
 chat.set_signing_keys(signing_keys); // all participants
 
@@ -1583,7 +1593,7 @@ chat.UpdateConfig(juiceboxConfigJson);
 chat.Unlock(pin, juiceboxConfigJson);
 
 // Set the session once: identity, opt-in key cache, signing-key store.
-chat.SetIdentity(myUserId, mySigningKeyVersion);
+chat.SetIdentity(new SetIdentityParams(myUserId, mySigningKeyVersion));
 chat.SetCacheKeys(true);
 chat.SetSigningKeys(signingKeys); // all participants
 
@@ -1651,7 +1661,7 @@ try (Chat chat = new Chat()) {
     chat.unlock("2580", juiceboxConfigJson);
 
     // Set the session once: identity, opt-in key cache, signing-key store.
-    chat.setIdentity(myUserId, mySigningKeyVersion);
+    chat.setIdentity(new SetIdentityParams(myUserId, mySigningKeyVersion));
     chat.setCacheKeys(true);
     chat.setSigningKeys(signingKeys); // all participants
 

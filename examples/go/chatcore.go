@@ -45,7 +45,7 @@ func (c *ChatCore) LoadKeys(privateKeysB64, signingKeyVersion string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.chat.ImportKeysWithVersion(keys, signingKeyVersion); err != nil {
+	if err := c.chat.ImportKeys(chatxdk.ImportKeysParams{Keys: keys, SigningKeyVersion: signingKeyVersion}); err != nil {
 		return err
 	}
 	c.SigningKeyVersion = signingKeyVersion
@@ -60,7 +60,7 @@ func (c *ChatCore) SetIdentity(userID string) error {
 		return errors.New("signing key version unknown: pass LoadKeys the public_key_version " +
 			"the X API returned when the keys were registered")
 	}
-	return c.chat.SetIdentity(userID, c.SigningKeyVersion)
+	return c.chat.SetIdentity(chatxdk.SetIdentityParams{UserID: userID, SigningKeyVersion: c.SigningKeyVersion})
 }
 
 // SetSigningKeys stores the senders' signing keys for decrypt calls that

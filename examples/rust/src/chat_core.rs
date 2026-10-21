@@ -23,6 +23,7 @@ use chat_xdk_core::{
     GroupCreateParams, GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
     PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
+use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
 
 /// Optional extras for [`ChatCore::encrypt_reply`].
@@ -87,8 +88,9 @@ impl ChatCore {
         let bytes = B64
             .decode(private_keys_b64)
             .map_err(|e| SdkError::Parse(format!("invalid base64 private keys: {e}")))?;
-        self.inner
-            .import_keys_with_version(&bytes, signing_key_version)?;
+        self.inner.import_keys(
+            &ImportKeysParams::new(bytes).with_signing_key_version(signing_key_version),
+        )?;
         self.signing_key_version = signing_key_version.to_string();
         Ok(())
     }
@@ -100,7 +102,7 @@ impl ChatCore {
         let bytes = B64
             .decode(private_keys_b64)
             .map_err(|e| SdkError::Parse(format!("invalid base64 private keys: {e}")))?;
-        self.inner.import_keys(&bytes)
+        self.inner.import_keys(&ImportKeysParams::new(bytes))
     }
 
     /// Generate a fresh identity. Returns the registration payload to POST to
@@ -134,8 +136,10 @@ impl ChatCore {
                     .into(),
             ));
         }
-        self.inner.set_identity(user_id, &self.signing_key_version);
-        Ok(())
+        self.inner.set_identity(&SetIdentityParams::new(
+            user_id,
+            self.signing_key_version.as_str(),
+        ))
     }
 
     // -- Conversation keys --------------------------------------------------

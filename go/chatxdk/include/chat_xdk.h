@@ -167,13 +167,13 @@ int32_t chat_xdk_has_identity_key(const struct ChatHandle *handle);
 void chat_xdk_set_reject_unverified(struct ChatHandle *handle, int32_t reject);
 
 /**
- * Set the session identity: the owner's user id and signing-key version,
- * used as defaults wherever a params document leaves `sender_id` /
- * `signing_key_version` unset.
+ * Set the session identity from a params JSON document:
+ * `{"user_id": "...", "signing_key_version": "..."}`. They become the
+ * defaults wherever a params document omits `sender_id` /
+ * `signing_key_version`.
  */
-struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle,
-                                       const char *user_id,
-                                       const char *signing_key_version);
+struct FfiResult chat_xdk_set_identity_params(const struct ChatHandle *handle,
+                                              const char *params_json);
 
 /**
  * Enable (non-zero) or disable (0) the conversation-key cache (off by
@@ -233,22 +233,17 @@ struct FfiResult chat_xdk_get_public_key_fingerprint(const struct ChatHandle *ha
 struct FfiResult chat_xdk_export_keys(const struct ChatHandle *handle);
 
 /**
- * Import private keys from a base64 string.
+ * Import private keys: `keys` / `keys_len` is the blob
+ * `chat_xdk_export_keys` returns (32 bytes for the identity key, 64 with the
+ * signing key), and `params_json` is `{}` or
+ * `{"signing_key_version": "..."}` to record the `public_key_version` the
+ * keys were registered under. The key bytes stay out of the JSON so they are
+ * never copied into a string; NULL with length 0 is an empty blob.
  */
-struct FfiResult chat_xdk_import_keys(const struct ChatHandle *handle, const char *keys_b64);
-
-/**
- * Like `chat_xdk_import_keys` but also records the public key version the
- * keys were registered under, so participant-key filtering and the session
- * `signing_key_version` are set in one call.
- *
- * `keys` are the raw private key bytes (32 or 64) — no base64 transport
- * copy, so the caller-owned buffer is the only copy to wipe.
- */
-struct FfiResult chat_xdk_import_keys_with_version(const struct ChatHandle *handle,
-                                                   const uint8_t *keys,
-                                                   uintptr_t keys_len,
-                                                   const char *version);
+struct FfiResult chat_xdk_import_keys_params(const struct ChatHandle *handle,
+                                             const uint8_t *keys,
+                                             uintptr_t keys_len,
+                                             const char *params_json);
 
 /**
  * `events_json`: JSON array of base64-encoded event strings.

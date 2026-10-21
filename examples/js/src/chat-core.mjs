@@ -76,7 +76,7 @@ export class ChatCore {
   loadKeys(privateKeysB64, signingKeyVersion) {
     const bytes = base64ToBytes(privateKeysB64);
     if (!bytes) throw new Error("invalid base64 private keys");
-    this.#chat.importKeys(bytes, signingKeyVersion);
+    this.#chat.importKeys({ keys: bytes, signingKeyVersion: signingKeyVersion });
     this.signingKeyVersion = signingKeyVersion;
   }
 
@@ -104,7 +104,7 @@ export class ChatCore {
           "the X API returned when the keys were registered",
       );
     }
-    this.#chat.setIdentity(userId, this.signingKeyVersion);
+    this.#chat.setIdentity({ userId: userId, signingKeyVersion: this.signingKeyVersion });
   }
 
   /**

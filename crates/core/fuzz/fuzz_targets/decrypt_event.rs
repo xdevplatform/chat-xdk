@@ -7,6 +7,7 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::{ChatCore, SigningKeyEntry};
+use chat_xdk_core::ImportKeysParams;
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -26,7 +27,7 @@ fn fixture() -> &'static Fixture {
         private_concat[31] = 1;
         private_concat[63] = 2;
         let core = ChatCore::new();
-        core.import_keys_with_version(&private_concat, "1")
+        core.import_keys(&ImportKeysParams::new(private_concat.to_vec()).with_signing_key_version("1"))
             .expect("import keys");
 
         let mut ckey_bytes = vec![0u8; 32];

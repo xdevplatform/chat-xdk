@@ -29,7 +29,7 @@ public sealed class ChatCore : IDisposable
     /// registered.</summary>
     public void LoadKeys(string privateKeysB64, string signingKeyVersion)
     {
-        _chat.ImportKeys(Convert.FromBase64String(privateKeysB64), signingKeyVersion);
+        _chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(privateKeysB64)) { SigningKeyVersion = signingKeyVersion });
         SigningKeyVersion = signingKeyVersion;
     }
 
@@ -43,7 +43,7 @@ public sealed class ChatCore : IDisposable
             throw new InvalidOperationException(
                 "signing key version unknown: pass LoadKeys the public_key_version the X API "
                 + "returned when the keys were registered");
-        _chat.SetIdentity(userId, SigningKeyVersion);
+        _chat.SetIdentity(new SetIdentityParams(userId, SigningKeyVersion));
     }
 
     /// <summary>Generate a fresh identity. Returns the registration payload to

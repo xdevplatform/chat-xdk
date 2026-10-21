@@ -181,11 +181,14 @@ public final class Chat implements AutoCloseable {
      * version is the {@code public_key_version} returned when the keys were
      * registered.
      */
-    public void setIdentity(String userId, String signingKeyVersion) {
+    public void setIdentity(SetIdentityParams parameters) {
         throwIfDisposed();
-        try (Memory user = FfiStrings.utf8(userId);
-                Memory ver = FfiStrings.utf8(signingKeyVersion)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_identity(handle, user, ver));
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("user_id", parameters.userId);
+        n.put("signing_key_version", parameters.signingKeyVersion);
+        try (Memory j = FfiStrings.utf8(n.toString())) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_identity_params(handle, j));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -502,39 +505,34 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Import private keys from a byte array produced by {@link #exportKeys}.
-     * Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-     * No signing-key version is set; {@link #importKeys(byte[], String)} sets it.
+     * Import private keys from the byte array {@link #exportKeys} produced: 32 bytes (identity
+     * only) or 64 bytes (identity + signing). When {@link ImportKeysParams#signingKeyVersion} is
+     * set (the {@code public_key_version} returned when the keys were registered), it is recorded
+     * as well, so participant-key filtering and the session signing-key version are set in one
+     * call. The key bytes are passed to the native side directly, never copied into a string.
      */
-    public void importKeys(byte[] keys) {
+    public void importKeys(ImportKeysParams parameters) {
         throwIfDisposed();
-        String b64 = Base64.getEncoder().encodeToString(keys);
-        try (Memory b64m = FfiStrings.utf8(b64)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_import_keys(handle, b64m));
-        } finally {
-            Reference.reachabilityFence(this);
+        Objects.requireNonNull(parameters, "parameters");
+        byte[] keys = parameters.keys == null ? new byte[0] : parameters.keys;
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        if (parameters.signingKeyVersion != null) {
+            n.put("signing_key_version", parameters.signingKeyVersion);
         }
-    }
-
-    /**
-     * Like {@link #importKeys(byte[])} but also records the
-     * {@code public_key_version} returned when the keys were registered, so
-     * participant-key filtering and the session signing-key version are set in
-     * one call.
-     */
-    public void importKeys(byte[] keys, String version) {
-        throwIfDisposed();
-        Objects.requireNonNull(keys, "keys");
         FfiResult.ByValue r;
-        try (Memory ver = FfiStrings.utf8(version)) {
+        try (Memory j = FfiStrings.utf8(n.toString())) {
             if (keys.length == 0) {
                 // A zero-length Memory cannot be allocated; the native side
                 // treats NULL + length 0 as an empty key blob.
-                r = ChatNative.INSTANCE.chat_xdk_import_keys_with_version(handle, null, 0, ver);
+                r = ChatNative.INSTANCE.chat_xdk_import_keys_params(handle, null, 0, j);
             } else {
                 try (Memory m = new Memory(keys.length)) {
                     m.write(0, keys, 0, keys.length);
-                    r = ChatNative.INSTANCE.chat_xdk_import_keys_with_version(handle, m, keys.length, ver);
+                    try {
+                        r = ChatNative.INSTANCE.chat_xdk_import_keys_params(handle, m, keys.length, j);
+                    } finally {
+                        m.clear();
+                    }
                 }
             }
         } finally {

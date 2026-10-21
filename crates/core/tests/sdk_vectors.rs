@@ -5,6 +5,7 @@ use chat_xdk_core::crypto::{
     keys::{KeypairPurpose, XChatConversationKey},
 };
 use chat_xdk_core::keys::conversation_keys::{decrypt_conversation_key, encrypt_conversation_key};
+use chat_xdk_core::ImportKeysParams;
 use chat_xdk_core::{
     DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams,
 };
@@ -167,9 +168,9 @@ fn vectors_conversation_key_ecies_roundtrip_and_wrong_key_fails() {
 fn vectors_decrypt_events_batch_and_single_event_contracts() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
-    core.import_keys_with_version(
-        &B64.decode(&v.private_keys_concat_b64).unwrap(),
-        &v.event_recipient_key_version,
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
     )
     .unwrap();
 
@@ -293,9 +294,9 @@ fn vectors_failure_event_decodes_type_and_rate_limit_tier() {
 fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new();
-    core.import_keys_with_version(
-        &B64.decode(&v.private_keys_concat_b64).unwrap(),
-        &v.event_recipient_key_version,
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
     )
     .unwrap();
 
@@ -621,9 +622,9 @@ fn vectors_media_errors_say_what_to_pass() {
 fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new();
-    core.import_keys_with_version(
-        &B64.decode(&v.private_keys_concat_b64).unwrap(),
-        &v.event_recipient_key_version,
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
     )
     .unwrap();
     let signing_keys = [

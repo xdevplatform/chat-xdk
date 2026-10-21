@@ -269,7 +269,7 @@ async function register({ force }) {
   version = String(version);
 
   // Records the registered key version and the session identity in one call.
-  chat.setIdentity(userId, version);
+  chat.setIdentity({ userId: userId, signingKeyVersion: version });
 
   await writeMarker({
     registered: true,

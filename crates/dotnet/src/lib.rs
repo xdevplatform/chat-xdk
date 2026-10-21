@@ -25,8 +25,9 @@ use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
     DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
     EncryptReactionParams, EncryptReplyParams, EntityDescriptor, FileDecryptorParams,
-    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, MarkConversationReadParams,
-    MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
+    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, PublicKeyInput, QuickReply, SetIdentityParams,
+    SigningKeyEntry,
 };
 
 // FFI result type
@@ -386,6 +387,18 @@ struct FfiGroupCreateParams {
 // `{"version": "base64 raw 32-byte key"}` and byte fields as base64.
 
 #[derive(serde::Deserialize)]
+struct FfiSetIdentityParams {
+    user_id: String,
+    signing_key_version: String,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiImportKeysParams {
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct FfiDecryptEventParams {
     event_b64: String,
     #[serde(default)]
@@ -555,24 +568,31 @@ pub extern "C" fn chat_xdk_set_reject_unverified(handle: *mut ChatHandle, reject
     })
 }
 
-/// Set the session identity: the owner's user id and signing-key version,
-/// used as the defaults wherever a params document omits `sender_id` /
+/// Set the session identity from a params JSON document:
+/// `{"user_id": "...", "signing_key_version": "..."}`. They become the
+/// defaults wherever a params document omits `sender_id` /
 /// `signing_key_version`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_set_identity(
+pub extern "C" fn chat_xdk_set_identity_params(
     handle: *const ChatHandle,
-    user_id: *const c_char,
-    signing_key_version: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let user_id = try_str!(user_id);
-        let signing_key_version = try_str!(signing_key_version);
-        h.inner.set_identity(user_id, signing_key_version);
-        ok_void()
+        let p: FfiSetIdentityParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        match h
+            .inner
+            .set_identity(&SetIdentityParams::new(p.user_id, p.signing_key_version))
+        {
+            Ok(()) => ok_void(),
+            Err(e) => err_from(e),
+        }
     })
 }
 
@@ -937,53 +957,32 @@ pub extern "C" fn chat_xdk_export_keys(handle: *const ChatHandle) -> FfiResult {
     })
 }
 
-/// Import private key material from a base64 string produced by `chat_xdk_export_keys`.
-///
-/// Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
+/// Import private keys: `keys` / `keys_len` is the blob
+/// `chat_xdk_export_keys` returns (32 bytes for the identity key, 64 with the
+/// signing key), and `params_json` is `{}` or
+/// `{"signing_key_version": "..."}` to record the `public_key_version` the
+/// keys were registered under. The key bytes stay out of the JSON so they are
+/// never copied into a string; NULL with length 0 is an empty blob.
 #[no_mangle]
-pub extern "C" fn chat_xdk_import_keys(
-    handle: *const ChatHandle,
-    keys_b64: *const c_char,
-) -> FfiResult {
-    catch_ffi(|| {
-        if handle.is_null() {
-            return err_result("Null handle");
-        }
-        let h = unsafe { &*handle };
-        let keys_b64 = try_str!(keys_b64);
-        let key_bytes = match BASE64.decode(keys_b64) {
-            Ok(b) => b,
-            Err(e) => return err_result(&format!("Base64 error: {}", e)),
-        };
-        match h.inner.import_keys(&key_bytes) {
-            Ok(()) => ok_void(),
-            Err(e) => err_from(e),
-        }
-    })
-}
-
-/// Like `chat_xdk_import_keys` but takes the raw key bytes and also records
-/// the public key version the keys were registered under, so participant-key
-/// filtering and the session `signing_key_version` are set in one call.
-///
-/// Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-#[no_mangle]
-pub extern "C" fn chat_xdk_import_keys_with_version(
+pub extern "C" fn chat_xdk_import_keys_params(
     handle: *const ChatHandle,
     keys: *const u8,
     keys_len: usize,
-    version: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let version = try_str!(version);
-        // NULL/empty decays to an empty slice so core reports the same
-        // invalid-length error as every other binding.
+        let p: FfiImportKeysParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
         let key_bytes = unsafe { bytes_from_ffi_ptr(keys, keys_len) };
-        match h.inner.import_keys_with_version(key_bytes, version) {
+        let mut params = ImportKeysParams::new(key_bytes);
+        params.signing_key_version = p.signing_key_version.filter(|v| !v.is_empty());
+        match h.inner.import_keys(&params) {
             Ok(()) => ok_void(),
             Err(e) => err_from(e),
         }
@@ -1145,7 +1144,7 @@ fn json_prepared_change(
 /// `params_json` — single JSON document: `public_keys`
 /// (`[{"user_id","public_key","key_version"},...]`), plus optional
 /// `sender_id` / `signing_key_version` (absent resolves from the session
-/// identity set via `chat_xdk_set_identity`) and optional `conversation_id`
+/// identity set via `chat_xdk_set_identity_params`) and optional `conversation_id`
 /// (absent or empty derives the one-to-one id).
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_conversation_key_change(

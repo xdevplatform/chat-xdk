@@ -67,11 +67,11 @@ and two decrypt paths whose contracts are **identical across bindings**:
 - `decryptEvent({ eventB64, conversationKeys, signingKeys })` — single event
   with pre-cached keys. **Throws** on failure.
 
-Each `prepare*`, message `encrypt*`, `decryptEvent(s)` and file method takes
-one params type, named the same in every binding (`DecryptEventParams`,
-`EncryptFileParams`, …), so fields can be added without breaking callers.
-One-input calls (`extractConversationKeys`, `encryptedFileSize`) stay
-positional.
+Each `prepare*`, message `encrypt*`, `decryptEvent(s)` and file method, and
+`setIdentity` and `importKeys`, takes one params type, named the same in
+every binding (`DecryptEventParams`, `EncryptFileParams`, `SetIdentityParams`,
+…), so fields can be added without breaking callers. One-input calls
+(`extractConversationKeys`, `encryptedFileSize`) stay positional.
 
 Don't add speculative configurability or one-off helpers.
 

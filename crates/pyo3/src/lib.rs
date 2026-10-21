@@ -1095,6 +1095,52 @@ impl MessageDeleteParams {
     }
 }
 
+/// Parameters for ``Chat.set_identity``.
+#[pyclass(get_all, set_all)]
+pub struct SetIdentityParams {
+    /// Your user ID: the sender of everything this chat signs.
+    user_id: String,
+    /// The ``public_key_version`` the X API returned when your keys were
+    /// registered.
+    signing_key_version: String,
+}
+
+#[pymethods]
+impl SetIdentityParams {
+    #[new]
+    #[pyo3(signature = (user_id, signing_key_version))]
+    fn new(user_id: String, signing_key_version: String) -> Self {
+        Self {
+            user_id,
+            signing_key_version,
+        }
+    }
+}
+
+/// Parameters for ``Chat.import_keys``.
+#[pyclass(get_all, set_all)]
+pub struct ImportKeysParams {
+    /// Key bytes from ``export_keys()``: 32 (the identity key) or 64 (the
+    /// identity and signing keys).
+    keys: Vec<u8>,
+    /// The ``public_key_version`` the X API returned when the keys were
+    /// registered. When given, it becomes the signing-key version, as with
+    /// ``set_identity``.
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl ImportKeysParams {
+    #[new]
+    #[pyo3(signature = (keys, *, signing_key_version=None))]
+    fn new(keys: Vec<u8>, signing_key_version: Option<String>) -> Self {
+        Self {
+            keys,
+            signing_key_version,
+        }
+    }
+}
+
 /// Parameters for ``Chat.prepare_mark_conversation_read``.
 ///
 /// A read receipt is a signed plaintext event, not an encrypted message, so
@@ -1483,8 +1529,13 @@ impl Chat {
     /// explicitly passed value produce identical signed output. The
     /// signing-key version is the ``public_key_version`` returned when your
     /// keys were registered.
-    fn set_identity(&self, user_id: &str, signing_key_version: &str) {
-        self.inner.set_identity(user_id, signing_key_version);
+    fn set_identity(&self, params: PyRef<'_, SetIdentityParams>) -> PyResult<()> {
+        self.inner
+            .set_identity(&chat_xdk_core::SetIdentityParams::new(
+                params.user_id.as_str(),
+                params.signing_key_version.as_str(),
+            ))
+            .map_err(to_py_err)
     }
 
     /// Enable or disable the conversation-key cache (off by default).
@@ -2208,25 +2259,16 @@ impl Chat {
         Ok(Some(out))
     }
 
-    /// Import private keys from raw bytes.
+    /// Import private keys from the bytes ``export_keys()`` returned: 32
+    /// (identity only) or 64 (identity and signing).
     ///
-    /// Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-    ///
-    /// Args:
-    ///     keys: Raw key bytes from ``export_keys()``.
-    ///     version: Optional ``public_key_version`` returned when the keys
-    ///         were registered; when given, it becomes the signing-key
-    ///         version and enables participant-key filtering by version in
-    ///         the same call. Without it, no signing-key version is set.
-    #[pyo3(signature = (keys, version=None))]
-    fn import_keys(&self, keys: &[u8], version: Option<&str>) -> PyResult<()> {
-        match version {
-            Some(v) => self
-                .inner
-                .import_keys_with_version(keys, v)
-                .map_err(to_py_err),
-            None => self.inner.import_keys(keys).map_err(to_py_err),
-        }
+    /// When ``params.signing_key_version`` is given, it becomes the
+    /// signing-key version and enables participant-key filtering by version
+    /// in the same call. Without it, no signing-key version is set.
+    fn import_keys(&self, params: PyRef<'_, ImportKeysParams>) -> PyResult<()> {
+        let mut core = chat_xdk_core::ImportKeysParams::new(params.keys.as_slice());
+        core.signing_key_version = params.signing_key_version.clone().filter(|v| !v.is_empty());
+        self.inner.import_keys(&core).map_err(to_py_err)
     }
 
     /// Sign arbitrary data. Returns raw signature bytes.
@@ -2441,6 +2483,8 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<GroupMembersChangeParams>()?;
     m.add_class::<GroupCreateParams>()?;
     m.add_class::<MessageDeleteParams>()?;
+    m.add_class::<SetIdentityParams>()?;
+    m.add_class::<ImportKeysParams>()?;
     m.add_class::<MarkConversationReadParams>()?;
     m.add_class::<DecryptEventParams>()?;
     m.add_class::<DecryptEventsParams>()?;

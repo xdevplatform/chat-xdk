@@ -158,7 +158,7 @@ async function delegationTests() {
   assert.equal(chat.matchesRegisteredKey(v.signing_public_b64), false);
 
   // Event decryption over the fixture vectors.
-  chat.setIdentity(v.event_sender_id, v.event_recipient_key_version);
+  chat.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_recipient_key_version });
   const signingKeys = [
     {
       userId: v.event_sender_id,
@@ -213,7 +213,7 @@ async function delegationTests() {
   // setIdentity + setCacheKeys delegations: the session identity and the
   // cached key (populated by the decryptEvents call above re-run with the
   // cache enabled) back an encryptMessage with no explicit identity or key.
-  chat.setIdentity(v.event_sender_id, v.event_signing_key_version);
+  chat.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
   chat.setCacheKeys(true);
   chat.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
   // With no conversationKeys, decryptEvent takes the key from the cache.

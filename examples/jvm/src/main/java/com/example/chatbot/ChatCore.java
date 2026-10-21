@@ -46,7 +46,7 @@ public final class ChatCore implements AutoCloseable {
      * together with the public_key_version the X API returned when it was
      * registered. */
     public void loadKeys(String privateKeysB64, String signingKeyVersion) {
-        chat.importKeys(Base64.getDecoder().decode(privateKeysB64), signingKeyVersion);
+        chat.importKeys(new ImportKeysParams(Base64.getDecoder().decode(privateKeysB64), signingKeyVersion));
         this.signingKeyVersion = signingKeyVersion;
     }
 
@@ -59,7 +59,7 @@ public final class ChatCore implements AutoCloseable {
             throw new IllegalStateException("signing key version unknown: pass loadKeys the "
                     + "public_key_version the X API returned when the keys were registered");
         }
-        chat.setIdentity(userId, signingKeyVersion);
+        chat.setIdentity(new SetIdentityParams(userId, signingKeyVersion));
     }
 
     /** Generated identity: the registration payload + the private blob to persist. */

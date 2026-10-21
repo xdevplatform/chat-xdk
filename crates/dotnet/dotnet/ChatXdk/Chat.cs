@@ -240,14 +240,18 @@ namespace ChatXdk
         /// version is the <c>public_key_version</c> returned when the keys were
         /// registered.
         /// </summary>
-        public void SetIdentity(string userId, string signingKeyVersion)
+        public void SetIdentity(SetIdentityParams parameters)
         {
             ThrowIfDisposed();
-            var user = Utf8Z(userId);
-            var ver = Utf8Z(signingKeyVersion);
-            fixed (byte* userPtr = user)
-            fixed (byte* verPtr = ver)
-                ConsumeResult(NativeMethods.chat_xdk_set_identity(_handle, userPtr, verPtr));
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["user_id"] = parameters.UserId,
+                ["signing_key_version"] = parameters.SigningKeyVersion,
+            }, JsonOpts);
+            var jsonBytes = Utf8Z(json);
+            fixed (byte* jsonPtr = jsonBytes)
+                ConsumeResult(NativeMethods.chat_xdk_set_identity_params(_handle, jsonPtr));
             GC.KeepAlive(this);
         }
 
@@ -524,40 +528,39 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Import private keys from a byte array produced by <see cref="ExportKeys"/>.
-        /// Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-        /// When <paramref name="version"/> is given (the <c>public_key_version</c>
-        /// returned when the keys were registered), it is recorded as well, so
-        /// participant-key filtering and the session signing-key version are set in
-        /// one call. Without it, no signing-key version is set.
+        /// Import private keys from the byte array <see cref="ExportKeys"/> produced: 32 bytes
+        /// (identity only) or 64 bytes (identity + signing). When
+        /// <see cref="ImportKeysParams.SigningKeyVersion"/> is set (the <c>public_key_version</c>
+        /// returned when the keys were registered), it is recorded as well, so participant-key
+        /// filtering and the session signing-key version are set in one call. Without it, no
+        /// signing-key version is set. The key bytes are passed to the native side directly,
+        /// never copied into a string.
         /// </summary>
-        public void ImportKeys(byte[] keys, string? version = null)
+        public void ImportKeys(ImportKeysParams parameters)
         {
             ThrowIfDisposed();
-            if (version != null)
+            ArgumentNullException.ThrowIfNull(parameters);
+            var keys = parameters.Keys ?? Array.Empty<byte>();
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
             {
-                var ver = Utf8Z(version);
+                ["signing_key_version"] = parameters.SigningKeyVersion,
+            }, JsonOpts);
+            var jsonBytes = Utf8Z(json);
+            fixed (byte* jsonPtr = jsonBytes)
+            {
                 // A zero-length array pins to a null pointer on some CLRs; the
                 // native side treats NULL + length 0 as an empty key blob.
                 if (keys.Length == 0)
                 {
-                    fixed (byte* verPtr = ver)
-                        ConsumeResult(NativeMethods.chat_xdk_import_keys_with_version(_handle, null, 0, verPtr));
+                    ConsumeResult(NativeMethods.chat_xdk_import_keys_params(_handle, null, 0, jsonPtr));
                 }
                 else
                 {
                     fixed (byte* keysPtr = keys)
-                    fixed (byte* verPtr = ver)
-                        ConsumeResult(NativeMethods.chat_xdk_import_keys_with_version(
-                            _handle, keysPtr, (nuint)keys.Length, verPtr));
+                        ConsumeResult(NativeMethods.chat_xdk_import_keys_params(
+                            _handle, keysPtr, (nuint)keys.Length, jsonPtr));
                 }
-                GC.KeepAlive(this);
-                return;
             }
-            var b64 = Convert.ToBase64String(keys);
-            var b64Bytes = Utf8Z(b64);
-            fixed (byte* b64Ptr = b64Bytes)
-                ConsumeResult(NativeMethods.chat_xdk_import_keys(_handle, b64Ptr));
             GC.KeepAlive(this);
         }
 

@@ -21,7 +21,10 @@ const KEY_VERSION: &str = "7";
 /// A party whose session identity is its own user id, sending v1.
 fn author() -> Party {
     let party = Party::new(AUTHOR);
-    party.core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
+    party
+        .core
+        .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
     enable_v1_send(&party.core);
     party
 }
@@ -712,7 +715,10 @@ fn a_rebuilt_message_keeps_its_encrypted_files_valid() {
 
     // Another session of the same sender, with other signing keys.
     let restarted = Party::new(AUTHOR);
-    restarted.core.set_identity(AUTHOR, "2");
+    restarted
+        .core
+        .set_identity(&SetIdentityParams::new(AUTHOR, "2"))
+        .unwrap();
     enable_v1_send(&restarted.core);
     for (what, rebuilt) in [
         ("rebuilt", build(&author, "final text")),

@@ -6,7 +6,7 @@
 //! existing callers:
 //!
 //! ```rust,ignore
-//! chat.set_identity("1876543210", signing_key_version);
+//! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 //! params.ttl_msec = Some(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
@@ -41,6 +41,74 @@ use crate::types::{
 fn non_empty(s: impl Into<String>) -> Option<String> {
     let s = s.into();
     (!s.is_empty()).then_some(s)
+}
+
+/// Parameters for [`crate::ChatCore::set_identity`].
+#[derive(Clone, Debug)]
+pub struct SetIdentityParams {
+    /// Your user id: the sender of everything this chat signs.
+    pub user_id: String,
+    /// The `public_key_version` the X API returned when your keys were
+    /// registered.
+    pub signing_key_version: String,
+}
+
+impl SetIdentityParams {
+    /// Create params with both fields.
+    pub fn new(user_id: impl Into<String>, signing_key_version: impl Into<String>) -> Self {
+        Self {
+            user_id: user_id.into(),
+            signing_key_version: signing_key_version.into(),
+        }
+    }
+}
+
+/// Parameters for [`crate::ChatCore::import_keys`].
+///
+/// The key bytes are zeroized when the params are dropped and are redacted
+/// from `Debug` output.
+#[derive(Clone)]
+pub struct ImportKeysParams {
+    /// The key blob from `export_keys`: 32 bytes (the identity key) or 64
+    /// (the identity and signing keys).
+    pub keys: Vec<u8>,
+    /// The `public_key_version` the X API returned when the keys were
+    /// registered. When set, it becomes the signing-key version, as with
+    /// `set_identity`; when unset, the chat has no signing-key version until
+    /// `set_identity` sets one.
+    pub signing_key_version: Option<String>,
+}
+
+impl ImportKeysParams {
+    /// Create params with the key blob; `signing_key_version` defaults to
+    /// `None`.
+    pub fn new(keys: impl Into<Vec<u8>>) -> Self {
+        Self {
+            keys: keys.into(),
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the registered `public_key_version` of the keys.
+    pub fn with_signing_key_version(mut self, signing_key_version: impl Into<String>) -> Self {
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+impl Drop for ImportKeysParams {
+    fn drop(&mut self) {
+        self.keys.zeroize();
+    }
+}
+
+impl std::fmt::Debug for ImportKeysParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportKeysParams")
+            .field("keys", &"[REDACTED]")
+            .field("signing_key_version", &self.signing_key_version)
+            .finish()
+    }
 }
 
 /// Parameters for [`crate::ChatCore::encrypt_message`].

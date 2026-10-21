@@ -43,8 +43,8 @@ JS). POST the payload as returned. Rust:
 
 `generate_keypairs` no longer sets a signing-key version. After you register
 the keys, call `set_identity` with your user id and the `public_key_version`
-the registration returns, or pass that version to `import_keys` when you
-load saved keys. A signed action without a version fails in the SDK with
+the registration returns, or pass that version as `signing_key_version` in
+`ImportKeysParams` when you load saved keys. A signed action without a version fails in the SDK with
 `signing_key_version is not set: pass it explicitly or call set_identity()
 first`. In 0.5.x, `generate_keypairs` set a local timestamp as the version,
 and signed actions were rejected unless the app called `set_identity` with
@@ -57,14 +57,14 @@ await registerPublicKey(userId, payload);
 // After
 const payload = chat.generateKeypairs(); // carries publicKey only
 const publicKeyVersion = await registerPublicKey(userId, payload); // the public_key_version the X API returns
-chat.setIdentity(userId, publicKeyVersion);
+chat.setIdentity({ userId, signingKeyVersion: publicKeyVersion });
 ```
 
 ```python
 # After
 payload = chat.generate_keypairs()
 public_key_version = register_public_key(user_id, payload)
-chat.set_identity(user_id, public_key_version)
+chat.set_identity(SetIdentityParams(user_id, public_key_version))
 ```
 
 Go, .NET, JVM and Rust call `SetIdentity` / `setIdentity` / `set_identity`
@@ -403,6 +403,18 @@ prepared = chat.prepare_conversation_key_change(
   `file_encryptor`, `prepare_conversation_key_change`, `prepare_group_create`
   and `prepare_group_members_change` (and their `_with_version` forms). Add
   `&` at each call.
+- `set_identity` and `import_keys` take a params object, as every call with
+  more than one input does: `SetIdentityParams` (`user_id`,
+  `signing_key_version`) and `ImportKeysParams` (`keys`, optional
+  `signing_key_version`), named the same in every binding.
+  `import_keys_with_version` (Rust), `ImportKeysWithVersion` (Go) and the
+  version overloads of `importKeys` / `ImportKeys` (JVM, .NET) are removed,
+  and Python's `import_keys` takes the version as `signing_key_version` in
+  the params. `set_identity` reports invalid input (Rust returns `Result`).
+  C ABI: `chat_xdk_set_identity` is `chat_xdk_set_identity_params`, and
+  `chat_xdk_import_keys` and `chat_xdk_import_keys_with_version` are
+  `chat_xdk_import_keys_params`, which takes the key bytes by pointer and
+  the version as a params JSON document.
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.

@@ -69,12 +69,13 @@ namespace ChatXdk
         internal static extern void chat_xdk_set_reject_unverified(ChatHandle* handle, int reject);
 
         /// <summary>
-        ///  Set the session identity: the owner's user id and signing-key version,
-        ///  used as the defaults wherever a params document omits `sender_id` /
+        ///  Set the session identity from a params JSON document:
+        ///  `{"user_id": "...", "signing_key_version": "..."}`. They become the
+        ///  defaults wherever a params document omits `sender_id` /
         ///  `signing_key_version`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_set_identity", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_set_identity(ChatHandle* handle, byte* user_id, byte* signing_key_version);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_set_identity_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_set_identity_params(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Enable (non-zero) or disable (zero) the conversation-key cache (off by
@@ -218,22 +219,15 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_export_keys(ChatHandle* handle);
 
         /// <summary>
-        ///  Import private key material from a base64 string produced by `chat_xdk_export_keys`.
-        ///
-        ///  Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
+        ///  Import private keys: `keys` / `keys_len` is the blob
+        ///  `chat_xdk_export_keys` returns (32 bytes for the identity key, 64 with the
+        ///  signing key), and `params_json` is `{}` or
+        ///  `{"signing_key_version": "..."}` to record the `public_key_version` the
+        ///  keys were registered under. The key bytes stay out of the JSON so they are
+        ///  never copied into a string; NULL with length 0 is an empty blob.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_import_keys(ChatHandle* handle, byte* keys_b64);
-
-        /// <summary>
-        ///  Like `chat_xdk_import_keys` but takes the raw key bytes and also records
-        ///  the public key version the keys were registered under, so participant-key
-        ///  filtering and the session `signing_key_version` are set in one call.
-        ///
-        ///  Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-        /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys_with_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_import_keys_with_version(ChatHandle* handle, byte* keys, nuint keys_len, byte* version);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_import_keys_params(ChatHandle* handle, byte* keys, nuint keys_len, byte* params_json);
 
         /// <summary>
         ///  Extract and decrypt conversation keys from raw KeyChange event strings.
@@ -263,7 +257,7 @@ namespace ChatXdk
         ///  `params_json` — single JSON document: `public_keys`
         ///  (`[{"user_id","public_key","key_version"},...]`), plus optional
         ///  `sender_id` / `signing_key_version` (absent resolves from the session
-        ///  identity set via `chat_xdk_set_identity`) and optional `conversation_id`
+        ///  identity set via `chat_xdk_set_identity_params`) and optional `conversation_id`
         ///  (absent or empty derives the one-to-one id).
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_key_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

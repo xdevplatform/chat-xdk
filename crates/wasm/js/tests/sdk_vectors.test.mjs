@@ -53,8 +53,8 @@ async function main() {
   const chat = new Chat();
 
   // import keys (raw bytes, not base64)
-  assert.throws(() => chat.importKeys(new Uint8Array([0])), /Invalid key format|expected/i);
-  chat.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+  assert.throws(() => chat.importKeys({ keys: new Uint8Array([0]) }), /Invalid key format|expected/i);
+  chat.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
   assert.equal(chat.isUnlocked(), true);
 
   // public keys match fixture
@@ -88,8 +88,8 @@ async function main() {
   // and opens from the sent message's event.
   const fixtureKeys = { [v.event_conversation_key_version]: convKey };
   const sender = new Chat();
-  sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-  sender.setIdentity(v.event_sender_id, v.event_signing_key_version);
+  sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+  sender.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
   sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
   const media = (mediaHashKey) => ({
     attachment_type: "media",
@@ -215,7 +215,7 @@ async function main() {
   // A message with files needs a sender identity like any other send.
   {
     const noIdentity = new Chat();
-    noIdentity.importKeys(b64ToBytes(v.private_keys_concat_b64));
+    noIdentity.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
     assert.throws(
       () =>
         noIdentity.encryptMessage({
@@ -310,8 +310,8 @@ async function main() {
   // key pair from the session.
   {
     const session = new Chat();
-    session.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-    session.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    session.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+    session.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
     session.setCacheKeys(true);
     session.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
     const cached = session.encryptMessage({
@@ -344,8 +344,8 @@ async function main() {
   // after the key change decrypted.
   {
     const noCache = new Chat();
-    noCache.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-    noCache.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    noCache.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+    noCache.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
     noCache.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
     assert.throws(
       () => noCache.encryptMessage({ conversationId: v.event_conversation_id, text: "x" }),
@@ -357,7 +357,7 @@ async function main() {
   // the core naming the missing sender_id.
   {
     const noIdentity = new Chat();
-    noIdentity.importKeys(b64ToBytes(v.private_keys_concat_b64));
+    noIdentity.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
     assert.throws(
       () =>
         noIdentity.encryptMessage({
@@ -374,8 +374,8 @@ async function main() {
   // decrypts back to the same quickReply, in the shape decryption returns.
   {
     const qr = new Chat();
-    qr.importKeys(b64ToBytes(v.private_keys_concat_b64));
-    qr.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    qr.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
+    qr.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
     const key = {
       conversationKey: b64ToBytes(v.conversation_key_b64),
       conversationKeyVersion: v.event_conversation_key_version,
@@ -507,7 +507,7 @@ async function main() {
 
     // Batch path: the key change in the batch supplies the conversation key.
     const batchReceiver = new Chat();
-    batchReceiver.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+    batchReceiver.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
     const mkBatch = batchReceiver.decryptEvents({
       events: [v.event_key_change_message_key_b64, v.event_message_key_b64],
       signingKeys: signingKeysFor(v.event_sender_id, v.message_key_sender_id),

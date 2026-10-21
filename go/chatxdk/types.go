@@ -165,6 +165,25 @@ type GroupCreateParams struct {
 	TTLMsec           *int64           `json:"ttl_msec,omitempty"`
 }
 
+// SetIdentityParams are the parameters for SetIdentity.
+type SetIdentityParams struct {
+	// UserID is your user ID: the sender of everything this chat signs.
+	UserID string `json:"user_id"`
+	// SigningKeyVersion is the public_key_version the X API returned when
+	// your keys were registered.
+	SigningKeyVersion string `json:"signing_key_version"`
+}
+
+// ImportKeysParams are the parameters for ImportKeys.
+type ImportKeysParams struct {
+	// Keys is the blob ExportKeys returned. It is passed to the native side
+	// directly and never serialized.
+	Keys []byte `json:"-"`
+	// SigningKeyVersion is the public_key_version the X API returned when the
+	// keys were registered; empty leaves the signing-key version unset.
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
+}
+
 // EncryptMessageParams are the parameters for EncryptMessage.
 //
 // Only ConversationID and Text are required. The identity fields (SenderID,

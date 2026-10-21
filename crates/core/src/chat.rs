@@ -10,7 +10,7 @@
 //! // Create, unlock, and set the session identity once
 //! let chat = Chat::new(juicebox_config);
 //! chat.unlock(b"2580").await?;
-//! chat.set_identity(user_id, signing_key_version);
+//! chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version)).unwrap();
 //! chat.set_cache_keys(true);
 //! chat.set_signing_keys(signing_keys);
 //!
@@ -69,7 +69,8 @@ use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, MarkConversationReadParams, MessageDeleteParams,
+    GroupMembersChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    SetIdentityParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -100,7 +101,7 @@ use zeroize::Zeroize;
 ///
 /// // On subsequent startups
 /// chat.unlock(b"2580").await?;
-/// chat.set_identity(user_id, signing_key_version);
+/// chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version)).unwrap();
 /// chat.set_cache_keys(true);
 /// chat.set_signing_keys(signing_keys);
 ///
@@ -191,8 +192,8 @@ impl Chat {
     /// Set the session identity: the owner's user id and signing-key version,
     /// used as defaults wherever `sender_id` / `signing_key_version` is not
     /// passed explicitly.
-    pub fn set_identity(&self, user_id: impl Into<String>, signing_key_version: impl Into<String>) {
-        self.inner.set_identity(user_id, signing_key_version);
+    pub fn set_identity(&self, params: &SetIdentityParams) -> Result<(), SdkError> {
+        self.inner.set_identity(params)
     }
     /// Enable or disable the conversation-key cache (off by default). While
     /// enabled, `decrypt_events` caches each conversation's verified latest
@@ -271,7 +272,8 @@ impl Chat {
         use crate::keys::juicebox::RecoverResult;
         match self.juicebox.recover_private_key(pin, &self.config).await {
             RecoverResult::Success(secret) => {
-                self.inner.import_keys(&secret)?;
+                self.inner
+                    .import_keys(&ImportKeysParams::new(secret.to_vec()))?;
                 Ok(())
             }
             // Invalid PIN carries the remaining-attempt count from Juicebox so
@@ -508,19 +510,12 @@ impl Chat {
     pub fn export_keys(&self) -> Result<Vec<u8>, SdkError> {
         self.inner.export_keys()
     }
-    /// Import private keys from bytes (32 or 64 bytes). Clears the
-    /// signing-key version of any previously loaded keys.
-    pub fn import_keys(&self, key_bytes: &[u8]) -> Result<(), SdkError> {
-        self.inner.import_keys(key_bytes)
-    }
-    /// Like [`Chat::import_keys`] but also records the public key version the
-    /// keys were registered under.
-    pub fn import_keys_with_version(
-        &self,
-        key_bytes: &[u8],
-        version: &str,
-    ) -> Result<(), SdkError> {
-        self.inner.import_keys_with_version(key_bytes, version)
+    /// Import private keys from the blob `export_keys` returns (32 or 64
+    /// bytes), with their registered `public_key_version` when
+    /// `params.signing_key_version` is set. Clears the signing-key version of
+    /// any previously loaded keys.
+    pub fn import_keys(&self, params: &ImportKeysParams) -> Result<(), SdkError> {
+        self.inner.import_keys(params)
     }
     /// Verify that a signing key is authentically bound to an identity key.
     pub fn verify_key_binding(
@@ -755,7 +750,8 @@ mod tests {
         chat.lock();
         assert!(!chat.is_unlocked());
 
-        chat.import_keys(&exported).unwrap();
+        chat.import_keys(&ImportKeysParams::new(exported.to_vec()))
+            .unwrap();
         assert!(chat.is_unlocked());
 
         let reimported_keys = chat.get_public_keys().unwrap();
@@ -947,7 +943,8 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
-        chat.set_identity("4201", "s1");
+        chat.set_identity(&SetIdentityParams::new("4201", "s1"))
+            .unwrap();
         let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
             .with_conversation_key(ckey.to_bytes(), "1");
         params.reply_to_sequence_id = Some("seq-99".into());
@@ -1225,8 +1222,12 @@ mod tests {
     #[tokio::test]
     async fn test_import_invalid_keys_fails() {
         let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
-        assert!(chat.import_keys(&[0u8; 16]).is_err()); // wrong size
-        assert!(chat.import_keys(&[]).is_err()); // empty
+        assert!(chat
+            .import_keys(&ImportKeysParams::new([0u8; 16].to_vec()))
+            .is_err()); // wrong size
+        assert!(chat
+            .import_keys(&ImportKeysParams::new([].to_vec()))
+            .is_err()); // empty
     }
 
     #[test]
@@ -1422,7 +1423,8 @@ mod tests {
         let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
         chat.generate_keypairs().unwrap();
         chat.setup(b"2580").await.unwrap();
-        chat.set_identity("1000", "1");
+        chat.set_identity(&SetIdentityParams::new("1000", "1"))
+            .unwrap();
         chat
     }
 

@@ -64,7 +64,7 @@ $("btn-load").addEventListener("click", () => {
   const version = $("keyversion").value.trim();
   if (!version) return ($("key-status").textContent = "Enter the key's public_key_version.");
   state.signingKeyVersion = version;
-  chat.importKeys(bytes, state.signingKeyVersion);
+  chat.importKeys({ keys: bytes, signingKeyVersion: state.signingKeyVersion });
   // Opt in to the SDK's conversation-key cache: decryptEvents feeds it and
   // encryptMessage resolves the key from it, so the app keeps no key state.
   chat.setCacheKeys(true);
@@ -79,7 +79,7 @@ $("btn-connect").addEventListener("click", async () => {
     const me = await api("/api/me");
     botUserId = String(me.id);
     // The session identity signs every outgoing message from here on.
-    chat.setIdentity(botUserId, state.signingKeyVersion);
+    chat.setIdentity({ userId: botUserId, signingKeyVersion: state.signingKeyVersion });
     await loadBacklog();
     poll();
   } catch (e) {

@@ -101,16 +101,16 @@ async function main() {
       deleteForAll: false,
     };
     assert.throws(() => fresh.prepareMessageDelete(deleteParams), /signing_key_version is not set/);
-    fresh.setIdentity("1234", "1700000000123");
+    fresh.setIdentity({ userId: "1234", signingKeyVersion: "1700000000123" });
     assert.equal(fresh.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000123");
 
     // Restored keys carry the version passed to importKeys, and none
     // without it.
     const keys = new Uint8Array(fresh.exportKeys());
     const restored = new Chat();
-    restored.importKeys(keys, "1700000000456");
+    restored.importKeys({ keys: keys, signingKeyVersion: "1700000000456" });
     assert.equal(restored.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000456");
-    restored.importKeys(keys);
+    restored.importKeys({ keys: keys });
     assert.throws(
       () => restored.prepareMessageDelete(deleteParams),
       /signing_key_version is not set/,
@@ -121,7 +121,7 @@ async function main() {
 
   // Set up a Chat with the fixture keys (raw crypto, no Juicebox)
   const chat = new Chat();
-  chat.importKeys(b64ToBytes(v.private_keys_concat_b64));
+  chat.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
   assert.equal(chat.isUnlocked(), true);
 
   // 1c. exportKeys returns the exact private bytes that were imported.
@@ -267,8 +267,8 @@ async function main() {
   // the returned eventB64 and the media hash key its attachment names, and
   // decrypts through the sent message's event.
   const sender = new Chat();
-  sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-  sender.setIdentity("111", "1");
+  sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+  sender.setIdentity({ userId: "111", signingKeyVersion: "1" });
   const mediaHashKey = "photo";
   const mediaKeys = { "1": convKey };
   const photoAttachment = (hash) => ({

@@ -29,7 +29,6 @@
 
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroize;
 
 use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
@@ -183,32 +182,33 @@ impl Chat {
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
-    /// Import private keys from raw bytes (`Uint8Array`).
-    ///
-    /// The input bytes are zeroized after import. When `version` is given it
-    /// also records the public key version the keys were registered under
+    /// Import private keys: `{ keys, signingKeyVersion? }`, where `keys` is
+    /// the `Uint8Array` `exportKeys` returned. The SDK's copy of the bytes is
+    /// zeroized after import. When `signingKeyVersion` is given it also
+    /// records the public key version the keys were registered under
     /// (participant-key filtering plus the session `signingKeyVersion`).
     #[wasm_bindgen(js_name = importKeys)]
-    pub fn import_keys(
-        &mut self,
-        mut keys: Vec<u8>,
-        version: Option<String>,
-    ) -> Result<(), JsError> {
-        let result = match version {
-            Some(v) => self.inner.import_keys_with_version(&keys, &v),
-            None => self.inner.import_keys(&keys),
-        }
-        .map_err(|e| JsError::new(&format!("{}", e)));
-        keys.zeroize();
-        result
+    pub fn import_keys(&mut self, params: JsValue) -> Result<(), JsError> {
+        let mut p: JsImportKeysParams = from_js_params("importKeys", params)?;
+        let mut core_params = chat_xdk_core::ImportKeysParams::new(std::mem::take(&mut p.keys));
+        core_params.signing_key_version = p.signing_key_version.take().filter(|v| !v.is_empty());
+        self.inner
+            .import_keys(&core_params)
+            .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
-    /// Set the session identity: the owner's user id and signing-key
-    /// version, used as defaults wherever a params object omits
-    /// `senderId` / `signingKeyVersion`.
+    /// Set the session identity: `{ userId, signingKeyVersion }`, used as
+    /// defaults wherever a params object omits `senderId` /
+    /// `signingKeyVersion`.
     #[wasm_bindgen(js_name = setIdentity)]
-    pub fn set_identity(&self, user_id: &str, signing_key_version: &str) {
-        self.inner.set_identity(user_id, signing_key_version);
+    pub fn set_identity(&self, params: JsValue) -> Result<(), JsError> {
+        let p: JsSetIdentityParams = from_js_params("setIdentity", params)?;
+        self.inner
+            .set_identity(&chat_xdk_core::SetIdentityParams::new(
+                p.user_id,
+                p.signing_key_version,
+            ))
+            .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
     /// Enable or disable the conversation-key cache (off by default).
@@ -1171,6 +1171,20 @@ fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<chat_xdk_core:
 // JS params mirrors — camelCase keys, deserialized from a single JS object.
 // Attachment objects keep the snake_case keys of the wire format (see
 // `AttachmentDescriptor` in the core).
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsSetIdentityParams {
+    user_id: String,
+    signing_key_version: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsImportKeysParams {
+    keys: Vec<u8>,
+    signing_key_version: Option<String>,
+}
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

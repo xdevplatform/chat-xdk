@@ -188,12 +188,15 @@ fn v0_sends_match_0_5_on_the_wire() {
     for (version, json) in FIXTURES {
         let fixture: Value = serde_json::from_str(json).unwrap();
         let core = ChatCore::new();
-        core.import_keys(&bytes(&fixture, "private_keys_b64"))
-            .unwrap();
-        core.set_identity(
+        core.import_keys(&ImportKeysParams::new(
+            bytes(&fixture, "private_keys_b64").to_vec(),
+        ))
+        .unwrap();
+        core.set_identity(&SetIdentityParams::new(
             text(&fixture, "sender_id"),
             text(&fixture, "signing_key_version"),
-        );
+        ))
+        .unwrap();
         assert!(!core.is_enabled(crate::features::V1_SEND));
         let ckey = conversation_key(&fixture);
         let signing_key: SigningKeyEntry =

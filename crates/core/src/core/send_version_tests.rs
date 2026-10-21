@@ -18,7 +18,10 @@ const KEY_VERSION: &str = "7";
 
 fn author() -> Party {
     let party = Party::new(AUTHOR);
-    party.core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
+    party
+        .core
+        .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
     party
 }
 
@@ -233,7 +236,8 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     assert!(!core.feature_refetch_due());
 
     core.generate_keypairs().unwrap();
-    core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
+    core.set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
     assert!(core.feature_refetch_due());
     assert!(!core.is_enabled(crate::features::V1_SEND));
     let ckey = key(3);
@@ -270,7 +274,9 @@ fn the_feature_bucket_follows_the_identity_key() {
     assert_eq!(bucket, crate::features::bucket_for_public_key(&spki));
 
     let restored = ChatCore::new();
-    restored.import_keys(&core.export_keys().unwrap()).unwrap();
+    restored
+        .import_keys(&ImportKeysParams::new(core.export_keys().unwrap().to_vec()))
+        .unwrap();
     assert_eq!(restored.feature_bucket(), Some(bucket));
 
     core.lock();
