@@ -117,8 +117,9 @@ namespace ChatXdk
         public bool ShouldNotify { get; init; }
 
         /// <summary>
-        /// Version of the Chat XDK that built this payload. Send it as the message's
-        /// optional <c>xdk_version</c> field.
+        /// Version of the Chat XDK that built this payload. Do not send it yet: the send
+        /// request takes it as an optional <c>xdk_version</c> field only once the X API
+        /// documents that field.
         /// </summary>
         [JsonPropertyName("xdk_version")]
         public string XdkVersion { get; init; } = "";

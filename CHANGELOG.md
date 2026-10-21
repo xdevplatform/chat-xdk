@@ -384,8 +384,9 @@ prepared = chat.prepare_conversation_key_change(
 - Each chat fetches its feature switches from `GET /2/chat/features` in the
   background, without delaying or failing anything; there is nothing to call.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
-  (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Forward it as the send
-  request's optional `xdk_version` field once the X API accepts it.
+  (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Do not send it yet: the
+  send request takes it as an optional `xdk_version` field only once the X
+  API documents that field.
 - Messages encrypted under per-message keys (`contents_encryption_version`
   1 or more) decrypt, as do their reply previews, edits and files. A reply
   to such a message carries the original's key, and an edit names the

@@ -1839,6 +1839,10 @@ receive, without the fields the server adds on delivery. Pass it to
 `encrypt_file` / `file_encryptor` to encrypt the message's files. It is not a
 field of the send request.
 
+`xdk_version` is the version of the SDK that built the payload. Do not send
+it yet: the send request takes it as an optional `xdk_version` field only
+once the X API documents that field.
+
 ```rust
 // Rust
 pub struct SendPayload {
@@ -1850,7 +1854,7 @@ pub struct SendPayload {
     pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
-    pub xdk_version: String,             // SDK version; send as the optional xdk_version field
+    pub xdk_version: String,             // SDK version; do not send it yet (see below)
 }
 
 // Python (SendPayload class attributes)
