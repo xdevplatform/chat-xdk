@@ -349,8 +349,8 @@ func TestEncryptMessageSmokeAndInvalidImport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -1160,14 +1160,14 @@ func TestEncryptReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 	if payload.ConversationKeyVersion != "1" {
 		t.Errorf("expected conversation_key_version '1', got %q", payload.ConversationKeyVersion)
@@ -1195,8 +1195,8 @@ func TestEncryptAddReaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptAddReaction failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -1224,8 +1224,8 @@ func TestEncryptRemoveReaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptRemoveReaction failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -1254,14 +1254,14 @@ func TestEncryptEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptEdit failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 	if payload.MessageID == "" {
 		t.Error("expected non-empty message_id")
@@ -1430,6 +1430,61 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 	_, err = chat.PrepareMarkConversationRead(MarkConversationReadParams{ConversationID: "g999"})
 	if err == nil || !strings.Contains(err.Error(), "seen_until_sequence_id is empty") {
 		t.Errorf("expected an empty seen_until_sequence_id error, got %v", err)
+	}
+}
+
+// TestSendPayloadTakesTheRequestFieldNames checks that a payload marshals
+// under the send request's field names, and that one stored by 0.5.x, under
+// encrypted_content and encoded_event_signature, still unmarshals.
+func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
+	payload, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "hi",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage failed: %v", err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fields["encoded_message_create_event"] != payload.EncodedMessageCreateEvent ||
+		fields["encoded_message_event_signature"] != payload.EncodedMessageEventSignature {
+		t.Errorf("payload JSON lacks the request field names: %s", data)
+	}
+	for _, old := range []string{"encrypted_content", "encoded_event_signature"} {
+		if _, present := fields[old]; present {
+			t.Errorf("payload JSON carries %s: %s", old, data)
+		}
+	}
+	var roundTrip SendPayload
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(roundTrip, *payload) {
+		t.Errorf("round trip changed the payload: %+v", roundTrip)
+	}
+
+	stored := `{"message_id":"mid","encrypted_content":"enc","signature":"sig",
+		"encoded_event_signature":"esig",
+		"signature_info":{"public_key_version":"1","signature_version":"7"},
+		"conversation_key_version":"1","should_notify":false}`
+	var old SendPayload
+	if err := json.Unmarshal([]byte(stored), &old); err != nil {
+		t.Fatalf("unmarshal a stored payload: %v", err)
+	}
+	if old.MessageID != "mid" || old.EncodedMessageCreateEvent != "enc" || old.Signature != "sig" ||
+		old.EncodedMessageEventSignature != "esig" || old.SignatureInfo.SignatureVersion != "7" {
+		t.Errorf("stored payload read as %+v", old)
 	}
 }
 
@@ -2121,8 +2176,8 @@ func TestEncryptMessageWithEntitiesAndAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage (entities+attachments) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -2230,8 +2285,8 @@ func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage (url attachment with banner) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -2328,8 +2383,8 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply (with attachments) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 }
 
@@ -2367,8 +2422,8 @@ func TestEncryptMessageMediaAttachmentZeroDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage (zero-dimension media) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 }
 
@@ -2550,8 +2605,8 @@ func TestEncryptMessageThenVerifySignature(t *testing.T) {
 	if payload.SignatureInfo.SignatureVersion == "" {
 		t.Error("expected non-empty signature_version in signature_info")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 }
 
@@ -2922,14 +2977,14 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 	if payload.ConversationKeyVersion != v.EventConversationKeyVersion {
 		t.Errorf("expected conversation_key_version %q, got %q", v.EventConversationKeyVersion, payload.ConversationKeyVersion)
@@ -3419,7 +3474,7 @@ func TestEncryptReplyByEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply by event failed: %v", err)
 	}
-	if payload.EncryptedContent == "" || payload.Signature == "" || payload.MessageID == "" {
+	if payload.EncodedMessageCreateEvent == "" || payload.Signature == "" || payload.MessageID == "" {
 		t.Errorf("incomplete payload: %+v", payload)
 	}
 }
@@ -3450,7 +3505,7 @@ func TestEncryptReactionByTargetEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptAddReaction by target event failed: %v", err)
 	}
-	if add.EncryptedContent == "" || add.MessageID == "" {
+	if add.EncodedMessageCreateEvent == "" || add.MessageID == "" {
 		t.Errorf("incomplete add payload: %+v", add)
 	}
 	// The same params value serves the matching remove.

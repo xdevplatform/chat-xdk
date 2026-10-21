@@ -137,7 +137,7 @@ public sealed class ChatCore : IDisposable
                 TtlMsec = ttlMsec,
             });
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature, payload.EventB64);
+        return new SendBody(payload.MessageId, payload.EncodedMessageCreateEvent, payload.EncodedMessageEventSignature, payload.EventB64);
     }
 
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
@@ -156,7 +156,7 @@ public sealed class ChatCore : IDisposable
         };
         var payload = add ? _chat.EncryptAddReaction(parameters) : _chat.EncryptRemoveReaction(parameters);
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature, payload.EventB64);
+        return new SendBody(payload.MessageId, payload.EncodedMessageCreateEvent, payload.EncodedMessageEventSignature, payload.EventB64);
     }
 
     // -- Group management -----------------------------------------------------

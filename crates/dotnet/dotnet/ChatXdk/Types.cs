@@ -89,20 +89,42 @@ namespace ChatXdk
         [JsonPropertyName("event_b64")]
         public string EventB64 { get; init; } = "";
 
-        /// <summary>Base64-encoded ciphertext of the encrypted message event.</summary>
-        [JsonPropertyName("encrypted_content")]
-        public string EncryptedContent { get; init; } = "";
+        /// <summary>
+        /// Base64-encoded Thrift <c>MessageCreateEvent</c> carrying the encrypted contents:
+        /// the send request's <c>encoded_message_create_event</c>.
+        /// </summary>
+        [JsonPropertyName("encoded_message_create_event")]
+        public string EncodedMessageCreateEvent { get; init; } = "";
 
         /// <summary>Base64-encoded raw r||s signature over the encrypted content.</summary>
         [JsonPropertyName("signature")]
         public string Signature { get; init; } = "";
 
         /// <summary>
-        /// Base64-encoded Thrift <c>MessageEventSignature</c>.
-        /// Pass as <c>encoded_message_event_signature</c> in the X API request.
+        /// Base64-encoded Thrift <c>MessageEventSignature</c>: the send request's
+        /// <c>encoded_message_event_signature</c>.
         /// </summary>
+        [JsonPropertyName("encoded_message_event_signature")]
+        public string EncodedMessageEventSignature { get; init; } = "";
+
+        // A payload stored by 0.5.x carries the two fields above under these names.
+        [JsonInclude]
+        [JsonPropertyName("encrypted_content")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        private string? StoredEncryptedContent
+        {
+            get => null;
+            init => EncodedMessageCreateEvent = value ?? EncodedMessageCreateEvent;
+        }
+
+        [JsonInclude]
         [JsonPropertyName("encoded_event_signature")]
-        public string EncodedEventSignature { get; init; } = "";
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        private string? StoredEncodedEventSignature
+        {
+            get => null;
+            init => EncodedMessageEventSignature = value ?? EncodedMessageEventSignature;
+        }
 
         /// <summary>Signing key and signature version metadata for this payload.</summary>
         [JsonPropertyName("signature_info")]

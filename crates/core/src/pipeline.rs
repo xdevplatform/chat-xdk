@@ -281,7 +281,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
     );
     let signature_bytes = serialize_thrift(&signature_struct)?;
-    let encoded_event_signature = base64_encode(&signature_bytes);
+    let encoded_message_event_signature = base64_encode(&signature_bytes);
     outgoing.detail = Some(detail);
     outgoing.message_event_signature = Some(signature_struct);
     let event_b64 = base64_encode(&serialize_thrift(&outgoing)?);
@@ -289,9 +289,9 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     Ok(SendPayload {
         message_id: params.message_id.to_string(),
         event_b64,
-        encrypted_content: base64_encode(&event_bytes),
+        encoded_message_create_event: base64_encode(&event_bytes),
         signature: signature_b64,
-        encoded_event_signature,
+        encoded_message_event_signature,
         signature_info: SignatureInfo {
             public_key_version: params.signing_key_version.to_string(),
             signature_version,
@@ -787,9 +787,9 @@ mod tests {
         );
         let payload = encrypt_and_sign(params).unwrap();
 
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
-        assert!(!payload.encoded_event_signature.is_empty());
+        assert!(!payload.encoded_message_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
         assert!(payload.should_notify);
     }
@@ -1016,8 +1016,12 @@ mod tests {
         let payload = encrypt_and_sign(params).unwrap();
 
         use base64::{engine::general_purpose::STANDARD, Engine};
-        assert!(STANDARD.decode(&payload.encrypted_content).is_ok());
-        assert!(STANDARD.decode(&payload.encoded_event_signature).is_ok());
+        assert!(STANDARD
+            .decode(&payload.encoded_message_create_event)
+            .is_ok());
+        assert!(STANDARD
+            .decode(&payload.encoded_message_event_signature)
+            .is_ok());
     }
 
     // build_thrift_attachments — URL attachments
@@ -1776,7 +1780,7 @@ mod tests {
             "1",
         );
         let payload = encrypt_and_sign(params).unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
     }
 
@@ -1811,7 +1815,7 @@ mod tests {
 
         // Random nonce means different ciphertext each time
         assert_ne!(
-            payload1.encrypted_content, payload2.encrypted_content,
+            payload1.encoded_message_create_event, payload2.encoded_message_create_event,
             "Two encryptions of the same content should differ due to random nonce"
         );
     }

@@ -397,6 +397,13 @@ prepared = chat.prepare_conversation_key_change(
   `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
   builds it with a struct literal. A payload stored by 0.5.x still
   deserializes, with both new fields empty.
+- `SendPayload`'s `encrypted_content` and `encoded_event_signature` are
+  `encoded_message_create_event` and `encoded_message_event_signature`, the
+  send request's field names, in every binding
+  (`encodedMessageCreateEvent` / `encodedMessageEventSignature` in JS and
+  the JVM, `EncodedMessageCreateEvent` / `EncodedMessageEventSignature` in
+  Go and .NET), so the request takes them as they are. A payload stored
+  under the old names still deserializes in Rust, Go, .NET and the JVM.
 - Rust: every encrypt and prepare method takes its params by reference:
   `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
   edit, delete and mark-read methods, and also `encrypt_file`,

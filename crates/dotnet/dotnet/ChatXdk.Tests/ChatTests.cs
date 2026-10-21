@@ -450,9 +450,9 @@ namespace ChatXdk.Tests
                 ConversationKeyVersion = "1",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.Signature);
-            Assert.NotEmpty(payload.EncodedEventSignature);
+            Assert.NotEmpty(payload.EncodedMessageEventSignature);
             Assert.Equal("1", payload.ConversationKeyVersion);
             Assert.Equal("7", payload.SignatureInfo.SignatureVersion);
             Assert.True(payload.ShouldNotify);
@@ -494,7 +494,7 @@ namespace ChatXdk.Tests
                 TtlMsec = 30_000,
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -516,7 +516,7 @@ namespace ChatXdk.Tests
                 },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -536,7 +536,7 @@ namespace ChatXdk.Tests
                 },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -582,7 +582,7 @@ namespace ChatXdk.Tests
                 Attachments = new List<AttachmentDescriptor> { attachment },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.Signature);
         }
 
@@ -607,7 +607,7 @@ namespace ChatXdk.Tests
                 ReplyToText = "Original message",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -654,7 +654,7 @@ namespace ChatXdk.Tests
                 ConversationKeyVersion = "1",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -673,7 +673,7 @@ namespace ChatXdk.Tests
                 ConversationKeyVersion = "1",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         // EncryptEdit
@@ -698,9 +698,42 @@ namespace ChatXdk.Tests
             });
 
             Assert.NotEmpty(payload.MessageId);
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.Signature);
-            Assert.NotEmpty(payload.EncodedEventSignature);
+            Assert.NotEmpty(payload.EncodedMessageEventSignature);
+        }
+
+        [Fact]
+        public void SendPayload_TakesTheRequestFieldNames()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+            var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "hi")
+            {
+                ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            });
+
+            var json = JsonSerializer.SerializeToElement(payload);
+            Assert.Equal(payload.EncodedMessageCreateEvent, json.GetProperty("encoded_message_create_event").GetString());
+            Assert.Equal(payload.EncodedMessageEventSignature, json.GetProperty("encoded_message_event_signature").GetString());
+            Assert.False(json.TryGetProperty("encrypted_content", out _));
+            Assert.False(json.TryGetProperty("encoded_event_signature", out _));
+            var roundTrip = json.Deserialize<SendPayload>()!;
+            Assert.Equal(payload.EncodedMessageCreateEvent, roundTrip.EncodedMessageCreateEvent);
+            Assert.Equal(payload.EncodedMessageEventSignature, roundTrip.EncodedMessageEventSignature);
+
+            // A payload stored by 0.5.x, under the field names it used then.
+            const string stored = """
+                {"message_id":"mid","encrypted_content":"enc","signature":"sig","encoded_event_signature":"esig",
+                 "signature_info":{"public_key_version":"1","signature_version":"7"},
+                 "conversation_key_version":"1","should_notify":false}
+                """;
+            var old = JsonSerializer.Deserialize<SendPayload>(stored)!;
+            Assert.Equal("mid", old.MessageId);
+            Assert.Equal("enc", old.EncodedMessageCreateEvent);
+            Assert.Equal("esig", old.EncodedMessageEventSignature);
+            Assert.Equal("7", old.SignatureInfo.SignatureVersion);
         }
 
         // PrepareMessageDelete
@@ -1388,7 +1421,7 @@ namespace ChatXdk.Tests
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                 ConversationKeyVersion = v.EventConversationKeyVersion,
             });
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.MessageId);
             Assert.Equal(v.EventSigningKeyVersion, payload.SignatureInfo.PublicKeyVersion);
         }
@@ -1413,7 +1446,7 @@ namespace ChatXdk.Tests
 
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "from the key cache"));
             Assert.Equal(v.EventConversationKeyVersion, payload.ConversationKeyVersion);
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
 
             // A file of a message sent from the cache encrypts under the same cached key.
             var photo = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "a photo")
@@ -1496,7 +1529,7 @@ namespace ChatXdk.Tests
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                 ConversationKeyVersion = v.EventConversationKeyVersion,
             });
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.MessageId);
         }
 
@@ -1837,7 +1870,7 @@ namespace ChatXdk.Tests
                 },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         // Verify the correct sign/verify contract end-to-end

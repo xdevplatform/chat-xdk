@@ -561,7 +561,7 @@ other X Chat clients. ECDSA signature values (`MessageEventSignature.signature`,
 also nested in each `ActionSignature`) and byte values embedded inside signed payloads
 (the ciphertext and plaintext conversation key components above) use standard
 base64 **without** padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
-`encrypted_content`, `encoded_event_signature`, and
+`encoded_message_create_event`, `encoded_message_event_signature`, and
 `ActionSignature.encoded_message_event_detail` — use standard base64 **with**
 padding (`base64_encode` in `protocol/serialization.rs`); decoding accepts
 either form (`DecodePaddingMode::Indifferent`), but producers must not swap
@@ -698,9 +698,9 @@ Complete flow for encrypting a message via `encrypt_message()` (the `encrypt_rep
                           event_b64: base64(MessageEvent { message_id,
                                      sender_id, conversation_id,
                                      detail, signature }),
-                          encrypted_content: base64(event_bytes),
+                          encoded_message_create_event: base64(event_bytes),
                           signature: base64(signature),
-                          encoded_event_signature: base64(sig_thrift),
+                          encoded_message_event_signature: base64(sig_thrift),
                           ...
                         }
 ```

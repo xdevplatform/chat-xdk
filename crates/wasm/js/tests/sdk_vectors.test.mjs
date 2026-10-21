@@ -349,14 +349,14 @@ async function main() {
       conversationKeyVersion: v.event_conversation_key_version,
     });
     assert.ok(reply.messageId.length > 0);
-    assert.ok(reply.encryptedContent.length > 0);
+    assert.ok(reply.encodedMessageCreateEvent.length > 0);
 
     // Reacting by raw event derives the conversation id and sequence id.
     const reaction = session.encryptAddReaction({
       emoji: "\u{1F44D}",
       targetEvent: v.event_message_b64,
     });
-    assert.ok(reaction.encryptedContent.length > 0);
+    assert.ok(reaction.encodedMessageCreateEvent.length > 0);
   }
 
   // Without the opt-in cache, an omitted conversation key is an error even

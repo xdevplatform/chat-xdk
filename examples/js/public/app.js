@@ -203,8 +203,8 @@ async function sendMessage(text) {
     body: JSON.stringify({
       conversation_id: signConvId,
       message_id: messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
     }),
   });
   renderMessage({ id: messageId, type: "message", senderId: botUserId, content: { text } });

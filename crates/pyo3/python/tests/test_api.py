@@ -570,9 +570,9 @@ class TestApiShapes(unittest.TestCase):
         )
 
         self.assertTrue(payload.message_id)
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
-        self.assertTrue(payload.encoded_event_signature)
+        self.assertTrue(payload.encoded_message_event_signature)
         self.assertEqual(payload.conversation_key_version, "1")
         self.assertEqual(payload.signature_info.signature_version, "7")
 
@@ -633,9 +633,9 @@ class TestApiShapes(unittest.TestCase):
             conversation_key_version="1",
         )
         for payload in (chat.encrypt_add_reaction(params), chat.encrypt_remove_reaction(params)):
-            self.assertTrue(payload.encrypted_content)
+            self.assertTrue(payload.encoded_message_create_event)
             self.assertTrue(payload.signature)
-            self.assertTrue(payload.encoded_event_signature)
+            self.assertTrue(payload.encoded_message_event_signature)
 
     def test_encrypt_edit_shape(self):
         from chat_xdk import EncryptEditParams
@@ -656,9 +656,9 @@ class TestApiShapes(unittest.TestCase):
             )
         )
 
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
-        self.assertTrue(payload.encoded_event_signature)
+        self.assertTrue(payload.encoded_message_event_signature)
         self.assertTrue(payload.message_id)
 
     def test_prepare_conversation_key_change_shape(self):
@@ -1124,7 +1124,7 @@ class TestApiShapes(unittest.TestCase):
                 ],
             )
         )
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
         self.assertTrue(payload.message_id)
 
@@ -1403,7 +1403,7 @@ class TestApiShapes(unittest.TestCase):
             )
         )
         self.assertEqual(payload.signature_info.public_key_version, "7")
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
 
         # The explicit-override form signs with the same key version and
         # produces an equally complete payload.
@@ -1417,7 +1417,7 @@ class TestApiShapes(unittest.TestCase):
             )
         )
         self.assertEqual(explicit.signature_info.public_key_version, "7")
-        self.assertTrue(explicit.encrypted_content)
+        self.assertTrue(explicit.encoded_message_create_event)
         self.assertTrue(explicit.signature)
 
     def test_encrypt_without_identity_mentions_sender_id(self):

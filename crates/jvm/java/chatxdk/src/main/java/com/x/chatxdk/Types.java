@@ -1,5 +1,6 @@
 package com.x.chatxdk;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -100,20 +101,27 @@ public final class Types {
         @JsonProperty("event_b64")
         public String eventB64 = "";
 
-        /** Base64-encoded ciphertext of the encrypted message event. */
-        @JsonProperty("encrypted_content")
-        public String encryptedContent = "";
+        /**
+         * Base64-encoded Thrift {@code MessageCreateEvent} carrying the encrypted contents: the
+         * send request's {@code encoded_message_create_event}. A payload stored by 0.5.x carries
+         * it as {@code encrypted_content}, which also reads.
+         */
+        @JsonProperty("encoded_message_create_event")
+        @JsonAlias("encrypted_content")
+        public String encodedMessageCreateEvent = "";
 
         /** Base64-encoded raw r||s signature over the encrypted content. */
         @JsonProperty("signature")
         public String signature = "";
 
         /**
-         * Base64-encoded Thrift {@code MessageEventSignature}.
-         * Pass as {@code encoded_message_event_signature} in the X API request.
+         * Base64-encoded Thrift {@code MessageEventSignature}: the send request's
+         * {@code encoded_message_event_signature}. A payload stored by 0.5.x carries it as
+         * {@code encoded_event_signature}, which also reads.
          */
-        @JsonProperty("encoded_event_signature")
-        public String encodedEventSignature = "";
+        @JsonProperty("encoded_message_event_signature")
+        @JsonAlias("encoded_event_signature")
+        public String encodedMessageEventSignature = "";
 
         /** Signing key and signature version metadata for this payload. */
         @JsonProperty("signature_info")

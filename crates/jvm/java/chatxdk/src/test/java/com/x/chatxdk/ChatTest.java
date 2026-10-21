@@ -329,9 +329,9 @@ class ChatTest {
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptMessage(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
             assertEquals("7", payload.signatureInfo.signatureVersion);
             assertTrue(payload.shouldNotify);
@@ -413,7 +413,7 @@ class ChatTest {
 
             p.attachments = java.util.List.of(attachment);
             SendPayload payload = chat.encryptMessage(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.messageId.isEmpty());
         }
@@ -434,9 +434,9 @@ class ChatTest {
             p.replyToSenderId = "12345";
             p.replyToText = "Original message";
             SendPayload payload = chat.encryptReply(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
             assertEquals("7", payload.signatureInfo.signatureVersion);
         }
@@ -478,9 +478,9 @@ class ChatTest {
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptAddReaction(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
@@ -497,9 +497,9 @@ class ChatTest {
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptRemoveReaction(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
@@ -524,9 +524,37 @@ class ChatTest {
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptEdit(p);
             assertFalse(payload.messageId.isEmpty());
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
+        }
+    }
+
+    @Test
+    void sendPayloadTakesTheRequestFieldNames() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            EncryptMessageParams params = new EncryptMessageParams(v.get("event_conversation_id").asText(), "hi");
+            params.conversationKey = b64(v, "conversation_key_b64");
+            params.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+            SendPayload payload = chat.encryptMessage(params);
+
+            JsonNode json = ChatJson.MAPPER.valueToTree(payload);
+            assertEquals(payload.encodedMessageCreateEvent, json.get("encoded_message_create_event").asText());
+            assertEquals(payload.encodedMessageEventSignature, json.get("encoded_message_event_signature").asText());
+            assertFalse(json.has("encrypted_content"), json.toString());
+            assertFalse(json.has("encoded_event_signature"), json.toString());
+
+            // A payload stored by 0.5.x, under the field names it used then.
+            String stored = "{\"message_id\":\"mid\",\"encrypted_content\":\"enc\",\"signature\":\"sig\","
+                    + "\"encoded_event_signature\":\"esig\","
+                    + "\"signature_info\":{\"public_key_version\":\"1\",\"signature_version\":\"7\"},"
+                    + "\"conversation_key_version\":\"1\",\"should_notify\":false}";
+            SendPayload old = ChatJson.MAPPER.readValue(stored, SendPayload.class);
+            assertEquals("mid", old.messageId);
+            assertEquals("enc", old.encodedMessageCreateEvent);
+            assertEquals("esig", old.encodedMessageEventSignature);
+            assertEquals("7", old.signatureInfo.signatureVersion);
         }
     }
 
@@ -1006,7 +1034,7 @@ class ChatTest {
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
             SendPayload payload = chat.encryptMessage(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.messageId.isEmpty());
             assertEquals(v.get("event_signing_key_version").asText(), payload.signatureInfo.publicKeyVersion);
         }
@@ -1037,7 +1065,7 @@ class ChatTest {
             SendPayload payload =
                     chat.encryptMessage(new EncryptMessageParams(conversationId, "from the key cache"));
             assertEquals(v.get("event_conversation_key_version").asText(), payload.conversationKeyVersion);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
 
             // A file of a message sent from the cache encrypts under the same cached key.
             EncryptMessageParams withPhoto = new EncryptMessageParams(conversationId, "a photo");
@@ -1121,7 +1149,7 @@ class ChatTest {
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
             SendPayload payload = chat.encryptReply(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.messageId.isEmpty());
         }
     }

@@ -1289,12 +1289,12 @@ mod tests {
         assert!(!core
             .encrypt_add_reaction(&params)
             .unwrap()
-            .encrypted_content
+            .encoded_message_create_event
             .is_empty());
         assert!(!core
             .encrypt_remove_reaction(&params)
             .unwrap()
-            .encrypted_content
+            .encoded_message_create_event
             .is_empty());
     }
 

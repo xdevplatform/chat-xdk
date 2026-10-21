@@ -22,7 +22,7 @@ Quick Start:
                              conversation_key=key,
                              conversation_key_version=version)
     )
-    # payload.message_id, payload.encrypted_content, payload.signature, etc.
+    # payload.message_id, payload.encoded_message_create_event, payload.signature, etc.
 """
 
 __version__ = "0.1.0"

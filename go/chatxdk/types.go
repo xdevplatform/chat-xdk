@@ -36,17 +36,46 @@ type SendPayload struct {
 	// receive, without the fields the server assigns. Pass it to EncryptFile
 	// or FileEncryptor to encrypt the message's files, or to DecryptEvent to
 	// read the message back.
-	EventB64               string        `json:"event_b64"`
-	EncryptedContent       string        `json:"encrypted_content"`
-	Signature              string        `json:"signature"`
-	EncodedEventSignature  string        `json:"encoded_event_signature"`
-	SignatureInfo          SignatureInfo `json:"signature_info"`
-	ConversationKeyVersion string        `json:"conversation_key_version"`
-	ShouldNotify           bool          `json:"should_notify"`
+	EventB64 string `json:"event_b64"`
+	// EncodedMessageCreateEvent is the base64 Thrift MessageCreateEvent
+	// carrying the encrypted contents: the send request's
+	// encoded_message_create_event.
+	EncodedMessageCreateEvent string `json:"encoded_message_create_event"`
+	Signature                 string `json:"signature"`
+	// EncodedMessageEventSignature is the base64 Thrift
+	// MessageEventSignature: the send request's
+	// encoded_message_event_signature.
+	EncodedMessageEventSignature string        `json:"encoded_message_event_signature"`
+	SignatureInfo                SignatureInfo `json:"signature_info"`
+	ConversationKeyVersion       string        `json:"conversation_key_version"`
+	ShouldNotify                 bool          `json:"should_notify"`
 	// XdkVersion is the version of the Chat XDK that built the payload. Do
 	// not send it yet: the send request takes it as an optional xdk_version
 	// field only once the X API documents that field.
 	XdkVersion string `json:"xdk_version"`
+}
+
+// UnmarshalJSON also reads a payload stored by 0.5.x, which carries
+// EncodedMessageCreateEvent as encrypted_content and
+// EncodedMessageEventSignature as encoded_event_signature.
+func (p *SendPayload) UnmarshalJSON(data []byte) error {
+	type plain SendPayload
+	var stored struct {
+		plain
+		EncryptedContent      *string `json:"encrypted_content"`
+		EncodedEventSignature *string `json:"encoded_event_signature"`
+	}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return err
+	}
+	*p = SendPayload(stored.plain)
+	if stored.EncryptedContent != nil && p.EncodedMessageCreateEvent == "" {
+		p.EncodedMessageCreateEvent = *stored.EncryptedContent
+	}
+	if stored.EncodedEventSignature != nil && p.EncodedMessageEventSignature == "" {
+		p.EncodedMessageEventSignature = *stored.EncodedEventSignature
+	}
+	return nil
 }
 
 // SignatureInfo contains metadata about the signing key used.

@@ -1901,7 +1901,13 @@ For reactions and edits, `targetMessageId` is the message **sequenceId**.
 
 ### SendPayload
 
-Returned by `encrypt_message()` and all `encrypt_*()` methods.
+Returned by `encrypt_message()` and all `encrypt_*()` methods. The fields the
+send request takes carry its names: send `message_id`,
+`encoded_message_create_event` and `encoded_message_event_signature` as they
+are (JS returns them camelCased, as `messageId`,
+`encodedMessageCreateEvent` and `encodedMessageEventSignature`). A payload
+stored by 0.5.x, which named the last two `encrypted_content` and
+`encoded_event_signature`, still deserializes in Rust, Go, .NET and the JVM.
 
 The SDK generates the `message_id` (a UUID) and embeds it in the signed
 event: derived from its files for a v1 message with files (see
@@ -1924,9 +1930,9 @@ once the X API documents that field.
 pub struct SendPayload {
     pub message_id: String,              // UUID, also embedded in the signed event
     pub event_b64: String,               // the outgoing message as a base64 event
-    pub encrypted_content: String,       // Base64-encoded Thrift MessageCreateEvent
-    pub signature: String,               // Base64-encoded ECDSA signature
-    pub encoded_event_signature: String, // Base64-encoded Thrift MessageEventSignature
+    pub encoded_message_create_event: String,    // Base64-encoded Thrift MessageCreateEvent
+    pub signature: String,                       // Base64-encoded ECDSA signature
+    pub encoded_message_event_signature: String, // Base64-encoded Thrift MessageEventSignature
     pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
@@ -1936,9 +1942,9 @@ pub struct SendPayload {
 // Python (SendPayload class attributes)
 // message_id: str
 // event_b64: str
-// encrypted_content: str
+// encoded_message_create_event: str
 // signature: str
-// encoded_event_signature: str
+// encoded_message_event_signature: str
 // signature_info: SignatureInfo
 // conversation_key_version: str
 // should_notify: bool

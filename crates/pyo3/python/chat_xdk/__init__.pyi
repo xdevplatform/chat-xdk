@@ -75,9 +75,9 @@ class SignatureInfo:
 class SendPayload:
     message_id: str
     event_b64: str
-    encrypted_content: str
+    encoded_message_create_event: str
     signature: str
-    encoded_event_signature: str
+    encoded_message_event_signature: str
     signature_info: SignatureInfo
     conversation_key_version: str
     should_notify: bool

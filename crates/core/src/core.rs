@@ -4556,14 +4556,14 @@ mod tests {
             )
             .unwrap();
 
-        // The SendPayload.encrypted_content is the MCE; wrap it in a full
+        // The SendPayload.encoded_message_create_event is the MCE; wrap it in a full
         // MessageEvent with the embedded signature, like the backend does.
-        let mce_bytes = base64_decode(&payload.encrypted_content).unwrap();
+        let mce_bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
         let mce = parse_message_event(&mce_bytes)
             .ok()
             .and_then(|e| e.detail)
             .or_else(|| {
-                // encrypted_content is just the MCE struct, not a MessageEvent.
+                // encoded_message_create_event is just the MCE struct, not a MessageEvent.
                 let cursor = Cursor::new(mce_bytes.clone());
                 let mut raw = TBinaryInputProtocol::new(cursor, true);
                 let mut p = BoundedProtocol::new(&mut raw);
@@ -4886,7 +4886,7 @@ mod tests {
         }]);
         let payload = core.encrypt_message(&params).unwrap();
 
-        let mce_bytes = base64_decode(&payload.encrypted_content).unwrap();
+        let mce_bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
         let cursor = Cursor::new(mce_bytes);
         let mut raw = TBinaryInputProtocol::new(cursor, true);
         let mut p = BoundedProtocol::new(&mut raw);
@@ -4996,7 +4996,7 @@ mod tests {
             )
             .unwrap();
 
-        let mce_bytes = base64_decode(&payload.encrypted_content).unwrap();
+        let mce_bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
         let cursor = Cursor::new(mce_bytes);
         let mut raw = TBinaryInputProtocol::new(cursor, true);
         let mut p = BoundedProtocol::new(&mut raw);
@@ -5102,7 +5102,7 @@ mod tests {
                 )
                 .unwrap();
 
-            let mce_bytes = base64_decode(&payload.encrypted_content).unwrap();
+            let mce_bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
             let cursor = Cursor::new(mce_bytes);
             let mut raw = TBinaryInputProtocol::new(cursor, true);
             let mut p = BoundedProtocol::new(&mut raw);
@@ -8313,7 +8313,7 @@ mod tests {
         sender_id: &str,
         conversation_id: &str,
     ) -> String {
-        let mce_bytes = base64_decode(&payload.encrypted_content).unwrap();
+        let mce_bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
         let mce = parse_message_event(&mce_bytes)
             .ok()
             .and_then(|e| e.detail)
@@ -9204,7 +9204,7 @@ mod tests {
         conversation_id: &str,
         sequence_id: &str,
     ) -> String {
-        let mce_bytes = base64_decode(&payload.encrypted_content).unwrap();
+        let mce_bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
         let mce = parse_message_event(&mce_bytes)
             .ok()
             .and_then(|e| e.detail)

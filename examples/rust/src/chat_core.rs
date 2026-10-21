@@ -237,8 +237,8 @@ impl ChatCore {
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
-            encoded_message_create_event: payload.encrypted_content,
-            encoded_message_event_signature: payload.encoded_event_signature,
+            encoded_message_create_event: payload.encoded_message_create_event,
+            encoded_message_event_signature: payload.encoded_message_event_signature,
             conversation_token: None,
             event_b64: payload.event_b64,
         })
@@ -264,8 +264,8 @@ impl ChatCore {
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
-            encoded_message_create_event: payload.encrypted_content,
-            encoded_message_event_signature: payload.encoded_event_signature,
+            encoded_message_create_event: payload.encoded_message_create_event,
+            encoded_message_event_signature: payload.encoded_message_event_signature,
             conversation_token: None,
             event_b64: payload.event_b64,
         })

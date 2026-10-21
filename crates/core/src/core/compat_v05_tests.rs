@@ -213,7 +213,7 @@ fn v0_sends_match_0_5_on_the_wire() {
 
             let mut theirs_create: MessageCreateEvent = read(&bytes(send, "encrypted_content"));
             let mut ours_create: MessageCreateEvent =
-                read(&base64_decode(&ours.encrypted_content).unwrap());
+                read(&base64_decode(&ours.encoded_message_create_event).unwrap());
             assert_eq!(ours_create.contents_encryption_version, None);
             let ours_contents = ours_create.contents.take().unwrap();
             let theirs_contents = theirs_create.contents.take().unwrap();
@@ -231,7 +231,7 @@ fn v0_sends_match_0_5_on_the_wire() {
             let mut theirs_signature: MessageEventSignature =
                 read(&bytes(send, "encoded_event_signature"));
             let mut ours_signature: MessageEventSignature =
-                read(&base64_decode(&ours.encoded_event_signature).unwrap());
+                read(&base64_decode(&ours.encoded_message_event_signature).unwrap());
             theirs_signature.signature = None;
             ours_signature.signature = None;
             assert_eq!(

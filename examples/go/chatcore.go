@@ -218,8 +218,8 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 	return &SendBody{
 		// The SDK generates the message id and returns it in the payload.
 		MessageID:                    payload.MessageID,
-		EncodedMessageCreateEvent:    payload.EncryptedContent,
-		EncodedMessageEventSignature: payload.EncodedEventSignature,
+		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
+		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
 		EventB64:                     payload.EventB64,
 	}, nil
 }
@@ -255,8 +255,8 @@ func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conve
 	return &SendBody{
 		// The SDK generates the message id and returns it in the payload.
 		MessageID:                    payload.MessageID,
-		EncodedMessageCreateEvent:    payload.EncryptedContent,
-		EncodedMessageEventSignature: payload.EncodedEventSignature,
+		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
+		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
 		EventB64:                     payload.EventB64,
 	}, nil
 }

@@ -410,7 +410,11 @@ async function main() {
   // The SDK generates and returns the message id.
   assert.equal(typeof payload.messageId, "string");
   assert.ok(payload.messageId.length > 0);
-  assert.equal(typeof payload.encryptedContent, "string");
+  // The payload's fields take the send request's names.
+  assert.ok(payload.encodedMessageCreateEvent.length > 0);
+  assert.ok(payload.encodedMessageEventSignature.length > 0);
+  assert.equal(payload.encryptedContent, undefined);
+  assert.equal(payload.encodedEventSignature, undefined);
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
   assert.equal(payload.signatureInfo.signatureVersion, "7");
@@ -430,9 +434,9 @@ async function main() {
     replyToSenderId: "12345",
     replyToText: "original message",
   });
-  assert.ok(replyPayload.encryptedContent.length > 0);
+  assert.ok(replyPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(replyPayload.signature.length > 0);
-  assert.ok(replyPayload.encodedEventSignature.length > 0);
+  assert.ok(replyPayload.encodedMessageEventSignature.length > 0);
   assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
@@ -524,13 +528,13 @@ async function main() {
     signingKeyVersion: "1",
   };
   const addPayload = chat.encryptAddReaction(reactionParams);
-  assert.ok(addPayload.encryptedContent.length > 0);
+  assert.ok(addPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(addPayload.signature.length > 0);
-  assert.ok(addPayload.encodedEventSignature.length > 0);
+  assert.ok(addPayload.encodedMessageEventSignature.length > 0);
   const removePayload = chat.encryptRemoveReaction(reactionParams);
-  assert.ok(removePayload.encryptedContent.length > 0);
+  assert.ok(removePayload.encodedMessageCreateEvent.length > 0);
   assert.ok(removePayload.signature.length > 0);
-  assert.ok(removePayload.encodedEventSignature.length > 0);
+  assert.ok(removePayload.encodedMessageEventSignature.length > 0);
 
   // 4c2. encryptEdit produces a signed payload that decrypts back to the
   // edit: updated text, target sequence id, and the [start, end, type]
@@ -545,9 +549,9 @@ async function main() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.ok(editPayload.encryptedContent.length > 0);
+  assert.ok(editPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(editPayload.signature.length > 0);
-  assert.ok(editPayload.encodedEventSignature.length > 0);
+  assert.ok(editPayload.encodedMessageEventSignature.length > 0);
   assert.ok(editPayload.messageId.length > 0);
   const decodedEdit = decryptOwn(editPayload);
   assert.equal(decodedEdit.newText, "see https://example.com");
@@ -790,7 +794,7 @@ async function main() {
       },
     ],
   });
-  assert.ok(urlCardPayload.encryptedContent.length > 0);
+  assert.ok(urlCardPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(urlCardPayload.signature.length > 0);
   assert.deepEqual(
     chat.decryptFile({

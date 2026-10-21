@@ -55,12 +55,12 @@ export interface SendPayload {
    * read the message back.
    */
   eventB64: string;
-  /** Base64-encoded Thrift MessageCreateEvent. */
-  encryptedContent: string;
+  /** Base64-encoded Thrift MessageCreateEvent: the send request's `encoded_message_create_event`. */
+  encodedMessageCreateEvent: string;
   /** Base64-encoded ECDSA signature. */
   signature: string;
-  /** Base64-encoded Thrift MessageEventSignature. */
-  encodedEventSignature: string;
+  /** Base64-encoded Thrift MessageEventSignature: the send request's `encoded_message_event_signature`. */
+  encodedMessageEventSignature: string;
   /** Signature metadata (signing key version + signature protocol version). */
   signatureInfo: { publicKeyVersion: string; signatureVersion: string };
   /** Version of the conversation key used to encrypt the content (a snowflake/timestamp string). */

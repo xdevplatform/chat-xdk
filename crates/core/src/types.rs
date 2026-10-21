@@ -1056,16 +1056,21 @@ pub struct SendPayload {
     #[serde(default)]
     pub event_b64: String,
 
-    /// Base64-encoded encrypted content.
-    pub encrypted_content: String,
+    /// Base64-encoded Thrift `MessageCreateEvent` carrying the encrypted
+    /// contents: the send request's `encoded_message_create_event`. A payload
+    /// stored by 0.5.x carries it as `encrypted_content`, which also reads.
+    #[serde(alias = "encrypted_content")]
+    pub encoded_message_create_event: String,
 
     /// Base64-encoded signature.
     pub signature: String,
 
-    /// Base64-encoded Thrift `MessageEventSignature` (for `encoded_message_event_signature`).
-    ///
-    /// The X API expects this value (not the raw signature bytes) when sending messages.
-    pub encoded_event_signature: String,
+    /// Base64-encoded Thrift `MessageEventSignature`: the send request's
+    /// `encoded_message_event_signature`, which takes this value rather than
+    /// the raw signature bytes. A payload stored by 0.5.x carries it as
+    /// `encoded_event_signature`, which also reads.
+    #[serde(alias = "encoded_event_signature")]
+    pub encoded_message_event_signature: String,
 
     /// Signature metadata.
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1577,9 +1582,9 @@ mod tests {
         let payload = SendPayload {
             message_id: "mid".to_string(),
             event_b64: "ev".to_string(),
-            encrypted_content: "enc".to_string(),
+            encoded_message_create_event: "enc".to_string(),
             signature: "sig".to_string(),
-            encoded_event_signature: "esig".to_string(),
+            encoded_message_event_signature: "esig".to_string(),
             signature_info: SignatureInfo {
                 public_key_version: "v1".to_string(),
                 signature_version: "4".to_string(),
@@ -1590,9 +1595,13 @@ mod tests {
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"xdk_version\":\"0.6.0\""));
+        // Serialized under the send request's field names.
+        assert!(json.contains("\"encoded_message_create_event\":\"enc\""));
+        assert!(json.contains("\"encoded_message_event_signature\":\"esig\""));
+        assert!(!json.contains("encrypted_content"));
         let decoded: SendPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.event_b64, "ev");
-        assert_eq!(decoded.encrypted_content, "enc");
+        assert_eq!(decoded.encoded_message_create_event, "enc");
         assert_eq!(decoded.signature_info.signature_version, "4");
         assert_eq!(decoded.xdk_version, "0.6.0");
 
@@ -1611,6 +1620,8 @@ mod tests {
             "conversation_key_version":"v1","should_notify":false}"#;
         let payload: SendPayload = serde_json::from_str(stored).unwrap();
         assert_eq!(payload.message_id, "mid");
+        assert_eq!(payload.encoded_message_create_event, "enc");
+        assert_eq!(payload.encoded_message_event_signature, "esig");
         assert_eq!(payload.event_b64, "");
         assert_eq!(payload.xdk_version, "");
         assert!(!payload.should_notify);

@@ -704,7 +704,7 @@ mod tests {
                     .with_conversation_key(ckey.to_bytes(), "1"),
             )
             .unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
     }
 
@@ -794,7 +794,7 @@ mod tests {
                     .with_conversation_key(ckey.to_bytes(), "1"),
             )
             .unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
     }
 
@@ -813,9 +813,9 @@ mod tests {
                     .with_conversation_key(ckey.to_bytes(), "42"),
             )
             .unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
-        assert!(!payload.encoded_event_signature.is_empty());
+        assert!(!payload.encoded_message_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "42");
     }
 
@@ -834,7 +834,7 @@ mod tests {
         params.reply_to_sender_id = Some("12345".to_string());
         params.reply_to_text = Some("Original message".into());
         let payload = chat.encrypt_reply(&params).unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
     }
 
     #[tokio::test]
@@ -851,7 +851,7 @@ mod tests {
         params.target_message_sequence_id = Some("seq-42".into());
 
         let add_payload = chat.encrypt_add_reaction(&params).unwrap();
-        assert!(!add_payload.encrypted_content.is_empty());
+        assert!(!add_payload.encoded_message_create_event.is_empty());
 
         let mut params = EncryptReactionParams::new("", "👍")
             .with_identity("4101", "67")
@@ -860,7 +860,7 @@ mod tests {
         params.target_message_sequence_id = Some("seq-42".into());
 
         let remove_payload = chat.encrypt_remove_reaction(&params).unwrap();
-        assert!(!remove_payload.encrypted_content.is_empty());
+        assert!(!remove_payload.encoded_message_create_event.is_empty());
     }
 
     #[tokio::test]
@@ -878,7 +878,7 @@ mod tests {
         params.should_notify = Some(false);
         params.ttl_msec = Some(30_000);
         let payload = chat.encrypt_message(&params).unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.should_notify);
     }
 
@@ -932,7 +932,7 @@ mod tests {
             .with_conversation_key(ckey.to_bytes(), "1");
         params.entities = Some(entities);
         let payload = chat.encrypt_message(&params).unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
     }
 
     #[tokio::test]
@@ -962,7 +962,7 @@ mod tests {
         params.should_notify = Some(false);
         params.ttl_msec = Some(60_000);
         let payload = chat.encrypt_reply(&params).unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.should_notify);
     }
 
@@ -1379,10 +1379,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_encrypt_message_produces_valid_payload() {
-        // encrypt_message returns a SendPayload with encrypted_content (base64 of
+        // encrypt_message returns a SendPayload with encoded_message_create_event (base64 of
         // MessageCreateEvent Thrift).  This is what gets POSTed to the X API.
         // The API wraps it in a full MessageEvent before delivering via webhook.
-        // We can't directly decrypt_event(encrypted_content) — that needs the
+        // We can't directly decrypt_event(encoded_message_create_event) — that needs the
         // full MessageEvent wrapper.  So we just verify the payload structure.
         let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
         chat.generate_keypairs().unwrap();
@@ -1395,9 +1395,9 @@ mod tests {
             .with_conversation_key(ckey.to_bytes(), "1");
         let payload = chat.encrypt_message(&params).unwrap();
 
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
-        assert!(!payload.encoded_event_signature.is_empty());
+        assert!(!payload.encoded_message_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
         assert_eq!(payload.signature_info.signature_version, "7");
         assert!(payload.should_notify);

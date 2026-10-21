@@ -149,7 +149,7 @@ pub(super) fn sent_event(
     sender_id: &str,
     conversation_id: &str,
 ) -> ThriftEvent {
-    let bytes = base64_decode(&payload.encrypted_content).unwrap();
+    let bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
     let mut raw = TBinaryInputProtocol::new(Cursor::new(bytes), true);
     let mut protocol = BoundedProtocol::new(&mut raw);
     let mce = MessageCreateEvent::read_from_in_protocol(&mut protocol).unwrap();

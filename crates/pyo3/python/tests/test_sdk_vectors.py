@@ -154,7 +154,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
 
         self.assertTrue(payload.message_id)
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
         self.assertTrue(payload.conversation_key_version is not None)
         self.assertTrue(payload.signature_info.public_key_version is not None)
@@ -244,7 +244,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(
             payload.conversation_key_version, v["event_conversation_key_version"]
         )
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
 
         # A file of a message sent from the cache encrypts under the same cached key.
         photo = chat.encrypt_message(
@@ -350,8 +350,8 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
         # The SDK mints the message id as a UUID.
         uuid.UUID(payload.message_id)
-        self.assertTrue(payload.encrypted_content)
-        self.assertTrue(payload.encoded_event_signature)
+        self.assertTrue(payload.encoded_message_create_event)
+        self.assertTrue(payload.encoded_message_event_signature)
 
     def _decrypt_own(self, chat, v, payload) -> dict:
         from chat_xdk import DecryptEventParams

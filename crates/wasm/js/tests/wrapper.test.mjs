@@ -304,7 +304,7 @@ async function delegationTests() {
     signingKeyVersion: "1",
     replyToSequenceId: "seq-1",
   });
-  assert.ok(replyPayload.encryptedContent.length > 0);
+  assert.ok(replyPayload.encodedMessageCreateEvent.length > 0);
   const addReaction = chat.encryptAddReaction({
     senderId: "111",
     conversationId: "conv-1",
@@ -314,7 +314,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.ok(addReaction.encryptedContent.length > 0);
+  assert.ok(addReaction.encodedMessageCreateEvent.length > 0);
   const removeReaction = chat.encryptRemoveReaction({
     senderId: "111",
     conversationId: "conv-1",
@@ -324,7 +324,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.ok(removeReaction.encryptedContent.length > 0);
+  assert.ok(removeReaction.encodedMessageCreateEvent.length > 0);
 
   // Generic + file crypto delegations (roundtrips prove every field): two
   // files encrypted from the message's eventB64 open from the same event.

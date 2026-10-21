@@ -65,8 +65,8 @@ pub fn frame_send_payload(
     sender_id: &str,
     conversation_id: &str,
 ) -> Result<String, SdkError> {
-    let content_bytes = base64_decode(&payload.encrypted_content)?;
-    // `encrypted_content` is either a full MessageEvent (take its detail) or a
+    let content_bytes = base64_decode(&payload.encoded_message_create_event)?;
+    // `encoded_message_create_event` is either a full MessageEvent (take its detail) or a
     // bare MessageCreateEvent (wrap it in the detail union).
     let detail = crate::core::parse_message_event(&content_bytes)
         .ok()
@@ -79,7 +79,9 @@ pub fn frame_send_payload(
                 .ok()
                 .map(MessageEventDetail::MessageCreateEvent)
         })
-        .ok_or_else(|| SdkError::Parse("SendPayload encrypted_content did not parse".into()))?;
+        .ok_or_else(|| {
+            SdkError::Parse("SendPayload encoded_message_create_event did not parse".into())
+        })?;
 
     let signature = MessageEventSignature::new(
         Some(payload.signature.clone()),

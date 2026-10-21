@@ -201,8 +201,8 @@ export class ChatCore {
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
       event_b64: payload.eventB64,
     };
   }
@@ -220,8 +220,8 @@ export class ChatCore {
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
     };
   }
 
@@ -241,8 +241,8 @@ export class ChatCore {
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
     };
   }
 
