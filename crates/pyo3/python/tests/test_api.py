@@ -568,6 +568,8 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
         with self.assertRaisesRegex(ValueError, "Invalid user_id 'user-1'"):
             chat.set_identity(SetIdentityParams("user-1", "1"))
+        with self.assertRaisesRegex(ValueError, "Invalid signing_key_version 'v1'"):
+            chat.set_identity(SetIdentityParams("1001", "v1"))
 
         params = EncryptReplyParams(
             "conv-1", "reply", None,

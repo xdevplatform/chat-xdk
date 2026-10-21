@@ -3755,6 +3755,10 @@ func TestUserIDsAreDigitStrings(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Invalid user_id 'user-1'") {
 		t.Fatalf("SetIdentity with a non-numeric id: got %v", err)
 	}
+	err = chat.SetIdentity(SetIdentityParams{UserID: "1001", SigningKeyVersion: "v1"})
+	if err == nil || !strings.Contains(err.Error(), "Invalid signing_key_version 'v1'") {
+		t.Fatalf("SetIdentity with a non-integer key version: got %v", err)
+	}
 	_, err = chat.EncryptReply(EncryptReplyParams{
 		ConversationID:         "conv-1",
 		Text:                   "reply",

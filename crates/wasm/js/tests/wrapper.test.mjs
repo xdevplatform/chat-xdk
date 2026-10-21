@@ -163,6 +163,10 @@ async function delegationTests() {
     () => chat.setIdentity({ userId: "user-1", signingKeyVersion: "1" }),
     /Invalid user_id 'user-1'/,
   );
+  assert.throws(
+    () => chat.setIdentity({ userId: "1001", signingKeyVersion: "v1" }),
+    /Invalid signing_key_version 'v1'/,
+  );
   const signingKeys = [
     {
       userId: v.event_sender_id,

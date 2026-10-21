@@ -427,6 +427,9 @@ class ChatTest {
             ChatXdkException e = assertThrows(ChatXdkException.class,
                     () -> chat.setIdentity(new SetIdentityParams("user-1", "1")));
             assertTrue(e.getMessage().contains("Invalid user_id 'user-1'"), e.getMessage());
+            e = assertThrows(ChatXdkException.class,
+                    () -> chat.setIdentity(new SetIdentityParams("1001", "v1")));
+            assertTrue(e.getMessage().contains("Invalid signing_key_version 'v1'"), e.getMessage());
             EncryptReplyParams p = new EncryptReplyParams("conv-1", "reply", null);
             p.senderId = "1001";
             p.signingKeyVersion = "1";

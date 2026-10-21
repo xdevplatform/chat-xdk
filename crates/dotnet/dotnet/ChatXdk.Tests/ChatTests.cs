@@ -603,6 +603,9 @@ namespace ChatXdk.Tests
             var ex = Assert.Throws<ChatXdkException>(
                 () => chat.SetIdentity(new SetIdentityParams("user-1", "1")));
             Assert.Contains("Invalid user_id 'user-1'", ex.Message);
+            ex = Assert.Throws<ChatXdkException>(
+                () => chat.SetIdentity(new SetIdentityParams("1001", "v1")));
+            Assert.Contains("Invalid signing_key_version 'v1'", ex.Message);
             ex = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
                 new EncryptReplyParams("conv-1", "reply", replyToEvent: null)
                 {
