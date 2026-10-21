@@ -34,7 +34,9 @@ It is not safe to merge the whole stack yet. The code itself is in good shape: e
 | S15 | Scope | **Off-stack PRs conflict with the tip.** #34 (15 conflicted files), #35 (44), #36 (44), #37 (47) and #22 (20) don't merge onto the tip; #19 merges cleanly (A5.3). #37's "attachments the SDK sends carry no `attachment_id`" is false at the tip (B2). | `git merge-tree` (A5.3) | #34–#37, #22 | Decide whether they are in 0.6.0. If so, rebase them onto the tip with params classes and v0/v1 send. |
 | S16 | Nit | **Misleading error prefix.** Input validation errors read `Invalid state: Invalid sender_id 'user-1': …` (A4.1). | `crates/core/src/pipeline.rs:309-336` | #47 | Use an input-error variant instead of `SdkError::InvalidState`. |
 | S17 | Nit | **New public Rust items aren't in the CHANGELOG:** `signatures::MESSAGE_SIGNATURE_VERSION` and `signatures::build_mark_conversation_read_signature`. | `crates/core/src/signatures.rs:20,290` | #47, #49 | List them, or make them `pub(crate)`. |
-| S18 | UNVERIFIED | **Browser CORS.** Per the prior agent, a CORS preflight to `/2/chat/features` gets 405. The SDK sends a simple request, but whether the response carries `Access-Control-Allow-Origin` is unknown, so browser apps may stay on v0 and log CORS errors on every retry. | `crates/wasm/js/index.js:679-683`; prior agent bc-6a35 [14769] | #50 | Confirm the header on the route before ramping v1 for web clients. |
+| S18 | Nit (UNVERIFIED) | **The browser path depends on one server header.** The SDK's fetch is a simple GET with no preflight. The handler the prior agent read sets `Access-Control-Allow-Origin: *`, and a test asserts it (bc-6a35 [11405], [11857]). An OPTIONS preflight gets 405 ([14769]), but the SDK never sends one. If the header is ever dropped, browser apps silently stay on v0 and log a CORS error on every retry. | `crates/wasm/js/index.js:679-683` | #50 | Keep the header test on the route as a release gate for web clients. |
+| S19 | Should-fix (docs) | **No doc or example shows the mark-read request body.** `ActionSignature` returns `signature`, `signature_version` and `public_key_version` flat. Per the prior agent, the mark-read route change (not merged) expects them nested under `message_event_signature` inside `action_signatures` (bc-a864 [5534]), which is how the examples already re-nest key-change signatures. The CHANGELOG only says to send it "with the mark-read request". | `crates/core/src/signatures.rs:42-57`; `examples/dotnet/ChatBot/ChatCore.cs:283-292`; `examples/jvm/src/main/java/com/example/chatbot/ChatCore.java:338-346`; `CHANGELOG.md:394-401` | #49 | Document the mark-read body in API.md, and hold the CHANGELOG promise until the route is live. |
+| S20 | Nit | **#50's description names internal systems in a public repo:** a link to an internal code-review tool and internal server branch names. | PR #50 description | #50 | Scrub the description before merge. |
 
 ## 3. API change table
 
@@ -128,8 +130,8 @@ Rows are the X API endpoint each group of SDK calls serves. ✓ means consistent
 | `POST /2/users/:id/public_keys` ← `generateKeypairs`, `setIdentity`, `importKeys` | ✓ casing only | ✗ `setIdentity(userId, version)` and `importKeys(keys, version?)` stay positional with two inputs, while the params rule exempts only one-input calls (`AGENTS.md:60-64`) | ✓ `PublicKeyRegistrationPayload {publicKey}` in all six | n/a | ✓ per binding | ✓ sync | ✗ the signing `public_key_version` may be any string (`core.rs:269-279`), but `conversation_key_version` must be an integer (`pipeline.rs:328-336`) |
 | `POST /2/chat/conversations/:id/messages` ← `encryptMessage`, `encryptReply` | ✓ | ✓ one params object in all six (Python since #47) | ✗ `SendPayload` names differ from the request body (`encryptedContent` vs `encoded_message_create_event`, `examples/python/x_api.py:250`); `eventB64` must not be sent | n/a | ✓ | ✓ sync | ✗ `senderId` is a digits-only string (`pipeline.rs:309-326`) but `replyToSenderId` is an integer (`params.rs:201`; JS `string \| number`, `index.d.ts:332`) |
 | same endpoint ← `encryptAddReaction`, `encryptRemoveReaction`, `encryptEdit` | ✓ | ✗ Rust takes `&params` here but message/reply take params by value (`core.rs:1966,2044` vs `1830,1898`); Python's `target_event` is optional yet positional (`pyo3/src/lib.rs:701,778`) | ✓ `SendPayload` | n/a | ✓ | ✓ | ✓ sequence ids are strings |
-| delete and mark-read actions ← `prepareMessageDelete`, `prepareMarkConversationRead` | ✓ `prepare*` | ✓ params object (Rust `&params` for both) | ✓ `ActionSignature` | n/a | ✓ errors name the empty field (`core.rs:2101-2115,2172-2181`) | ✓ | ✓ `seenAtMsec` and `ttlMsec` are int64 ms (JS `number`) |
-| key change and groups ← `prepareConversationKeyChange`, `prepareGroupCreate`, `prepareGroupMembersChange` | ✓ | ✓ params object (Python since #47) | ✓ `PreparedConversationChange` | n/a | ✓ | ✓ | ✓ |
+| delete and mark-read actions ← `prepareMessageDelete`, `prepareMarkConversationRead` | ✓ `prepare*` | ✓ params object (Rust `&params` for both) | ✗ a flat `ActionSignature`, but request bodies nest `message_event_signature` (S19) | n/a | ✓ errors name the empty field (`core.rs:2101-2115,2172-2181`) | ✓ | ✓ `seenAtMsec` and `ttlMsec` are int64 ms (JS `number`) |
+| key change and groups ← `prepareConversationKeyChange`, `prepareGroupCreate`, `prepareGroupMembersChange` | ✓ | ✓ params object (Python since #47) | ✗ `PreparedConversationChange` holds flat `ActionSignature`s that the app re-nests (`examples/dotnet/ChatBot/ChatCore.cs:283-292`) | n/a | ✓ | ✓ | ✓ |
 | media upload ← `encryptedFileSize`, `encryptFile`, `fileEncryptor` | ✓ `File*` everywhere | ✗ takes a key map, `conversationKeys`, while the message it belongs to took one `conversationKey` plus `conversationKeyVersion` | ✓ bytes / `FileEncryptor` | n/a | ✗ the JVM declares `throws Exception` (`Chat.java:876,913`) | ✓ | ✓ sizes are u64 (JS `number`) |
 | conversation events ← `decryptEvents`, `decryptEvent`, `extractConversationKeys` | ✓ | ✗ `decryptEvent` requires `conversationKeys`, but `{}` means "use the cache" (`index.d.ts:539-545`) | ✗ typed `Event` in Rust, JS and Go vs `JsonElement`, `JsonNode` and `dict` (a documented exception, `AGENTS.md` §4) | ✓ by design: the caller pages; `decryptEvents` takes one page; no cursor | ✓ the batch call never throws and the single call throws (unchanged) | ✓ | ✓ |
 | media download ← `decryptFile`, `fileDecryptor` | ✓ | ✓ the same values as `decryptEvent`, plus `mediaHashKey` | ✓ | n/a | ✗ the JVM declares `throws Exception` (`Chat.java:895,930`) | ✓ | ✓ |
@@ -180,6 +182,7 @@ Rows are the X API endpoint each group of SDK calls serves. ✓ means consistent
 - README and API.md never mention the outbound request; only `CHANGELOG.md:383-384` does.
 - #50's body says "v0 matches 0.5.x on the wire"; the gate doesn't cover files, replies or edits built from an event (B2).
 - #37's body is stale (S15).
+- No doc or example shows the mark-read request body (S19).
 - No 0.5.x calls remain in README, `docs/`, the binding READMEs or `examples/` (grep for `encryptStream`, `decryptStream`, `generateVersion` and positional `decryptEvent` finds none).
 
 ## 6. Before/after snippets
@@ -523,11 +526,19 @@ The Python `Chat` subclass, its thread and the outbound request are behavior cha
 
 ### A6. UNVERIFIED
 
-- **Server contract for `GET /2/chat/features`.** I couldn't read Origin PR 1003067: the `origin` CLI isn't authenticated on this VM, and a web fetch timed out. The prior agent describes an open route that returns a flat boolean map under `"features"`, buckets by public-key hash or client IP, and reads `v1_send` from a decider that is off by default (bc-6a35 [14769]). That matches the SDK parser (`features.rs:101-114`). The query parameter name `bucket` and the status codes are unconfirmed.
+- **Server contract for `GET /2/chat/features`.** I couldn't read Origin PR 1003067: the `origin` CLI isn't authenticated on this VM, and a web fetch timed out. The server code and PR text the prior agent read describe this route (bc-6a35 [11405], [11857], [11938], [14769]):
+  - an open route (no auth) that answers GET with `{"features":{"v1_send":false}}`, listing every registered flag and never returning an error status for decider problems;
+  - it takes `bucket` and ignores an invalid one rather than rejecting it;
+  - it buckets by public-key hash, falling back to the client IP;
+  - it sets `Cache-Control: private, max-age=60` and `Access-Control-Allow-Origin: *`, and answers a CORS preflight with 405.
+
+  That matches what the SDK sends and parses (`index.js:665`, `features.rs:101-114`). The route was trimmed after that (user request bc-6a35 [14158]), so I can't confirm the current code.
 - **Send route and `xdk_version`.** The prior agent says the change that strips `xdk_version` has merged (bc-6a35 [14770]); deployment is unconfirmed.
 - **Key registration without `version`.** The prior agent says it is deployed to prod, but no real registration has exercised it (bc-a864 [5720], [5817]).
-- **Mark-read route.** The prior agent says prod drops `action_signatures` (bc-a864 [5817]).
+- **Mark-read route.** The prior agent says prod drops `action_signatures` (bc-a864 [5817]), and that the unmerged route change expects them in the nested form (bc-a864 [5534]).
+- **Live end-to-end.** The prior agent ran no live chat-xdk end-to-end tests, for lack of X API credentials (bc-6a35 [9054]). A staging file send never happened because an upstream image service was out of quota, so nothing was uploaded, encrypted or sent (bc-6a35 [9192]).
+- **Native readers of v1.** Per the prior agent, native apps older than the message-key release can't read message-key sends, and native message-key sending was still off by default (bc-6a35 [5715]). v1 must stay off until those readers are gone.
 - **Native clients.** How they handle v0 sends that carry `attachment_id` and `MessageEdit.message_id` is unconfirmed (B2).
 - **Duplicate message ids.** The server's behavior on a duplicate `message_id` is unconfirmed (S4).
-- **Browser CORS** (S18).
+- **Browser path** (S18): the header is in the server code the prior agent read; it isn't confirmed in the current PR.
 - **Not run here:** macOS, Node 18, `cargo deny` and the Go darwin archives. The .NET results come from a local xunit stand-in, not `dotnet test`.
