@@ -1,7 +1,7 @@
 # chat-xdk Makefile
 # Run `make help` for available targets
 
-.PHONY: all build release test test-verbose check clean codegen fmt fmt-check lint doc help test-sdks test-js test-py go-lib prebuilt prebuilt-linux-amd64 prebuilt-linux-amd64-musl prebuilt-all test-go dotnet-build dotnet-test jvm-test versions set-version wheel wheel-dev wasm wasm-node wasm-bundler ci
+.PHONY: bindings-gate all build release test test-verbose check clean codegen fmt fmt-check lint doc help test-sdks test-js test-py go-lib prebuilt prebuilt-linux-amd64 prebuilt-linux-amd64-musl prebuilt-all test-go dotnet-build dotnet-test jvm-test versions set-version wheel wheel-dev wasm wasm-node wasm-bundler ci
 
 # Detect host platform for prebuilt target
 HOST_OS   := $(shell go env GOOS 2>/dev/null)
@@ -226,9 +226,13 @@ wasm-bundler:
 # Go (`make test-sdks` covers those; JS needs `make wasm` and Python needs the
 # built `_native` extension first) plus JVM (`make jvm-test`) and .NET
 # (`make dotnet-test`), and `cargo deny check licenses`.
-ci: fmt-check lint license-check test
+ci: fmt-check lint license-check test bindings-gate
 
 # Third-party license policy (deny.toml). Requires: cargo install cargo-deny
+# The internal `bindings` feature must not compile outside this repository.
+bindings-gate:
+	./scripts/check_bindings_gate.sh
+
 license-check:
 	@command -v cargo-deny >/dev/null 2>&1 || { echo "Error: cargo-deny not installed. Run: cargo install cargo-deny"; exit 1; }
 	cargo deny check licenses

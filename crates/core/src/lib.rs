@@ -134,8 +134,12 @@ pub(crate) const XDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod internals;
 
 // Hidden support for this repository's language bindings, which fetch the
-// feature switches internally. Not part of the public API — feature-gated so
-// the default surface doesn't expose it; see the module docs.
+// feature switches internally. Not part of the public API: the feature only
+// compiles in this repository's builds (see build.rs), so no dependent crate
+// can drive the switches.
+#[cfg(all(feature = "bindings", not(chat_xdk_bindings)))]
+compile_error!("the `bindings` feature is internal to the chat-xdk repository's language bindings");
+
 #[cfg(feature = "bindings")]
 #[doc(hidden)]
 pub mod bindings;

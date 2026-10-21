@@ -64,5 +64,6 @@ juicebox = ["dep:tokio", "dep:async-trait", "dep:juicebox_sdk"]
 js = ["dep:chat-xdk-macros"]
 # Expose the doc-hidden internals module (vector generator + fuzz targets only)
 internals = []
-# Expose the doc-hidden bindings module (this repository's language bindings only)
+# Expose the doc-hidden bindings module to this repository's language bindings.
+# Enabling it anywhere else is a compile error (see build.rs).
 bindings = []
