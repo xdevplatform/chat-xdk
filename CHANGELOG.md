@@ -376,10 +376,13 @@ prepared = chat.prepare_conversation_key_change(
   `chat_xdk_encrypted_stream_size`, `chat_xdk_stream_encryptor_*` and
   `chat_xdk_stream_decryptor_*` are `chat_xdk_encrypt_file`,
   `chat_xdk_decrypt_file`, `chat_xdk_encrypted_file_size`,
-  `chat_xdk_file_encryptor_*` and `chat_xdk_file_decryptor_*`. The file calls,
-  `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` take one params JSON
-  document, and `chat_xdk_file_encryptor_new` / `chat_xdk_file_decryptor_new`
-  return a result and write the handle to an out-parameter.
+  `chat_xdk_file_encryptor_*` and `chat_xdk_file_decryptor_*`.
+  `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` are
+  `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params`, so a
+  stale header or library fails to link instead of misreading arguments. They
+  and the file calls take one params JSON document, and
+  `chat_xdk_file_encryptor_new` / `chat_xdk_file_decryptor_new` return a
+  result and write the handle to an out-parameter.
 
 ### Added
 

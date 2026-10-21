@@ -612,7 +612,7 @@ namespace ChatXdk
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
-                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event(_handle, jsonPtr));
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event_params(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
@@ -646,7 +646,7 @@ namespace ChatXdk
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
-                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events(_handle, jsonPtr));
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events_params(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);

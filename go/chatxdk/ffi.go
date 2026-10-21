@@ -228,7 +228,7 @@ func ffiExtractConversationKeys(h handle, eventsJSON string) (string, error) {
 func ffiDecryptEvents(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_decrypt_events(h, c))
+	return ffiResult(C.chat_xdk_decrypt_events_params(h, c))
 }
 
 func ffiPrepareConversationKeyChange(h handle, paramsJSON string) (string, error) {
@@ -266,7 +266,7 @@ func ffiPrepareMarkConversationRead(h handle, paramsJSON string) (string, error)
 func ffiDecryptEvent(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_decrypt_event(h, c))
+	return ffiResult(C.chat_xdk_decrypt_event_params(h, c))
 }
 
 // encrypt

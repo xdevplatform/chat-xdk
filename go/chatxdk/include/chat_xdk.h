@@ -160,7 +160,7 @@ int32_t chat_xdk_has_identity_key(const struct ChatHandle *handle);
 /**
  * Enable or disable rejection of unverified events.
  *
- * When enabled — the default — `chat_xdk_decrypt_event` returns an error for
+ * When enabled — the default — `chat_xdk_decrypt_event_params` returns an error for
  * any signed event whose signature cannot be verified (invalid, missing, or
  * no matching signing key) instead of returning it with `verified: false`.
  */
@@ -179,7 +179,7 @@ struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle,
  * Enable (non-zero) or disable (0) the conversation-key cache (off by
  * default).
  *
- * While enabled, `chat_xdk_decrypt_events` caches each conversation's
+ * While enabled, `chat_xdk_decrypt_events_params` caches each conversation's
  * verified latest key and the encrypt functions resolve an omitted
  * `conversation_key`/`conversation_key_version` pair from it. Disabling
  * clears the cache.
@@ -191,7 +191,7 @@ void chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
  * `signing_keys_json`.
  *
  * `signing_keys_json` takes the same array shape as
- * `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
+ * `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this
  * call populates the store — keys carried inside events are never trusted.
  */
 struct FfiResult chat_xdk_set_signing_keys(const struct ChatHandle *handle,
@@ -265,7 +265,8 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
  * "identity_public_key","identity_public_key_signature"},...]`); absent or
  * empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
  */
-struct FfiResult chat_xdk_decrypt_events(const struct ChatHandle *handle, const char *params_json);
+struct FfiResult chat_xdk_decrypt_events_params(const struct ChatHandle *handle,
+                                                const char *params_json);
 
 /**
  * Prepare a signed conversation-key change.
@@ -338,17 +339,18 @@ struct FfiResult chat_xdk_prepare_mark_conversation_read(const struct ChatHandle
  *
  * `params_json` — single JSON document: `event_b64` (the base64 event),
  * `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
- * `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
+ * `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
  * for events without message contents, which also falls back to the opt-in
  * key cache), plus optional `signing_keys` (as for
- * `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
+ * `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
  * events fail decryption under the default reject-unverified policy
  * (disable it via `chat_xdk_set_reject_unverified` to have them returned
  * with `verified: false` instead).
  *
  * Returns JSON representation of the decrypted Event.
  */
-struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle, const char *params_json);
+struct FfiResult chat_xdk_decrypt_event_params(const struct ChatHandle *handle,
+                                               const char *params_json);
 
 /**
  * Encrypt a message for the X API.

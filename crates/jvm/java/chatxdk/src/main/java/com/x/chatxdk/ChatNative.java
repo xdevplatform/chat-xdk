@@ -59,7 +59,7 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_extract_conversation_keys(Pointer handle, Pointer eventsJson);
 
-    FfiResult.ByValue chat_xdk_decrypt_events(Pointer handle, Pointer paramsJson);
+    FfiResult.ByValue chat_xdk_decrypt_events_params(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_prepare_conversation_key_change(Pointer handle, Pointer paramsJson);
 
@@ -71,7 +71,7 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_mark_conversation_read(Pointer handle, Pointer paramsJson);
 
-    FfiResult.ByValue chat_xdk_decrypt_event(Pointer handle, Pointer paramsJson);
+    FfiResult.ByValue chat_xdk_decrypt_event_params(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_message(Pointer handle, Pointer paramsJson);
 

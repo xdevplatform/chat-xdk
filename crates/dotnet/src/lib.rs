@@ -538,7 +538,7 @@ pub extern "C" fn chat_xdk_has_identity_key(handle: *const ChatHandle) -> i32 {
     })
 }
 
-/// When `reject` is non-zero — the default — `chat_xdk_decrypt_event` returns
+/// When `reject` is non-zero — the default — `chat_xdk_decrypt_event_params` returns
 /// an error for any signed event whose signature cannot be verified (invalid,
 /// missing, or no matching signing key) instead of returning it with
 /// `verified: false`.
@@ -576,7 +576,7 @@ pub extern "C" fn chat_xdk_set_identity(
 }
 
 /// Enable (non-zero) or disable (zero) the conversation-key cache (off by
-/// default). While enabled, `chat_xdk_decrypt_events` caches, per
+/// default). While enabled, `chat_xdk_decrypt_events_params` caches, per
 /// conversation, the key whose key change carried a valid signature at the
 /// highest version seen, and the encrypt entry points resolve an omitted
 /// `conversation_key`/`conversation_key_version` pair from it. Disabling
@@ -684,7 +684,7 @@ pub extern "C" fn chat_xdk_internal_feature_refetch_due(handle: *const ChatHandl
 /// carried inside an event is never trusted for verification. Each call
 /// replaces the previous set.
 ///
-/// `signing_keys_json`: same array shape as `chat_xdk_decrypt_events`.
+/// `signing_keys_json`: same array shape as `chat_xdk_decrypt_events_params`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_signing_keys(
     handle: *const ChatHandle,
@@ -1047,7 +1047,7 @@ fn json_decrypt_events_result(
 /// `events_json` — JSON array of base64-encoded raw event strings from the webhook.
 ///
 /// Returns JSON `{"keys":{"version":"base64_bytes",...},"latest_version":"..."|null}`.
-/// Pass `keys` serialized as a flat map `{"version":"base64_bytes",...}` to `chat_xdk_decrypt_event`.
+/// Pass `keys` serialized as a flat map `{"version":"base64_bytes",...}` to `chat_xdk_decrypt_event_params`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_extract_conversation_keys(
     handle: *const ChatHandle,
@@ -1085,7 +1085,7 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
 /// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_events(
+pub extern "C" fn chat_xdk_decrypt_events_params(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {
@@ -1349,17 +1349,17 @@ pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
 ///
 /// `params_json` — single JSON document: `event_b64` (the base64 event),
 /// `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
-/// `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
+/// `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
 /// for events without message contents, which also falls back to the opt-in
 /// key cache), plus optional `signing_keys` (as for
-/// `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
+/// `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
 /// events fail decryption under the default reject-unverified policy
 /// (disable it via `chat_xdk_set_reject_unverified` to have them returned
 /// with `verified: false` instead).
 ///
 /// Returns JSON representation of the decrypted Event.
 #[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_event(
+pub extern "C" fn chat_xdk_decrypt_event_params(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {

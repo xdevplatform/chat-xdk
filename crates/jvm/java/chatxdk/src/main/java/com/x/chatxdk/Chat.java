@@ -583,7 +583,7 @@ public final class Chat implements AutoCloseable {
             n.set("signing_keys", ChatJson.MAPPER.valueToTree(parameters.signingKeys));
         }
         try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(n))) {
-            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_event(handle, j));
+            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_event_params(handle, j));
             return ChatJson.MAPPER.readTree(resultJson);
         } finally {
             Reference.reachabilityFence(this);
@@ -603,7 +603,7 @@ public final class Chat implements AutoCloseable {
             n.set("signing_keys", ChatJson.MAPPER.valueToTree(parameters.signingKeys));
         }
         try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(n))) {
-            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events(handle, j));
+            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events_params(handle, j));
             JsonNode root = ChatJson.MAPPER.readTree(resultJson);
             DecryptEventsResult out = new DecryptEventsResult();
             List<DecryptedMessage> messages = new ArrayList<>();
