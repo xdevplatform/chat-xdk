@@ -334,6 +334,20 @@ async function theFetchesEndWithACollectedChat(server) {
   assert.equal(server.buckets.length, seen, "no request once the chat is collected");
 }
 
+async function chatsAskingAtOnceShareARequest(v, server) {
+  server.delayMs = 300;
+  const chats = [];
+  for (let i = 0; i < 4; i++) chats.push(await newChat(server.endpoint));
+  await waitFor("the IP answer", () => chats.every(({ inner }) => inner.__isEnabled("v1_send")));
+  assert.deepEqual(server.buckets, [null]);
+
+  const keys = b64ToBytes(v.private_keys_concat_b64);
+  for (const { inner } of chats) inner.importKeys(keys);
+  await waitFor("the key answer", () => chats.every(({ inner }) => !inner.__featureRefetchDue()));
+  assert.deepEqual(server.buckets, [null, String(chats[0].inner.__featureBucket())]);
+  for (const { chat } of chats) chat.free();
+}
+
 /**
  * A Node process with a feature request still in flight exits once its own
  * work is done, rather than when the request ends. Runtimes without
@@ -406,6 +420,7 @@ async function main() {
     (server) => theFetchesEndWithACollectedChat(server),
     (server) => aMalformedBodyIsRejectedAndChangesNothing(server),
     (server) => aPendingFetchNeverKeepsNodeRunning(server),
+    (server) => chatsAskingAtOnceShareARequest(v, server),
   ];
   for (const test of tests) {
     const server = await featureServer();

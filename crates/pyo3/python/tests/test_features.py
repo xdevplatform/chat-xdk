@@ -287,6 +287,18 @@ class TestFeatureSwitches(unittest.TestCase):
         time.sleep(1.2)
         self.assertEqual(len(self.server.buckets), seen)
 
+    def test_chats_asking_at_once_share_a_request(self):
+        self.server.delay = 0.3
+        chats = [self._chat(with_keys=False) for _ in range(4)]
+        self.assertTrue(_wait_for(lambda: all(c._is_enabled("v1_send") for c in chats)))
+        self.assertEqual(self.server.buckets, [None])
+
+        keys = base64.b64decode(self.vectors["private_keys_concat_b64"])
+        for chat in chats:
+            chat.import_keys(keys)
+        self.assertTrue(_wait_for(lambda: not any(c._feature_refetch_due() for c in chats)))
+        self.assertEqual(self.server.buckets, [None, str(chats[0]._feature_bucket())])
+
     def test_a_body_still_arriving_at_the_timeout_is_dropped(self):
         import chat_xdk
 

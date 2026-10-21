@@ -9,7 +9,9 @@ import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
@@ -25,9 +27,11 @@ final class FeatureSwitches {
     private static final String DEFAULT_ENDPOINT = "https://api.x.com/2/chat/features";
     private static final String ENDPOINT_ENV = "CHAT_XDK_FEATURES_ENDPOINT";
     private static final int MAX_BODY = 64 * 1024;
-    private static final long MAX_REFETCH_BACKOFF_MS = 60_000;
     private static final HttpClient HTTP =
             HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+
+    // Feature requests in flight, by URL; guarded by itself.
+    private static final Map<String, CompletableFuture<String>> REQUESTS = new HashMap<>();
 
     private FeatureSwitches() {}
 
@@ -63,8 +67,8 @@ final class FeatureSwitches {
 
     /**
      * Fetch the flags for {@code chat} now (retrying once), again with the key's bucket once keys
-     * load (retrying with backoff), and re-check them every refresh interval with a fetch that can
-     * only turn flags off, until {@link #stop}. The daemon thread holds the chat weakly, so an
+     * load (retrying with a backoff that grows to the refresh interval), and re-check them every
+     * refresh interval with a fetch that can only turn flags off, until {@link #stop}. The daemon thread holds the chat weakly, so an
      * unclosed chat is still cleaned up, and the fetches end with it.
      */
     static Runner start(Chat chat, Options options) {
@@ -129,6 +133,7 @@ final class FeatureSwitches {
             // Every flag stays off; the loop below retries.
         }
         long refreshMs = options.refresh.toMillis();
+        long maxBackoffMs = Math.max(refreshMs, 1000);
         long nextRecheck = now() + refreshMs;
         long retryAt = 0;
         long backoffMs = 1000;
@@ -143,7 +148,7 @@ final class FeatureSwitches {
                             nextRecheck = now() + refreshMs;
                         } else {
                             retryAt = now() + backoffMs;
-                            backoffMs = Math.min(backoffMs * 2, MAX_REFETCH_BACKOFF_MS);
+                            backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
                         }
                     }
                 } else if (refreshMs > 0 && now >= nextRecheck) {
@@ -176,8 +181,47 @@ final class FeatureSwitches {
         }
         String endpoint = options.endpoint;
         String url = bucket < 0 ? endpoint : endpoint + (endpoint.contains("?") ? "&" : "?") + "bucket=" + bucket;
-        String body = get(url, options.timeout);
+        String body = sharedGet(url, options.timeout);
         return body != null && apply(ref, body, bucket, downgradeOnly);
+    }
+
+    /**
+     * The body for {@code url}, from the request another chat has in flight for it or else from a
+     * new one, so chats that ask at once share a request. The request runs on the thread of the chat
+     * that started it and ends if that chat stops; the chats waiting on it then see a failure and
+     * retry.
+     */
+    private static String sharedGet(String url, Duration timeout) {
+        CompletableFuture<String> request;
+        boolean owner = false;
+        synchronized (REQUESTS) {
+            request = REQUESTS.get(url);
+            if (request == null) {
+                request = new CompletableFuture<>();
+                REQUESTS.put(url, request);
+                owner = true;
+            }
+        }
+        if (owner) {
+            String body = null;
+            try {
+                body = get(url, timeout);
+            } finally {
+                synchronized (REQUESTS) {
+                    REQUESTS.remove(url);
+                }
+                request.complete(body);
+            }
+            return body;
+        }
+        try {
+            return request.get(timeout.toMillis() + 1000, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

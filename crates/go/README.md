@@ -97,6 +97,16 @@ func main() {
 
 See the **Go** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media). Method names use **PascalCase**; raw-byte parameters cross the FFI boundary as **base64 strings**.
 
+## Network access
+
+Each chat makes one kind of request itself: an anonymous
+`GET https://api.x.com/2/chat/features` in the background, which reads the X
+API's feature switches that pick the format the SDK sends in. It runs when the
+chat is created, again once keys load, and every 5 minutes after that, and
+chats asking for the same thing at once share one request. It carries no
+credentials and never delays or fails a call; if it fails or is blocked,
+sends stay in v0, the format 0.5.x sends. Call `chat.Close()` when you're done with a chat to stop its requests; a garbage-collected chat stops too.
+
 ## Security limitations
 
 The underlying protocol provides **no forward secrecy and no post-compromise

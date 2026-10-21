@@ -407,6 +407,31 @@ class FeatureSwitchTest {
     }
 
     @Test
+    void chatsAskingAtOnceShareARequest() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.set(200, "{\"features\":{\"v1_send\":true}}", 300);
+            List<Chat> chats = new ArrayList<>();
+            try {
+                for (int i = 0; i < 4; i++) {
+                    chats.add(newChat(server.endpoint));
+                }
+                waitFor("the IP answer", () -> chats.stream().allMatch(c -> c.isEnabled("v1_send")));
+                assertEquals(list((String) null), server.buckets());
+
+                chats.get(0).generateKeypairs();
+                byte[] keys = chats.get(0).exportKeys();
+                for (Chat chat : chats.subList(1, chats.size())) {
+                    chat.importKeys(keys);
+                }
+                waitFor("the key answer", () -> chats.stream().noneMatch(Chat::featureRefetchDue));
+                assertEquals(list(null, chats.get(0).featureBucket().toString()), server.buckets());
+            } finally {
+                chats.forEach(Chat::close);
+            }
+        }
+    }
+
+    @Test
     void aMalformedBodyIsRejectedAndChangesNothing() throws Exception {
         try (FeatureServer server = new FeatureServer()) {
             // The fetch never applies anything, so only the calls below change the flags.

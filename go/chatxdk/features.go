@@ -17,10 +17,9 @@ import (
 // only this repository's tests set, overrides the endpoint.
 
 const (
-	featuresEndpoint         = "https://api.x.com/2/chat/features"
-	featuresEndpointEnv      = "CHAT_XDK_FEATURES_ENDPOINT"
-	maxFeaturesBody          = 64 * 1024
-	maxFeatureRefetchBackoff = 60 * time.Second
+	featuresEndpoint    = "https://api.x.com/2/chat/features"
+	featuresEndpointEnv = "CHAT_XDK_FEATURES_ENDPOINT"
+	maxFeaturesBody     = 64 * 1024
 )
 
 // featureOptions configures the goroutine that fetches a chat's feature
@@ -74,8 +73,9 @@ func (f *featureSync) close() {
 }
 
 // run fetches the flags now (retrying once), again with the key's bucket
-// once keys load (retrying with backoff), and re-checks them every refresh
-// interval with a fetch that can only turn flags off, until stop closes.
+// once keys load (retrying with a backoff that grows to the refresh
+// interval), and re-checks them every refresh interval with a fetch that can
+// only turn flags off, until stop closes.
 func (f *featureSync) run(opts featureOptions) {
 	defer close(f.done)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,6 +88,7 @@ func (f *featureSync) run(opts featureOptions) {
 		}
 	}()
 	client := &http.Client{Timeout: opts.timeout}
+	maxBackoff := max(opts.refresh, time.Second)
 
 	if !f.fetch(ctx, client, opts.endpoint, false) {
 		f.fetch(ctx, client, opts.endpoint, false)
@@ -104,7 +105,7 @@ func (f *featureSync) run(opts featureOptions) {
 					nextRecheck = time.Now().Add(opts.refresh)
 				} else {
 					retryAt = time.Now().Add(backoff)
-					backoff = min(backoff*2, maxFeatureRefetchBackoff)
+					backoff = min(backoff*2, maxBackoff)
 				}
 			}
 		} else if opts.refresh > 0 && !now.Before(nextRecheck) {
@@ -143,7 +144,7 @@ func (f *featureSync) fetch(ctx context.Context, client *http.Client, endpoint s
 	bucket := ffiFeatureBucket(f.h)
 	f.mu.RUnlock()
 
-	body, ok := getFeatures(ctx, client, featuresURL(endpoint, bucket))
+	body, ok := sharedFeatures(ctx, client, featuresURL(endpoint, bucket))
 	if !ok {
 		return false
 	}
@@ -175,6 +176,47 @@ func featuresURL(endpoint string, bucket int) string {
 		sep = "&"
 	}
 	return endpoint + sep + "bucket=" + strconv.Itoa(bucket)
+}
+
+// featureRequest is a feature request in flight; body and ok are set before
+// done closes.
+type featureRequest struct {
+	done chan struct{}
+	body string
+	ok   bool
+}
+
+var (
+	featureRequestsMu sync.Mutex
+	featureRequests   = map[string]*featureRequest{}
+)
+
+// sharedFeatures returns the body for url, from the request another chat has
+// in flight for it or else from a new one, so chats that ask at once share a
+// request. The request runs on its own goroutine and ends with the context of
+// the chat that started it; the chats waiting on it then see a failure and
+// retry.
+func sharedFeatures(ctx context.Context, client *http.Client, url string) (string, bool) {
+	featureRequestsMu.Lock()
+	r, inFlight := featureRequests[url]
+	if !inFlight {
+		r = &featureRequest{done: make(chan struct{})}
+		featureRequests[url] = r
+		go func() {
+			r.body, r.ok = getFeatures(ctx, client, url)
+			featureRequestsMu.Lock()
+			delete(featureRequests, url)
+			featureRequestsMu.Unlock()
+			close(r.done)
+		}()
+	}
+	featureRequestsMu.Unlock()
+	select {
+	case <-r.done:
+		return r.body, r.ok
+	case <-ctx.Done():
+		return "", false
+	}
 }
 
 func getFeatures(ctx context.Context, client *http.Client, url string) (string, bool) {

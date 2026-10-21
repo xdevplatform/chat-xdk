@@ -201,7 +201,10 @@ The core holds each chat's switches and picks each send's format from them.
 Only the language bindings make the request, each with its own HTTP stack:
 
 - **When:** when a chat is created; again with the identity key's bucket once
-  keys load; then a re-check every 300 s that can only turn switches off.
+  keys load; then a re-check every 300 s that can only turn switches off. A
+  failed fetch is retried with a backoff that doubles from 1 s up to 300 s.
+  Chats in one process that ask for the same bucket while a request for it is
+  in flight wait for that request instead of making their own.
 - **What it sends:** no credentials and no user data. The only input is the
   `bucket` query parameter, 0–9999, derived from the identity public key (the
   first 8 bytes of the SHA-256 of its SPKI, top bit cleared, mod 10000).

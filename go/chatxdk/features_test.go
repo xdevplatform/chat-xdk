@@ -521,3 +521,38 @@ func TestAMalformedBodyIsRejectedAndChangesNothing(t *testing.T) {
 		t.Fatal("the downgrade did not apply")
 	}
 }
+
+func TestChatsAskingAtOnceShareARequest(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.setDelay(300 * time.Millisecond)
+	chats := make([]*Chat, 4)
+	for i := range chats {
+		chats[i] = featureChat(t, testFeatureOptions(server.endpoint()))
+	}
+	all := func(cond func(*Chat) bool) func() bool {
+		return func() bool {
+			for _, chat := range chats {
+				if !cond(chat) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	waitFor(t, "the IP answer", all(func(c *Chat) bool { return c.isEnabled("v1_send") }))
+	if got := server.seen(); !slices.Equal(got, []string{""}) {
+		t.Fatalf("requests %q, want one without a bucket", got)
+	}
+
+	for _, chat := range chats {
+		if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+			t.Fatalf("ImportKeys failed: %v", err)
+		}
+	}
+	waitFor(t, "the key answer", all(func(c *Chat) bool { return !c.featureRefetchDue() }))
+	want := []string{"", strconv.Itoa(chats[0].featureBucket())}
+	if got := server.seen(); !slices.Equal(got, want) {
+		t.Fatalf("requests %q, want %q", got, want)
+	}
+}

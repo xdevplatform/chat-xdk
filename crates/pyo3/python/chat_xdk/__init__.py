@@ -78,7 +78,6 @@ _FEATURE_TIMEOUT_SECONDS = 2.0
 _FEATURE_REFRESH_SECONDS = 300.0
 _FEATURE_KEY_POLL_SECONDS = 1.0
 _MAX_FEATURES_BODY = 64 * 1024
-_MAX_REFETCH_BACKOFF_SECONDS = 60.0
 
 
 class Chat(_NativeChat):
@@ -123,13 +122,40 @@ def _fetch_features(chat, endpoint, timeout, downgrade_only):
         url = endpoint
         if bucket is not None:
             url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
-        body = _get_features(url, timeout)
+        body = _shared_features(url, timeout)
         if body is None:
             return False
         chat._apply_feature_config(body, bucket, downgrade_only)
     except Exception:
         return False
     return True
+
+
+# Feature requests in flight, by URL: url -> (done event, [body]).
+_feature_requests = {}
+_feature_requests_lock = _threading.Lock()
+
+
+def _shared_features(url, timeout):
+    """The body for ``url``, from the request another chat has in flight
+    for it or else from a new one, so chats that ask at once share a
+    request."""
+    with _feature_requests_lock:
+        shared = _feature_requests.get(url)
+        owner = shared is None
+        if owner:
+            shared = _feature_requests[url] = (_threading.Event(), [])
+    done, result = shared
+    if owner:
+        try:
+            result.append(_get_features(url, timeout))
+        finally:
+            with _feature_requests_lock:
+                del _feature_requests[url]
+            done.set()
+    else:
+        done.wait(timeout + 1.0)
+    return result[0] if result else None
 
 
 def _get_features(url, timeout):
@@ -171,9 +197,11 @@ def _request_features(url, timeout):
 
 def _feature_loop(chat_ref, settings, stop):
     """Fetch once now (retrying once), then again with the key's bucket once
-    keys load, retrying with backoff, and re-check every refresh interval
-    with a fetch that can only turn flags off. Ends when ``stop`` is set."""
+    keys load, retrying with a backoff that grows to the refresh interval,
+    and re-check every refresh interval with a fetch that can only turn
+    flags off. Ends when ``stop`` is set."""
     endpoint, timeout, refresh, key_poll = settings
+    max_backoff = max(refresh, 1.0)
     chat = chat_ref()
     if chat is None:
         return
@@ -198,7 +226,7 @@ def _feature_loop(chat_ref, settings, stop):
                         next_recheck = now + refresh
                     else:
                         retry_at = now + backoff
-                        backoff = min(backoff * 2, _MAX_REFETCH_BACKOFF_SECONDS)
+                        backoff = min(backoff * 2, max_backoff)
             elif refresh and now >= next_recheck:
                 _fetch_features(chat, endpoint, timeout, True)
                 next_recheck = now + refresh

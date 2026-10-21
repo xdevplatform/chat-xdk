@@ -527,7 +527,6 @@ export class ChatWithJuicebox {
 
 const FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
 const MAX_FEATURES_BODY = 64 * 1024;
-const MAX_FEATURE_REFETCH_BACKOFF_MS = 60_000;
 
 /** A non-empty environment variable in Node; undefined anywhere else. */
 function envVar(name) {
@@ -553,10 +552,11 @@ function featureSettings() {
 
 /**
  * Fetch the flags for `wasmChat` now (retrying once), again with the key's
- * bucket once keys load (retrying with backoff), and re-check them every
- * refresh interval with a fetch that can only turn flags off, until
- * `stopFeatureSwitches`. The chat is held weakly so an instance dropped
- * without `free()` can still be collected; the fetches end with it.
+ * bucket once keys load (retrying with a backoff that grows to the refresh
+ * interval), and re-check them every refresh interval with a fetch that can
+ * only turn flags off, until `stopFeatureSwitches`. The chat is held weakly
+ * so an instance dropped without `free()` can still be collected; the
+ * fetches end with it.
  */
 function startFeatureSwitches(wasmChat) {
   const run = {
@@ -564,7 +564,6 @@ function startFeatureSwitches(wasmChat) {
     settings: featureSettings(),
     stopped: false,
     timer: null,
-    request: null,
   };
   featureLoop(run).catch(() => {});
   return run;
@@ -580,7 +579,6 @@ function weakRef(target) {
 function stopFeatureSwitches(run) {
   run.stopped = true;
   clearTimeout(run.timer);
-  run.request?.abort();
 }
 
 /**
@@ -595,6 +593,7 @@ function withChat(run, use, gone) {
 
 async function featureLoop(run) {
   const { refreshMs, keyPollMs } = run.settings;
+  const maxBackoffMs = Math.max(refreshMs, 1000);
   (await fetchFeatures(run, false)) || (await fetchFeatures(run, false));
   let nextRecheck = Date.now() + refreshMs;
   let retryAt = 0;
@@ -610,7 +609,7 @@ async function featureLoop(run) {
             nextRecheck = Date.now() + refreshMs;
           } else {
             retryAt = Date.now() + backoffMs;
-            backoffMs = Math.min(backoffMs * 2, MAX_FEATURE_REFETCH_BACKOFF_MS);
+            backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
           }
         }
       } else if (refreshMs > 0 && now >= nextRecheck) {
@@ -639,14 +638,8 @@ async function featureLoop(run) {
 async function fetchFeatures(run, downgradeOnly) {
   const bucket = withChat(run, (chat) => chat.__featureBucket() ?? null, undefined);
   if (bucket === undefined) return false;
-  const request = new AbortController();
-  run.request = request;
-  const body = await getFeatures(
-    featuresUrl(run.settings.endpoint, bucket),
-    run.settings.timeoutMs,
-    request,
-  );
-  if (run.request === request) run.request = null;
+  const url = featuresUrl(run.settings.endpoint, bucket);
+  const body = await sharedFeatures(url, run.settings.timeoutMs);
   if (body === null) return false;
   try {
     return withChat(
@@ -673,10 +666,26 @@ function unrefTimer(timer) {
   return timer;
 }
 
+/** Feature requests in flight, by URL. */
+const featureRequests = new Map();
+
+/**
+ * The body for `url`, from the request another chat has in flight for it or
+ * else from a new one, so chats that ask at once share a request.
+ */
+function sharedFeatures(url, timeoutMs) {
+  let body = featureRequests.get(url);
+  if (!body) {
+    body = getFeatures(url, timeoutMs).finally(() => featureRequests.delete(url));
+    featureRequests.set(url, body);
+  }
+  return body;
+}
+
 /** The body of a 200 response from `url`, or null on any failure. */
-function getFeatures(url, timeoutMs, request) {
+function getFeatures(url, timeoutMs) {
   const http = nodeHttpModule(url);
-  return http ? getWithNode(http, url, timeoutMs, request) : getWithFetch(url, timeoutMs, request);
+  return http ? getWithNode(http, url, timeoutMs) : getWithFetch(url, timeoutMs);
 }
 
 /**
@@ -699,7 +708,7 @@ function nodeHttpModule(url) {
  * pending request never keeps the process alive, and a body is dropped as
  * soon as it grows past the cap.
  */
-function getWithNode(http, url, timeoutMs, request) {
+function getWithNode(http, url, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
     let req = null;
@@ -714,7 +723,7 @@ function getWithNode(http, url, timeoutMs, request) {
     try {
       req = http.get(
         url,
-        { headers: { Accept: "application/json" }, signal: request.signal },
+        { headers: { Accept: "application/json" } },
         (response) => {
           if (response.statusCode !== 200) return finish(null);
           const chunks = [];
@@ -740,7 +749,8 @@ function getWithNode(http, url, timeoutMs, request) {
  * GET `url` with `fetch`, where Node's http module is out of reach. The
  * timeout covers reading the body too.
  */
-async function getWithFetch(url, timeoutMs, request) {
+async function getWithFetch(url, timeoutMs) {
+  const request = new AbortController();
   const timer = unrefTimer(setTimeout(() => request.abort(), timeoutMs));
   try {
     const response = await fetch(url, {

@@ -394,8 +394,12 @@ prepared = chat.prepare_conversation_key_change(
 
 ### Added
 
-- Each chat fetches its feature switches from `GET /2/chat/features` in the
-  background, without delaying or failing anything; there is nothing to call.
+- Each chat fetches its feature switches from
+  `GET https://api.x.com/2/chat/features` in the background, without
+  delaying or failing anything; there is nothing to call. The request is
+  anonymous, carries a 0–9999 bucket derived from the identity public key,
+  repeats every 5 minutes, and is shared by chats that ask at once; if it
+  fails or is blocked, sends stay v0. See "Network access" in the README.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
   (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Do not send it yet: the
   send request takes it as an optional `xdk_version` field only once the X
