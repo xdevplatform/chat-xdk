@@ -1074,8 +1074,8 @@ interface ChatCrypto {
    * message `params.eventB64` carries, and encrypts the file under that
    * attachment's key. Upload the result under the same media hash key; its
    * size is `encryptedFileSize(file.length)`. Throws, saying what to pass
-   * instead, when the event is not a message with this file or the key map
-   * lacks its key.
+   * instead, when the event is not a message with this file or the
+   * conversation key is not the one the message was encrypted under.
    */
   encryptFile(params: EncryptFileParams): Uint8Array;
 
