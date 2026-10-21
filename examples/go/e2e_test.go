@@ -183,11 +183,7 @@ func TestE2ELive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
 	}
-	pub, err := core.PublicKeys()
-	if err != nil {
-		t.Fatalf("PublicKeys: %v", err)
-	}
-	resp, err := api.AddConversationKeys(conv, PrepToRequest(prep, pub.Signing))
+	resp, err := api.AddConversationKeys(conv, PrepToRequest(prep))
 	if err != nil {
 		t.Fatalf("AddConversationKeys: %v", err)
 	}
@@ -386,12 +382,6 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 			myKeys = append(myKeys, k)
 		}
 	}
-	pub, err := core.PublicKeys()
-	if err != nil {
-		t.Fatalf("PublicKeys: %v", err)
-	}
-	signingPub := pub.Signing
-
 	groupID, err := api.InitializeGroup()
 	if err != nil {
 		t.Fatalf("InitializeGroup: %v", err)
@@ -407,7 +397,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 		t.Fatalf("PrepareGroupCreate: %v", err)
 	}
 	members := []string{myID}
-	if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep, signingPub)); err != nil {
+	if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep)); err != nil {
 		// Some deployments reject single-member groups; fall back to creating
 		// with both participants (skipping the member-add below).
 		prep, err = core.PrepareGroupCreate(bothKeys, groupID, []string{myID, partnerID}, []string{myID})
@@ -415,7 +405,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 			t.Fatalf("PrepareGroupCreate (fallback): %v", err)
 		}
 		members = []string{myID, partnerID}
-		if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep, signingPub)); err != nil {
+		if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep)); err != nil {
 			t.Fatalf("CreateConversation: %v", err)
 		}
 	}
@@ -453,7 +443,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 		if err != nil {
 			t.Fatalf("PrepareGroupMembersChange: %v", err)
 		}
-		mBody := PrepToRequest(mPrep, signingPub)
+		mBody := PrepToRequest(mPrep)
 		mBody["user_ids"] = []string{partnerID}
 		if _, err := api.AddGroupMembers(groupID, mBody); err != nil {
 			t.Fatalf("AddGroupMembers: %v", err)
@@ -464,8 +454,8 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 
 // groupBody assembles the group-create request: roster fields plus the
 // two-signature key change from PrepareGroupCreate.
-func groupBody(groupID string, members []string, adminID string, prep *chatxdk.PreparedConversationChange, signingPub string) map[string]any {
-	body := PrepToRequest(prep, signingPub)
+func groupBody(groupID string, members []string, adminID string, prep *chatxdk.PreparedConversationChange) map[string]any {
+	body := PrepToRequest(prep)
 	body["conversation_id"] = groupID
 	body["group_members"] = members
 	body["group_admins"] = []string{adminID}

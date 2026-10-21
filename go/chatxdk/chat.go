@@ -385,12 +385,12 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 }
 
 // PrepareMessageDelete builds the signed action for deleting messages from a
-// conversation, ready to submit alongside the delete request.
+// conversation: the request's action_signatures, one entry.
 //
 // A delete is a signed plaintext event, not an encrypted message, so no
 // conversation key is involved. The SDK generates the action's message id;
-// read it back from the result.
-func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error) {
+// read it back from the entry.
+func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*PreparedAction, error) {
 	defer runtime.KeepAlive(c)
 	// Sequence ids are a required field; marshal a nil slice as [] rather
 	// than null.
@@ -403,7 +403,7 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 	if err != nil {
 		return nil, err
 	}
-	var out ActionSignature
+	var out PreparedAction
 	if err := json.Unmarshal([]byte(data), &out); err != nil {
 		return nil, err
 	}
@@ -411,12 +411,14 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 }
 
 // PrepareMarkConversationRead builds the signed action for marking a
-// conversation read, ready to submit alongside the mark-read request.
+// conversation read: the request's action_signatures, one entry. The X API's
+// mark-read route does not take action_signatures yet, so that request shape
+// is not final.
 //
 // A read receipt is a signed plaintext event, not an encrypted message, so
 // no conversation key is involved. The SDK generates the action's message
-// id; read it back from the result.
-func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*ActionSignature, error) {
+// id; read it back from the entry.
+func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*PreparedAction, error) {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)
 	if err != nil {
@@ -426,7 +428,7 @@ func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*
 	if err != nil {
 		return nil, err
 	}
-	var out ActionSignature
+	var out PreparedAction
 	if err := json.Unmarshal([]byte(data), &out); err != nil {
 		return nil, err
 	}

@@ -427,6 +427,22 @@ prepared = chat.prepare_conversation_key_change(
   `key_version`) are now checked as `conversation_key_version` is, and
   `conversation_key_version` no longer accepts a negative value. Anything
   else fails with an error naming the field.
+- Action signatures come in the shape a request's `action_signatures`
+  carries them: `message_id`, `encoded_message_event_detail`, the signature
+  nested under `message_event_signature` (`signature`, `signature_version`,
+  `public_key_version` and the new `signing_public_key`, your signing public
+  key as `get_public_keys` returns it), and `signature_payload` when it is
+  not withheld. They were flat, with no signing public key, and apps
+  re-nested them: pass `action_signatures` through as returned instead.
+  The new `MessageEventSignature` type holds the nested signature in every
+  binding. `prepare_message_delete` and `prepare_mark_conversation_read`
+  return the new `PreparedAction` (`action_signatures`, one entry) instead
+  of a single `ActionSignature`; read the action's `message_id` from that
+  entry. Go, .NET and the JVM omit an absent `signature_payload` when
+  serializing (.NET `SignaturePayload` is `string?` and the JVM field is
+  `null` when absent). The mark-read shape is pending: the X API's mark-read
+  route does not take `action_signatures` yet, so the shape may change when
+  it does.
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
@@ -467,8 +483,9 @@ prepared = chat.prepare_conversation_key_change(
 - Read receipts can be signed. `prepare_mark_conversation_read` takes
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
   (the sequence id of the newest event read) and an optional
-  `seen_at_msec`, which defaults to the current time. It returns an
-  `ActionSignature` to send with the mark-read request once the X API's
-  route takes it, nested as API.md shows. Recipients' `decrypt_event`
-  returns a signed receipt as a verified `ReadReceipt`. The C ABI adds
-  `chat_xdk_prepare_mark_conversation_read`.
+  `seen_at_msec`, which defaults to the current time. It returns a
+  `PreparedAction` whose `action_signatures` are nested as the
+  conversation-change requests nest theirs; the X API's mark-read route
+  does not take them yet, so that shape is pending and may change.
+  Recipients' `decrypt_event` returns a signed receipt as a verified
+  `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.

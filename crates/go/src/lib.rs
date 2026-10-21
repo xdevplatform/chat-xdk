@@ -1331,8 +1331,9 @@ pub extern "C" fn chat_xdk_prepare_group_create(
 /// caller's view), plus optional `sender_id` / `signing_key_version` (unset
 /// resolves from the session identity).
 ///
-/// Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
-/// on it.
+/// Returns JSON `PreparedAction`: `action_signatures`, one entry with its
+/// signature nested under `message_event_signature`. The SDK-generated
+/// `message_id` is a field on the entry.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_message_delete(
     handle: *const ChatHandle,
@@ -1354,7 +1355,7 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_message_delete(&params) {
-            Ok(signature) => match serde_json::to_string(&signature) {
+            Ok(prepared) => match serde_json::to_string(&prepared) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
             },
@@ -1371,8 +1372,9 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
 /// epoch; unset takes the current time) and `sender_id` /
 /// `signing_key_version` (unset resolves from the session identity).
 ///
-/// Returns JSON `ActionSignature` to submit alongside the mark-read request;
-/// the SDK-generated `message_id` is a field on it.
+/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
+/// returns it. The X API's mark-read route does not take `action_signatures`
+/// yet, so that request shape is not final.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
     handle: *const ChatHandle,
@@ -1395,7 +1397,7 @@ pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_mark_conversation_read(&params) {
-            Ok(signature) => match serde_json::to_string(&signature) {
+            Ok(prepared) => match serde_json::to_string(&prepared) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
             },

@@ -297,7 +297,7 @@ interface PreparedConversationChange {
     "conversation_key": b"...",              # raw 32 bytes
     "conversation_key_version": "171000...", # timestamp string
     "participant_keys": [ {"user_id": "111", "encrypted_key": "...", "public_key_version": "1"} ],
-    "action_signatures": [ {"message_id": "...", "signature": "...", ...} ],
+    "action_signatures": [ {"message_id": "...", "message_event_signature": {"signature": "...", ...}, ...} ],
 }
 ```
 
@@ -737,8 +737,8 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(EncryptReactionParams) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(EncryptReactionParams) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
 | 30 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(EncryptEditParams) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
-| 31 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(MessageDeleteParams) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
-| 32 | **prepare_mark_conversation_read** | `prepare_mark_conversation_read(&MarkConversationReadParams) → ActionSignature` | `prepareMarkConversationRead(params: MarkConversationReadParams) → ActionSignature` | `prepare_mark_conversation_read(MarkConversationReadParams) → dict` | `PrepareMarkConversationRead(params MarkConversationReadParams) (*ActionSignature, error)` | `prepareMarkConversationRead(MarkConversationReadParams)` | `PrepareMarkConversationRead(MarkConversationReadParams)` |
+| 31 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → PreparedAction` | `prepareMessageDelete(params: MessageDeleteParams) → PreparedAction` | `prepare_message_delete(MessageDeleteParams) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*PreparedAction, error)` | `prepareMessageDelete(MessageDeleteParams)` → `PreparedAction` | `PrepareMessageDelete(MessageDeleteParams)` → `PreparedAction` |
+| 32 | **prepare_mark_conversation_read** | `prepare_mark_conversation_read(&MarkConversationReadParams) → PreparedAction` | `prepareMarkConversationRead(params: MarkConversationReadParams) → PreparedAction` | `prepare_mark_conversation_read(MarkConversationReadParams) → dict` | `PrepareMarkConversationRead(params MarkConversationReadParams) (*PreparedAction, error)` | `prepareMarkConversationRead(MarkConversationReadParams)` → `PreparedAction` | `PrepareMarkConversationRead(MarkConversationReadParams)` → `PreparedAction` |
 
 Required fields of `EncryptMessageParams` (all bindings, names per language
 idiom): `conversation_id` and `text`. Everything else is an optional override:
@@ -885,45 +885,50 @@ overrides above apply) and returns a `SendPayload` with its own fresh
 requires `conversation_id`, the `sequence_ids` of the messages to delete,
 and `delete_for_all` — `true` deletes for every participant (own messages
 only), `false` only from the caller's view. No conversation key is involved:
-`prepare_message_delete` returns a single `ActionSignature` (the same shape
-as the prepare methods' `actionSignatures` entries, with its
-`signature_payload` populated) whose `encodedMessageEventDetail` carries the
-`MessageDeleteEvent`, ready to submit alongside the delete request. The
-optional `sender_id` / `signing_key_version` overrides resolve from the
-session identity, and a one-to-one id is signed in its canonical colon form,
-as everywhere.
+`prepare_message_delete` returns a `PreparedAction`, the request's
+`action_signatures` with one entry. The entry is an `ActionSignature`, the
+same shape as the conversation-change `actionSignatures` entries (see
+**Action signatures** below), with its `signature_payload` populated; its
+`encodedMessageEventDetail` carries the `MessageDeleteEvent`. The optional
+`sender_id` / `signing_key_version` overrides resolve from the session
+identity, and a one-to-one id is signed in its canonical colon form, as
+everywhere.
 
 **Read receipts are signed, not encrypted.** `MarkConversationReadParams`
 requires `conversation_id` and `seen_until_sequence_id` — the `sequence_id`
 of the newest event read. The optional `seen_at_msec` (milliseconds since the
 Unix epoch) records when it was read and defaults to the current time; the JS
 binding reads the JavaScript clock. `prepare_mark_conversation_read` returns a
-single `ActionSignature` whose `encodedMessageEventDetail` carries the
-`MarkConversationReadEvent`, ready to submit alongside the mark-read request.
-The signature covers the read point and its time, so a recipient's
+`PreparedAction` shaped as for deletes, whose entry's
+`encodedMessageEventDetail` carries the `MarkConversationReadEvent`. The
+signature covers the read point and its time, so a recipient's
 `decrypt_event` returns the receipt as a `ReadReceipt` event with `verified`
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
-The X API's mark-read route does not take the signature yet. Once it does,
-send the signature as an entry of the request's `action_signatures`, nested
-the way the conversation-change requests nest theirs: `ActionSignature`
-returns `signature`, `signature_version` and `public_key_version` flat, and
-the entry carries them under `message_event_signature`, with your signing
-public key. Check the X API reference for the route's other fields.
+**Pending: the mark-read route.** The X API's mark-read route does not take
+`action_signatures` yet. The SDK nests the read receipt's signature the way
+the conversation-change requests nest theirs, but that shape is not
+confirmed for mark-read and may change when the route accepts it; check the
+X API reference before sending it, and for the route's other fields.
+
+**Action signatures.** Every prepare method returns its signed actions in
+the shape a request's `action_signatures` carries them, so they serialize
+into the request body as they are (snake_case shown; JS returns camelCase):
 
 ```json
 {
   "action_signatures": [
     {
-      "message_id": "<ActionSignature.message_id>",
-      "encoded_message_event_detail": "<ActionSignature.encoded_message_event_detail>",
+      "message_id": "<the action's message id, generated by the SDK>",
+      "encoded_message_event_detail": "<base64 MessageEventDetail>",
       "message_event_signature": {
-        "signature": "<ActionSignature.signature>",
-        "signature_version": "<ActionSignature.signature_version>",
-        "public_key_version": "<ActionSignature.public_key_version>",
-        "signing_public_key": "<your signing public key>"
-      }
+        "signature": "<base64 ECDSA signature>",
+        "signature_version": "7",
+        "public_key_version": "<your signing key version>",
+        "signing_public_key": "<your signing public key, as get_public_keys returns it>"
+      },
+      "signature_payload": "<the signed payload; omitted for conversation-key changes>"
     }
   ]
 }
@@ -1147,7 +1152,8 @@ one-call prepare methods (`prepare_conversation_key_change`,
 `actionSignatures` ready to POST. Group create and member-add each return two
 signatures (a conversation-key change plus the group change). Message deletes
 and read receipts are signed by `prepare_message_delete` and
-`prepare_mark_conversation_read`, which each return a single `ActionSignature`.
+`prepare_mark_conversation_read`, which each return a `PreparedAction` with
+one entry in its `actionSignatures`.
 
 ### Utilities
 

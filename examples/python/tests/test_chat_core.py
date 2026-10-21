@@ -179,7 +179,7 @@ class TestPreparedChanges(unittest.TestCase):
 
         core, keys = self._core_and_keys()
         prep = core.prepare_conversation_key_change(keys, conversation_id="1000:2000")
-        body = prep_to_request(prep, core.public_keys()["signing"])
+        body = prep_to_request(prep)
 
         self.assertEqual(body["conversation_key_version"], prep["conversation_key_version"])
         (pk,) = body["conversation_participant_keys"]

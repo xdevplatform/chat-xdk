@@ -142,6 +142,9 @@ namespace ChatXdk.Tests
         private static Dictionary<string, byte[]> ConversationKeys(SdkVectors v) =>
             new() { [v.EventConversationKeyVersion] = Convert.FromBase64String(v.ConversationKeyB64) };
 
+        /// <summary>The one <c>action_signatures</c> entry of a prepared delete or read receipt.</summary>
+        private static ActionSignature OnlyAction(PreparedAction prepared) => Assert.Single(prepared.ActionSignatures);
+
         /// <summary>File-encryption params under the fixture conversation key.</summary>
         private static EncryptFileParams EncryptFileParamsFor(SdkVectors v, byte[] file, string eventB64, string mediaHashKey) =>
             new(file, eventB64, mediaHashKey)
@@ -293,14 +296,18 @@ namespace ChatXdk.Tests
             Assert.Contains("signing_key_version", ex.Message);
 
             chat.SetIdentity(new SetIdentityParams("1234", "1700000000123"));
-            Assert.Equal("1700000000123", chat.PrepareMessageDelete(deleteParams).PublicKeyVersion);
+            Assert.Equal(
+                "1700000000123",
+                OnlyAction(chat.PrepareMessageDelete(deleteParams)).MessageEventSignature.PublicKeyVersion);
 
             // Restored keys carry the version passed to ImportKeys, and none
             // without it.
             var keys = chat.ExportKeys()!;
             using var restored = new Chat();
             restored.ImportKeys(new ImportKeysParams(keys) { SigningKeyVersion = "1700000000456" });
-            Assert.Equal("1700000000456", restored.PrepareMessageDelete(deleteParams).PublicKeyVersion);
+            Assert.Equal(
+                "1700000000456",
+                OnlyAction(restored.PrepareMessageDelete(deleteParams)).MessageEventSignature.PublicKeyVersion);
             restored.ImportKeys(new ImportKeysParams(keys));
             Assert.Throws<ChatXdkException>(() => restored.PrepareMessageDelete(deleteParams));
         }
@@ -705,16 +712,26 @@ namespace ChatXdk.Tests
 
             // A 1:1 id is signed in its canonical colon form; delete-for-all
             // signs the wire action 2.
-            var sig = chat.PrepareMessageDelete(new MessageDeleteParams(
+            var prepared = chat.PrepareMessageDelete(new MessageDeleteParams(
                 "222-111", new[] { "seq-10", "seq-11" }, deleteForAll: true)
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
             });
+            var sig = OnlyAction(prepared);
 
             Assert.NotEmpty(sig.MessageId);
             Assert.NotEmpty(sig.EncodedMessageEventDetail);
-            Assert.NotEmpty(sig.Signature);
+            // The signature is nested as the request's action_signatures carry it.
+            Assert.NotEmpty(sig.MessageEventSignature.Signature);
+            Assert.Equal("7", sig.MessageEventSignature.SignatureVersion);
+            Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
+            Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
+            var entry = JsonSerializer.SerializeToElement(prepared).GetProperty("action_signatures")[0];
+            Assert.False(entry.TryGetProperty("signature", out _));
+            Assert.Equal(
+                sig.MessageEventSignature.SigningPublicKey,
+                entry.GetProperty("message_event_signature").GetProperty("signing_public_key").GetString());
             Assert.Equal(
                 $"MessageDeleteEvent,{sig.MessageId},111,111:222,2,seq-10,seq-11",
                 sig.SignaturePayload);
@@ -727,12 +744,12 @@ namespace ChatXdk.Tests
 
             // Group ids pass through unchanged; delete-for-self signs the wire
             // action 1.
-            var sig = chat.PrepareMessageDelete(new MessageDeleteParams(
+            var sig = OnlyAction(chat.PrepareMessageDelete(new MessageDeleteParams(
                 "g999", new[] { "seq-1" }, deleteForAll: false)
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
-            });
+            }));
 
             Assert.Equal(
                 $"MessageDeleteEvent,{sig.MessageId},111,g999,1,seq-1",
@@ -748,24 +765,25 @@ namespace ChatXdk.Tests
 
             // A 1:1 id is signed in its canonical colon form, followed by the
             // read point and its time.
-            var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams(
+            var sig = OnlyAction(chat.PrepareMarkConversationRead(new MarkConversationReadParams(
                 "222-111", "2011626338877079553")
             {
                 SeenAtMsec = 1700000000123,
                 SenderId = "111",
                 SigningKeyVersion = "1",
-            });
+            }));
 
             Assert.NotEmpty(sig.MessageId);
             Assert.NotEmpty(sig.EncodedMessageEventDetail);
-            Assert.Equal("1", sig.PublicKeyVersion);
+            Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
+            Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
             Assert.Equal(
                 $"MarkConversationReadEvent,{sig.MessageId},111,111:222,2011626338877079553,1700000000123",
                 sig.SignaturePayload);
-            var signature = Convert.FromBase64String(
-                sig.Signature.PadRight(sig.Signature.Length + (4 - sig.Signature.Length % 4) % 4, '='));
+            var signed = sig.MessageEventSignature.Signature;
+            var signature = Convert.FromBase64String(signed.PadRight(signed.Length + (4 - signed.Length % 4) % 4, '='));
             Assert.True(chat.Verify(
-                chat.GetPublicKeys().Signing, signature, System.Text.Encoding.UTF8.GetBytes(sig.SignaturePayload)));
+                chat.GetPublicKeys().Signing, signature, System.Text.Encoding.UTF8.GetBytes(sig.SignaturePayload!)));
         }
 
         [Fact]
@@ -775,13 +793,13 @@ namespace ChatXdk.Tests
             chat.SetIdentity(new SetIdentityParams("111", "7"));
 
             var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams("g999", "seq-1"));
+            var sig = OnlyAction(chat.PrepareMarkConversationRead(new MarkConversationReadParams("g999", "seq-1")));
             var after = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            Assert.Equal("7", sig.PublicKeyVersion);
+            Assert.Equal("7", sig.MessageEventSignature.PublicKeyVersion);
             var prefix = $"MarkConversationReadEvent,{sig.MessageId},111,g999,seq-1,";
             Assert.StartsWith(prefix, sig.SignaturePayload);
-            var seenAt = long.Parse(sig.SignaturePayload.Substring(prefix.Length));
+            var seenAt = long.Parse(sig.SignaturePayload!.Substring(prefix.Length));
             Assert.InRange(seenAt, before, after);
         }
 
@@ -825,8 +843,8 @@ namespace ChatXdk.Tests
 
             Assert.Single(prepared.ParticipantKeys);
             Assert.Single(prepared.ActionSignatures);
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Equal("", prepared.ActionSignatures[0].SignaturePayload);
+            // Absent: the payload embeds the plaintext conversation key and is withheld.
+            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
 
             var decrypted = chat.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey);
             Assert.Equal(prepared.ConversationKey, decrypted);
@@ -1073,8 +1091,8 @@ namespace ChatXdk.Tests
             Assert.Equal("g123", prepared.ConversationId);
             // A member add emits two signed actions: the key change and the add.
             Assert.Equal(2, prepared.ActionSignatures.Count);
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Equal("", prepared.ActionSignatures[0].SignaturePayload);
+            // Absent: the payload embeds the plaintext conversation key and is withheld.
+            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[0].EncodedMessageEventDetail);
             Assert.StartsWith("GroupChangeEvent.GroupMemberAddChange,", prepared.ActionSignatures[1].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
@@ -1127,8 +1145,8 @@ namespace ChatXdk.Tests
             Assert.Equal("g123", prepared.ConversationId);
             // A group create emits two signed actions: the key change and the create.
             Assert.Equal(2, prepared.ActionSignatures.Count);
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Equal("", prepared.ActionSignatures[0].SignaturePayload);
+            // Absent: the payload embeds the plaintext conversation key and is withheld.
+            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[0].EncodedMessageEventDetail);
             Assert.StartsWith("GroupChangeEvent.GroupCreate,", prepared.ActionSignatures[1].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);

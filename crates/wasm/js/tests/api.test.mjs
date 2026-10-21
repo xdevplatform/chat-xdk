@@ -18,6 +18,13 @@ const withKey = ({ conversationKeys, ...rest }) => {
   return { ...rest, conversationKey, conversationKeyVersion };
 };
 
+/** The one `actionSignatures` entry of a prepared delete or read receipt. */
+const onlyAction = (prepared) => {
+  assert.deepEqual(Object.keys(prepared), ["actionSignatures"]);
+  assert.equal(prepared.actionSignatures.length, 1);
+  return prepared.actionSignatures[0];
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -108,14 +115,20 @@ async function main() {
     };
     assert.throws(() => fresh.prepareMessageDelete(deleteParams), /signing_key_version is not set/);
     fresh.setIdentity({ userId: "1234", signingKeyVersion: "1700000000123" });
-    assert.equal(fresh.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000123");
+    assert.equal(
+      onlyAction(fresh.prepareMessageDelete(deleteParams)).messageEventSignature.publicKeyVersion,
+      "1700000000123",
+    );
 
     // Restored keys carry the version passed to importKeys, and none
     // without it.
     const keys = new Uint8Array(fresh.exportKeys());
     const restored = new Chat();
     restored.importKeys({ keys: keys, signingKeyVersion: "1700000000456" });
-    assert.equal(restored.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000456");
+    assert.equal(
+      onlyAction(restored.prepareMessageDelete(deleteParams)).messageEventSignature.publicKeyVersion,
+      "1700000000456",
+    );
     restored.importKeys({ keys: keys });
     assert.throws(
       () => restored.prepareMessageDelete(deleteParams),
@@ -210,6 +223,9 @@ async function main() {
   assert.equal(prep.actionSignatures.length, 1);
   // Omitted: the payload embeds the plaintext conversation key and is withheld.
   assert.equal(prep.actionSignatures[0].signaturePayload, undefined);
+  // Nested as the request's actionSignatures carry it.
+  assert.equal(prep.actionSignatures[0].messageEventSignature.publicKeyVersion, "1");
+  assert.equal(prep.actionSignatures[0].messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
   const decryptedKey = chat.decryptConversationKey(prep.participantKeys[0].encryptedKey);
   assert.deepEqual(decryptedKey, prep.conversationKey);
   // two prepared changes generate different keys (randomized)
@@ -540,29 +556,39 @@ async function main() {
   assert.equal(decodedEdit.entities[0].startIndex, 4);
   assert.equal(decodedEdit.entities[0].endIndex, 23);
 
-  // 4c3. prepareMessageDelete returns a signed action with the encoded
-  // MessageDeleteEvent detail; 1:1 ids are signed in canonical colon form.
-  const deleteSig = chat.prepareMessageDelete({
+  // 4c3. prepareMessageDelete returns the request's actionSignatures: one
+  // signed action with the encoded MessageDeleteEvent detail, its signature
+  // nested; 1:1 ids are signed in canonical colon form.
+  const deleteSig = onlyAction(chat.prepareMessageDelete({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "222-111",
     sequenceIds: ["seq-10", "seq-11"],
     deleteForAll: true,
-  });
+  }));
   assert.ok(deleteSig.messageId.length > 0);
   assert.ok(deleteSig.encodedMessageEventDetail.length > 0);
-  assert.ok(deleteSig.signature.length > 0);
+  assert.deepEqual(Object.keys(deleteSig.messageEventSignature).sort(), [
+    "publicKeyVersion",
+    "signature",
+    "signatureVersion",
+    "signingPublicKey",
+  ]);
+  assert.ok(deleteSig.messageEventSignature.signature.length > 0);
+  assert.equal(deleteSig.messageEventSignature.signatureVersion, "7");
+  assert.equal(deleteSig.messageEventSignature.publicKeyVersion, "1");
+  assert.equal(deleteSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
   assert.equal(
     deleteSig.signaturePayload,
     `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`,
   );
-  const deleteForSelfSig = chat.prepareMessageDelete({
+  const deleteForSelfSig = onlyAction(chat.prepareMessageDelete({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g999",
     sequenceIds: ["seq-1"],
     deleteForAll: false,
-  });
+  }));
   assert.equal(
     deleteForSelfSig.signaturePayload,
     `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
@@ -570,16 +596,17 @@ async function main() {
 
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.
-  const readSig = chat.prepareMarkConversationRead({
+  const readSig = onlyAction(chat.prepareMarkConversationRead({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "222-111",
     seenUntilSequenceId: "2011626338877079553",
     seenAtMsec: 1700000000123,
-  });
+  }));
   assert.ok(readSig.messageId.length > 0);
   assert.ok(readSig.encodedMessageEventDetail.length > 0);
-  assert.equal(readSig.publicKeyVersion, "1");
+  assert.equal(readSig.messageEventSignature.publicKeyVersion, "1");
+  assert.equal(readSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
   assert.equal(
     readSig.signaturePayload,
     `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`,
@@ -587,7 +614,7 @@ async function main() {
   assert.equal(
     chat.verify(
       v.signing_public_b64,
-      b64ToBytes(readSig.signature),
+      b64ToBytes(readSig.messageEventSignature.signature),
       new TextEncoder().encode(readSig.signaturePayload),
     ),
     true,
@@ -595,12 +622,12 @@ async function main() {
 
   // An omitted seenAtMsec signs the JavaScript clock's current time.
   const beforeRead = Date.now();
-  const readNowSig = chat.prepareMarkConversationRead({
+  const readNowSig = onlyAction(chat.prepareMarkConversationRead({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g999",
     seenUntilSequenceId: "seq-1",
-  });
+  }));
   const afterRead = Date.now();
   const readNowPrefix = `MarkConversationReadEvent,${readNowSig.messageId},111,g999,seq-1,`;
   assert.ok(readNowSig.signaturePayload.startsWith(readNowPrefix));

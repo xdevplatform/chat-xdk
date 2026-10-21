@@ -450,7 +450,8 @@ All ECDSA signatures are raw `r || s` (64 bytes):
 ### Signature Versions
 
 The signature protocol is versioned, and the version travels with each signature
-(`MessageEventSignature.signature_version` / `ActionSignature.signature_version`).
+(`MessageEventSignature.signature_version`, which an `ActionSignature` nests
+as `message_event_signature.signature_version`).
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -557,7 +558,7 @@ or the resulting signature is unverifiable.
 
 Two base64 flavors appear on the wire, and both are frozen for interop with
 other X Chat clients. ECDSA signature values (`MessageEventSignature.signature`,
-`ActionSignature.signature`) and byte values embedded inside signed payloads
+also nested in each `ActionSignature`) and byte values embedded inside signed payloads
 (the ciphertext and plaintext conversation key components above) use standard
 base64 **without** padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
 `encrypted_content`, `encoded_event_signature`, and

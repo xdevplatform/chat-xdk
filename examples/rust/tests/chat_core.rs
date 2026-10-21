@@ -166,7 +166,7 @@ fn prep_to_request_maps_the_rest_shape() {
         .prepare_conversation_key_change(&keys, Some("1000:2000"))
         .expect("prepare_conversation_key_change");
     let signing = core.public_keys().expect("public_keys").signing;
-    let body = prep_to_request(&prep, &signing);
+    let body = prep_to_request(&prep);
 
     assert_eq!(
         body["conversation_key_version"].as_str().unwrap(),

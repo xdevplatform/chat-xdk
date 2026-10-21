@@ -685,39 +685,41 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Build the signed action for deleting messages from a conversation, ready
-     * to submit alongside the delete request.
+     * Build the signed action for deleting messages from a conversation: the
+     * request's {@code action_signatures}, one entry.
      *
      * <p>A delete is a signed plaintext event, not an encrypted message, so no
      * conversation key is involved. The SDK generates the action's message id;
-     * read it back from the result.
+     * read it back from the entry.
      */
-    public ActionSignature prepareMessageDelete(MessageDeleteParams parameters) throws Exception {
+    public PreparedAction prepareMessageDelete(MessageDeleteParams parameters) throws Exception {
         throwIfDisposed();
         try (Memory j = FfiStrings.utf8(buildPrepareMessageDeleteJson(parameters))) {
             String resultJson = FfiStrings.consume(
                     ChatNative.INSTANCE.chat_xdk_prepare_message_delete(handle, j));
-            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+            return ChatJson.MAPPER.readValue(resultJson, PreparedAction.class);
         } finally {
             Reference.reachabilityFence(this);
         }
     }
 
     /**
-     * Build the signed action for marking a conversation read, ready to submit
-     * alongside the mark-read request.
+     * Build the signed action for marking a conversation read: the request's
+     * {@code action_signatures}, one entry. The X API's mark-read route does
+     * not take {@code action_signatures} yet, so that request shape is not
+     * final.
      *
      * <p>A read receipt is a signed plaintext event, not an encrypted message,
      * so no conversation key is involved. The SDK generates the action's
-     * message id; read it back from the result.
+     * message id; read it back from the entry.
      */
-    public ActionSignature prepareMarkConversationRead(MarkConversationReadParams parameters)
+    public PreparedAction prepareMarkConversationRead(MarkConversationReadParams parameters)
             throws Exception {
         throwIfDisposed();
         try (Memory j = FfiStrings.utf8(buildPrepareMarkConversationReadJson(parameters))) {
             String resultJson = FfiStrings.consume(
                     ChatNative.INSTANCE.chat_xdk_prepare_mark_conversation_read(handle, j));
-            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+            return ChatJson.MAPPER.readValue(resultJson, PreparedAction.class);
         } finally {
             Reference.reachabilityFence(this);
         }

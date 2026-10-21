@@ -179,8 +179,7 @@ const bothKeys = [
 const prep = core.prepareConversationKeyChange({
   publicKeys: bothKeys,
 });
-const signingPub = core.publicKeys().signing;
-const resp = await api.addConversationKeys(conv, prepToRequest(prep, signingPub));
+const resp = await api.addConversationKeys(conv, prepToRequest(prep));
 const data = resp.data ?? {};
 assert(
   data.sequenceId ||
@@ -344,7 +343,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       groupMembers: members,
       groupAdmins: [myId],
       groupName: "chat-xdk e2e",
-      ...prepToRequest(gPrep, signingPub),
+      ...prepToRequest(gPrep),
     });
   } catch {
     // Some deployments reject single-member groups; fall back to creating
@@ -361,7 +360,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       groupMembers: members,
       groupAdmins: [myId],
       groupName: "chat-xdk e2e",
-      ...prepToRequest(gPrep, signingPub),
+      ...prepToRequest(gPrep),
     });
   }
   const gkv = gPrep.conversationKeyVersion;
@@ -400,7 +399,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
     });
     await api.addGroupMembers(groupId, {
       userIds: [partnerId],
-      ...prepToRequest(mPrep, signingPub),
+      ...prepToRequest(mPrep),
     });
     console.log(
       `group member add: ${partnerId} added (key rotated to ${mPrep.conversationKeyVersion})`,

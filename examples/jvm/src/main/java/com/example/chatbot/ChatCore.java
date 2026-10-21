@@ -328,12 +328,10 @@ public final class ChatCore implements AutoCloseable {
      * Map a prepared conversation change into the X API request shape.
      *
      * <p>Works for 1:1 key changes (one signature) and group create / member add
-     * (two signatures). {@code signingPublicKey} is the sender's own signing key,
-     * which the API expects alongside each signature. A conversation-key change's
-     * {@code signature_payload} is withheld (it embeds the plaintext key), so it
-     * is included only when non-empty.
+     * (two signatures). The action signatures already have the request's shape;
+     * the participant keys take the request's field names.
      */
-    public static ObjectNode prepToRequest(PreparedConversationChange prep, String signingPublicKey) {
+    public static ObjectNode prepToRequest(PreparedConversationChange prep) {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("conversation_key_version", prep.conversationKeyVersion);
         ArrayNode participantKeys = body.putArray("conversation_participant_keys");
@@ -343,20 +341,7 @@ public final class ChatCore implements AutoCloseable {
             entry.put("encrypted_conversation_key", pk.encryptedKey);
             entry.put("public_key_version", pk.publicKeyVersion);
         }
-        ArrayNode signatures = body.putArray("action_signatures");
-        for (ActionSignature sig : prep.actionSignatures) {
-            ObjectNode entry = signatures.addObject();
-            entry.put("message_id", sig.messageId);
-            entry.put("encoded_message_event_detail", sig.encodedMessageEventDetail);
-            ObjectNode inner = entry.putObject("message_event_signature");
-            inner.put("signature", sig.signature);
-            inner.put("signature_version", sig.signatureVersion);
-            inner.put("public_key_version", sig.publicKeyVersion);
-            inner.put("signing_public_key", signingPublicKey);
-            if (sig.signaturePayload != null && !sig.signaturePayload.isEmpty()) {
-                entry.put("signature_payload", sig.signaturePayload);
-            }
-        }
+        body.set("action_signatures", MAPPER.valueToTree(prep.actionSignatures));
         return body;
     }
 

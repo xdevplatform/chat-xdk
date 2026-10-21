@@ -71,6 +71,12 @@ class ChatTest {
         return Map.of(v.get("event_conversation_key_version").asText(), b64(v, "conversation_key_b64"));
     }
 
+    /** The one {@code action_signatures} entry of a prepared delete or read receipt. */
+    private static ActionSignature onlyAction(PreparedAction prepared) {
+        assertEquals(1, prepared.actionSignatures.size());
+        return prepared.actionSignatures.get(0);
+    }
+
     /** File-encryption params under the fixture conversation key. */
     private static EncryptFileParams encryptFileParams(JsonNode v, byte[] file, String eventB64, String mediaHashKey) {
         EncryptFileParams params = new EncryptFileParams(file, eventB64, mediaHashKey);
@@ -532,10 +538,20 @@ class ChatTest {
             MessageDeleteParams p = new MessageDeleteParams("222-111", List.of("seq-10", "seq-11"), true);
             p.senderId = "111";
             p.signingKeyVersion = "1";
-            ActionSignature sig = chat.prepareMessageDelete(p);
+            PreparedAction prepared = chat.prepareMessageDelete(p);
+            ActionSignature sig = onlyAction(prepared);
             assertFalse(sig.messageId.isEmpty());
             assertFalse(sig.encodedMessageEventDetail.isEmpty());
-            assertFalse(sig.signature.isEmpty());
+            // The signature is nested as the request's action_signatures carry it.
+            MessageEventSignature signed = sig.messageEventSignature;
+            assertFalse(signed.signature.isEmpty());
+            assertEquals("7", signed.signatureVersion);
+            assertEquals("1", signed.publicKeyVersion);
+            assertEquals(chat.getPublicKeys().signing, signed.signingPublicKey);
+            JsonNode entry = ChatJson.MAPPER.<JsonNode>valueToTree(prepared).get("action_signatures").get(0);
+            assertFalse(entry.has("signature"), entry.toString());
+            assertEquals(signed.signingPublicKey,
+                    entry.get("message_event_signature").get("signing_public_key").asText());
             assertEquals(
                     "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11",
                     sig.signaturePayload);
@@ -550,7 +566,7 @@ class ChatTest {
             MessageDeleteParams p = new MessageDeleteParams("g999", List.of("seq-1"), false);
             p.senderId = "111";
             p.signingKeyVersion = "1";
-            ActionSignature sig = chat.prepareMessageDelete(p);
+            ActionSignature sig = onlyAction(chat.prepareMessageDelete(p));
             assertEquals(
                     "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1",
                     sig.signaturePayload);
@@ -566,17 +582,18 @@ class ChatTest {
             p.seenAtMsec = 1700000000123L;
             p.senderId = "111";
             p.signingKeyVersion = "1";
-            ActionSignature sig = chat.prepareMarkConversationRead(p);
+            ActionSignature sig = onlyAction(chat.prepareMarkConversationRead(p));
             assertFalse(sig.messageId.isEmpty());
             assertFalse(sig.encodedMessageEventDetail.isEmpty());
-            assertEquals("1", sig.publicKeyVersion);
+            assertEquals("1", sig.messageEventSignature.publicKeyVersion);
+            assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
             assertEquals(
                     "MarkConversationReadEvent," + sig.messageId
                             + ",111,111:222,2011626338877079553,1700000000123",
                     sig.signaturePayload);
             assertTrue(chat.verify(
                     chat.getPublicKeys().signing,
-                    Base64.getDecoder().decode(sig.signature),
+                    Base64.getDecoder().decode(sig.messageEventSignature.signature),
                     sig.signaturePayload.getBytes(StandardCharsets.UTF_8)));
         }
     }
@@ -586,11 +603,11 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             chat.setIdentity(new SetIdentityParams("111", "7"));
             long before = System.currentTimeMillis();
-            ActionSignature sig = chat.prepareMarkConversationRead(
-                    new MarkConversationReadParams("g999", "seq-1"));
+            ActionSignature sig = onlyAction(chat.prepareMarkConversationRead(
+                    new MarkConversationReadParams("g999", "seq-1")));
             long after = System.currentTimeMillis();
 
-            assertEquals("7", sig.publicKeyVersion);
+            assertEquals("7", sig.messageEventSignature.publicKeyVersion);
             String prefix = "MarkConversationReadEvent," + sig.messageId + ",111,g999,seq-1,";
             assertTrue(sig.signaturePayload.startsWith(prefix), sig.signaturePayload);
             long seenAt = Long.parseLong(sig.signaturePayload.substring(prefix.length()));
@@ -621,14 +638,16 @@ class ChatTest {
             assertTrue(ex.getMessage().contains("signing_key_version"), ex.getMessage());
 
             chat.setIdentity(new SetIdentityParams("1234", "1700000000123"));
-            assertEquals("1700000000123", chat.prepareMessageDelete(p).publicKeyVersion);
+            assertEquals("1700000000123",
+                    onlyAction(chat.prepareMessageDelete(p)).messageEventSignature.publicKeyVersion);
 
             // Restored keys carry the version passed to importKeys, and none
             // without it.
             byte[] keys = chat.exportKeys();
             assertNotNull(keys);
             restored.importKeys(new ImportKeysParams(keys, "1700000000456"));
-            assertEquals("1700000000456", restored.prepareMessageDelete(p).publicKeyVersion);
+            assertEquals("1700000000456",
+                    onlyAction(restored.prepareMessageDelete(p)).messageEventSignature.publicKeyVersion);
             restored.importKeys(new ImportKeysParams(keys));
             assertThrows(ChatXdkException.class, () -> restored.prepareMessageDelete(p));
         }
@@ -688,7 +707,7 @@ class ChatTest {
             assertFalse(prepared.participantKeys.get(0).encryptedKey.isEmpty());
             assertEquals(1, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertTrue(prepared.actionSignatures.get(0).signaturePayload.isEmpty());
+            assertNull(prepared.actionSignatures.get(0).signaturePayload);
         }
     }
 
@@ -720,7 +739,7 @@ class ChatTest {
             // A member add emits two signed actions: the key change and the add.
             assertEquals(2, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertTrue(prepared.actionSignatures.get(0).signaturePayload.isEmpty());
+            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
             assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
                     "GroupChangeEvent.GroupMemberAddChange,"));
@@ -770,7 +789,7 @@ class ChatTest {
             // A group create emits two signed actions: the key change and the create.
             assertEquals(2, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertTrue(prepared.actionSignatures.get(0).signaturePayload.isEmpty());
+            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
             assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
                     "GroupChangeEvent.GroupCreate,"));

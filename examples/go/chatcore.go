@@ -387,9 +387,9 @@ func MessageText(event *chatxdk.Event) string {
 // PrepToRequest maps a prepared conversation change into the X API request shape.
 //
 // Works for 1:1 key changes (one signature) and group create / member add
-// (two signatures). signingPublicKey is the sender's own signing key, which
-// the API expects alongside each signature.
-func PrepToRequest(prep *chatxdk.PreparedConversationChange, signingPublicKey string) map[string]any {
+// (two signatures). The action signatures already have the request's shape;
+// the participant keys take the request's field names.
+func PrepToRequest(prep *chatxdk.PreparedConversationChange) map[string]any {
 	participantKeys := make([]map[string]any, 0, len(prep.ParticipantKeys))
 	for _, pk := range prep.ParticipantKeys {
 		participantKeys = append(participantKeys, map[string]any{
@@ -398,26 +398,9 @@ func PrepToRequest(prep *chatxdk.PreparedConversationChange, signingPublicKey st
 			"public_key_version":         pk.PublicKeyVersion,
 		})
 	}
-	actionSignatures := make([]map[string]any, 0, len(prep.ActionSignatures))
-	for _, sig := range prep.ActionSignatures {
-		entry := map[string]any{
-			"message_id":                   sig.MessageID,
-			"encoded_message_event_detail": sig.EncodedMessageEventDetail,
-			"message_event_signature": map[string]any{
-				"signature":          sig.Signature,
-				"signature_version":  sig.SignatureVersion,
-				"public_key_version": sig.PublicKeyVersion,
-				"signing_public_key": signingPublicKey,
-			},
-		}
-		if sig.SignaturePayload != "" {
-			entry["signature_payload"] = sig.SignaturePayload
-		}
-		actionSignatures = append(actionSignatures, entry)
-	}
 	return map[string]any{
 		"conversation_key_version":      prep.ConversationKeyVersion,
 		"conversation_participant_keys": participantKeys,
-		"action_signatures":             actionSignatures,
+		"action_signatures":             prep.ActionSignatures,
 	}
 }

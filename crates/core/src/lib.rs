@@ -185,7 +185,7 @@ pub use types::*;
 // The derive macro JsCamelCase generates Js* types alongside each annotated type.
 #[cfg(feature = "js")]
 pub mod js {
-    pub use crate::signatures::JsActionSignature;
+    pub use crate::signatures::{JsActionSignature, JsMessageEventSignature};
     pub use crate::types::{
         JsAttachmentInfo,
         JsConversationDeletedEvent,
@@ -213,6 +213,7 @@ pub mod js {
         JsMoneyAttachmentInfo,
         JsParticipantKey,
         JsPostAttachmentInfo,
+        JsPreparedAction,
         JsPreparedConversationChange,
         JsPublicKeyInput,
         JsPublicKeyRegistration,

@@ -145,7 +145,7 @@ test("prepToRequest maps the X API request shape", async () => {
     ],
     conversationId: "1000:2000",
   });
-  const body = prepToRequest(prep, core.publicKeys().signing);
+  const body = prepToRequest(prep);
 
   assert.equal(body.conversationKeyVersion, prep.conversationKeyVersion);
   assert.equal(body.conversationParticipantKeys.length, 1);

@@ -296,8 +296,9 @@ namespace ChatXdk
         ///  caller's view), plus optional `sender_id` / `signing_key_version` (absent
         ///  resolves from the session identity).
         ///
-        ///  Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
-        ///  on it.
+        ///  Returns JSON `PreparedAction`: `action_signatures`, one entry with its
+        ///  signature nested under `message_event_signature`. The SDK-generated
+        ///  `message_id` is a field on the entry.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_message_delete", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
@@ -311,8 +312,9 @@ namespace ChatXdk
         ///  epoch; absent takes the current time) and `sender_id` /
         ///  `signing_key_version` (absent resolves from the session identity).
         ///
-        ///  Returns JSON `ActionSignature` to submit alongside the mark-read request;
-        ///  the SDK-generated `message_id` is a field on it.
+        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
+        ///  returns it. The X API's mark-read route does not take `action_signatures`
+        ///  yet, so that request shape is not final.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_mark_conversation_read", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_mark_conversation_read(ChatHandle* handle, byte* params_json);

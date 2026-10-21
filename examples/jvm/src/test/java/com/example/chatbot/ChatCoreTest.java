@@ -151,7 +151,7 @@ class ChatCoreTest {
             PreparedConversationChange prep =
                     core.prepareConversationKeyChange(fixtureKeys(v), "1000:2000");
             String signingPub = core.publicKeys().signing;
-            ObjectNode body = ChatCore.prepToRequest(prep, signingPub);
+            ObjectNode body = ChatCore.prepToRequest(prep);
 
             assertEquals(prep.conversationKeyVersion, body.path("conversation_key_version").asText());
             JsonNode pks = body.path("conversation_participant_keys");

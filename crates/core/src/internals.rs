@@ -241,10 +241,11 @@ pub fn frame_signed_key_change(
         None,
         None,
     );
+    let signed = &signature.message_event_signature;
     let sig_struct = MessageEventSignature::new(
-        Some(signature.signature.clone()),
-        Some(signature.public_key_version.clone()),
-        Some(signature.signature_version.clone()),
+        Some(signed.signature.clone()),
+        Some(signed.public_key_version.clone()),
+        Some(signed.signature_version.clone()),
         None,
         None,
     );

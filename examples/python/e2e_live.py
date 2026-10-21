@@ -167,7 +167,7 @@ def main() -> None:
         pks_by_user.get(partner_id) or [], partner_id
     )
     prep = core.prepare_conversation_key_change(both_keys)
-    resp = api.add_conversation_keys(conversation_id, prep_to_request(prep, core.public_keys()["signing"]))
+    resp = api.add_conversation_keys(conversation_id, prep_to_request(prep))
     data = resp.get("data") or {}
     assert data.get("sequence_id") or data.get("conversation_key_change_sequence_id"), (
         f"key rotation not acknowledged: {resp}"
@@ -313,7 +313,6 @@ def _groups_flow(
     signing: list[dict],
 ) -> None:
     my_keys = [k for k in both_keys if k["user_id"] == my_id]
-    signing_pub = core.public_keys()["signing"]
 
     group_id = api.initialize_group()
     assert group_id.startswith("g"), f"unexpected group id: {group_id!r}"
@@ -326,7 +325,7 @@ def _groups_flow(
         "group_members": [my_id],
         "group_admins": [my_id],
         "group_name": "chat-xdk e2e",
-        **prep_to_request(prep, signing_pub),
+        **prep_to_request(prep),
     }
     try:
         api.create_conversation(body)
@@ -340,7 +339,7 @@ def _groups_flow(
             "group_members": [my_id, partner_id],
             "group_admins": [my_id],
             "group_name": "chat-xdk e2e",
-            **prep_to_request(prep, signing_pub),
+            **prep_to_request(prep),
         }
         api.create_conversation(body)
         members = [my_id, partner_id]
@@ -369,7 +368,7 @@ def _groups_flow(
         )
         api.add_group_members(
             group_id,
-            {"user_ids": [partner_id], **prep_to_request(prep, signing_pub)},
+            {"user_ids": [partner_id], **prep_to_request(prep)},
         )
         print(f"group member add: {partner_id} added (key rotated to {prep['conversation_key_version']})")
 

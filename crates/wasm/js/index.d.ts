@@ -76,20 +76,42 @@ export interface SendPayload {
 }
 
 /**
- * An action signature authenticating a conversation key change, member add, or message delete.
+ * A signed action (conversation-key change, group change, message delete or
+ * read receipt), shaped as an entry of a request's `actionSignatures`: the
+ * signature is nested under `messageEventSignature`.
  */
 export interface ActionSignature {
   messageId: string;
   encodedMessageEventDetail: string;
-  signature: string;
-  signatureVersion: string;
-  publicKeyVersion: string;
+  /** The signature over the action, with its versions and the signer's signing public key. */
+  messageEventSignature: MessageEventSignature;
   /**
    * The comma-separated payload string that was signed; populated for group
-   * changes and message deletes. Omitted for conversation-key changes, whose
-   * payload embeds the plaintext conversation key.
+   * changes, message deletes and read receipts. Omitted for conversation-key
+   * changes, whose payload embeds the plaintext conversation key.
    */
   signaturePayload?: string;
+}
+
+/** The signature of an ActionSignature. */
+export interface MessageEventSignature {
+  /** Base64 ECDSA signature of the payload. */
+  signature: string;
+  /** Signature protocol version. */
+  signatureVersion: string;
+  /** Version of the signing public key. */
+  publicKeyVersion: string;
+  /** The signer's base64 signing public key, as getPublicKeys returns it. */
+  signingPublicKey: string;
+}
+
+/**
+ * A signed message delete or read receipt: the `actionSignatures` a request
+ * carries for it, one entry. The X API's mark-read route does not take
+ * `actionSignatures` yet, so that request shape is not final.
+ */
+export interface PreparedAction {
+  actionSignatures: ActionSignature[];
 }
 
 /**
@@ -1061,11 +1083,18 @@ interface ChatCrypto {
   /** Encrypt a message edit. */
   encryptEdit(params: EncryptEditParams): SendPayload;
 
-  /** Build the signed action for deleting messages from a conversation. */
-  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+  /**
+   * Build the signed action for deleting messages from a conversation: the
+   * request's `actionSignatures`, one entry.
+   */
+  prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
 
-  /** Build the signed action for marking a conversation read. */
-  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+  /**
+   * Build the signed action for marking a conversation read: the request's
+   * `actionSignatures`, one entry. The X API's mark-read route does not take
+   * them yet, so that request shape is not final.
+   */
+  prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
 
   /**
    * Encrypt a file of an outgoing message, after the message is built.
@@ -1186,8 +1215,8 @@ declare class Chat implements ChatCrypto {
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
-  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+  prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
+  prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
   encryptFile(params: EncryptFileParams): Uint8Array;
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
@@ -1255,8 +1284,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
-  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+  prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
+  prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
   encryptFile(params: EncryptFileParams): Uint8Array;
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;

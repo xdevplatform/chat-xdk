@@ -35,7 +35,7 @@ use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
 use chat_xdk_core::js::{
-    JsActionSignature, JsEvent, JsPreparedConversationChange, JsPublicKeyInput,
+    JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPublicKeyInput,
     JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
 };
 
@@ -635,18 +635,18 @@ impl Chat {
     /// `sequenceIds` (array of message sequence ids), `deleteForAll`
     /// (boolean: every participant vs only the caller's view), plus optional
     /// `senderId` / `signingKeyVersion` (resolved from the session identity
-    /// when omitted). Returns the action signature to submit alongside the
-    /// delete request; the SDK generates the action's message id
-    /// (`messageId` on the result).
+    /// when omitted). Returns the request's `actionSignatures`, one entry
+    /// with its signature nested under `messageEventSignature`; the SDK
+    /// generates the action's message id (`messageId` on the entry).
     #[wasm_bindgen(js_name = prepareMessageDelete)]
     pub fn prepare_message_delete(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsMessageDeleteParams = from_js_params("prepareMessageDelete", params)?;
-        let signature = self
+        let prepared = self
             .inner
             .prepare_message_delete(&p.into_core())
             .map_err(|e| JsError::new(&format!("{}", e)))?;
-        let js_signature: JsActionSignature = signature.into();
-        to_js_value(&js_signature)
+        let js_prepared: JsPreparedAction = prepared.into();
+        to_js_value(&js_prepared)
     }
 
     /// Build the signed action for marking a conversation read.
@@ -656,19 +656,20 @@ impl Chat {
     /// optional `seenAtMsec` (when it was read, in milliseconds since the
     /// Unix epoch; the current time when omitted) and `senderId` /
     /// `signingKeyVersion` (resolved from the session identity when omitted).
-    /// Returns the action signature to submit alongside the mark-read
-    /// request; the SDK generates the action's message id (`messageId` on
-    /// the result).
+    /// Returns the request's `actionSignatures`, shaped as
+    /// `prepareMessageDelete` returns them; the X API's mark-read route does
+    /// not take them yet, so that request shape is not final. The SDK
+    /// generates the action's message id (`messageId` on the entry).
     #[wasm_bindgen(js_name = prepareMarkConversationRead)]
     pub fn prepare_mark_conversation_read(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsMarkConversationReadParams =
             from_js_params("prepareMarkConversationRead", params)?;
-        let signature = self
+        let prepared = self
             .inner
             .prepare_mark_conversation_read(&p.into_core())
             .map_err(|e| JsError::new(&format!("{}", e)))?;
-        let js_signature: JsActionSignature = signature.into();
-        to_js_value(&js_signature)
+        let js_prepared: JsPreparedAction = prepared.into();
+        to_js_value(&js_prepared)
     }
 
     /// Encrypt a file of an outgoing message, after the message is built.

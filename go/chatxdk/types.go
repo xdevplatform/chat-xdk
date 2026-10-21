@@ -494,15 +494,35 @@ type FileDecryptorParams struct {
 	MediaHashKey     string            `json:"media_hash_key"`
 }
 
-// ActionSignature authenticates a conversation key change, member add,
-// message delete, or read receipt.
+// ActionSignature authenticates a conversation key change, group change,
+// message delete, or read receipt. It is shaped as an entry of a request's
+// action_signatures: the signature is nested under message_event_signature.
 type ActionSignature struct {
-	MessageID                 string `json:"message_id"`
-	EncodedMessageEventDetail string `json:"encoded_message_event_detail"`
-	Signature                 string `json:"signature"`
-	SignatureVersion          string `json:"signature_version"`
-	PublicKeyVersion          string `json:"public_key_version"`
-	SignaturePayload          string `json:"signature_payload"`
+	MessageID                 string                `json:"message_id"`
+	EncodedMessageEventDetail string                `json:"encoded_message_event_detail"`
+	MessageEventSignature     MessageEventSignature `json:"message_event_signature"`
+	// SignaturePayload is the comma-separated payload that was signed;
+	// empty for conversation-key changes, whose payload embeds the
+	// plaintext conversation key.
+	SignaturePayload string `json:"signature_payload,omitempty"`
+}
+
+// MessageEventSignature is the signature of an ActionSignature.
+type MessageEventSignature struct {
+	Signature        string `json:"signature"`
+	SignatureVersion string `json:"signature_version"`
+	PublicKeyVersion string `json:"public_key_version"`
+	// SigningPublicKey is the signer's base64 signing public key, as
+	// GetPublicKeys returns it.
+	SigningPublicKey string `json:"signing_public_key"`
+}
+
+// PreparedAction is a signed message delete or read receipt: the
+// action_signatures a request carries for it, one entry. The X API's
+// mark-read route does not take action_signatures yet, so that request
+// shape is not final.
+type PreparedAction struct {
+	ActionSignatures []ActionSignature `json:"action_signatures"`
 }
 
 // orEmpty returns a non-nil slice so JSON marshals it as [] rather than null.

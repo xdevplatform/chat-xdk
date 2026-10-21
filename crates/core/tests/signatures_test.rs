@@ -43,11 +43,11 @@ fn test_group_member_add_signature_roundtrip() {
     assert!(sig.signature_payload.contains("86400000"));
     // ckey version followed by the null screen-capture slot
     assert!(sig.signature_payload.ends_with(",42,null"));
-    assert_eq!(sig.signature_version, "7");
-    assert_eq!(sig.public_key_version, "1");
+    assert_eq!(sig.message_event_signature.signature_version, "7");
+    assert_eq!(sig.message_event_signature.public_key_version, "1");
 
     // Verify the signature is cryptographically valid
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid =
         KeyFactory::verify(&kp.public, &sig_bytes, sig.signature_payload.as_bytes()).unwrap();
     assert!(valid, "GroupMemberAdd signature should be verifiable");
@@ -71,7 +71,7 @@ fn test_ckey_change_signature_roundtrip() {
 
     // The payload embeds the plaintext conversation key and is withheld
     assert!(sig.signature_payload.is_empty());
-    assert_eq!(sig.signature_version, "7");
+    assert_eq!(sig.message_event_signature.signature_version, "7");
 
     // v7 signs the plaintext ckey bytes (base64 no-padding); reconstruct the
     // signed bytes to pin the wire format and verify the signature
@@ -79,7 +79,7 @@ fn test_ckey_change_signature_roundtrip() {
         "ConversationKeyChangeEvent,msg-uuid-2,sender-100,conv-200,99,{}",
         STANDARD_NO_PAD.encode(&ckey)
     );
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid = KeyFactory::verify(&kp.public, &sig_bytes, expected_payload.as_bytes()).unwrap();
     assert!(valid);
 }
@@ -107,10 +107,10 @@ fn test_group_member_add_empty_optional_fields() {
 
     // Absent optional fields render as the "null" sentinel (title, avatar, ttl)
     assert!(sig.signature_payload.contains("null,null,null"));
-    assert!(!sig.signature.is_empty());
+    assert!(!sig.message_event_signature.signature.is_empty());
 
     // Signature should still verify
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid =
         KeyFactory::verify(&kp.public, &sig_bytes, sig.signature_payload.as_bytes()).unwrap();
     assert!(valid);
@@ -141,9 +141,9 @@ fn test_group_member_add_signs_optional_fields() {
     assert!(sig
         .signature_payload
         .contains("https://example.com/avatar.png"));
-    assert_eq!(sig.public_key_version, "2");
+    assert_eq!(sig.message_event_signature.public_key_version, "2");
 
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid =
         KeyFactory::verify(&kp.public, &sig_bytes, sig.signature_payload.as_bytes()).unwrap();
     assert!(valid);
@@ -172,7 +172,7 @@ fn test_ckey_change_single_participant() {
         "ConversationKeyChangeEvent,msg-single,sender-1,conv-1,10,{}",
         STANDARD_NO_PAD.encode(&ckey)
     );
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid = KeyFactory::verify(&kp.public, &sig_bytes, expected_payload.as_bytes()).unwrap();
     assert!(valid);
 }
@@ -200,7 +200,7 @@ fn test_signature_fails_with_wrong_key() {
     .unwrap();
 
     // Verify with wrong key should fail
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid =
         KeyFactory::verify(&kp2.public, &sig_bytes, sig.signature_payload.as_bytes()).unwrap();
     assert!(!valid, "Signature should not verify with wrong key");
@@ -239,11 +239,11 @@ fn test_group_member_add_all_optional_fields_roundtrip() {
     assert!(sig.signature_payload.contains("7200000"));
     // ckey version followed by the null screen-capture slot
     assert!(sig.signature_payload.ends_with(",77,null"));
-    assert_eq!(sig.public_key_version, "3");
-    assert_eq!(sig.signature_version, "7");
+    assert_eq!(sig.message_event_signature.public_key_version, "3");
+    assert_eq!(sig.message_event_signature.signature_version, "7");
 
     // Cryptographic roundtrip
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid =
         KeyFactory::verify(&kp.public, &sig_bytes, sig.signature_payload.as_bytes()).unwrap();
     assert!(valid, "Signature with all optional fields should verify");
@@ -267,13 +267,13 @@ fn test_ckey_change_three_participants_roundtrip() {
 
     // The payload embeds the plaintext conversation key and is withheld
     assert!(sig.signature_payload.is_empty());
-    assert_eq!(sig.public_key_version, "5");
+    assert_eq!(sig.message_event_signature.public_key_version, "5");
 
     let expected_payload = format!(
         "ConversationKeyChangeEvent,msg-ckey-3p,sender-root,conv-group,200,{}",
         STANDARD_NO_PAD.encode(&ckey)
     );
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid = KeyFactory::verify(&kp.public, &sig_bytes, expected_payload.as_bytes()).unwrap();
     assert!(valid);
 }
@@ -312,7 +312,7 @@ fn test_group_member_add_many_members() {
     }
 
     // Verify signature
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid =
         KeyFactory::verify(&kp.public, &sig_bytes, sig.signature_payload.as_bytes()).unwrap();
     assert!(valid, "Large group add should produce valid signature");
@@ -340,7 +340,7 @@ fn test_ckey_change_signature_fails_verification_with_tampered_payload() {
         "ConversationKeyChangeEvent,msg-tamper,sender-1,conv-1,1,{}",
         STANDARD_NO_PAD.encode(&ckey)
     );
-    let sig_bytes = decode_no_pad(&sig.signature);
+    let sig_bytes = decode_no_pad(&sig.message_event_signature.signature);
     let valid = KeyFactory::verify(&kp.public, &sig_bytes, expected_payload.as_bytes()).unwrap();
     assert!(valid, "Reconstructed payload should verify");
 

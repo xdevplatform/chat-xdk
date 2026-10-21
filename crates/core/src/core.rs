@@ -2127,13 +2127,14 @@ impl ChatCore {
     /// Build the signed action for deleting messages from a conversation.
     ///
     /// A delete is a plaintext `MessageDeleteEvent`, not an encrypted
-    /// message: the result carries the encoded event detail and its
-    /// signature, ready to submit alongside the delete request. The SDK
-    /// generates the action's message id; read it back from the result.
+    /// message: the result's one `action_signatures` entry carries the
+    /// encoded event detail and its signature, nested as the request nests
+    /// it. The SDK generates the action's message id; read it back from the
+    /// entry.
     pub fn prepare_message_delete(
         &self,
         params: &MessageDeleteParams,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+    ) -> Result<PreparedAction, SdkError> {
         if params.sequence_ids.is_empty() {
             return Err(SdkError::InvalidInput(
                 "sequence_ids is empty: pass at least one message to delete".into(),
@@ -2173,7 +2174,9 @@ impl ChatCore {
         )?;
         signature.encoded_message_event_detail =
             Self::encode_message_delete_detail(&params.sequence_ids, delete_action)?;
-        Ok(signature)
+        Ok(PreparedAction {
+            action_signatures: vec![signature],
+        })
     }
 
     /// Serialize the `MessageDeleteEvent` the API validates and relays.
@@ -2197,14 +2200,16 @@ impl ChatCore {
     /// Build the signed action for marking a conversation read.
     ///
     /// A read receipt is a plaintext `MarkConversationReadEvent`, not an
-    /// encrypted message: the result carries the encoded event detail and its
-    /// signature, ready to submit alongside the mark-read request. The SDK
-    /// generates the action's message id; read it back from the result. An
-    /// unset `seen_at_msec` reads the system clock.
+    /// encrypted message: the result's one `action_signatures` entry carries
+    /// the encoded event detail and its signature, nested as the
+    /// conversation-change requests nest theirs. The X API's mark-read route
+    /// does not take `action_signatures` yet, so that request shape is not
+    /// final. The SDK generates the action's message id; read it back from
+    /// the entry. An unset `seen_at_msec` reads the system clock.
     pub fn prepare_mark_conversation_read(
         &self,
         params: &MarkConversationReadParams,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+    ) -> Result<PreparedAction, SdkError> {
         if params.conversation_id.is_empty() {
             return Err(SdkError::InvalidInput(
                 "conversation_id is empty: pass the conversation being marked read".into(),
@@ -2238,7 +2243,9 @@ impl ChatCore {
             &params.seen_until_sequence_id,
             seen_at_msec,
         )?;
-        Ok(signature)
+        Ok(PreparedAction {
+            action_signatures: vec![signature],
+        })
     }
 
     /// Serialize the `MarkConversationReadEvent` as a base64
@@ -6720,9 +6727,9 @@ mod tests {
             None,
         );
         let sig_struct = crate::thrift::event::MessageEventSignature::new(
-            Some(sig.signature.clone()),
-            Some(sig.public_key_version.clone()),
-            Some(sig.signature_version.clone()),
+            Some(sig.message_event_signature.signature.clone()),
+            Some(sig.message_event_signature.public_key_version.clone()),
+            Some(sig.message_event_signature.signature_version.clone()),
             None,
             None,
         );
@@ -7402,6 +7409,12 @@ mod tests {
         }
     }
 
+    /// The one action signature of a prepared delete or read receipt.
+    fn only_action(prepared: PreparedAction) -> crate::signatures::ActionSignature {
+        assert_eq!(prepared.action_signatures.len(), 1);
+        prepared.action_signatures.into_iter().next().unwrap()
+    }
+
     /// Reconstruct the canonical signed payload for an emitted action signature
     /// through the exact code `decrypt_events` uses to verify, assert it equals
     /// the bytes the signer signed, and verify the signature with the signer's
@@ -7414,10 +7427,11 @@ mod tests {
         plaintext_ckey_b64: Option<&str>,
     ) {
         let detail = decode_detail(&sig.encoded_message_event_detail);
+        let signed = &sig.message_event_signature;
         let event_sig = crate::thrift::event::MessageEventSignature::new(
-            Some(sig.signature.clone()),
-            Some(sig.public_key_version.clone()),
-            Some(sig.signature_version.clone()),
+            Some(signed.signature.clone()),
+            Some(signed.public_key_version.clone()),
+            Some(signed.signature_version.clone()),
             None::<String>,
             None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
         );
@@ -7450,7 +7464,8 @@ mod tests {
         }
 
         let signing_pubkey = core.get_public_keys().unwrap().signing;
-        let sig_bytes = base64_decode(&sig.signature).unwrap();
+        assert_eq!(signed.signing_public_key, signing_pubkey);
+        let sig_bytes = base64_decode(&signed.signature).unwrap();
         assert!(
             core.verify(&signing_pubkey, &sig_bytes, &reconstructed)
                 .unwrap(),
@@ -7568,7 +7583,7 @@ mod tests {
             true,
         )
         .with_identity("111", "1");
-        let sig = core.prepare_message_delete(&params).unwrap();
+        let sig = only_action(core.prepare_message_delete(&params).unwrap());
 
         // The 1:1 conversation id is signed in canonical colon form even when
         // the params carry the hyphen form.
@@ -7604,7 +7619,7 @@ mod tests {
 
         let params = crate::MessageDeleteParams::new("g999", vec!["seq-1".to_string()], false)
             .with_identity("111", "1");
-        let sig = core.prepare_message_delete(&params).unwrap();
+        let sig = only_action(core.prepare_message_delete(&params).unwrap());
 
         assert_eq!(
             sig.signature_payload,
@@ -7664,11 +7679,11 @@ mod tests {
 
         let mut params = crate::MarkConversationReadParams::new("222-111", "2011626338877079553");
         params.seen_at_msec = Some(1_700_000_000_123);
-        let sig = core.prepare_mark_conversation_read(&params).unwrap();
+        let sig = only_action(core.prepare_mark_conversation_read(&params).unwrap());
 
         // The session identity's signing key version signs the receipt, and
         // the 1:1 conversation id is signed in canonical colon form.
-        assert_eq!(sig.public_key_version, "61");
+        assert_eq!(sig.message_event_signature.public_key_version, "61");
         assert_eq!(
             sig.signature_payload,
             format!(
@@ -7688,9 +7703,9 @@ mod tests {
             Some(decode_detail(&sig.encoded_message_event_detail)),
             None::<crate::thrift::event::MessageEventRelaySource>,
             Some(crate::thrift::event::MessageEventSignature::new(
-                Some(sig.signature.clone()),
-                Some(sig.public_key_version.clone()),
-                Some(sig.signature_version.clone()),
+                Some(sig.message_event_signature.signature.clone()),
+                Some(sig.message_event_signature.public_key_version.clone()),
+                Some(sig.message_event_signature.signature_version.clone()),
                 None::<String>,
                 None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
             )),
@@ -7725,7 +7740,7 @@ mod tests {
         let params =
             crate::MarkConversationReadParams::new("g999", "seq-1").with_identity("111", "1");
         let before = now_msec();
-        let sig = core.prepare_mark_conversation_read(&params).unwrap();
+        let sig = only_action(core.prepare_mark_conversation_read(&params).unwrap());
         let after = now_msec();
 
         let seen_at = match decode_detail(&sig.encoded_message_event_detail) {
@@ -7770,6 +7785,43 @@ mod tests {
             err.to_string().contains("seen_until_sequence_id is empty"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn deletes_and_read_receipts_return_the_requests_action_signatures() {
+        let core = ChatCore::new();
+        core.generate_keypairs().unwrap();
+        core.set_identity(&SetIdentityParams::new("111", "61"))
+            .unwrap();
+        let signing_public_key = core.get_public_keys().unwrap().signing;
+
+        let delete = core
+            .prepare_message_delete(&crate::MessageDeleteParams::new(
+                "g999",
+                vec!["5".to_string()],
+                true,
+            ))
+            .unwrap();
+        let read = core
+            .prepare_mark_conversation_read(&crate::MarkConversationReadParams::new("g999", "5"))
+            .unwrap();
+        for prepared in [delete, read] {
+            let json = serde_json::to_value(&prepared).unwrap();
+            let entries = json["action_signatures"].as_array().unwrap();
+            assert_eq!(entries.len(), 1);
+            let entry = &entries[0];
+            assert_eq!(
+                entry["message_id"],
+                prepared.action_signatures[0].message_id
+            );
+            assert!(entry["encoded_message_event_detail"].as_str().is_some());
+            let signed = &entry["message_event_signature"];
+            assert_eq!(signed["public_key_version"], "61");
+            assert_eq!(signed["signature_version"], "7");
+            assert_eq!(signed["signing_public_key"], signing_public_key.as_str());
+            assert!(signed["signature"].as_str().is_some_and(|s| !s.is_empty()));
+            assert!(entry.get("signature").is_none());
+        }
     }
 
     #[test]
@@ -8466,9 +8518,14 @@ mod tests {
             None,
         );
         let sig_struct = crate::thrift::event::MessageEventSignature::new(
-            Some(action_sig.signature.clone()),
-            Some(action_sig.public_key_version.clone()),
-            Some(action_sig.signature_version.clone()),
+            Some(action_sig.message_event_signature.signature.clone()),
+            Some(
+                action_sig
+                    .message_event_signature
+                    .public_key_version
+                    .clone(),
+            ),
+            Some(action_sig.message_event_signature.signature_version.clone()),
             None,
             None,
         );
@@ -8620,11 +8677,11 @@ mod tests {
                 .sign_key_change("61", "msg-kc", "910003", "conv-1", "1001", ckey.encoded())
                 .unwrap();
             let signature = if corrupt {
-                let mut raw = base64_decode(&action_sig.signature).unwrap();
+                let mut raw = base64_decode(&action_sig.message_event_signature.signature).unwrap();
                 raw[5] ^= 0xff;
                 STANDARD_NO_PAD.encode(raw)
             } else {
-                action_sig.signature.clone()
+                action_sig.message_event_signature.signature.clone()
             };
             let kce = ThriftCKCE::new(
                 Some("1001".to_string()),
@@ -8638,8 +8695,13 @@ mod tests {
             );
             let sig_struct = crate::thrift::event::MessageEventSignature::new(
                 Some(signature),
-                Some(action_sig.public_key_version.clone()),
-                Some(action_sig.signature_version.clone()),
+                Some(
+                    action_sig
+                        .message_event_signature
+                        .public_key_version
+                        .clone(),
+                ),
+                Some(action_sig.message_event_signature.signature_version.clone()),
                 None,
                 None,
             );
@@ -8741,11 +8803,11 @@ mod tests {
             .sign_key_change("61", "msg-kc", "910003", conv_id, version, ckey.encoded())
             .unwrap();
         let signature = if corrupt {
-            let mut raw = base64_decode(&action_sig.signature).unwrap();
+            let mut raw = base64_decode(&action_sig.message_event_signature.signature).unwrap();
             raw[5] ^= 0xff;
             STANDARD_NO_PAD.encode(raw)
         } else {
-            action_sig.signature.clone()
+            action_sig.message_event_signature.signature.clone()
         };
         let kce = ThriftCKCE::new(
             Some(version.to_string()),
@@ -8759,8 +8821,13 @@ mod tests {
         );
         let sig_struct = crate::thrift::event::MessageEventSignature::new(
             Some(signature),
-            Some(action_sig.public_key_version.clone()),
-            Some(action_sig.signature_version.clone()),
+            Some(
+                action_sig
+                    .message_event_signature
+                    .public_key_version
+                    .clone(),
+            ),
+            Some(action_sig.message_event_signature.signature_version.clone()),
             None,
             None,
         );
@@ -9359,8 +9426,11 @@ mod tests {
             .unwrap();
         let payload = core.encrypt_message(&message).unwrap();
         assert_eq!(payload.signature_info.public_key_version, "1700000000123");
-        let signature = core.prepare_message_delete(&delete).unwrap();
-        assert_eq!(signature.public_key_version, "1700000000123");
+        let signature = only_action(core.prepare_message_delete(&delete).unwrap());
+        assert_eq!(
+            signature.message_event_signature.public_key_version,
+            "1700000000123"
+        );
     }
 
     #[test]
@@ -9427,7 +9497,12 @@ mod tests {
         }]);
         params.conversation_id = Some("conv-1".into());
         let prepared = core.prepare_conversation_key_change(&params).unwrap();
-        assert_eq!(prepared.action_signatures[0].public_key_version, "1");
+        assert_eq!(
+            prepared.action_signatures[0]
+                .message_event_signature
+                .public_key_version,
+            "1"
+        );
     }
 
     // Conversation-key and signing-key caches

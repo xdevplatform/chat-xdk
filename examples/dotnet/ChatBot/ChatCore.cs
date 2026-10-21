@@ -278,33 +278,11 @@ public static class EventHelpers
     /// (snake_case field names, ready to serialize as the JSON body).
     ///
     /// Works for 1:1 key changes (one signature) and group create / member add
-    /// (two signatures). <paramref name="signingPublicKey"/> is the sender's own
-    /// signing key, which the API expects alongside each signature.
+    /// (two signatures). The action signatures already have the request's
+    /// shape; the participant keys take the request's field names.
     /// </summary>
-    public static Dictionary<string, object?> PrepToRequest(PreparedConversationChange prep, string signingPublicKey)
-    {
-        var actionSignatures = new List<Dictionary<string, object?>>();
-        foreach (var sig in prep.ActionSignatures)
-        {
-            var entry = new Dictionary<string, object?>
-            {
-                ["message_id"] = sig.MessageId,
-                ["encoded_message_event_detail"] = sig.EncodedMessageEventDetail,
-                ["message_event_signature"] = new Dictionary<string, object?>
-                {
-                    ["signature"] = sig.Signature,
-                    ["signature_version"] = sig.SignatureVersion,
-                    ["public_key_version"] = sig.PublicKeyVersion,
-                    ["signing_public_key"] = signingPublicKey,
-                },
-            };
-            // Conversation-key-change payloads are withheld by the SDK (they
-            // embed the plaintext key); only include the field when present.
-            if (!string.IsNullOrEmpty(sig.SignaturePayload))
-                entry["signature_payload"] = sig.SignaturePayload;
-            actionSignatures.Add(entry);
-        }
-        return new Dictionary<string, object?>
+    public static Dictionary<string, object?> PrepToRequest(PreparedConversationChange prep) =>
+        new()
         {
             ["conversation_key_version"] = prep.ConversationKeyVersion,
             ["conversation_participant_keys"] = prep.ParticipantKeys
@@ -315,7 +293,6 @@ public static class EventHelpers
                     ["public_key_version"] = pk.PublicKeyVersion,
                 })
                 .ToList(),
-            ["action_signatures"] = actionSignatures,
+            ["action_signatures"] = prep.ActionSignatures,
         };
-    }
 }

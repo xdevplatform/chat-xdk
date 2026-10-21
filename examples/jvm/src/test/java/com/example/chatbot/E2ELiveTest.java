@@ -257,8 +257,7 @@ class E2ELiveTest {
             bothKeys.addAll(keyEntries(pksByUser.getOrDefault(partnerId, List.of()), partnerId));
             PreparedConversationChange prep =
                     core.prepareConversationKeyChange(bothKeys, null);
-            String signingPub = core.publicKeys().signing;
-            JsonNode resp = api.addConversationKeys(conv, ChatCore.prepToRequest(prep, signingPub));
+            JsonNode resp = api.addConversationKeys(conv, ChatCore.prepToRequest(prep));
             JsonNode data = resp.path("data");
             assertTrue(
                     !data.path("sequence_id").asText("").isEmpty()
@@ -432,7 +431,6 @@ class E2ELiveTest {
             throws Exception {
         List<PublicKeyInput> myKeys =
                 bothKeys.stream().filter(k -> myId.equals(k.userId)).toList();
-        String signingPub = core.publicKeys().signing;
 
         String groupId = api.initializeGroup();
         assertTrue(groupId.startsWith("g"), "unexpected group id: " + groupId);
@@ -443,14 +441,14 @@ class E2ELiveTest {
                 core.prepareGroupCreate(myKeys, groupId, List.of(myId), List.of(myId));
         List<String> members = List.of(myId);
         try {
-            api.createConversation(groupCreateBody(groupId, members, myId, prep, signingPub));
+            api.createConversation(groupCreateBody(groupId, members, myId, prep));
         } catch (Exception ex) {
             // Some deployments reject single-member groups; fall back to creating
             // with both participants (skipping the member-add below).
             prep = core.prepareGroupCreate(
                     bothKeys, groupId, List.of(myId, partnerId), List.of(myId));
             members = List.of(myId, partnerId);
-            api.createConversation(groupCreateBody(groupId, members, myId, prep, signingPub));
+            api.createConversation(groupCreateBody(groupId, members, myId, prep));
         }
         String kv = prep.conversationKeyVersion;
         byte[] key = prep.conversationKey;
@@ -469,7 +467,7 @@ class E2ELiveTest {
         if (!members.contains(partnerId)) {
             PreparedConversationChange mPrep = core.prepareGroupMembersChange(
                     bothKeys, groupId, List.of(partnerId), members, List.of(myId));
-            ObjectNode body = ChatCore.prepToRequest(mPrep, signingPub);
+            ObjectNode body = ChatCore.prepToRequest(mPrep);
             body.putArray("user_ids").add(partnerId);
             api.addGroupMembers(groupId, body);
             System.out.println("group member add: " + partnerId
@@ -481,9 +479,8 @@ class E2ELiveTest {
             String groupId,
             List<String> members,
             String adminId,
-            PreparedConversationChange prep,
-            String signingPub) {
-        ObjectNode body = ChatCore.prepToRequest(prep, signingPub);
+            PreparedConversationChange prep) {
+        ObjectNode body = ChatCore.prepToRequest(prep);
         body.put("conversation_id", groupId);
         var groupMembers = body.putArray("group_members");
         members.forEach(groupMembers::add);

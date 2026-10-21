@@ -292,16 +292,40 @@ fn prepared_change_to_pydict(
     }
     outer.set_item("participant_keys", participant_keys)?;
 
-    let action_signatures = pyo3::types::PyList::empty(py);
-    for sig in &result.action_signatures {
-        action_signatures.append(action_signature_to_pydict(py, sig)?)?;
-    }
-    outer.set_item("action_signatures", action_signatures)?;
+    outer.set_item(
+        "action_signatures",
+        action_signatures_to_pylist(py, &result.action_signatures)?,
+    )?;
 
     Ok(outer.into())
 }
 
-/// Build the Python dict for a signed action.
+/// Build the Python dict for a prepared delete or read receipt.
+fn prepared_action_to_pydict(
+    py: Python<'_>,
+    prepared: &chat_xdk_core::PreparedAction,
+) -> PyResult<Py<PyAny>> {
+    let outer = pyo3::types::PyDict::new(py);
+    outer.set_item(
+        "action_signatures",
+        action_signatures_to_pylist(py, &prepared.action_signatures)?,
+    )?;
+    Ok(outer.into())
+}
+
+fn action_signatures_to_pylist<'py>(
+    py: Python<'py>,
+    signatures: &[chat_xdk_core::signatures::ActionSignature],
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    let list = pyo3::types::PyList::empty(py);
+    for sig in signatures {
+        list.append(action_signature_to_pydict(py, sig)?)?;
+    }
+    Ok(list)
+}
+
+/// Build the Python dict for a signed action, the signature nested under
+/// ``message_event_signature`` as requests carry it.
 fn action_signature_to_pydict<'py>(
     py: Python<'py>,
     sig: &chat_xdk_core::signatures::ActionSignature,
@@ -312,9 +336,13 @@ fn action_signature_to_pydict<'py>(
         "encoded_message_event_detail",
         &sig.encoded_message_event_detail,
     )?;
-    dict.set_item("signature", &sig.signature)?;
-    dict.set_item("signature_version", &sig.signature_version)?;
-    dict.set_item("public_key_version", &sig.public_key_version)?;
+    let signed = &sig.message_event_signature;
+    let message_event_signature = pyo3::types::PyDict::new(py);
+    message_event_signature.set_item("signature", &signed.signature)?;
+    message_event_signature.set_item("signature_version", &signed.signature_version)?;
+    message_event_signature.set_item("public_key_version", &signed.public_key_version)?;
+    message_event_signature.set_item("signing_public_key", &signed.signing_public_key)?;
+    dict.set_item("message_event_signature", message_event_signature)?;
     // Absent for conversation-key changes: the signed payload embeds the
     // plaintext conversation key and is withheld.
     if !sig.signature_payload.is_empty() {
@@ -2202,53 +2230,55 @@ impl Chat {
     /// Build the signed action for deleting messages from a conversation.
     ///
     /// A delete is a signed plaintext event, not an encrypted message, so no
-    /// conversation key is involved: the result is a single action-signature
-    /// dict to submit alongside the delete request. The SDK generates the
-    /// action's message id; read it back from the result.
+    /// conversation key is involved: the result holds the request's
+    /// ``action_signatures``, one entry. The SDK generates the action's
+    /// message id; read it back from the entry.
     ///
     /// Args:
     ///     params: A ``MessageDeleteParams``.
     ///
     /// Returns:
-    ///     A dict with ``message_id``, ``encoded_message_event_detail``,
-    ///     ``signature``, ``signature_version``, ``public_key_version``,
-    ///     ``signature_payload``.
+    ///     A dict with ``action_signatures``: one dict with ``message_id``,
+    ///     ``encoded_message_event_detail``, ``message_event_signature``
+    ///     (``signature``, ``signature_version``, ``public_key_version``,
+    ///     ``signing_public_key``) and ``signature_payload``.
     fn prepare_message_delete(
         &self,
         py: Python<'_>,
         params: PyRef<'_, MessageDeleteParams>,
     ) -> PyResult<Py<PyAny>> {
-        let signature = self
+        let prepared = self
             .inner
             .prepare_message_delete(&params.to_core(py)?)
             .map_err(to_py_err)?;
-        Ok(action_signature_to_pydict(py, &signature)?.into())
+        prepared_action_to_pydict(py, &prepared)
     }
 
     /// Build the signed action for marking a conversation read.
     ///
     /// A read receipt is a signed plaintext event, not an encrypted message,
-    /// so no conversation key is involved: the result is a single
-    /// action-signature dict to submit alongside the mark-read request. The
-    /// SDK generates the action's message id; read it back from the result.
+    /// so no conversation key is involved: the result holds the request's
+    /// ``action_signatures``, one entry, nested as the conversation-change
+    /// requests nest theirs. The X API's mark-read route does not take
+    /// ``action_signatures`` yet, so that request shape is not final. The
+    /// SDK generates the action's message id; read it back from the entry.
     ///
     /// Args:
     ///     params: A ``MarkConversationReadParams``.
     ///
     /// Returns:
-    ///     A dict with ``message_id``, ``encoded_message_event_detail``,
-    ///     ``signature``, ``signature_version``, ``public_key_version``,
-    ///     ``signature_payload``.
+    ///     A dict with ``action_signatures``, shaped as
+    ///     ``prepare_message_delete`` returns it.
     fn prepare_mark_conversation_read(
         &self,
         py: Python<'_>,
         params: PyRef<'_, MarkConversationReadParams>,
     ) -> PyResult<Py<PyAny>> {
-        let signature = self
+        let prepared = self
             .inner
             .prepare_mark_conversation_read(&params.to_core())
             .map_err(to_py_err)?;
-        Ok(action_signature_to_pydict(py, &signature)?.into())
+        prepared_action_to_pydict(py, &prepared)
     }
 
     /// Export private keys as raw bytes for secure storage.

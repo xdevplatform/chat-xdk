@@ -409,9 +409,9 @@ pub fn message_text(event: &Event) -> Option<&str> {
 /// Map a prepared conversation change into the X API request shape.
 ///
 /// Works for 1:1 key changes (one signature) and group create / member add
-/// (two signatures). `signing_public_key` is the sender's own signing key,
-/// which the API expects alongside each signature.
-pub fn prep_to_request(prep: &PreparedConversationChange, signing_public_key: &str) -> Value {
+/// (two signatures). The action signatures already have the request's shape;
+/// the participant keys take the request's field names.
+pub fn prep_to_request(prep: &PreparedConversationChange) -> Value {
     let participant_keys: Vec<Value> = prep
         .participant_keys
         .iter()
@@ -423,31 +423,9 @@ pub fn prep_to_request(prep: &PreparedConversationChange, signing_public_key: &s
             })
         })
         .collect();
-    let action_signatures: Vec<Value> = prep
-        .action_signatures
-        .iter()
-        .map(|sig| {
-            let mut entry = json!({
-                "message_id": sig.message_id,
-                "encoded_message_event_detail": sig.encoded_message_event_detail,
-                "message_event_signature": {
-                    "signature": sig.signature,
-                    "signature_version": sig.signature_version,
-                    "public_key_version": sig.public_key_version,
-                    "signing_public_key": signing_public_key,
-                },
-            });
-            // Conversation-key-change payloads are withheld by the SDK (they
-            // embed the plaintext key); only forward one when it is present.
-            if !sig.signature_payload.is_empty() {
-                entry["signature_payload"] = json!(sig.signature_payload);
-            }
-            entry
-        })
-        .collect();
     json!({
         "conversation_key_version": prep.conversation_key_version,
         "conversation_participant_keys": participant_keys,
-        "action_signatures": action_signatures,
+        "action_signatures": prep.action_signatures,
     })
 }

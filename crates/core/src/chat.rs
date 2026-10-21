@@ -373,14 +373,14 @@ impl Chat {
     pub fn prepare_message_delete(
         &self,
         params: &MessageDeleteParams,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+    ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_message_delete(params)
     }
     /// Build the signed action for marking a conversation read.
     pub fn prepare_mark_conversation_read(
         &self,
         params: &MarkConversationReadParams,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+    ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_mark_conversation_read(params)
     }
     /// Decrypt an encrypted conversation key (ECIES).
@@ -998,7 +998,10 @@ mod tests {
         // The key-change payload embeds the plaintext conversation key, so it
         // is never exposed on the signature.
         assert!(result.action_signatures[0].signature_payload.is_empty());
-        assert!(!result.action_signatures[0].signature.is_empty());
+        assert!(!result.action_signatures[0]
+            .message_event_signature
+            .signature
+            .is_empty());
 
         // The encrypted key should be decryptable back to the raw key.
         let decrypted = chat
@@ -1582,9 +1585,9 @@ mod tests {
             )
             .unwrap();
 
-        assert!(!sig.signature.is_empty());
+        assert!(!sig.message_event_signature.signature.is_empty());
         assert!(!sig.signature_payload.is_empty());
-        assert_eq!(sig.public_key_version, "1");
+        assert_eq!(sig.message_event_signature.public_key_version, "1");
     }
 
     #[tokio::test]
@@ -1599,7 +1602,7 @@ mod tests {
             .sign_key_change("1", "msg-1", "910003", "conv-1", "2", ckey.encoded())
             .unwrap();
 
-        assert!(!sig.signature.is_empty());
+        assert!(!sig.message_event_signature.signature.is_empty());
         // Withheld: the signed payload embeds the plaintext conversation key.
         assert!(sig.signature_payload.is_empty());
     }

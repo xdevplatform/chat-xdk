@@ -734,13 +734,13 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Build the signed action for deleting messages from a conversation,
-        /// ready to submit alongside the delete request.
+        /// Build the signed action for deleting messages from a conversation:
+        /// the request's <c>action_signatures</c>, one entry.
         /// A delete is a signed plaintext event, not an encrypted message, so no
         /// conversation key is involved. The SDK generates the action's message
-        /// id; read it back from the result.
+        /// id; read it back from the entry.
         /// </summary>
-        public ActionSignature PrepareMessageDelete(MessageDeleteParams parameters)
+        public PreparedAction PrepareMessageDelete(MessageDeleteParams parameters)
         {
             ThrowIfDisposed();
             var jsonBytes = Utf8Z(BuildPrepareMessageDeleteJson(parameters));
@@ -748,17 +748,18 @@ namespace ChatXdk
             fixed (byte* jsonPtr = jsonBytes)
                 resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_message_delete(_handle, jsonPtr));
             GC.KeepAlive(this);
-            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+            return JsonSerializer.Deserialize<PreparedAction>(resultJson, JsonOpts)!;
         }
 
         /// <summary>
-        /// Build the signed action for marking a conversation read, ready to
-        /// submit alongside the mark-read request.
+        /// Build the signed action for marking a conversation read: the request's
+        /// <c>action_signatures</c>, one entry. The X API's mark-read route does not
+        /// take <c>action_signatures</c> yet, so that request shape is not final.
         /// A read receipt is a signed plaintext event, not an encrypted message,
         /// so no conversation key is involved. The SDK generates the action's
-        /// message id; read it back from the result.
+        /// message id; read it back from the entry.
         /// </summary>
-        public ActionSignature PrepareMarkConversationRead(MarkConversationReadParams parameters)
+        public PreparedAction PrepareMarkConversationRead(MarkConversationReadParams parameters)
         {
             ThrowIfDisposed();
             var jsonBytes = Utf8Z(BuildPrepareMarkConversationReadJson(parameters));
@@ -766,7 +767,7 @@ namespace ChatXdk
             fixed (byte* jsonPtr = jsonBytes)
                 resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_mark_conversation_read(_handle, jsonPtr));
             GC.KeepAlive(this);
-            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+            return JsonSerializer.Deserialize<PreparedAction>(resultJson, JsonOpts)!;
         }
 
         // Shared helper: marshal the single-JSON params document, call the

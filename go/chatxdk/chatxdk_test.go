@@ -1268,6 +1268,19 @@ func TestEncryptEdit(t *testing.T) {
 	}
 }
 
+// onlyAction returns the one action_signatures entry of a prepared delete or
+// read receipt.
+func onlyAction(t *testing.T, prepared *PreparedAction, err error) ActionSignature {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("prepare failed: %v", err)
+	}
+	if len(prepared.ActionSignatures) != 1 {
+		t.Fatalf("expected one action signature, got %d", len(prepared.ActionSignatures))
+	}
+	return prepared.ActionSignatures[0]
+}
+
 func TestPrepareMessageDelete(t *testing.T) {
 	v := loadVectors(t)
 
@@ -1279,24 +1292,44 @@ func TestPrepareMessageDelete(t *testing.T) {
 
 	// A 1:1 id is signed in its canonical colon form; delete-for-all signs
 	// the wire action 2.
-	sig, err := chat.PrepareMessageDelete(MessageDeleteParams{
+	prepared, err := chat.PrepareMessageDelete(MessageDeleteParams{
 		SenderID:          "111",
 		SigningKeyVersion: "1",
 		ConversationID:    "222-111",
 		SequenceIDs:       []string{"seq-10", "seq-11"},
 		DeleteForAll:      true,
 	})
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete failed: %v", err)
-	}
+	sig := onlyAction(t, prepared, err)
 	if sig.MessageID == "" {
 		t.Error("expected non-empty message_id")
 	}
 	if sig.EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty encoded_message_event_detail")
 	}
-	if sig.Signature == "" {
-		t.Error("expected non-empty signature")
+	// The signature is nested as the request's action_signatures carry it.
+	keys, err := chat.GetPublicKeys()
+	if err != nil {
+		t.Fatalf("GetPublicKeys failed: %v", err)
+	}
+	signed := sig.MessageEventSignature
+	if signed.Signature == "" || signed.SignatureVersion != "7" || signed.PublicKeyVersion != "1" ||
+		signed.SigningPublicKey != keys.Signing {
+		t.Errorf("unexpected message_event_signature: %+v", signed)
+	}
+	var body map[string][]map[string]any
+	data, err := json.Marshal(prepared)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	entry := body["action_signatures"][0]
+	if _, flat := entry["signature"]; flat {
+		t.Errorf("signature is flat in %s", data)
+	}
+	if nested, ok := entry["message_event_signature"].(map[string]any); !ok || nested["signing_public_key"] != keys.Signing {
+		t.Errorf("message_event_signature missing from %s", data)
 	}
 	want := fmt.Sprintf("MessageDeleteEvent,%s,111,111:222,2,seq-10,seq-11", sig.MessageID)
 	if sig.SignaturePayload != want {
@@ -1305,16 +1338,14 @@ func TestPrepareMessageDelete(t *testing.T) {
 
 	// Group ids pass through unchanged; delete-for-self signs the wire
 	// action 1.
-	selfSig, err := chat.PrepareMessageDelete(MessageDeleteParams{
+	selfPrepared, err := chat.PrepareMessageDelete(MessageDeleteParams{
 		SenderID:          "111",
 		SigningKeyVersion: "1",
 		ConversationID:    "g999",
 		SequenceIDs:       []string{"seq-1"},
 		DeleteForAll:      false,
 	})
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete (delete-for-self) failed: %v", err)
-	}
+	selfSig := onlyAction(t, selfPrepared, err)
 	want = fmt.Sprintf("MessageDeleteEvent,%s,111,g999,1,seq-1", selfSig.MessageID)
 	if selfSig.SignaturePayload != want {
 		t.Errorf("expected signature_payload %q, got %q", want, selfSig.SignaturePayload)
@@ -1333,24 +1364,22 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 	// A 1:1 id is signed in its canonical colon form, followed by the read
 	// point and its time.
 	seenAt := int64(1700000000123)
-	sig, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
+	prepared, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
 		SenderID:            "111",
 		SigningKeyVersion:   "1",
 		ConversationID:      "222-111",
 		SeenUntilSequenceID: "2011626338877079553",
 		SeenAtMsec:          &seenAt,
 	})
-	if err != nil {
-		t.Fatalf("PrepareMarkConversationRead failed: %v", err)
-	}
+	sig := onlyAction(t, prepared, err)
 	if sig.MessageID == "" {
 		t.Error("expected non-empty message_id")
 	}
 	if sig.EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty encoded_message_event_detail")
 	}
-	if sig.PublicKeyVersion != "1" {
-		t.Errorf("expected public_key_version 1, got %q", sig.PublicKeyVersion)
+	if sig.MessageEventSignature.PublicKeyVersion != "1" {
+		t.Errorf("expected public_key_version 1, got %q", sig.MessageEventSignature.PublicKeyVersion)
 	}
 	want := fmt.Sprintf(
 		"MarkConversationReadEvent,%s,111,111:222,2011626338877079553,1700000000123",
@@ -1359,7 +1388,7 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 	if sig.SignaturePayload != want {
 		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
 	}
-	rawSig, err := base64.RawStdEncoding.DecodeString(sig.Signature)
+	rawSig, err := base64.RawStdEncoding.DecodeString(sig.MessageEventSignature.Signature)
 	if err != nil {
 		t.Fatalf("decode signature: %v", err)
 	}
@@ -1377,16 +1406,14 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	before := time.Now().UnixMilli()
-	nowSig, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
+	nowPrepared, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
 		ConversationID:      "g999",
 		SeenUntilSequenceID: "seq-1",
 	})
 	after := time.Now().UnixMilli()
-	if err != nil {
-		t.Fatalf("PrepareMarkConversationRead (defaults) failed: %v", err)
-	}
-	if nowSig.PublicKeyVersion != "7" {
-		t.Errorf("expected public_key_version 7, got %q", nowSig.PublicKeyVersion)
+	nowSig := onlyAction(t, nowPrepared, err)
+	if nowSig.MessageEventSignature.PublicKeyVersion != "7" {
+		t.Errorf("expected public_key_version 7, got %q", nowSig.MessageEventSignature.PublicKeyVersion)
 	}
 	prefix := fmt.Sprintf("MarkConversationReadEvent,%s,111,g999,seq-1,", nowSig.MessageID)
 	if !strings.HasPrefix(nowSig.SignaturePayload, prefix) {
@@ -2395,7 +2422,7 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 	}
 	// Two signed actions: the key change and the member add. The title lives
 	// in the member-add payload (index 1).
-	if len(prepared.ActionSignatures) != 2 || prepared.ActionSignatures[1].Signature == "" {
+	if len(prepared.ActionSignatures) != 2 || prepared.ActionSignatures[1].MessageEventSignature.Signature == "" {
 		t.Fatalf("expected 2 action signatures with a non-empty member-add signature, got %d", len(prepared.ActionSignatures))
 	}
 	if !strings.Contains(prepared.ActionSignatures[1].SignaturePayload, "My Group Chat") {
@@ -3171,12 +3198,10 @@ func TestGeneratedKeysSignOnlyWithTheRegisteredVersion(t *testing.T) {
 	if err := chat.SetIdentity(SetIdentityParams{UserID: "1234", SigningKeyVersion: "1700000000123"}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
-	sig, err := chat.PrepareMessageDelete(deleteParams)
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete after SetIdentity failed: %v", err)
-	}
-	if sig.PublicKeyVersion != "1700000000123" {
-		t.Errorf("expected public_key_version %q, got %q", "1700000000123", sig.PublicKeyVersion)
+	prepared, err := chat.PrepareMessageDelete(deleteParams)
+	sig := onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "1700000000123" {
+		t.Errorf("expected public_key_version %q, got %q", "1700000000123", sig.MessageEventSignature.PublicKeyVersion)
 	}
 
 	// Restored keys carry the version passed to ImportKeys, and
@@ -3190,12 +3215,10 @@ func TestGeneratedKeysSignOnlyWithTheRegisteredVersion(t *testing.T) {
 	if err := restored.ImportKeys(ImportKeysParams{Keys: keys, SigningKeyVersion: "1700000000456"}); err != nil {
 		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
-	sig, err = restored.PrepareMessageDelete(deleteParams)
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete after ImportKeys with a signing-key version failed: %v", err)
-	}
-	if sig.PublicKeyVersion != "1700000000456" {
-		t.Errorf("expected public_key_version %q, got %q", "1700000000456", sig.PublicKeyVersion)
+	prepared, err = restored.PrepareMessageDelete(deleteParams)
+	sig = onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "1700000000456" {
+		t.Errorf("expected public_key_version %q, got %q", "1700000000456", sig.MessageEventSignature.PublicKeyVersion)
 	}
 	if err := restored.ImportKeys(ImportKeysParams{Keys: keys}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)

@@ -445,14 +445,14 @@ def message_text(event: dict[str, Any]) -> str | None:
     return content.get("text")
 
 
-def prep_to_request(prep: dict[str, Any], signing_public_key: str) -> dict[str, Any]:
+def prep_to_request(prep: dict[str, Any]) -> dict[str, Any]:
     """Map a prepared conversation change into the X API request shape.
 
     Works for 1:1 key changes (one signature) and group create / member add
-    (two signatures). ``signing_public_key`` is the sender's own signing key,
-    which the API expects alongside each signature.
+    (two signatures). The action signatures already have the request's shape;
+    the participant keys take the request's field names.
     """
-    body: dict[str, Any] = {
+    return {
         "conversation_key_version": prep["conversation_key_version"],
         "conversation_participant_keys": [
             {
@@ -462,23 +462,5 @@ def prep_to_request(prep: dict[str, Any], signing_public_key: str) -> dict[str, 
             }
             for pk in prep["participant_keys"]
         ],
-        "action_signatures": [
-            {
-                "message_id": sig["message_id"],
-                "encoded_message_event_detail": sig["encoded_message_event_detail"],
-                "message_event_signature": {
-                    "signature": sig["signature"],
-                    "signature_version": sig["signature_version"],
-                    "public_key_version": sig["public_key_version"],
-                    "signing_public_key": signing_public_key,
-                },
-                **(
-                    {"signature_payload": sig["signature_payload"]}
-                    if sig.get("signature_payload")
-                    else {}
-                ),
-            }
-            for sig in prep["action_signatures"]
-        ],
+        "action_signatures": prep["action_signatures"],
     }
-    return body

@@ -247,8 +247,8 @@ export class ChatCore {
   }
 
   /**
-   * Sign a message delete. Returns the action signature to submit alongside
-   * the delete request.
+   * Sign a message delete. Returns the delete request's `actionSignatures`,
+   * one entry.
    */
   prepareMessageDelete({ conversationId, sequenceIds, deleteForAll }) {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
@@ -366,10 +366,10 @@ export function messageText(event) {
  * Map a prepared conversation change into the X API request shape.
  *
  * Works for 1:1 key changes (one signature) and group create / member add
- * (two signatures). `signingPublicKey` is the sender's own signing key,
- * which the API expects alongside each signature.
+ * (two signatures). The action signatures already have the request's shape;
+ * the participant keys take the request's field names.
  */
-export function prepToRequest(prep, signingPublicKey) {
+export function prepToRequest(prep) {
   return {
     conversationKeyVersion: prep.conversationKeyVersion,
     conversationParticipantKeys: prep.participantKeys.map((pk) => ({
@@ -377,16 +377,6 @@ export function prepToRequest(prep, signingPublicKey) {
       encryptedConversationKey: pk.encryptedKey,
       publicKeyVersion: String(pk.publicKeyVersion),
     })),
-    actionSignatures: prep.actionSignatures.map((sig) => ({
-      messageId: sig.messageId,
-      encodedMessageEventDetail: sig.encodedMessageEventDetail,
-      ...(sig.signaturePayload ? { signaturePayload: sig.signaturePayload } : {}),
-      messageEventSignature: {
-        signature: sig.signature,
-        signatureVersion: sig.signatureVersion,
-        publicKeyVersion: sig.publicKeyVersion,
-        signingPublicKey,
-      },
-    })),
+    actionSignatures: prep.actionSignatures,
   };
 }

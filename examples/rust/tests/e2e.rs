@@ -227,9 +227,8 @@ fn e2e_live() {
     let prep = core
         .prepare_conversation_key_change(&both_keys, None)
         .expect("prepare_conversation_key_change");
-    let signing_pub = core.public_keys().expect("public_keys").signing;
     let resp = api
-        .add_conversation_keys(&conv, &prep_to_request(&prep, &signing_pub))
+        .add_conversation_keys(&conv, &prep_to_request(&prep))
         .expect("add_conversation_keys");
     let data = &resp["data"];
     // The ack sequence id may arrive as a JSON string or number.
@@ -447,7 +446,6 @@ fn e2e_live() {
             &partner_id,
             &both_keys,
             &signing,
-            &signing_pub,
         );
     }
 
@@ -461,7 +459,6 @@ fn groups_flow(
     partner_id: &str,
     both_keys: &[PublicKeyInput],
     signing: &[SigningKeyEntry],
-    signing_pub: &str,
 ) {
     let my_keys: Vec<PublicKeyInput> = both_keys
         .iter()
@@ -486,7 +483,7 @@ fn groups_flow(
         )
         .expect("prepare_group_create");
     let mut members = vec![my_id.to_string()];
-    let mut body = prep_to_request(&prep, signing_pub);
+    let mut body = prep_to_request(&prep);
     body["conversation_id"] = json!(group_id);
     body["group_members"] = json!(members);
     body["group_admins"] = json!([my_id]);
@@ -503,7 +500,7 @@ fn groups_flow(
             )
             .expect("prepare_group_create fallback");
         members = vec![my_id.to_string(), partner_id.to_string()];
-        let mut body = prep_to_request(&prep, signing_pub);
+        let mut body = prep_to_request(&prep);
         body["conversation_id"] = json!(group_id);
         body["group_members"] = json!(members);
         body["group_admins"] = json!([my_id]);
@@ -544,7 +541,7 @@ fn groups_flow(
                 &[my_id.to_string()],
             )
             .expect("prepare_group_members_change");
-        let mut body = prep_to_request(&prep, signing_pub);
+        let mut body = prep_to_request(&prep);
         body["user_ids"] = json!([partner_id]);
         api.add_group_members(&group_id, &body)
             .expect("add_group_members");

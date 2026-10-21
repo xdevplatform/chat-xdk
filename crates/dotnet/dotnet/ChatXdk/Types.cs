@@ -128,8 +128,10 @@ namespace ChatXdk
     // Action signatures (group operations)
 
     /// <summary>
-    /// Signed action payload authenticating a conversation key change, member
-    /// add, message delete, or read receipt.
+    /// Signed action authenticating a conversation key change, group change,
+    /// message delete, or read receipt, shaped as an entry of a request's
+    /// <c>action_signatures</c>: the signature is nested under
+    /// <c>message_event_signature</c>.
     /// </summary>
     public sealed class ActionSignature
     {
@@ -139,22 +141,50 @@ namespace ChatXdk
         [JsonPropertyName("encoded_message_event_detail")]
         public string EncodedMessageEventDetail { get; init; } = "";
 
-        [JsonPropertyName("signature")]
-        public string Signature { get; init; } = "";
-
-        [JsonPropertyName("signature_version")]
-        public string SignatureVersion { get; init; } = "";
-
-        [JsonPropertyName("public_key_version")]
-        public string PublicKeyVersion { get; init; } = "";
+        /// <summary>The signature over the action, with its versions and the signer's signing public key.</summary>
+        [JsonPropertyName("message_event_signature")]
+        public MessageEventSignature MessageEventSignature { get; init; } = new();
 
         /// <summary>
-        /// The comma-separated payload string that was signed. Empty for
+        /// The comma-separated payload string that was signed; <see langword="null"/> for
         /// conversation-key changes, whose payload embeds the plaintext
         /// conversation key and is withheld.
         /// </summary>
         [JsonPropertyName("signature_payload")]
-        public string SignaturePayload { get; init; } = "";
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SignaturePayload { get; init; }
+    }
+
+    /// <summary>The signature of an <see cref="ActionSignature"/>.</summary>
+    public sealed class MessageEventSignature
+    {
+        /// <summary>Base64 ECDSA signature of the payload.</summary>
+        [JsonPropertyName("signature")]
+        public string Signature { get; init; } = "";
+
+        /// <summary>Signature protocol version.</summary>
+        [JsonPropertyName("signature_version")]
+        public string SignatureVersion { get; init; } = "";
+
+        /// <summary>Version of the signing public key.</summary>
+        [JsonPropertyName("public_key_version")]
+        public string PublicKeyVersion { get; init; } = "";
+
+        /// <summary>The signer's base64 signing public key, as <see cref="Chat.GetPublicKeys"/> returns it.</summary>
+        [JsonPropertyName("signing_public_key")]
+        public string SigningPublicKey { get; init; } = "";
+    }
+
+    /// <summary>
+    /// A signed message delete or read receipt: the <c>action_signatures</c> a request
+    /// carries for it, one entry. The X API's mark-read route does not take
+    /// <c>action_signatures</c> yet, so that request shape is not final.
+    /// </summary>
+    public sealed class PreparedAction
+    {
+        /// <summary>The signed action, as the request's <c>action_signatures</c> entries.</summary>
+        [JsonPropertyName("action_signatures")]
+        public List<ActionSignature> ActionSignatures { get; init; } = new();
     }
 
     // Key / recipient types

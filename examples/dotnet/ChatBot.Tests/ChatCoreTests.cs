@@ -166,7 +166,7 @@ public class ChatCoreTests
 
         // Assert on the serialized form — the exact JSON the HTTP layer posts.
         using var doc = JsonDocument.Parse(
-            JsonSerializer.Serialize(EventHelpers.PrepToRequest(prep, signingPub)));
+            JsonSerializer.Serialize(EventHelpers.PrepToRequest(prep)));
         var body = doc.RootElement;
 
         Assert.Equal(prep.ConversationKeyVersion, body.GetProperty("conversation_key_version").GetString());

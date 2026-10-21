@@ -51,6 +51,14 @@ def _key_kwargs(keys):
     ((version, key),) = keys.items()
     return {"conversation_key": key, "conversation_key_version": version}
 
+
+def _only_action(prepared):
+    """The one ``action_signatures`` entry of a prepared delete or read receipt."""
+    assert list(prepared) == ["action_signatures"], prepared
+    (entry,) = prepared["action_signatures"]
+    return entry
+
+
 class TestUtilityFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -682,7 +690,7 @@ class TestApiShapes(unittest.TestCase):
 
         self.assertEqual(len(result["action_signatures"]), 1)
         sig = result["action_signatures"][0]
-        self.assertTrue(sig["signature"])
+        self.assertTrue(sig["message_event_signature"]["signature"])
         # Absent: the payload embeds the plaintext conversation key and is withheld.
         self.assertNotIn("signature_payload", sig)
 
@@ -726,7 +734,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         add = result["action_signatures"][1]
-        self.assertTrue(add["signature"])
+        self.assertTrue(add["message_event_signature"]["signature"])
         self.assertTrue(
             add["signature_payload"].startswith("GroupChangeEvent.GroupMemberAddChange,")
         )
@@ -793,7 +801,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         create = result["action_signatures"][1]
-        self.assertTrue(create["signature"])
+        self.assertTrue(create["message_event_signature"]["signature"])
         self.assertTrue(
             create["signature_payload"].startswith("GroupChangeEvent.GroupCreate,")
         )
@@ -845,19 +853,30 @@ class TestApiShapes(unittest.TestCase):
 
         # A 1:1 id is signed in its canonical colon form; delete-for-all
         # signs the wire action 2.
-        sig = chat.prepare_message_delete(
-            MessageDeleteParams(
-                "222-111",
-                ["seq-10", "seq-11"],
-                True,
-                sender_id="111",
-                signing_key_version="1",
+        sig = _only_action(
+            chat.prepare_message_delete(
+                MessageDeleteParams(
+                    "222-111",
+                    ["seq-10", "seq-11"],
+                    True,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
             )
         )
 
         self.assertTrue(sig["message_id"])
         self.assertTrue(sig["encoded_message_event_detail"])
-        self.assertTrue(sig["signature"])
+        # The signature is nested as the request's action_signatures carry it.
+        signed = sig["message_event_signature"]
+        self.assertEqual(
+            sorted(signed),
+            ["public_key_version", "signature", "signature_version", "signing_public_key"],
+        )
+        self.assertTrue(signed["signature"])
+        self.assertEqual(signed["signature_version"], "7")
+        self.assertEqual(signed["public_key_version"], "1")
+        self.assertEqual(signed["signing_public_key"], chat.get_public_keys().signing)
         self.assertEqual(
             sig["signature_payload"],
             f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11",
@@ -870,13 +889,15 @@ class TestApiShapes(unittest.TestCase):
 
         # Group ids pass through unchanged; delete-for-self signs the wire
         # action 1.
-        sig = chat.prepare_message_delete(
-            MessageDeleteParams(
-                "g999",
-                ["seq-1"],
-                False,
-                sender_id="111",
-                signing_key_version="1",
+        sig = _only_action(
+            chat.prepare_message_delete(
+                MessageDeleteParams(
+                    "g999",
+                    ["seq-1"],
+                    False,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
             )
         )
 
@@ -892,25 +913,30 @@ class TestApiShapes(unittest.TestCase):
 
         # A 1:1 id is signed in its canonical colon form, followed by the
         # read point and its time.
-        sig = chat.prepare_mark_conversation_read(
-            MarkConversationReadParams(
-                "222-111",
-                "2011626338877079553",
-                seen_at_msec=1700000000123,
-                sender_id="111",
-                signing_key_version="1",
+        sig = _only_action(
+            chat.prepare_mark_conversation_read(
+                MarkConversationReadParams(
+                    "222-111",
+                    "2011626338877079553",
+                    seen_at_msec=1700000000123,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
             )
         )
 
         self.assertTrue(sig["message_id"])
         self.assertTrue(sig["encoded_message_event_detail"])
-        self.assertEqual(sig["public_key_version"], "1")
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "1")
+        self.assertEqual(
+            sig["message_event_signature"]["signing_public_key"], chat.get_public_keys().signing
+        )
         self.assertEqual(
             sig["signature_payload"],
             f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
             "2011626338877079553,1700000000123",
         )
-        signature = sig["signature"]
+        signature = sig["message_event_signature"]["signature"]
         self.assertTrue(
             chat.verify(
                 v["signing_public_b64"],
@@ -928,11 +954,13 @@ class TestApiShapes(unittest.TestCase):
         chat.set_identity(SetIdentityParams("111", "7"))
 
         before = int(time.time() * 1000)
-        sig = chat.prepare_mark_conversation_read(MarkConversationReadParams("g999", "seq-1"))
+        sig = _only_action(
+            chat.prepare_mark_conversation_read(MarkConversationReadParams("g999", "seq-1"))
+        )
         after = int(time.time() * 1000)
 
         # The session identity signs; the unset time is the current time.
-        self.assertEqual(sig["public_key_version"], "7")
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
         prefix = f"MarkConversationReadEvent,{sig['message_id']},111,g999,seq-1,"
         self.assertTrue(sig["signature_payload"].startswith(prefix))
         seen_at = int(sig["signature_payload"][len(prefix) :])
@@ -1422,18 +1450,22 @@ class TestApiShapes(unittest.TestCase):
         self.assertIn("signing_key_version", str(ctx.exception))
 
         chat.set_identity(SetIdentityParams("1234", "1700000000123"))
-        sig = chat.prepare_message_delete(MessageDeleteParams("1234-5678", ["seq-1"], False))
-        self.assertEqual(sig["public_key_version"], "1700000000123")
+        sig = _only_action(
+            chat.prepare_message_delete(MessageDeleteParams("1234-5678", ["seq-1"], False))
+        )
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "1700000000123")
 
         # Restored keys carry the version passed to import_keys, and none
         # without it.
         keys = bytes(chat.export_keys())
         restored = Chat()
         restored.import_keys(ImportKeysParams(keys, signing_key_version="1700000000456"))
-        sig = restored.prepare_message_delete(
-            MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+        sig = _only_action(
+            restored.prepare_message_delete(
+                MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+            )
         )
-        self.assertEqual(sig["public_key_version"], "1700000000456")
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "1700000000456")
         restored.import_keys(ImportKeysParams(keys))
         with self.assertRaises(ValueError):
             restored.prepare_message_delete(

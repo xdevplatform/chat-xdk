@@ -137,9 +137,12 @@ public final class Types {
     }
 
     /**
-     * Signed action payload authenticating a conversation key change, member
-     * add, message delete, or read receipt.
+     * Signed action authenticating a conversation key change, group change,
+     * message delete, or read receipt, shaped as an entry of a request's
+     * {@code action_signatures}: the signature is nested under
+     * {@code message_event_signature}.
      */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class ActionSignature {
         /** ID of the message carrying the action. */
         @JsonProperty("message_id")
@@ -149,6 +152,21 @@ public final class Types {
         @JsonProperty("encoded_message_event_detail")
         public String encodedMessageEventDetail = "";
 
+        /** The signature over the action, with its versions and the signer's signing public key. */
+        @JsonProperty("message_event_signature")
+        public MessageEventSignature messageEventSignature = new MessageEventSignature();
+
+        /**
+         * The comma-separated payload string that was signed; {@code null} for
+         * conversation-key changes, whose payload embeds the plaintext
+         * conversation key and is withheld.
+         */
+        @JsonProperty("signature_payload")
+        public String signaturePayload;
+    }
+
+    /** The signature of an {@link ActionSignature}. */
+    public static final class MessageEventSignature {
         /** Base64-encoded raw r||s signature over the action payload. */
         @JsonProperty("signature")
         public String signature = "";
@@ -161,13 +179,20 @@ public final class Types {
         @JsonProperty("public_key_version")
         public String publicKeyVersion = "";
 
-        /**
-         * The comma-separated payload string that was signed. Empty for
-         * conversation-key changes, whose payload embeds the plaintext
-         * conversation key and is withheld.
-         */
-        @JsonProperty("signature_payload")
-        public String signaturePayload = "";
+        /** The signer's base64 signing public key, as {@link Chat#getPublicKeys} returns it. */
+        @JsonProperty("signing_public_key")
+        public String signingPublicKey = "";
+    }
+
+    /**
+     * A signed message delete or read receipt: the {@code action_signatures} a
+     * request carries for it, one entry. The X API's mark-read route does not
+     * take {@code action_signatures} yet, so that request shape is not final.
+     */
+    public static final class PreparedAction {
+        /** The signed action, as the request's {@code action_signatures} entries. */
+        @JsonProperty("action_signatures")
+        public List<ActionSignature> actionSignatures = Collections.emptyList();
     }
 
     /** A signing key entry for {@link Chat#decryptEvent} and {@link Chat#decryptEvents}. */
