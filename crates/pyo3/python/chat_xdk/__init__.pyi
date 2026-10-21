@@ -139,7 +139,7 @@ class EncryptReplyParams:
         self,
         conversation_id: str,
         text: str,
-        reply_to_event: Optional[str],
+        reply_to_event: Optional[str] = None,
         *,
         reply_to_edit_event: Optional[str] = None,
         reply_to_ckces: Optional[list[str]] = None,
@@ -170,8 +170,8 @@ class EncryptReactionParams:
     conversation_key_version: Optional[str]
     def __init__(
         self,
-        target_event: Optional[str],
-        emoji: str,
+        target_event: Optional[str] = None,
+        emoji: str = ...,
         *,
         conversation_id: Optional[str] = None,
         target_message_sequence_id: Optional[str] = None,
@@ -193,8 +193,8 @@ class EncryptEditParams:
     conversation_key_version: Optional[str]
     def __init__(
         self,
-        target_event: Optional[str],
-        updated_text: str,
+        target_event: Optional[str] = None,
+        updated_text: str = ...,
         *,
         entities: Optional[list[tuple[int, int, str]]] = None,
         conversation_id: Optional[str] = None,

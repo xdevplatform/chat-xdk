@@ -342,9 +342,9 @@ JsonNode event = chat.decryptEvent(one);
 `EncryptMessageParams`, `EncryptReplyParams`, `EncryptReactionParams`,
 `EncryptEditParams`, `ConversationKeyChangeParams`,
 `GroupMembersChangeParams`, `GroupCreateParams` and `MessageDeleteParams`.
-Each class takes the required fields positionally and the optional ones as
-keywords, with the names the methods took, and exposes every field as a
-read/write attribute.
+Each class takes the arguments its method took, in the same order and with
+the same names and defaults, and exposes every field as a read/write
+attribute.
 
 ```python
 # Before

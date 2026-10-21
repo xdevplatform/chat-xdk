@@ -209,7 +209,7 @@ class TestParams(unittest.TestCase):
 
         missing_required = [
             lambda: EncryptMessageParams("conv-1"),
-            lambda: EncryptReplyParams("conv-1", "hi"),
+            lambda: EncryptReplyParams("conv-1"),
             lambda: EncryptReactionParams(None),
             lambda: EncryptEditParams(None),
             lambda: ConversationKeyChangeParams(),
@@ -244,6 +244,43 @@ class TestParams(unittest.TestCase):
         for make in optional_positional:
             with self.assertRaises(TypeError):
                 make()
+
+    def test_the_event_a_reply_reaction_or_edit_targets_is_optional(self):
+        from chat_xdk import EncryptEditParams, EncryptReactionParams, EncryptReplyParams
+
+        reply = EncryptReplyParams("conv-1", "hi", reply_to_sequence_id="5", reply_to_sender_id=1001)
+        self.assertIsNone(reply.reply_to_event)
+        self.assertEqual(EncryptReplyParams("conv-1", "hi", "event").reply_to_event, "event")
+        self.assertEqual(
+            EncryptReplyParams("conv-1", "hi", reply_to_event="event").reply_to_event, "event"
+        )
+
+        reaction = EncryptReactionParams(
+            emoji="👍", conversation_id="conv-1", target_message_sequence_id="5"
+        )
+        self.assertIsNone(reaction.target_event)
+        self.assertEqual(EncryptReactionParams("event", "👍").emoji, "👍")
+        edit = EncryptEditParams(
+            updated_text="fixed", conversation_id="conv-1", target_message_sequence_id="5"
+        )
+        self.assertIsNone(edit.target_event)
+        self.assertEqual(EncryptEditParams("event", "fixed").updated_text, "fixed")
+
+        with self.assertRaisesRegex(TypeError, "missing required argument: 'emoji'"):
+            EncryptReactionParams("event")
+        with self.assertRaisesRegex(TypeError, "missing required argument: 'updated_text'"):
+            EncryptEditParams(target_event="event")
+
+    def test_chat_shows_its_constructor_signature(self):
+        import inspect
+
+        from chat_xdk import Chat
+
+        params = inspect.signature(Chat).parameters
+        self.assertEqual(list(params), ["config_json"])
+        self.assertIsNone(params["config_json"].default)
+        with self.assertRaises(TypeError):
+            Chat(None, None)
 
     def test_methods_take_only_their_params_class(self):
         from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams

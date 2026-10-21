@@ -84,9 +84,9 @@ _MAX_REFETCH_BACKOFF_SECONDS = 60.0
 class Chat(_NativeChat):
     __doc__ = _NativeChat.__doc__
 
-    def __init__(self, *args, **kwargs):
-        # The native constructor already ran; this only starts the
-        # feature-switch thread.
+    def __init__(self, config_json=None):
+        # The native constructor already took config_json; this only starts
+        # the feature-switch thread.
         self._feature_stop = _start_feature_switches(self)
 
     def close(self):

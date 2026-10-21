@@ -247,6 +247,15 @@ fn public_keys_field(
         .collect()
 }
 
+/// A required argument that follows an optional positional one, as
+/// ``emoji`` follows ``target_event``: missing, it raises the ``TypeError``
+/// Python raises for a missing argument.
+fn required<T>(value: Option<T>, name: &str) -> PyResult<T> {
+    value.ok_or_else(|| {
+        pyo3::exceptions::PyTypeError::new_err(format!("missing required argument: '{name}'"))
+    })
+}
+
 fn to_py_err(e: impl std::error::Error) -> PyErr {
     let mut msg = e.to_string();
     let mut source = e.source();
@@ -589,7 +598,7 @@ pub struct EncryptReplyParams {
 impl EncryptReplyParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn new(
         conversation_id: String,
         text: String,
@@ -701,27 +710,27 @@ pub struct EncryptReactionParams {
 impl EncryptReactionParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         target_event: Option<String>,
-        emoji: String,
+        emoji: Option<String>,
         conversation_id: Option<String>,
         target_message_sequence_id: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             target_event,
-            emoji,
+            emoji: required(emoji, "emoji")?,
             conversation_id,
             target_message_sequence_id,
             sender_id,
             signing_key_version,
             conversation_key,
             conversation_key_version,
-        }
+        })
     }
 }
 
@@ -778,10 +787,10 @@ pub struct EncryptEditParams {
 impl EncryptEditParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, updated_text=None, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         target_event: Option<String>,
-        updated_text: String,
+        updated_text: Option<String>,
         entities: Option<Py<PyAny>>,
         conversation_id: Option<String>,
         target_message_sequence_id: Option<String>,
@@ -789,10 +798,10 @@ impl EncryptEditParams {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             target_event,
-            updated_text,
+            updated_text: required(updated_text, "updated_text")?,
             entities,
             conversation_id,
             target_message_sequence_id,
@@ -800,7 +809,7 @@ impl EncryptEditParams {
             signing_key_version,
             conversation_key,
             conversation_key_version,
-        }
+        })
     }
 }
 
