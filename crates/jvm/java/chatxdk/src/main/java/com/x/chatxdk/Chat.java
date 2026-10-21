@@ -849,16 +849,17 @@ public final class Chat implements AutoCloseable {
     }
 
     private static String fileParamsJson(
-            String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) throws Exception {
+            String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("event_b64", eventB64);
         n.set("conversation_keys", conversationKeysJson(conversationKeys));
         n.put("media_hash_key", mediaHashKey);
-        return ChatJson.MAPPER.writeValueAsString(n);
+        return n.toString();
     }
 
-    private byte[] callFile(ObjectNode params, ParamsJsonFn fn) throws Exception {
-        try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(params))) {
+    // JsonNode.toString() writes the tree as JSON without a checked exception.
+    private byte[] callFile(ObjectNode params, ParamsJsonFn fn) {
+        try (Memory j = FfiStrings.utf8(params.toString())) {
             return Base64.getDecoder().decode(FfiStrings.consume(fn.apply(handle, j)));
         } finally {
             Reference.reachabilityFence(this);
@@ -876,7 +877,7 @@ public final class Chat implements AutoCloseable {
      * @throws ChatXdkException if the event is not a message with this file, or the key map
      *     lacks its key. The message says what to pass instead.
      */
-    public byte[] encryptFile(EncryptFileParams parameters) throws Exception {
+    public byte[] encryptFile(EncryptFileParams parameters) {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
@@ -895,7 +896,7 @@ public final class Chat implements AutoCloseable {
      *     message with this file, or {@link DecryptFileParams#encrypted} is not the file's
      *     complete encrypted bytes. The message says what to pass instead.
      */
-    public byte[] decryptFile(DecryptFileParams parameters) throws Exception {
+    public byte[] decryptFile(DecryptFileParams parameters) {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
@@ -912,8 +913,10 @@ public final class Chat implements AutoCloseable {
      * {@link #encryptFile} apart from the file, which is fed to the encryptor.
      *
      * @return A new {@link FileEncryptor}; close it when finished.
+     * @throws ChatXdkException if the event is not a message with this file, or the key map
+     *     lacks its key. The message says what to pass instead.
      */
-    public FileEncryptor fileEncryptor(FileEncryptorParams parameters) throws Exception {
+    public FileEncryptor fileEncryptor(FileEncryptorParams parameters) {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
         try {
@@ -929,8 +932,10 @@ public final class Chat implements AutoCloseable {
      * params of {@link #decryptFile} apart from the encrypted bytes, which are fed to the decryptor.
      *
      * @return A new {@link FileDecryptor}; close it when finished.
+     * @throws ChatXdkException if the key version is missing, or the event is not an encrypted
+     *     message with this file. The message says what to pass instead.
      */
-    public FileDecryptor fileDecryptor(FileDecryptorParams parameters) throws Exception {
+    public FileDecryptor fileDecryptor(FileDecryptorParams parameters) {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
         try {
