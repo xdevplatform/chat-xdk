@@ -226,7 +226,6 @@ JS/WASM with Juicebox key storage you also build juicebox-sdk's wasm crate — s
 - **[docs/API.md](docs/API.md)** — full API reference for every binding
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — modules and data flows
 - **[docs/CRYPTO.md](docs/CRYPTO.md)** — algorithms, key lifecycle, wire formats
-- **[docs/migrating-0.6](docs/migrating-0.6/README.md)** — moving from 0.5.x to 0.6.0, one guide per binding
 
 ## License
 
