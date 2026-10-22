@@ -499,3 +499,6 @@ prepared = chat.prepare_conversation_key_change(
   does not take them yet, so that shape is pending and may change.
   Recipients' `decrypt_event` returns a signed receipt as a verified
   `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.
+- The JVM jar and the .NET package bundle the native library for 64-bit ARM
+  Linux (`linux-arm64`) too, so both bindings run there without a library of
+  your own.

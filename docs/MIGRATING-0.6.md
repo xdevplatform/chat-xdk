@@ -52,6 +52,7 @@ them by task and shows the code. The API itself is documented in
 | Signed actions | Signatures come nested under `message_event_signature`, with your signing public key; deletes return a `PreparedAction` | all |
 | Errors | Invalid input fails with the message alone (`SdkError::InvalidInput` in Rust) | all |
 | Network | Each chat fetches feature switches in the background; release chats when you're done | all but Rust and the C ABI |
+| Platforms | The jar and the NuGet package bundle the native library for 64-bit ARM Linux (`linux-arm64`) too | JVM, .NET |
 | New | Signed read receipts (the X API route is pending), `xdk_version` (don't send it yet) | all |
 
 ## Send formats: v0 and v1
@@ -1060,6 +1061,11 @@ The file calls declare no checked exceptions (see [Errors](#errors)). If you
 call the JNA interface `ChatNative` directly, its methods follow the C ABI
 renames below.
 
+The jar bundles the native library for 64-bit ARM Linux (`linux-arm64`) too,
+and on ARM64 Linux loads it ahead of any copy on `jna.library.path`. If you
+built one to run 0.5.x there, remove it: a 0.5.x build's entry points don't
+match 0.6.0's (see [C ABI](#c-abi)).
+
 0.5.x:
 
 ```java
@@ -1196,6 +1202,11 @@ chat.close();
 | `PublicKeyRegistrationPayload.Version`, `.GenerateVersion` | removed |
 | `EncryptReplyParams.ReplyToSenderId` (`long?`) | `string?` |
 | — | `PrepareMarkConversationRead(MarkConversationReadParams)` |
+
+The package bundles the native library for 64-bit ARM Linux (`linux-arm64`)
+too, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need no copy
+of their own. If you shipped one you built to run 0.5.x there, remove it: a
+0.5.x build's entry points don't match 0.6.0's (see [C ABI](#c-abi)).
 
 0.5.x:
 
