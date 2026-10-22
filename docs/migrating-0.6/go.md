@@ -2,10 +2,10 @@
 
 This page lists every change that Go code written for
 `github.com/xdevplatform/chat-xdk/go/chatxdk` 0.5.x (0.5.0, 0.5.1 or 0.5.2)
-runs into in 0.6.0, each with the lines to change. The other bindings have
-their own pages, listed in the [index](README.md). [API.md](../API.md)
-documents every call, and the [CHANGELOG](../../CHANGELOG.md) lists every
-change.
+runs into in 0.6.0, each with the lines to change. The [index](README.md)
+explains why each change was made and lists the other bindings' pages.
+[API.md](../API.md) documents every call, and the
+[CHANGELOG](../../CHANGELOG.md) lists every change.
 
 ## Checklist
 
@@ -19,14 +19,13 @@ change.
 - [ ] [Pass a `DecryptEventsParams` to `DecryptEvents`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `DecryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
-- [ ] [Don't send `XdkVersion` yet](#xdkversion-dont-send-it-yet)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
+- [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
 
@@ -36,18 +35,21 @@ keys loaded, and the other names stand for your own values: ids, versions,
 keys and events as the X API returns them, `keys` for the conversation key
 map `DecryptEvents` returns, `payload` for a `*SendPayload` and `prepared`
 for a `*PreparedConversationChange`. `must(err)` stands for your error
-handling, and `startUpload`, `upload`, `finishUpload`, `photoAttachment` and
-`registerPublicKey` for your own upload and request code.
+handling. `api.Post(path, body)` stands for your HTTP client: it POSTs
+`body` as JSON to `https://api.x.com` + `path` with your user access token
+and returns the parsed JSON response as a `map[string]any`.
+`photoAttachment(mediaHashKey)` stands for your code that builds a photo's
+`AttachmentDescriptor`. `base64` (`encoding/base64`) and `strings` are the
+standard library's.
 
 ## Upgrade readers before v1 sends start
 
 0.6.0 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
-it at signature version 10. A chat sends v1 only once the X API turns on its
-`v1_send` feature switch (see
-[The feature-switch request](#the-feature-switch-request)); until then every
-send is v0.
+it at signature version 10. A chat sends v1 while the X API's `v1_send`
+feature switch is on for it, and v0 otherwise (see
+[The feature-switch request](#the-feature-switch-request)).
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations to 0.6.0 before your senders can
@@ -73,8 +75,6 @@ Chats read the X API's feature switches with one anonymous request,
 - for a chat that is already sending, a re-check can only turn a switch off:
   a switch turning on reaches only chats that start sending after it.
 
-Every send is v0 until the X API turns `v1_send` on.
-
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. Close each chat when you're done with
 it, or let it be garbage-collected: the requests stop once no chat in the
@@ -90,10 +90,10 @@ defer chat.Close()
 
 `GenerateKeypairs` returns a `*PublicKeyRegistrationPayload` that holds only
 `PublicKey`. Send it as the only field of the
-`POST /2/users/:id/public_keys` body, `public_key`. 0.6.0 doesn't pick a
-signing-key version for new keys: after you register, call `SetIdentity`
-with the `public_key_version` the X API returns (see the next section). A
-signed call made without a version returns the error `Invalid state:
+`POST /2/users/{id}/public_keys` body, `public_key`. 0.6.0 doesn't pick a
+signing-key version for new keys: call `SetIdentity` with the
+`public_key_version` the request returns (see the next section). A signed
+call made without a version returns the error `Invalid state:
 signing_key_version is not set: pass it explicitly or call set_identity()
 first`.
 
@@ -101,19 +101,21 @@ first`.
 // 0.5.x
 registration, err := chat.GenerateKeypairs()
 must(err)
-body := map[string]any{
+response, err := api.Post("/2/users/"+userID+"/public_keys", map[string]any{
 	"public_key":       registration.PublicKey,
 	"version":          registration.Version,
 	"generate_version": registration.GenerateVersion,
-}
-publicKeyVersion := registerPublicKey(userID, body)
+})
+must(err)
+publicKeyVersion := response["data"].(map[string]any)["public_key_version"].(string)
 must(chat.SetIdentity(userID, publicKeyVersion))
 
 // 0.6.0
 registration, err := chat.GenerateKeypairs()
 must(err)
-body := map[string]any{"public_key": registration.PublicKey}
-publicKeyVersion := registerPublicKey(userID, body)
+response, err := api.Post("/2/users/"+userID+"/public_keys", map[string]any{"public_key": registration.PublicKey})
+must(err)
+publicKeyVersion := response["data"].(map[string]any)["public_key_version"].(string)
 must(chat.SetIdentity(chatxdk.SetIdentityParams{UserID: userID, SigningKeyVersion: publicKeyVersion}))
 ```
 
@@ -218,8 +220,9 @@ must(err)
 
 ## `SendPayload` fields take the send request's names
 
-The two encoded fields carry the names of the send request's fields, so the
-request takes them as they are:
+The two encoded fields carry the names of the fields of the send request,
+`POST /2/chat/conversations/{id}/messages`, so the request takes them as
+they are:
 
 ```go
 // 0.5.x
@@ -243,29 +246,30 @@ new fields, with `EventB64` and `XdkVersion` empty. A payload also carries
 request: keep it to encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
-## `XdkVersion`: don't send it yet
-
-`payload.XdkVersion` is the version of the SDK that built the payload.
-Don't add it to the send request yet: the request takes it as an optional
-`xdk_version` field only once the X API documents that field.
-
 ## Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
 message first:
 
-1. Start each file's upload, declaring `EncryptedFileSize` of the file's
-   size, and keep its media hash key.
+1. Start each file's upload with `POST /2/chat/media/upload/initialize`,
+   declaring `EncryptedFileSize` of the file's size as `total_bytes`, and
+   keep the `session_id` and `media_hash_key` it returns.
 2. Encrypt the message with attachments that name those media hash keys.
 3. Encrypt each file with `EncryptFile`, passing the payload's `EventB64`
    and the file's media hash key.
-4. Finish the uploads, then send the message.
+4. Upload each encrypted file with `POST
+   /2/chat/media/upload/{session_id}/append` and finish it with `POST
+   /2/chat/media/upload/{session_id}/finalize`, then send the message.
 
 ```go
 // 0.5.x
 encrypted, err := chat.EncryptStream(photo, conversationKey)
 must(err)
-mediaHashKey := upload(encrypted)
+response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
+	"conversation_id": conversationID, "total_bytes": len(encrypted),
+})
+must(err)
+mediaHashKey := response["data"].(map[string]any)["media_hash_key"].(string)
 payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
 	ConversationID: conversationID, Text: "a photo",
 	Attachments: []chatxdk.AttachmentDescriptor{photoAttachment(mediaHashKey)},
@@ -275,7 +279,12 @@ must(err)
 // 0.6.0
 size, err := chatxdk.EncryptedFileSize(uint64(len(photo)))
 must(err)
-mediaHashKey := startUpload(size)
+response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
+	"conversation_id": conversationID, "total_bytes": size,
+})
+must(err)
+upload := response["data"].(map[string]any)
+sessionID, mediaHashKey := upload["session_id"].(string), upload["media_hash_key"].(string)
 payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
 	ConversationID: conversationID, Text: "a photo",
 	Attachments: []chatxdk.AttachmentDescriptor{photoAttachment(mediaHashKey)},
@@ -285,8 +294,23 @@ encrypted, err := chat.EncryptFile(chatxdk.EncryptFileParams{
 	File: photo, EventB64: payload.EventB64, MediaHashKey: mediaHashKey,
 })
 must(err)
-finishUpload(mediaHashKey, encrypted)
+_, err = api.Post("/2/chat/media/upload/"+sessionID+"/append", map[string]any{
+	"conversation_id": conversationID, "media_hash_key": mediaHashKey,
+	"segment_index": 0, "media": base64.StdEncoding.EncodeToString(encrypted),
+})
+must(err)
+_, err = api.Post("/2/chat/media/upload/"+sessionID+"/finalize", map[string]any{
+	"conversation_id": conversationID, "media_hash_key": mediaHashKey, "num_parts": "1",
+})
+must(err)
 ```
+
+The `append` and `finalize` requests don't change, but they come after
+`EncryptFile`, which produces the bytes they upload. The upload requests
+take `conversation_id` in its colon form, as the SDK does. The snippet
+uploads the file in one segment; a larger file goes up in several `append`
+requests, `segment_index` 0, 1 and so on (the examples send 3 MB segments),
+with their count as `num_parts`.
 
 Like `EncryptMessage`, `EncryptFileParams` takes `ConversationKey` and
 `ConversationKeyVersion` (set both, or neither to resolve them from the key
@@ -417,17 +441,17 @@ only)` or `too many attachments: at most 10 per message`, without an
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Signed read receipts (new, pending)
+## Signed read receipts
 
 `PrepareMarkConversationRead` signs a read receipt for the newest event you
 read. It takes a `MarkConversationReadParams` (`ConversationID`,
 `SeenUntilSequenceID`, that event's sequence id, and an optional
-`SeenAtMsec` that defaults to now) and returns a `*PreparedAction`. A
-recipient's `DecryptEvent` returns a signed receipt as a verified
-`ReadReceipt` event.
-
-**Pending:** the X API's mark-read route doesn't take `action_signatures`
-yet, so the shape of that request may change when it does.
+`SeenAtMsec` that defaults to now) and returns a `*PreparedAction`, one
+entry shaped as [Action signatures come nested](#action-signatures-come-nested)
+shows. Send its `ActionSignatures` as the `action_signatures` of the
+mark-read request, `POST /2/chat/conversations/{id}/read`, whose path takes
+the conversation id in its hyphen form. A recipient's `DecryptEvent` returns
+a signed receipt as a verified `ReadReceipt` event.
 
 ```go
 // 0.6.0
@@ -435,5 +459,7 @@ receipt, err := chat.PrepareMarkConversationRead(chatxdk.MarkConversationReadPar
 	ConversationID: conversationID, SeenUntilSequenceID: seenUntilSequenceID,
 })
 must(err)
-actionSignatures := receipt.ActionSignatures
+path := "/2/chat/conversations/" + strings.ReplaceAll(conversationID, ":", "-") + "/read"
+_, err = api.Post(path, map[string]any{"action_signatures": receipt.ActionSignatures})
+must(err)
 ```

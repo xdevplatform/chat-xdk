@@ -907,11 +907,9 @@ signature covers the read point and its time, so a recipient's
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
-**Pending: the mark-read route.** The X API's mark-read route does not take
-`action_signatures` yet. The SDK nests the read receipt's signature the way
-the conversation-change requests nest theirs, but that shape is not
-confirmed for mark-read and may change when the route accepts it; check the
-X API reference before sending it, and for the route's other fields.
+Send the receipt in the mark-read request,
+`POST /2/chat/conversations/:id/read`: its `action_signatures` take the
+`PreparedAction`'s entries as they are.
 
 **Action signatures.** Every prepare method returns its signed actions in
 the shape a request's `action_signatures` carries them, so they serialize
@@ -1042,8 +1040,10 @@ encrypted:
    key and version the message was encrypted under (or neither, to resolve
    them from the key cache). The SDK finds the file in the message and
    encrypts it under that attachment's key.
-4. Upload each encrypted file and finish its upload (`append` → `finalize`),
-   then send the message.
+4. Upload each encrypted file and finish its upload
+   (`POST /2/chat/media/upload/{session_id}/append`, then
+   `POST /2/chat/media/upload/{session_id}/finalize`), then send the message
+   (`POST /2/chat/conversations/{id}/messages`).
 
 The order of the uploads does not matter, and the file calls need no session
 identity: the sender, message id and key version come from `event_b64`. If
@@ -1051,9 +1051,19 @@ you build the message again (for example after a restart), the same files,
 sender, conversation and key give the same message id, so files already
 encrypted for it stay valid.
 
+In the examples, `api.post(path, body)` and `api.get(path)` stand for your
+HTTP client, sending requests to `https://api.x.com` + `path` with your user
+access token: `post` sends `body` as JSON, with its keys in snake_case, and
+returns the parsed response, and `get` returns the response body's bytes.
+The upload requests take `conversation_id` in its colon form, and URL paths
+take a conversation id in its hyphen form.
+
 ```js
 const totalBytes = encryptedFileSize(photo.length);
-const { sessionId, mediaHashKey } = await startMediaUpload(conversationId, totalBytes);
+const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
+  conversation_id: conversationId, total_bytes: totalBytes,
+});
+const mediaHashKey = upload.media_hash_key;
 const payload = chat.encryptMessage({
   conversationId,
   text: "a photo",
@@ -1066,9 +1076,23 @@ const encrypted = chat.encryptFile({
   conversationKeyVersion,
   mediaHashKey,
 });
-await finishMediaUpload(conversationId, { sessionId, mediaHashKey }, encrypted);
-await sendMessage(conversationId, payload);
+await api.post(`/2/chat/media/upload/${upload.session_id}/append`, {
+  conversation_id: conversationId, media_hash_key: mediaHashKey,
+  segment_index: 0, media: bytesToBase64(encrypted),
+});
+await api.post(`/2/chat/media/upload/${upload.session_id}/finalize`, {
+  conversation_id: conversationId, media_hash_key: mediaHashKey, num_parts: "1",
+});
+await api.post(`/2/chat/conversations/${conversationId.replaceAll(":", "-")}/messages`, {
+  message_id: payload.messageId,
+  encoded_message_create_event: payload.encodedMessageCreateEvent,
+  encoded_message_event_signature: payload.encodedMessageEventSignature,
+});
 ```
+
+A larger file goes up in several `append` requests, `segment_index` 0, 1
+and so on (the examples send 3 MB segments), with their count as
+`num_parts`.
 
 **Receiving files.** Pass the base64 event of the message that carries the
 file and the conversation's key map — the same two values `decrypt_event`
@@ -1086,7 +1110,7 @@ are not checked here; use the `verified` flag from `decrypt_event`.
 const keys = result.conversationKeys.keys;
 const message = chat.decryptEvent({ eventB64, conversationKeys: keys });
 for (const { mediaHashKey } of message.mediaHashes ?? []) {
-  const encrypted = await downloadMedia(mediaHashKey);
+  const encrypted = await api.get(`/2/chat/media/${message.conversationId.replaceAll(":", "-")}/${mediaHashKey}`);
   const plaintext = chat.decryptFile({ encrypted, eventB64, conversationKeys: keys, mediaHashKey });
 }
 ```
@@ -1334,7 +1358,8 @@ for (;;) {
 parts.push(dec.finish());
 
 // ── Send a file: build the message first, then encrypt the file from it ──
-// newMediaHashKey comes from starting the upload with encryptedFileSize(photo.length).
+// newMediaHashKey is the media_hash_key that POST /2/chat/media/upload/initialize
+// returns for { conversation_id, total_bytes: encryptedFileSize(photo.length) }.
 const photoMessage = chat.encryptMessage({
   conversationId: event.conversationId,
   text: "a photo",
@@ -1345,7 +1370,8 @@ const encryptedPhoto = chat.encryptFile({
   eventB64: photoMessage.eventB64,
   mediaHashKey: newMediaHashKey,
 });
-// … finish the upload with encryptedPhoto, then send photoMessage …
+// … upload encryptedPhoto (POST /2/chat/media/upload/{session_id}/append, then
+// /finalize), then send photoMessage (POST /2/chat/conversations/{id}/messages) …
 ```
 
 ### Python
@@ -1399,7 +1425,8 @@ media_hash_key = event["media_hashes"][0]["media_hash_key"]
 decrypted = chat.decrypt_file(DecryptFileParams(encrypted_bytes, event_b64, keys, media_hash_key))
 
 # ── Send a file: build the message first, then encrypt the file from it ──
-# new_media_hash_key comes from starting the upload with encrypted_file_size(len(photo)).
+# new_media_hash_key is the media_hash_key that POST /2/chat/media/upload/initialize
+# returns for {conversation_id, total_bytes: encrypted_file_size(len(photo))}.
 photo_message = chat.encrypt_message(
     EncryptMessageParams(
         event["conversation_id"],
@@ -1418,7 +1445,8 @@ photo_message = chat.encrypt_message(
 encrypted_photo = chat.encrypt_file(
     EncryptFileParams(photo, photo_message.event_b64, new_media_hash_key)
 )
-# … finish the upload with encrypted_photo, then send photo_message …
+# … upload encrypted_photo (POST /2/chat/media/upload/{session_id}/append, then
+# /finalize), then send photo_message (POST /2/chat/conversations/{id}/messages) …
 ```
 
 ### Go
@@ -1504,7 +1532,8 @@ func main() {
     _ = decrypted
 
     // ── Send a file: build the message first, then encrypt the file from it ──
-    // newMediaHashKey comes from starting the upload with EncryptedFileSize.
+    // newMediaHashKey is the media_hash_key that POST /2/chat/media/upload/initialize
+    // returns for {conversation_id, total_bytes: size}.
     size, _ := chatxdk.EncryptedFileSize(uint64(len(photo)))
     mediaType := int32(1)
     photoMessage, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
@@ -1528,7 +1557,9 @@ func main() {
         EventB64:     photoMessage.EventB64,
         MediaHashKey: newMediaHashKey,
     })
-    _ = encryptedPhoto // … finish the upload with it, then send photoMessage …
+    // … upload encryptedPhoto (POST /2/chat/media/upload/{session_id}/append, then
+    // /finalize), then send photoMessage (POST /2/chat/conversations/{id}/messages) …
+    _ = encryptedPhoto
 }
 ```
 
@@ -1584,8 +1615,9 @@ let decrypted = chat.decrypt_file(DecryptFileParams::new(
 ))?;
 
 // ── Send a file: build the message first, then encrypt the file from it ──
-// `new_media_hash_key` comes from starting the upload with
-// `utils::encrypted_file_size(photo.len() as u64)`.
+// `new_media_hash_key` is the `media_hash_key` that
+// `POST /2/chat/media/upload/initialize` returns for
+// `{conversation_id, total_bytes: size}`.
 let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64).unwrap();
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
 params.attachments = Some(vec![AttachmentDescriptor::Media {
@@ -1603,7 +1635,8 @@ let encrypted_photo = chat.encrypt_file(&EncryptFileParams::new(
     &photo_message.event_b64,
     new_media_hash_key,
 ))?;
-// … finish the upload with encrypted_photo, then send photo_message …
+// … upload encrypted_photo (POST /2/chat/media/upload/{session_id}/append, then
+// /finalize), then send photo_message (POST /2/chat/conversations/{id}/messages) …
 ```
 
 ### .NET (C#)
@@ -1649,7 +1682,8 @@ var mediaPlain = chat.DecryptFile(
     new DecryptFileParams(encryptedMediaBytes, webhookB64, keys, mediaHashKey));
 
 // Send a file: build the message first, then encrypt the file from it.
-// newMediaHashKey comes from starting the upload with EncryptedFileSize.
+// newMediaHashKey is the media_hash_key that POST /2/chat/media/upload/initialize
+// returns for { conversation_id, total_bytes = size }.
 var size = ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length);
 var photoMessage = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo")
 {
@@ -1660,7 +1694,8 @@ var photoMessage = chat.EncryptMessage(new EncryptMessageParams(conversationId, 
 });
 var encryptedPhoto = chat.EncryptFile(
     new EncryptFileParams(photo, photoMessage.EventB64, newMediaHashKey));
-// … finish the upload with encryptedPhoto, then send photoMessage …
+// … upload encryptedPhoto (POST /2/chat/media/upload/{session_id}/append, then
+// /finalize), then send photoMessage (POST /2/chat/conversations/{id}/messages) …
 ```
 
 ```bash
@@ -1720,7 +1755,8 @@ try (Chat chat = new Chat()) {
             new DecryptFileParams(encryptedMediaBytes, eventB64, keys, mediaHashKey));
 
     // Send a file: build the message first, then encrypt the file from it.
-    // newMediaHashKey comes from starting the upload with encryptedFileSize.
+    // newMediaHashKey is the media_hash_key that POST /2/chat/media/upload/initialize
+    // returns for {conversation_id, total_bytes: size}.
     long size = ChatXdkUtilities.encryptedFileSize(photo.length);
     EncryptMessageParams photoParams = new EncryptMessageParams(conversationId, "a photo");
     photoParams.attachments = List.of(
@@ -1728,7 +1764,8 @@ try (Chat chat = new Chat()) {
     SendPayload photoMessage = chat.encryptMessage(photoParams);
     byte[] encryptedPhoto = chat.encryptFile(
             new EncryptFileParams(photo, photoMessage.eventB64, newMediaHashKey));
-    // … finish the upload with encryptedPhoto, then send photoMessage …
+    // … upload encryptedPhoto (POST /2/chat/media/upload/{session_id}/append, then
+    // /finalize), then send photoMessage (POST /2/chat/conversations/{id}/messages) …
 }
 ```
 
@@ -1922,9 +1959,7 @@ receive, without the fields the server adds on delivery. Pass it to
 `encrypt_file` / `file_encryptor` to encrypt the message's files. It is not a
 field of the send request.
 
-`xdk_version` is the version of the SDK that built the payload. Do not send
-it yet: the send request takes it as an optional `xdk_version` field only
-once the X API documents that field.
+`xdk_version` is the version of the SDK that built the payload.
 
 ```rust
 // Rust
@@ -1937,7 +1972,7 @@ pub struct SendPayload {
     pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
-    pub xdk_version: String,             // SDK version; do not send it yet (see below)
+    pub xdk_version: String,             // SDK version
 }
 
 // Python (SendPayload class attributes)

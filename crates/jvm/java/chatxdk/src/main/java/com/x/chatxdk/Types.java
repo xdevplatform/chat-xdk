@@ -136,9 +136,7 @@ public final class Types {
         public boolean shouldNotify;
 
         /**
-         * Version of the Chat XDK that built this payload. Do not send it yet: the send request
-         * takes it as an optional {@code xdk_version} field only once the X API documents that
-         * field.
+         * Version of the Chat XDK that built this payload.
          */
         @JsonProperty("xdk_version")
         public String xdkVersion = "";
@@ -194,8 +192,7 @@ public final class Types {
 
     /**
      * A signed message delete or read receipt: the {@code action_signatures} a
-     * request carries for it, one entry. The X API's mark-read route does not
-     * take {@code action_signatures} yet, so that request shape is not final.
+     * request carries for it, one entry.
      */
     public static final class PreparedAction {
         /** The signed action, as the request's {@code action_signatures} entries. */

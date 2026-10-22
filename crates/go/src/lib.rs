@@ -1398,8 +1398,7 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
 /// `signing_key_version` (unset resolves from the session identity).
 ///
 /// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
-/// returns it. The X API's mark-read route does not take `action_signatures`
-/// yet, so that request shape is not final.
+/// returns it: the mark-read request's `action_signatures`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
     handle: *const ChatHandle,

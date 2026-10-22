@@ -322,8 +322,7 @@ namespace ChatXdk
         ///  `signing_key_version` (absent resolves from the session identity).
         ///
         ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
-        ///  returns it. The X API's mark-read route does not take `action_signatures`
-        ///  yet, so that request shape is not final.
+        ///  returns it: the mark-read request's `action_signatures`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_mark_conversation_read", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_mark_conversation_read(ChatHandle* handle, byte* params_json);

@@ -139,9 +139,7 @@ namespace ChatXdk
         public bool ShouldNotify { get; init; }
 
         /// <summary>
-        /// Version of the Chat XDK that built this payload. Do not send it yet: the send
-        /// request takes it as an optional <c>xdk_version</c> field only once the X API
-        /// documents that field.
+        /// Version of the Chat XDK that built this payload.
         /// </summary>
         [JsonPropertyName("xdk_version")]
         public string XdkVersion { get; init; } = "";
@@ -199,8 +197,7 @@ namespace ChatXdk
 
     /// <summary>
     /// A signed message delete or read receipt: the <c>action_signatures</c> a request
-    /// carries for it, one entry. The X API's mark-read route does not take
-    /// <c>action_signatures</c> yet, so that request shape is not final.
+    /// carries for it, one entry.
     /// </summary>
     public sealed class PreparedAction
     {

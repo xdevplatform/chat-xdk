@@ -390,9 +390,8 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*PreparedAction
 }
 
 // PrepareMarkConversationRead builds the signed action for marking a
-// conversation read: the request's action_signatures, one entry. The X API's
-// mark-read route does not take action_signatures yet, so that request shape
-// is not final.
+// conversation read: the action_signatures of the mark-read request
+// (POST /2/chat/conversations/{id}/read), one entry.
 //
 // A read receipt is a signed plaintext event, not an encrypted message, so
 // no conversation key is involved. The SDK generates the action's message

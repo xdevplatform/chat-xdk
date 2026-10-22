@@ -2,8 +2,8 @@
 
 This page lists every change that Rust code written for `chat-xdk-core`
 0.5.x (0.5.0, 0.5.1 or 0.5.2) runs into in 0.6.0, each with the lines to
-change. The other bindings have their own pages, listed in the
-[index](README.md). [API.md](../API.md) documents every call, and the
+change. The [index](README.md) explains why each change was made and lists
+the other bindings' pages. [API.md](../API.md) documents every call, and the
 [CHANGELOG](../../CHANGELOG.md) lists every change.
 
 ## Checklist
@@ -18,14 +18,13 @@ change. The other bindings have their own pages, listed in the
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass params by reference to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-by-reference)
 - [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
-- [ ] [Don't send `xdk_version` yet](#xdk_version-dont-send-it-yet)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
-- [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
+- [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
 
@@ -36,9 +35,12 @@ other names stand for your own values: ids, versions, keys and events as the
 X API returns them, `keys` for the conversation key map `decrypt_events`
 returns, `payload` for a `SendPayload`, `prepared` for a
 `PreparedConversationChange`, `key_change` for a
-`ConversationKeyChangeParams` and `err` for an `SdkError`. `start_upload`,
-`upload`, `finish_upload`, `photo_attachment` and `register_public_key`
-stand for your own upload and request code. Every type the snippets use
+`ConversationKeyChangeParams` and `err` for an `SdkError`.
+`api.post(path, &body)` stands for your HTTP client: it POSTs `body`, a
+`serde_json::Value`, to `https://api.x.com` + `path` with your user access
+token and returns the parsed JSON response as a `serde_json::Value`.
+`photo_attachment(media_hash_key)` stands for your code that builds a
+photo's `AttachmentDescriptor`. Every type and module the snippets use
 imports from `chat_xdk_core`, except `SdkError`, which imports from
 `chat_xdk_core::error`.
 
@@ -49,7 +51,7 @@ format 0.5.x sends. v1 encrypts each message under its own key, derived from
 the conversation key, the sender and the message id, and signs it at
 signature version 10. The Rust crate doesn't fetch the X API's feature
 switches, so it always sends v0. The Python, JavaScript, Go, JVM and .NET
-bindings send v1 once the X API turns on its `v1_send` feature switch.
+bindings send v1 while the X API's `v1_send` feature switch is on.
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations, Rust ones included, to 0.6.0 before
@@ -62,12 +64,11 @@ for v1.
 
 `generate_keypairs` returns a `PublicKeyRegistrationPayload` that holds only
 `public_key`. Send it as the only field of the
-`POST /2/users/:id/public_keys` body, `public_key`. 0.6.0 doesn't take or
-pick a signing-key version for new keys: after you register, call
-`set_identity` with the `public_key_version` the X API returns. A signed
-call made without a version fails with `SdkError::InvalidState`:
-`signing_key_version is not set: pass it explicitly or call set_identity()
-first`.
+`POST /2/users/{id}/public_keys` body. 0.6.0 doesn't take or pick a
+signing-key version for new keys: call `set_identity` with the
+`public_key_version` the request returns. A signed call made without a
+version fails with `SdkError::InvalidState`: `signing_key_version is not
+set: pass it explicitly or call set_identity() first`.
 
 ```rust
 // 0.5.x
@@ -77,13 +78,15 @@ let body = serde_json::json!({
     "version": registration.version,
     "generate_version": registration.generate_version,
 });
-let public_key_version = register_public_key(user_id, &body)?;
+let response = api.post(&format!("/2/users/{user_id}/public_keys"), &body)?;
+let public_key_version = response["data"]["public_key_version"].as_str().ok_or("no version")?;
 chat.set_identity(user_id, public_key_version);
 
 // 0.6.0
 let registration = chat.generate_keypairs()?;
 let body = serde_json::json!({ "public_key": registration.public_key });
-let public_key_version = register_public_key(user_id, &body)?;
+let response = api.post(&format!("/2/users/{user_id}/public_keys"), &body)?;
+let public_key_version = response["data"]["public_key_version"].as_str().ok_or("no version")?;
 chat.set_identity(&SetIdentityParams::new(user_id, public_key_version))?;
 ```
 
@@ -215,8 +218,9 @@ let prepared = chat.prepare_conversation_key_change(&key_change)?;
 
 ## `SendPayload` fields take the send request's names
 
-The two encoded fields carry the names of the send request's fields, so the
-request takes them as they are:
+The two encoded fields carry the names of the fields of the send request,
+`POST /2/chat/conversations/{id}/messages`, so the request takes them as
+they are:
 
 ```rust
 // 0.5.x
@@ -243,41 +247,58 @@ but can't build one with a struct literal. A payload that 0.5.x serialized
 still deserializes into the new fields, with `event_b64` and `xdk_version`
 empty.
 
-## `xdk_version`: don't send it yet
-
-`SendPayload::xdk_version` is the version of the SDK that built the payload.
-Don't add it to the send request yet: the request takes it as an optional
-field only once the X API documents that field.
-
 ## Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
 message first:
 
-1. Start each file's upload, declaring `encrypted_file_size` of the file's
-   size, and keep its media hash key.
+1. Start each file's upload with `POST /2/chat/media/upload/initialize`,
+   declaring `utils::encrypted_file_size` of the file's size as
+   `total_bytes`, and keep the `session_id` and `media_hash_key` it returns.
 2. Encrypt the message with attachments that name those media hash keys.
 3. Encrypt each file with `encrypt_file`, passing the payload's `event_b64`
    and the file's media hash key.
-4. Finish the uploads, then send the message.
+4. Upload each encrypted file with `POST
+   /2/chat/media/upload/{session_id}/append` and finish it with `POST
+   /2/chat/media/upload/{session_id}/finalize`, then send the message.
 
 ```rust
 // 0.5.x
 let encrypted = chat.encrypt_stream(&photo, &keys[conversation_key_version])?;
-let media_hash_key = upload(&encrypted);
+let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
+    "conversation_id": conversation_id, "total_bytes": encrypted.len(),
+}))?;
+let media_hash_key = upload["data"]["media_hash_key"].as_str().ok_or("no media_hash_key")?;
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(vec![photo_attachment(&media_hash_key)]);
+params.attachments = Some(vec![photo_attachment(media_hash_key)]);
 let payload = chat.encrypt_message(params)?;
 
 // 0.6.0
-use chat_xdk_core::utils::encrypted_file_size;
-let media_hash_key = start_upload(encrypted_file_size(photo.len() as u64).ok_or("file too large")?);
+let total_bytes = utils::encrypted_file_size(photo.len() as u64).ok_or("file too large")?;
+let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
+    "conversation_id": conversation_id, "total_bytes": total_bytes,
+}))?;
+let session_id = upload["data"]["session_id"].as_str().ok_or("no session_id")?;
+let media_hash_key = upload["data"]["media_hash_key"].as_str().ok_or("no media_hash_key")?;
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(vec![photo_attachment(&media_hash_key)]);
+params.attachments = Some(vec![photo_attachment(media_hash_key)]);
 let payload = chat.encrypt_message(&params)?;
-let encrypted = chat.encrypt_file(&EncryptFileParams::new(photo, &payload.event_b64, &media_hash_key))?;
-finish_upload(&media_hash_key, &encrypted);
+let encrypted = chat.encrypt_file(&EncryptFileParams::new(photo, &payload.event_b64, media_hash_key))?;
+api.post(&format!("/2/chat/media/upload/{session_id}/append"), &serde_json::json!({
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key,
+    "segment_index": 0, "media": utils::bytes_to_base64(&encrypted),
+}))?;
+api.post(&format!("/2/chat/media/upload/{session_id}/finalize"), &serde_json::json!({
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key, "num_parts": "1",
+}))?;
 ```
+
+The `append` and `finalize` requests don't change, but they come after
+`encrypt_file`, which produces the bytes they upload. The upload requests
+take `conversation_id` in its colon form, as the SDK does. The snippet
+uploads the file in one segment; a larger file goes up in several `append`
+requests, `segment_index` 0, 1 and so on (the examples send 3 MB segments),
+with their count as `num_parts`.
 
 Like `encrypt_message`, `EncryptFileParams` takes the conversation key and
 its version with `with_conversation_key` (or resolves both from the key
@@ -416,16 +437,17 @@ let invalid_input = matches!(err, SdkError::InvalidState(_));
 let invalid_input = matches!(err, SdkError::InvalidInput(_));
 ```
 
-## Signed read receipts (new, pending)
+## Signed read receipts
 
 `prepare_mark_conversation_read` signs a read receipt for the newest event
 you read. It takes a `MarkConversationReadParams` (the conversation id, that
 event's sequence id, and an optional `seen_at_msec` that defaults to now)
-and returns a `PreparedAction`. A recipient's `decrypt_event` returns a
-signed receipt as a verified `ReadReceipt` event.
-
-**Pending:** the X API's mark-read route doesn't take `action_signatures`
-yet, so the shape of that request may change when it does.
+and returns a `PreparedAction`, one entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+its `action_signatures` as those of the mark-read request,
+`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
+in its hyphen form. A recipient's `decrypt_event` returns a signed receipt
+as a verified `ReadReceipt` event.
 
 ```rust
 // 0.6.0
@@ -433,5 +455,6 @@ let receipt = chat.prepare_mark_conversation_read(&MarkConversationReadParams::n
     conversation_id,
     seen_until_sequence_id,
 ))?;
-let action_signatures = serde_json::to_value(&receipt.action_signatures)?;
+let path = format!("/2/chat/conversations/{}/read", conversation_id.replace(':', "-"));
+api.post(&path, &serde_json::json!({ "action_signatures": receipt.action_signatures }))?;
 ```

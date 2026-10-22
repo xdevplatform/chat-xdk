@@ -552,7 +552,7 @@ function stepFeatureDriver() {
   }
 }
 
-/** In Node, keep a pending timer from holding the process open. */
+/** In Node, keep a scheduled timer from holding the process open. */
 function unrefTimer(timer) {
   timer?.unref?.();
   return timer;
@@ -586,7 +586,7 @@ function nodeHttpModule(url) {
 
 /**
  * GET `url` with Node's http module. Its socket and timer are unref'd, so a
- * pending request never keeps the process alive.
+ * request in flight never keeps the process alive.
  */
 function getWithNode(http, url, timeoutMs, maxBytes) {
   return new Promise((resolve) => {

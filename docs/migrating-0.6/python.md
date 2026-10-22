@@ -2,8 +2,8 @@
 
 This page lists every change that Python code written for chat-xdk 0.5.x
 (0.5.0, 0.5.1 or 0.5.2) runs into in 0.6.0, each with the lines to change.
-The other bindings have their own pages, listed in the [index](README.md).
-[API.md](../API.md) documents every call, and the
+The [index](README.md) explains why each change was made and lists the
+other bindings' pages. [API.md](../API.md) documents every call, and the
 [CHANGELOG](../../CHANGELOG.md) lists every change.
 
 ## Checklist
@@ -19,14 +19,13 @@ The other bindings have their own pages, listed in the [index](README.md).
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass a params class to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-classes)
 - [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
-- [ ] [Don't send `xdk_version` yet](#xdk_version-dont-send-it-yet)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
+- [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
 
@@ -35,20 +34,21 @@ and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
 loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
 `decrypt_events` returns, `payload` for a `SendPayload` and `prepared` for
-the dict a prepare method returns. `start_upload`, `upload`,
-`finish_upload`, `photo_attachment`, `public_key_json` and
-`register_public_key` stand for your own upload and request code. Every
-class and function the snippets use imports from `chat_xdk`.
+the dict a prepare method returns. `api.post(path, body)` stands for your
+HTTP client: it POSTs `body` as JSON to `https://api.x.com` + `path` with
+your user access token and returns the parsed JSON response.
+`photo_attachment(media_hash_key)` stands for your code that builds a
+photo's attachment descriptor. Every class and function the snippets use
+imports from `chat_xdk`.
 
 ## Upgrade readers before v1 sends start
 
 0.6.0 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
-it at signature version 10. A chat sends v1 only once the X API turns on its
-`v1_send` feature switch (see
-[The feature-switch request](#the-feature-switch-request)); until then every
-send is v0.
+it at signature version 10. A chat sends v1 while the X API's `v1_send`
+feature switch is on for it, and v0 otherwise (see
+[The feature-switch request](#the-feature-switch-request)).
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations to 0.6.0 before your senders can
@@ -74,8 +74,6 @@ Chats read the X API's feature switches with one anonymous request,
 - for a chat that is already sending, a re-check can only turn a switch off:
   a switch turning on reaches only chats that start sending after it.
 
-Every send is v0 until the X API turns `v1_send` on.
-
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. The request runs on daemon threads,
 and one still under way at exit is cut short, so it never keeps the process
@@ -91,28 +89,31 @@ chat.close()
 
 ## Register keys with the public key only
 
-`generate_keypairs()` returns a payload that holds only `public_key`. Send
-it as the only field of the `POST /2/users/:id/public_keys` body,
-`public_key`. 0.6.0 doesn't pick a signing-key version for new keys: after
-you register, call `set_identity` with the `public_key_version` the X API
-returns (see the next section). A signed call made without a version raises
-`ValueError: Invalid state: signing_key_version is not set: pass it
+`generate_keypairs()` returns a payload that holds only `public_key`. Build
+the request's `public_key` object from it as you do today (its
+`public_key`, `signing_public_key`, `identity_public_key_signature`,
+`signing_public_key_signature` and `registration_method`; `public_key` in
+the snippet), and send it as the only field of the
+`POST /2/users/{id}/public_keys` body. 0.6.0 doesn't pick a signing-key
+version for new keys: call `set_identity` with the `public_key_version` the
+request returns (see the next section). A signed call made without a version
+raises `ValueError: Invalid state: signing_key_version is not set: pass it
 explicitly or call set_identity() first`.
 
 ```python
 # 0.5.x
 registration = chat.generate_keypairs()
-public_key_version = register_public_key(user_id, {
-    "public_key": public_key_json(registration.public_key),
+response = api.post(f"/2/users/{user_id}/public_keys", {
+    "public_key": public_key,
     "version": registration.version,
     "generate_version": registration.generate_version,
 })
-chat.set_identity(user_id, public_key_version)
+chat.set_identity(user_id, response["data"]["public_key_version"])
 
 # 0.6.0
 registration = chat.generate_keypairs()
-public_key_version = register_public_key(user_id, {"public_key": public_key_json(registration.public_key)})
-chat.set_identity(SetIdentityParams(user_id, public_key_version))
+response = api.post(f"/2/users/{user_id}/public_keys", {"public_key": public_key})
+chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_version"]))
 ```
 
 ## `set_identity` takes `SetIdentityParams`
@@ -243,9 +244,10 @@ prepared = chat.prepare_conversation_key_change(
 
 ## `SendPayload` fields take the send request's names
 
-The two encoded fields carry the names of the send request's fields, so the
-request takes them as they are. Read them under those names wherever your
-code reads a payload, including code that stores payloads:
+The two encoded fields carry the names of the fields of the send request,
+`POST /2/chat/conversations/{id}/messages`, so the request takes them as
+they are. Read them under those names wherever your code reads a payload,
+including code that stores payloads:
 
 ```python
 # 0.5.x
@@ -267,38 +269,54 @@ A payload also carries `event_b64`, the message as recipients receive it.
 It isn't part of the send request: keep it to encrypt the message's files
 (see [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
-## `xdk_version`: don't send it yet
-
-`payload.xdk_version` is the version of the SDK that built the payload.
-Don't add it to the send request yet: the request takes it as an optional
-field only once the X API documents that field.
-
 ## Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
 message first:
 
-1. Start each file's upload, declaring `encrypted_file_size` of the file's
-   size, and keep its media hash key.
+1. Start each file's upload with `POST /2/chat/media/upload/initialize`,
+   declaring `encrypted_file_size` of the file's size as `total_bytes`, and
+   keep the `session_id` and `media_hash_key` it returns.
 2. Encrypt the message with attachments that name those media hash keys.
 3. Encrypt each file with `encrypt_file`, passing the payload's `event_b64`
    and the file's media hash key.
-4. Finish the uploads, then send the message.
+4. Upload each encrypted file with `POST
+   /2/chat/media/upload/{session_id}/append` and finish it with `POST
+   /2/chat/media/upload/{session_id}/finalize`, then send the message.
 
 ```python
 # 0.5.x
 encrypted = chat.encrypt_stream(photo, conversation_key)
-media_hash_key = upload(encrypted)
+upload = api.post("/2/chat/media/upload/initialize", {
+    "conversation_id": conversation_id, "total_bytes": len(encrypted),
+})["data"]
+media_hash_key = upload["media_hash_key"]
 payload = chat.encrypt_message(conversation_id, "a photo", attachments=[photo_attachment(media_hash_key)])
 
 # 0.6.0
-media_hash_key = start_upload(encrypted_file_size(len(photo)))
+upload = api.post("/2/chat/media/upload/initialize", {
+    "conversation_id": conversation_id, "total_bytes": encrypted_file_size(len(photo)),
+})["data"]
+media_hash_key = upload["media_hash_key"]
 payload = chat.encrypt_message(
     EncryptMessageParams(conversation_id, "a photo", attachments=[photo_attachment(media_hash_key)])
 )
 encrypted = chat.encrypt_file(EncryptFileParams(photo, payload.event_b64, media_hash_key))
-finish_upload(media_hash_key, encrypted)
+api.post(f"/2/chat/media/upload/{upload['session_id']}/append", {
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key,
+    "segment_index": 0, "media": bytes_to_base64(encrypted),
+})
+api.post(f"/2/chat/media/upload/{upload['session_id']}/finalize", {
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key, "num_parts": "1",
+})
 ```
+
+The `append` and `finalize` requests don't change, but they come after
+`encrypt_file`, which produces the bytes they upload. The upload requests
+take `conversation_id` in its colon form, as the SDK does. The snippet
+uploads the file in one segment; a larger file goes up in several `append`
+requests, `segment_index` 0, 1 and so on (the examples send 3 MB segments),
+with their count as `num_parts`.
 
 Like `encrypt_message`, `EncryptFileParams` takes the conversation key and
 its version as the keyword arguments `conversation_key` and
@@ -410,21 +428,24 @@ the value, such as `Invalid sender_id 'user-1': pass a numeric user id
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Signed read receipts (new, pending)
+## Signed read receipts
 
 `prepare_mark_conversation_read` signs a read receipt for the newest event
 you read. It takes a `MarkConversationReadParams` (the conversation id, that
 event's sequence id, and an optional `seen_at_msec` that defaults to now)
-and returns a dict with `action_signatures`. A recipient's `decrypt_event`
-returns a signed receipt as a verified `ReadReceipt` event.
-
-**Pending:** the X API's mark-read route doesn't take `action_signatures`
-yet, so the shape of that request may change when it does.
+and returns a dict with `action_signatures`, one entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+them as the `action_signatures` of the mark-read request,
+`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
+in its hyphen form. A recipient's `decrypt_event` returns a signed receipt
+as a verified `ReadReceipt` event.
 
 ```python
 # 0.6.0
 receipt = chat.prepare_mark_conversation_read(
     MarkConversationReadParams(conversation_id, seen_until_sequence_id)
 )
-action_signatures = receipt["action_signatures"]
+api.post(f"/2/chat/conversations/{conversation_id.replace(':', '-')}/read", {
+    "action_signatures": receipt["action_signatures"],
+})
 ```

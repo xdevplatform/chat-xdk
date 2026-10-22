@@ -293,7 +293,7 @@ async function aProcessThatNeverSendsExitsAtOnce(server) {
  * done. Runtimes without `process.getBuiltinModule` use fetch(), which holds
  * the process until the request ends or times out.
  */
-async function aPendingRequestNeverKeepsNodeRunning(v, server) {
+async function aRequestInFlightNeverKeepsNodeRunning(v, server) {
   if (typeof process.getBuiltinModule !== "function") return;
   server.delayMs = 60_000;
   const { code, elapsed } = await runNode(`
@@ -336,7 +336,7 @@ async function main() {
     (server) => freeStopsTheRequests(v, server),
     (server) => theRequestsEndWithACollectedChat(v, server),
     (server) => aProcessThatNeverSendsExitsAtOnce(server),
-    (server) => aPendingRequestNeverKeepsNodeRunning(v, server),
+    (server) => aRequestInFlightNeverKeepsNodeRunning(v, server),
   ];
   for (const test of tests) {
     const server = await featureServer();

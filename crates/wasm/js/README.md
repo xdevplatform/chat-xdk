@@ -133,7 +133,7 @@ API's feature switches that pick the format the SDK sends in. A chat asks on
 its first send, never earlier, and chats in one process share the request,
 which is re-checked every 5 minutes while any chat uses it. It carries no
 credentials and never delays or fails a call; if it fails or is blocked,
-sends stay in v0, the format 0.5.x sends. Call `chat.free()` when you're done with a chat, or let it be garbage-collected: the requests stop once no chat in the process uses them. A Node script that never sends makes no request and exits at once. From Node 20.16 a pending request never keeps the process alive; before it, one can delay exit until it ends, at most 2 seconds.
+sends stay in v0, the format 0.5.x sends. Call `chat.free()` when you're done with a chat, or let it be garbage-collected: the requests stop once no chat in the process uses them. A Node script that never sends makes no request and exits at once. From Node 20.16 a request in flight never keeps the process alive; before it, one can delay exit until it ends, at most 2 seconds.
 In a browser, the request is a simple cross-origin GET made with `fetch`.
 
 ## Security limitations
