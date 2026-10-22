@@ -23,6 +23,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -226,10 +227,10 @@ var body = new Dictionary<string, string>
 };
 ```
 
-A `SendPayload` that 0.5.x code serialized with `System.Text.Json` still
-deserializes into the new fields, without `EventB64` or `XdkVersion`. A
-payload also carries `EventB64`, the message as recipients receive it. It
-isn't part of the send request: keep it to encrypt the message's files (see
+Read them under those names wherever your code reads a payload, including
+code that stores payloads. A payload also carries `EventB64`, the message
+as recipients receive it. It isn't part of the send request: keep it to
+encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
 ## Encrypt a file from its message
@@ -370,9 +371,29 @@ var actionSignatures = prepared.ActionSignatures.Select(sig => new Dictionary<st
 var actionSignatures = prepared.ActionSignatures;
 ```
 
-A prepared change's `ParticipantKeys` keep their shape (`UserId`,
-`EncryptedKey`, `PublicKeyVersion`): map them to the key-change request's
-`conversation_participant_keys` as you do today.
+## Participant keys take the key requests' names
+
+A prepared change's participant keys carry the names of the requests that
+take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `ConversationParticipantKeys`, whose entries
+(`UserId`, `EncryptedConversationKey`, `PublicKeyVersion`) serialize as
+`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
+through as returned:
+
+```csharp
+// 0.5.x
+var conversationParticipantKeys = prepared.ParticipantKeys
+    .Select(key => new Dictionary<string, string>
+    {
+        ["user_id"] = key.UserId,
+        ["encrypted_conversation_key"] = key.EncryptedKey,
+        ["public_key_version"] = key.PublicKeyVersion,
+    })
+    .ToList();
+
+// 0.6.0
+var conversationParticipantKeys = prepared.ConversationParticipantKeys;
+```
 
 ## Deletes return a `PreparedAction`
 
