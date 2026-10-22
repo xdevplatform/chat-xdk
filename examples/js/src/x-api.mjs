@@ -138,7 +138,7 @@ export class XChatClient {
    * (and returns) the canonical conversation ID.
    */
   async addConversationKeys(conversationId, body) {
-    return this.client.chat.initializeConversationKeys(
+    return this.client.chat.addConversationKeys(
       conversationId.replaceAll(":", "-"),
       body,
     );
