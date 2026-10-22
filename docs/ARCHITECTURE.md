@@ -143,6 +143,7 @@ crates/core/src/
 │   ├── keys.rs                   # Key type definitions (XChatKeyPair, etc.)
 │   ├── key_factory.rs            # Key generation, ECDH, signing, verification
 │   ├── hash.rs                   # SHA-256, HKDF-SHA256, HMAC-SHA256
+│   ├── message_keys.rs           # Per-message key derivation
 │   └── encryption.rs             # XSalsa20-Poly1305 message & streaming encryption
 │
 ├── keys/                         # Layer 2: Key Lifecycle Management
@@ -258,7 +259,17 @@ Uses `p256` and `aes-gcm` crates from RustCrypto. All functions are pure — no 
 | `sha256(data)` | SHA-256 hash |
 | `hmac_sha256(message, key)` | HMAC-SHA256 |
 | `hkdf(secret, salt, len)` | HKDF-SHA256 key derivation |
+| `hkdf_with_info(secret, salt, info, len)` | HKDF-SHA256 with an `info` input (message keys) |
 | `kdf2_sha256(shared_secret, shared_info, len)` | X9.63 KDF (used in ECIES) |
+
+#### `crypto/message_keys.rs` — Message Keys
+
+| Function | Description |
+|----------|-------------|
+| `uses_message_key(contents_encryption_version)` | Whether a message is encrypted under a message key (version ≥ 1) |
+| `derive_message_key(ckey, sender_id, message_id)` | Message key derived from the conversation key |
+
+See [CRYPTO.md — Message Keys](CRYPTO.md#message-keys).
 
 Uses `sha2` and `hmac` crates.
 
@@ -531,7 +542,8 @@ Developer                          SDK
     │                               │  1. Base64-decode event
     │                               │  2. Parse Thrift MessageEvent (TBinaryProtocol)
     │                               │  3. Route on event type
-    │                               │  4. (MessageCreateEvent only) XSalsa20-Poly1305 decrypt
+    │                               │  4. (MessageCreateEvent only) XSalsa20-Poly1305 decrypt,
+    │                               │     under its message key when it uses one
     │                               │  5. Parse Thrift MessageEntryHolder
     │                               │  6. Verify signature (reject_unverified by default)
     │                               │  7. Validate any reply preview that embeds its raw

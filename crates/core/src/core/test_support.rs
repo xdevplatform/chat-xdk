@@ -9,9 +9,21 @@ use crate::thrift::event::{
     MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail as Detail,
     MessageEventSignature,
 };
+use crate::thrift::product::{
+    MediaAttachment as ThriftMedia, MessageAttachment as ThriftAttachment, MessageContents,
+    MessageEntryContents as Contents,
+};
 
 pub(super) const SIGNING_KEY_VERSION: &str = "1";
 pub(super) const CONVERSATION: &str = "2:1491585161162473473";
+
+/// Known-answer inputs and output of the message key derivation.
+pub(super) const KAT_CONVERSATION_KEY: &str =
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+pub(super) const KAT_KEY_SENDER: &str = "1876543210987654321";
+pub(super) const KAT_KEY_MESSAGE_ID: &str = "9d8c7b6a-5f4e-4d3c-8b2a-190807060504";
+pub(super) const KAT_MESSAGE_KEY: &str =
+    "4d443b9a862e9584ccd0aee2753162aa7c5c1dbcb5f967610155f65ae41d8084";
 
 /// A participant signing with its own `ChatCore`'s signing key.
 pub(super) struct Party {
@@ -52,6 +64,56 @@ impl Party {
 
 pub(super) fn key(byte: u8) -> XChatConversationKey {
     XChatConversationKey::from_bytes(vec![byte; 32]).unwrap()
+}
+
+pub(super) fn hex_key(hex_str: &str) -> XChatConversationKey {
+    XChatConversationKey::from_bytes(hex::decode(hex_str).unwrap()).unwrap()
+}
+
+pub(super) fn message_key(
+    conversation_key: &XChatConversationKey,
+    sender_id: &str,
+    message_id: &str,
+) -> XChatConversationKey {
+    message_keys::derive_message_key(conversation_key, sender_id, message_id).unwrap()
+}
+
+/// Serialized `MessageEntryHolder` for message `contents`.
+pub(super) fn holder(contents: MessageContents) -> Vec<u8> {
+    serialize_thrift(&MessageEntryHolder::new(Some(Box::new(Contents::Message(
+        Box::new(contents),
+    )))))
+    .unwrap()
+}
+
+pub(super) fn media(hash: &str, attachment_id: Option<&str>) -> Box<ThriftAttachment> {
+    Box::new(ThriftAttachment::Media(Box::new(ThriftMedia {
+        media_hash_key: Some(hash.to_string()),
+        filename: Some(format!("{}.jpg", hash)),
+        attachment_id: attachment_id.map(str::to_string),
+        ..Default::default()
+    })))
+}
+
+/// A v10 message-key message from the known-answer sender, under key
+/// version "7", carrying two media attachments without ids (`photo-a` and
+/// `photo-b`), encrypted under the known message key.
+pub(super) fn known_answer_media_message(author: &Party) -> ThriftEvent {
+    let contents = holder(MessageContents {
+        message_text: Some("two photos".to_string()),
+        attachments: Some(vec![media("photo-a", None), media("photo-b", None)]),
+        ..Default::default()
+    });
+    message_event(
+        author,
+        KAT_KEY_MESSAGE_ID,
+        "100",
+        "7",
+        Some(1),
+        10,
+        &hex_key(KAT_MESSAGE_KEY),
+        &contents,
+    )
 }
 
 pub(super) fn keys(
