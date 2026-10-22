@@ -238,7 +238,7 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     assert!(!core.is_enabled(crate::features::V1_SEND));
     let ckey = key(3);
     let payload = core
-        .encrypt_message(message_params("pending", &ckey))
+        .encrypt_message(message_params("before refetch", &ckey))
         .unwrap();
     assert_eq!(payload.signature_info.signature_version, "7");
 
