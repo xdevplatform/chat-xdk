@@ -5,8 +5,8 @@ runs into in 0.6.0, coming from 0.5.x (0.5.0, 0.5.1 or 0.5.2). The ABI is
 declared in
 [`go/chatxdk/include/chat_xdk.h`](../../go/chatxdk/include/chat_xdk.h), and
 the native libraries in the .NET and JVM packages export the same functions.
-The [index](README.md) explains why each change was made and lists the
-language bindings' pages.
+[Why 0.6.0 changes](why.md) explains why each change was made, and the
+[index](README.md) lists the language bindings' pages.
 
 Every entry point whose arguments changed takes a new name, so a stale
 header or library fails to link instead of misreading its arguments.

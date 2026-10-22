@@ -4,7 +4,8 @@
 
 To move code from 0.5.x, follow your binding's guide in
 [docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
-with before/after code.
+with before/after code, and [Why 0.6.0 changes](docs/migrating-0.6/why.md)
+explains why each change was made.
 
 ### Breaking changes
 

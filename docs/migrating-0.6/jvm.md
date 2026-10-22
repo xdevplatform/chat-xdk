@@ -2,9 +2,10 @@
 
 This page lists every change that Java and other JVM code written for
 `com.x:chatxdk` 0.5.x (0.5.0, 0.5.1 or 0.5.2) runs into in 0.6.0, each with
-the lines to change. The [index](README.md) explains why each change was
-made and lists the other bindings' pages. [API.md](../API.md) documents
-every call, and the [CHANGELOG](../../CHANGELOG.md) lists every change.
+the lines to change. [Why 0.6.0 changes](why.md) explains why each change
+was made, and the [index](README.md) lists the other bindings' pages.
+[API.md](../API.md) documents every call, and the
+[CHANGELOG](../../CHANGELOG.md) lists every change.
 
 ## Checklist
 
