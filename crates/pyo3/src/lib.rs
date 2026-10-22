@@ -35,7 +35,7 @@ use pyo3::Py;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
+use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, QuickReply, SigningKeyEntry};
@@ -1518,17 +1518,8 @@ pub struct Chat {
     runtime: tokio::runtime::Runtime,
 }
 
-#[pymethods]
 impl Chat {
-    /// Create a new Chat instance.
-    ///
-    /// Args:
-    ///     config_json: Juicebox configuration JSON.
-    ///         Pass ``None`` or an empty JSON object (e.g. ``"{}"``) for
-    ///         manual key management without Juicebox.
-    #[new]
-    #[pyo3(signature = (config_json=None))]
-    fn new(config_json: Option<&str>) -> PyResult<Self> {
+    fn create(config_json: Option<&str>) -> PyResult<Self> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
@@ -1547,6 +1538,40 @@ impl Chat {
         let inner = chat_xdk_core::Chat::with_juicebox(config, Arc::new(JuiceboxClient::new()));
 
         Ok(Self { inner, runtime })
+    }
+}
+
+#[pymethods]
+impl Chat {
+    /// Create a new Chat instance.
+    ///
+    /// Args:
+    ///     config_json: Juicebox configuration JSON.
+    ///         Pass ``None`` or an empty JSON object (e.g. ``"{}"``) for
+    ///         manual key management without Juicebox.
+    #[new]
+    #[pyo3(signature = (config_json=None))]
+    fn new(py: Python<'_>, config_json: Option<&str>) -> PyResult<Self> {
+        let chat = Self::create(config_json)?;
+        start_feature_read(py, &chat.inner);
+        Ok(chat)
+    }
+
+    /// For this repository's tests: a chat that reads its feature switches
+    /// from ``endpoint``, within ``timeout`` seconds.
+    #[staticmethod]
+    #[pyo3(name = "_reading_features_from", signature = (endpoint, timeout, config_json=None))]
+    fn reading_features_from(
+        py: Python<'_>,
+        endpoint: &str,
+        timeout: f64,
+        config_json: Option<&str>,
+    ) -> PyResult<Self> {
+        let chat = Self::create(config_json)?;
+        chat.inner
+            .configure_features(endpoint, (timeout * 1000.0) as u64);
+        start_feature_read(py, &chat.inner);
+        Ok(chat)
     }
 
     /// Update the Juicebox configuration (e.g. to refresh auth tokens).
@@ -1596,41 +1621,6 @@ impl Chat {
     /// from it. Disabling clears the cache.
     fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
-    }
-
-    // Feature switches. Internal: the Python ``Chat`` fetches
-    // ``GET /2/chat/features`` itself and drives these; they are not API.
-
-    #[pyo3(name = "_feature_bucket")]
-    fn feature_bucket(&self) -> Option<u16> {
-        self.inner.feature_bucket()
-    }
-
-    #[pyo3(name = "_apply_feature_config", signature = (json, bucket=None, downgrade_only=false))]
-    fn apply_feature_config(
-        &self,
-        json: &str,
-        bucket: Option<u16>,
-        downgrade_only: bool,
-    ) -> PyResult<()> {
-        let mode = if downgrade_only {
-            FeatureApply::DowngradeOnly
-        } else {
-            FeatureApply::Full
-        };
-        self.inner
-            .apply_feature_config(json, mode, bucket)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
-    }
-
-    #[pyo3(name = "_is_enabled")]
-    fn is_enabled(&self, name: &str) -> bool {
-        self.inner.is_enabled(name)
-    }
-
-    #[pyo3(name = "_feature_refetch_due")]
-    fn feature_refetch_due(&self) -> bool {
-        self.inner.feature_refetch_due()
     }
 
     /// Store signing keys to use when a decrypt call's ``signing_keys`` is
@@ -2512,6 +2502,61 @@ impl FileDecryptor {
     }
 }
 
+// Feature switches (GET /2/chat/features). A chat reads them once, when it is
+// created: the core decides what to fetch and what an answer means, and the
+// Python package performs the GET on a thread of its own. None of this is API.
+
+static FEATURE_STARTER: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+
+/// Start `chat`'s one read of the feature switches: hand the GET the core
+/// returns, if any, to the starter the package registered. A GET that cannot
+/// start fails at once, and the chat keeps every switch off.
+fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
+    let Some(fetch) = chat.start_features() else {
+        return;
+    };
+    let started = FEATURE_STARTER.get(py).is_some_and(|starter| {
+        starter
+            .call1(
+                py,
+                (
+                    fetch.id,
+                    fetch.url.as_str(),
+                    fetch.timeout_ms as f64 / 1000.0,
+                    fetch.max_bytes,
+                ),
+            )
+            .is_ok()
+    });
+    if !started {
+        bindings::complete_fetch(fetch.id, 0, &[]);
+    }
+}
+
+/// Register the callable that performs a chat's feature GET:
+/// ``starter(id, url, timeout_seconds, max_bytes)`` starts it and returns.
+#[pyfunction]
+#[pyo3(name = "_feature_set_starter")]
+fn feature_set_starter(py: Python<'_>, starter: Py<PyAny>) {
+    let _ = FEATURE_STARTER.set(py, starter);
+}
+
+/// Report the result of the feature GET ``fetch_id``: its HTTP status, 0 when
+/// no complete response arrived, and its body.
+#[pyfunction]
+#[pyo3(name = "_feature_complete")]
+fn feature_complete(fetch_id: u64, status: u16, body: &[u8]) {
+    bindings::complete_fetch(fetch_id, status, body);
+}
+
+/// For this repository's tests: the endpoint of every chat that does not set
+/// its own, or the X API's when ``None``.
+#[pyfunction]
+#[pyo3(name = "_feature_set_default_endpoint")]
+fn feature_set_default_endpoint(endpoint: Option<&str>) {
+    bindings::set_default_endpoint(endpoint);
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -2551,6 +2596,9 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hex_to_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(detect_mime_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_image_dimensions, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_set_starter, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_complete, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_set_default_endpoint, m)?)?;
 
     Ok(())
 }

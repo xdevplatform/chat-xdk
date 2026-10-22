@@ -197,7 +197,7 @@ fn v0_sends_match_0_5_on_the_wire() {
             text(&fixture, "signing_key_version"),
         ))
         .unwrap();
-        assert!(!core.is_enabled(crate::features::V1_SEND));
+        assert!(!core.feature_enabled(crate::features::V1_SEND));
         let ckey = conversation_key(&fixture);
         let signing_key: SigningKeyEntry =
             serde_json::from_value(fixture["signing_key"].clone()).unwrap();

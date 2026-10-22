@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
-use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
+use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 #[cfg(feature = "juicebox")]
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
@@ -549,88 +549,86 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
 
 /// Internal, for this repository's bindings; not part of the API.
 ///
-/// The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
-/// flags for, derived from the loaded identity public key; -1 until keys
-/// load (or for a null handle).
+/// Start this chat's one read of the feature switches. Returns in `data` the
+/// GET to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
+/// "max_bytes": …}`. Both fields are NULL when the chat takes the answer of a
+/// GET already in flight, or has started its read already.
 #[no_mangle]
-pub extern "C" fn chat_xdk_internal_feature_bucket(handle: *const ChatHandle) -> i32 {
-    catch_ffi_or(-1, || {
+pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return -1;
+            return err_result("Null handle");
         }
-        let h = unsafe { &*handle };
-        h.inner.feature_bucket().map_or(-1, i32::from)
+        match unsafe { &*handle }.inner.start_features() {
+            Some(fetch) => match serde_json::to_string(&fetch) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_from(e),
+            },
+            None => ok_void(),
+        }
     })
 }
 
 /// Internal, for this repository's bindings; not part of the API.
 ///
-/// Apply a `GET /2/chat/features` response body.
-///
-/// `bucket` is the bucket the request carried, or negative when it carried
-/// none. A non-zero `downgrade_only` only turns flags off (a re-check);
-/// zero replaces them. A body that is not a JSON object with a `features`
-/// object is an error and changes nothing.
+/// Report the result of the feature-switch GET `id`: its HTTP status, 0 when
+/// no response arrived, and `body_len` bytes of its body, read to the end or
+/// to one byte past the GET's `max_bytes`. `body` may be NULL when
+/// `body_len` is 0.
 #[no_mangle]
-pub extern "C" fn chat_xdk_internal_apply_feature_config(
+pub extern "C" fn chat_xdk_internal_feature_complete(
+    id: u64,
+    status: i32,
+    body: *const u8,
+    body_len: usize,
+) {
+    catch_ffi_or((), || {
+        let body = if body.is_null() || body_len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(body, body_len) }
+        };
+        bindings::complete_fetch(id, u16::try_from(status).unwrap_or(0), body);
+    })
+}
+
+/// Internal, for this repository's tests; not part of the API.
+///
+/// Read this chat's feature switches from `endpoint`, within `timeout_ms`
+/// milliseconds, when its read starts.
+#[no_mangle]
+pub extern "C" fn chat_xdk_internal_feature_configure(
     handle: *const ChatHandle,
-    json: *const c_char,
-    bucket: i32,
-    downgrade_only: i32,
+    endpoint: *const c_char,
+    timeout_ms: u64,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
-        let h = unsafe { &*handle };
-        let json = try_str!(json);
-        let bucket = u16::try_from(bucket).ok();
-        let mode = if downgrade_only != 0 {
-            FeatureApply::DowngradeOnly
+        let endpoint = try_str!(endpoint);
+        unsafe { &*handle }
+            .inner
+            .configure_features(endpoint, timeout_ms);
+        ok_void()
+    })
+}
+
+/// Internal, for this repository's tests; not part of the API.
+///
+/// The feature-switch endpoint of every chat that does not set its own;
+/// NULL for the X API's.
+#[no_mangle]
+pub extern "C" fn chat_xdk_internal_feature_set_default_endpoint(
+    endpoint: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if endpoint.is_null() {
+            bindings::set_default_endpoint(None);
         } else {
-            FeatureApply::Full
-        };
-        match h.inner.apply_feature_config(json, mode, bucket) {
-            Ok(()) => ok_void(),
-            Err(e) => err_result(&e.to_string()),
+            bindings::set_default_endpoint(Some(try_str!(endpoint)));
         }
-    })
-}
-
-/// Internal, for this repository's bindings; not part of the API.
-///
-/// Whether the feature switch `name` is on: 1 on, 0 off, -1 on a null
-/// handle or invalid name.
-#[no_mangle]
-pub extern "C" fn chat_xdk_internal_is_enabled(
-    handle: *const ChatHandle,
-    name: *const c_char,
-) -> i32 {
-    catch_ffi_or(-1, || {
-        if handle.is_null() {
-            return -1;
-        }
-        let h = unsafe { &*handle };
-        match unsafe { from_c_str(name) } {
-            Ok(name) => i32::from(h.inner.is_enabled(name)),
-            Err(_) => -1,
-        }
-    })
-}
-
-/// Internal, for this repository's bindings; not part of the API.
-///
-/// Whether keys are loaded but no response to a request carrying their
-/// bucket has applied, so the flags must be fetched with the key's bucket:
-/// 1 yes, 0 no, -1 on a null handle.
-#[no_mangle]
-pub extern "C" fn chat_xdk_internal_feature_refetch_due(handle: *const ChatHandle) -> i32 {
-    catch_ffi_or(-1, || {
-        if handle.is_null() {
-            return -1;
-        }
-        let h = unsafe { &*handle };
-        i32::from(h.inner.feature_refetch_due())
+        ok_void()
     })
 }
 

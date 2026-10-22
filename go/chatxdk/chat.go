@@ -59,24 +59,27 @@ import (
 // sync.Mutex) or confine each instance to one goroutine.
 type Chat struct {
 	h handle
-	// features is shared with the goroutine that fetches this instance's
-	// feature switches.
-	features *featureSync
 }
 
-// New creates a new Chat SDK instance.
+// New creates a new Chat SDK instance. It reads the X API's feature switches
+// once, in the background.
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func New() *Chat {
-	return newChat(defaultFeatureOptions())
+	c := newChat()
+	if c != nil {
+		c.startFeatures()
+	}
+	return c
 }
 
-func newChat(opts featureOptions) *Chat {
+// newChat creates a Chat that has not started reading its feature switches.
+func newChat() *Chat {
 	h := ffiNew()
 	if h == nil {
 		return nil
 	}
-	c := &Chat{h: h, features: startFeatureSwitches(h, opts)}
+	c := &Chat{h: h}
 	// GC backstop for instances never explicitly Closed. A receiver becomes
 	// collectible as soon as its last use passes — even while one of its
 	// methods is still executing native code — so every method that hands
@@ -90,24 +93,11 @@ func newChat(opts featureOptions) *Chat {
 // After Close, the Chat must not be used. Safe to call multiple times.
 func (c *Chat) Close() {
 	defer runtime.KeepAlive(c)
-	if c.features != nil {
-		c.features.close()
-	}
 	if c.h != nil {
 		ffiFree(c.h)
 		c.h = nil
 		runtime.SetFinalizer(c, nil)
 	}
-}
-
-// exclusive keeps the feature goroutine off the handle for a call that takes
-// it exclusively, until the returned func runs.
-func (c *Chat) exclusive() (unlock func()) {
-	if c.features == nil {
-		return func() {}
-	}
-	c.features.mu.Lock()
-	return c.features.mu.Unlock
 }
 
 // IsUnlocked returns true if both identity and signing keys are loaded.
@@ -128,7 +118,6 @@ func (c *Chat) HasIdentityKey() bool {
 // signing key) instead of returning it with Verified=false.
 func (c *Chat) SetRejectUnverified(reject bool) {
 	defer runtime.KeepAlive(c)
-	defer c.exclusive()()
 	ffiSetRejectUnverified(c.h, reject)
 }
 

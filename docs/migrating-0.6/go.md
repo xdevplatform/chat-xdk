@@ -11,7 +11,7 @@ change.
 ## Checklist
 
 - [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
-- [ ] [Allow or block the feature-switch request, and close chats you're done with](#the-feature-switch-request)
+- [ ] [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `SetIdentity`](#setidentity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `ImportKeys`](#importkeys-takes-importkeysparams)
@@ -64,29 +64,21 @@ files. There's no code to change: to see which format a send used, read
 
 ## The feature-switch request
 
-Each `Chat` reads the X API's feature switches with one anonymous request,
+Chats read the X API's feature switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, which runs in the background:
 
-- when the chat is created, again once its keys load (with a `bucket` query
-  parameter, 0–9999, derived from the identity public key), and every
-  5 minutes after that;
-- chats in one process that ask for the same bucket at the same time share
-  one request;
-- it carries no credentials, and never delays or fails a call;
-- if it fails or is blocked, every switch stays off and sends stay v0; a
-  failed request is retried with a backoff that grows to 5 minutes;
-- the 5-minute re-checks can only turn a switch off: a chat picks up a switch
-  turning on only when it is created again.
+- a chat reads them once, when it is created, and keeps the answer for its
+  lifetime; chats created while a request is in flight share it;
+- it carries no credentials and no query parameters, and never delays or
+  fails a call;
+- every switch is off until the answer arrives, so a chat's first sends can
+  be v0;
+- if the request fails or is blocked, every switch stays off for the chat's
+  lifetime and its sends stay v0; a failed request is not repeated;
+- a switch that changes reaches the chats created after it.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
-switch, or block it to keep them v0. Close each chat when you're done with
-it to stop its requests; a chat that is garbage-collected stops them too:
-
-```go
-// 0.6.0
-chat := chatxdk.New()
-defer chat.Close()
-```
+switch, or block it to keep them v0. There's no code to change.
 
 ## Register keys with the public key only
 

@@ -197,30 +197,35 @@ crates/
 The X API serves boolean feature switches at `GET /2/chat/features`, for
 example `{"features":{"v1_send":false}}`. `v1_send` picks the send format: v0,
 the format 0.5.x sends, while it is off, and v1 (per-message keys) while it is on.
-The core holds each chat's switches and picks each send's format from them.
-Only the language bindings make the request, each with its own HTTP stack:
+The core holds the whole policy: when to fetch, how chats share an answer,
+response validation and the fail-closed default. It never makes the request
+itself. Each language binding performs the GET the core hands it, with its own
+HTTP stack (`fetch` in a browser), and hands the status and body back:
 
-- **When:** when a chat is created; again with the identity key's bucket once
-  keys load; then a re-check every 300 s that can only turn switches off, so
-  a chat that is already running picks up a switch turning on only when it
-  is created again, while one turning off reaches it within 300 s. A
-  failed fetch is retried with a backoff that doubles from 1 s up to 300 s.
-  Chats in one process that ask for the same bucket while a request for it is
-  in flight wait for that request instead of making their own.
-- **What it sends:** no credentials and no user data. The only input is the
-  `bucket` query parameter, 0–9999, derived from the identity public key (the
-  first 8 bytes of the SHA-256 of its SPKI, top bit cleared, mod 10000).
-  Without keys it sends none, and the server buckets the request by IP.
-- **Fail-closed:** a network error, a timeout (2 s), a status other than 200,
-  a body over 64 KiB, malformed JSON, or a missing or non-boolean key leaves
-  every switch off, so sends stay v0. The request never blocks or fails an
-  SDK call.
-- **Lifetime:** the fetch is tied to the chat and stops when the chat is
-  freed, closed, disposed or garbage-collected.
+- **When:** a chat reads the switches once, when it is created, and keeps the
+  answer for its lifetime. Nothing reads them again; a chat created later
+  makes its own request. Chats created while a request for the same endpoint
+  is in flight share it. Until the answer arrives every switch reads off for
+  the chat, so its first sends can be v0.
+- **What it sends:** a GET with no query parameters, no credentials and no
+  user data.
+- **Fail-closed:** a network error, a request that takes more than 2 s in
+  all, a status other than 200, a body over 64 KiB, malformed JSON, or a
+  missing or non-boolean key leaves every switch off for the chat's lifetime,
+  so its sends stay v0. A failed request is not repeated, and the request
+  never blocks or fails an SDK call.
+- **Where it runs:** in the background, so creating a chat never waits for
+  it: a daemon thread in Python, a goroutine in Go, `HttpClient.sendAsync` in
+  the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
+  20.16 the request's socket and timer are unref'd, so it never keeps a
+  process alive; on older Node, `fetch()` can hold the process open until the
+  request ends, at most 2 s. At exit, Python cuts short a request still under
+  way and waits for it, so no thread is inside OpenSSL while OpenSSL cleans
+  up.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the
-  app stays on v0 and logs a CORS error on every retry.
+  chat stays on v0 and the browser logs a CORS error for its request.
 
 **Release gate:** before each release, check that
 `GET https://api.x.com/2/chat/features` still answers with

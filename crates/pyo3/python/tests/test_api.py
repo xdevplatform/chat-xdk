@@ -5,9 +5,6 @@ import re
 import sys
 import unittest
 
-# Keep every chat's automatic feature fetch off the network.
-os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
-
 
 def _repo_root() -> str:
     # .../crates/pyo3/python/tests/test_api.py -> repo root is 4 levels up
@@ -71,6 +68,9 @@ class TestUtilityFunctions(unittest.TestCase):
             import chat_xdk  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+        from features_support import keep_offline
+
+        keep_offline()
 
     def test_version_is_the_release_version(self):
         import chat_xdk
@@ -156,6 +156,9 @@ class TestParams(unittest.TestCase):
             import chat_xdk  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+        from features_support import keep_offline
+
+        keep_offline()
 
     def test_every_params_class_is_exported(self):
         import chat_xdk
@@ -343,12 +346,15 @@ class TestApiShapes(unittest.TestCase):
             from chat_xdk import Chat  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+        from features_support import keep_offline
 
-    def _unlocked_chat(self):
+        keep_offline()
+
+    def _unlocked_chat(self, chat=None):
         from chat_xdk import Chat, ImportKeysParams
 
         v = _load_vectors()
-        chat = Chat()
+        chat = Chat() if chat is None else chat
         chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
         return chat, v
 
@@ -487,8 +493,12 @@ class TestApiShapes(unittest.TestCase):
 
     def test_encrypt_message_signs_at_version_7_until_v1_send_is_on(self):
         from chat_xdk import EncryptMessageParams
+        from features_support import FeatureServer, reading, wait_for_v1
 
-        chat, v = self._unlocked_chat()
+        server = FeatureServer()
+        server.delay = 0.5
+        self.addCleanup(server.close)
+        chat, v = self._unlocked_chat(reading(server.url))
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
@@ -504,10 +514,7 @@ class TestApiShapes(unittest.TestCase):
             )
 
         self.assertEqual(send().signature_info.signature_version, "7")
-        chat._apply_feature_config(
-            '{"features":{"v1_send":true}}', chat._feature_bucket()
-        )
-        self.assertTrue(chat._is_enabled("v1_send"))
+        wait_for_v1(chat, sender_id="1001", signing_key_version="1")
         payload = send()
         self.assertEqual(payload.signature_info.signature_version, "10")
         self.assertTrue(payload.xdk_version)
@@ -1227,10 +1234,10 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             encryptor.finish()
 
-    def _sender_of_files(self):
+    def _sender_of_files(self, chat=None):
         from chat_xdk import EncryptMessageParams, SetIdentityParams
 
-        chat, v = self._unlocked_chat()
+        chat, v = self._unlocked_chat(chat)
         chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
@@ -1247,8 +1254,10 @@ class TestApiShapes(unittest.TestCase):
         return chat, send
 
     def test_a_v1_message_with_files_takes_the_id_its_files_derive(self):
-        chat, send = self._sender_of_files()
-        chat._apply_feature_config('{"features":{"v1_send":true}}', chat._feature_bucket())
+        from features_support import v1_chat, wait_for_v1
+
+        chat, send = self._sender_of_files(v1_chat())
+        wait_for_v1(chat)
 
         first = send("draft", ["photo-a", "photo-b"])
         self.assertEqual(send("final text", ["photo-a", "photo-b"]), first)

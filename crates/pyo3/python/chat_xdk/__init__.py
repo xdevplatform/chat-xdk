@@ -25,17 +25,19 @@ Quick Start:
     # payload.message_id, payload.encoded_message_create_event, payload.signature, etc.
 """
 
-import os as _os
+import atexit as _atexit
+import http.client as _http_client
 import re as _re
+import socket as _socket
 import threading as _threading
 import time as _time
-import urllib.request as _urllib_request
-import weakref as _weakref
+import urllib.parse as _urllib_parse
 from typing import Optional, TypedDict
 
-from chat_xdk._native import Chat as _NativeChat
+from chat_xdk import _native
 from chat_xdk._native import __version__
 from chat_xdk._native import (
+    Chat,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -69,179 +71,111 @@ from chat_xdk._native import (
     hex_to_bytes,
 )
 
-# Feature switches (GET /2/chat/features). Internal: every Chat fetches them
-# itself, without blocking or failing, and sends stay v0 unless a response
-# turns v1_send on. Nothing here is API. The module-level settings exist for
-# this repository's tests; CHAT_XDK_FEATURES_ENDPOINT overrides the endpoint.
-_FEATURES_ENDPOINT = "https://api.x.com/2/chat/features"
-_FEATURES_ENDPOINT_ENV = "CHAT_XDK_FEATURES_ENDPOINT"
-_FEATURE_TIMEOUT_SECONDS = 2.0
-_FEATURE_REFRESH_SECONDS = 300.0
-_FEATURE_KEY_POLL_SECONDS = 1.0
-_MAX_FEATURES_BODY = 64 * 1024
+# Feature switches (GET /2/chat/features). A chat reads them once, when it is
+# created: the native core decides what to fetch and what an answer means, and
+# this module performs the GET on a daemon thread. Nothing here is API.
 
 
-class Chat(_NativeChat):
-    __doc__ = _NativeChat.__doc__
-
-    def __init__(self, config_json=None):
-        # The native constructor already took config_json; this only starts
-        # the feature-switch thread.
-        self._feature_stop = _start_feature_switches(self)
-
-    def close(self):
-        """Stop this chat's background work: its fetch of the X API's
-        feature switches. A chat that is garbage-collected stops it too."""
-        self._feature_stop.set()
-
-
-def _start_feature_switches(chat):
-    """Fetch the flags for ``chat`` on a daemon thread that holds it weakly.
-    Returns the event that stops the thread, which ``chat`` being
-    garbage-collected also sets."""
-    stop = _threading.Event()
-    _weakref.finalize(chat, stop.set)
-    settings = (
-        _os.environ.get(_FEATURES_ENDPOINT_ENV) or _FEATURES_ENDPOINT,
-        _FEATURE_TIMEOUT_SECONDS,
-        _FEATURE_REFRESH_SECONDS,
-        _FEATURE_KEY_POLL_SECONDS,
-    )
+def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
+    """Start a chat's feature GET; the core calls this from the constructor."""
     _threading.Thread(
-        target=_feature_loop,
-        args=(_weakref.ref(chat), settings, stop),
+        target=_perform_feature_fetch,
+        args=(fetch_id, url, timeout, max_bytes),
         name="chat-xdk-features",
         daemon=True,
     ).start()
-    return stop
 
 
-def _fetch_features(chat, endpoint, timeout, downgrade_only):
-    """Fetch the flags for ``chat``'s bucket and apply them; True on success."""
+def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
     try:
-        bucket = chat._feature_bucket()
-        url = endpoint
-        if bucket is not None:
-            url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
-        body = _shared_features(url, timeout)
-        if body is None:
-            return False
-        chat._apply_feature_config(body, bucket, downgrade_only)
+        status, body = _get_features(url, timeout, max_bytes)
     except Exception:
-        return False
-    return True
+        status, body = 0, b""
+    _native._feature_complete(fetch_id, status, body)
 
 
-# Feature requests in flight, by URL: url -> (done event, [body]).
-_feature_requests = {}
-_feature_requests_lock = _threading.Lock()
+# The sockets of the GETs under way, by thread. At exit they are cut short and
+# waited for: a daemon thread still inside OpenSSL when the process exits races
+# OpenSSL's own cleanup, which can crash the process.
+_requests = {}
+_requests_lock = _threading.Lock()
+_exiting = False
+_tls_context = None
 
 
-def _shared_features(url, timeout):
-    """The body for ``url``, from the request another chat has in flight
-    for it or else from a new one, so chats that ask at once share a
-    request."""
-    with _feature_requests_lock:
-        shared = _feature_requests.get(url)
-        owner = shared is None
-        if owner:
-            shared = _feature_requests[url] = (_threading.Event(), [])
-    done, result = shared
-    if owner:
-        try:
-            result.append(_get_features(url, timeout))
-        finally:
-            with _feature_requests_lock:
-                del _feature_requests[url]
-            done.set()
-    else:
-        done.wait(timeout + 1.0)
-    return result[0] if result else None
-
-
-def _get_features(url, timeout):
-    """The body of a 200 response from ``url``, or None on any failure,
-    within ``timeout`` seconds in all. The request runs on its own daemon
-    thread, since urllib's timeout covers neither DNS nor the whole read."""
-    result = []
-    worker = _threading.Thread(
-        target=lambda: result.append(_request_features(url, timeout)),
-        name="chat-xdk-features-request",
-        daemon=True,
-    )
-    worker.start()
-    worker.join(timeout)
-    return result[0] if result else None
-
-
-def _request_features(url, timeout):
+def _get_features(url, timeout, max_bytes):
+    """GET ``url`` within ``timeout`` seconds: the status and the body, read
+    to its end or to one byte past ``max_bytes``. Status 0 when no complete
+    response arrived in time."""
+    global _tls_context
     deadline = _time.monotonic() + timeout
+    parts = _urllib_parse.urlsplit(url)
+    secure = parts.scheme == "https"
+    port = parts.port or (443 if secure else 80)
+    sock = _socket.create_connection((parts.hostname, port), timeout=timeout)
+    thread = _threading.current_thread()
+    with _requests_lock:
+        if _exiting:
+            sock.close()
+            return 0, b""
+        _requests[thread] = sock
     try:
-        request = _urllib_request.Request(url, headers={"Accept": "application/json"})
-        with _urllib_request.urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                return None
-            chunks = []
-            size = 0
-            while _time.monotonic() < deadline:
-                chunk = response.read1(16 * 1024)
-                if not chunk:
-                    return b"".join(chunks).decode("utf-8")
-                size += len(chunk)
-                if size > _MAX_FEATURES_BODY:
-                    return None
-                chunks.append(chunk)
-    except Exception:
-        pass
-    return None
+        if secure:
+            if _tls_context is None:
+                import ssl
+
+                _tls_context = ssl.create_default_context()
+            with _requests_lock:
+                if _exiting:
+                    return 0, b""
+                sock = _tls_context.wrap_socket(
+                    sock, server_hostname=parts.hostname, do_handshake_on_connect=False
+                )
+                _requests[thread] = sock
+            sock.do_handshake()
+            connection = _http_client.HTTPSConnection(
+                parts.hostname, port, timeout=timeout, context=_tls_context
+            )
+        else:
+            connection = _http_client.HTTPConnection(parts.hostname, port, timeout=timeout)
+        connection.sock = sock
+        target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+        connection.request("GET", target, headers={"Accept": "application/json"})
+        response = connection.getresponse()
+        body = bytearray()
+        while len(body) <= max_bytes:
+            if _time.monotonic() >= deadline:
+                return 0, b""
+            chunk = response.read1(max_bytes + 1 - len(body))
+            if not chunk:
+                break
+            body += chunk
+        return response.status, bytes(body)
+    finally:
+        with _requests_lock:
+            _requests.pop(thread, None)
+        sock.close()
 
 
-def _feature_loop(chat_ref, settings, stop):
-    """Fetch once now (retrying once), then again with the key's bucket once
-    keys load, retrying with a backoff that grows to the refresh interval,
-    and re-check every refresh interval with a fetch that can only turn
-    flags off. Ends when ``stop`` is set."""
-    endpoint, timeout, refresh, key_poll = settings
-    max_backoff = max(refresh, 1.0)
-    chat = chat_ref()
-    if chat is None:
-        return
-    _fetch_features(chat, endpoint, timeout, False) or stop.is_set() or _fetch_features(
-        chat, endpoint, timeout, False
-    )
-    del chat
-    next_recheck = _time.monotonic() + refresh
-    retry_at = 0.0
-    backoff = 1.0
-    while not stop.is_set():
-        chat = chat_ref()
-        if chat is None:
-            return
-        keyed = False
-        try:
-            now = _time.monotonic()
-            if chat._feature_refetch_due():
-                if now >= retry_at:
-                    if _fetch_features(chat, endpoint, timeout, False):
-                        backoff = 1.0
-                        next_recheck = now + refresh
-                    else:
-                        retry_at = now + backoff
-                        backoff = min(backoff * 2, max_backoff)
-            elif refresh and now >= next_recheck:
-                _fetch_features(chat, endpoint, timeout, True)
-                next_recheck = now + refresh
-            keyed = chat._feature_bucket() is not None and not chat._feature_refetch_due()
-        except Exception:
-            pass
-        del chat
-        if keyed and not refresh:
-            return
-        # Until a response for the key's bucket applies, watch for keys to
-        # load; afterwards, wake only for the re-check.
-        wait = max(0.0, next_recheck - _time.monotonic()) if keyed else key_poll
-        if stop.wait(wait):
-            return
+@_atexit.register
+def _end_feature_requests():
+    """Start no more GETs, cut short the ones under way, and wait for them to
+    end, at most 2 seconds."""
+    global _exiting
+    with _requests_lock:
+        _exiting = True
+        for sock in _requests.values():
+            try:
+                sock.shutdown(_socket.SHUT_RDWR)
+            except OSError:
+                pass
+        threads = list(_requests)
+    deadline = _time.monotonic() + 2.0
+    for thread in threads:
+        thread.join(max(0.0, deadline - _time.monotonic()))
+
+
+_native._feature_set_starter(_start_feature_fetch)
 
 
 class QuickReplyOption(TypedDict, total=False):

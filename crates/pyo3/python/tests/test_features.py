@@ -1,18 +1,12 @@
 import base64
 import gc
-import http.server
 import json
 import os
+import subprocess
 import sys
-import threading
+import textwrap
 import time
 import unittest
-import urllib.parse
-from unittest import mock
-
-# Keep every chat's automatic feature fetch off the network unless a test
-# points it at its own server.
-os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
 
 
 def _repo_root() -> str:
@@ -25,66 +19,10 @@ def _load_vectors() -> dict:
         return json.load(f)
 
 
-class _FeatureServer:
-    """A local GET /2/chat/features that records each request's bucket."""
-
-    def __init__(self):
-        self.status = 200
-        self.body = '{"features":{"v1_send":true}}'
-        self.delay = 0.0
-        self.drip = 0.0
-        self.buckets = []
-        server = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                # The answer is fixed before the request is recorded, so a
-                # test that sees the request can change the next answer.
-                status, body = server.status, server.body.encode("utf-8")
-                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                server.buckets.append(query.get("bucket", [None])[0])
-                if server.delay:
-                    time.sleep(server.delay)
-                try:
-                    self.send_response(status)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    if server.drip:
-                        # One byte at a time, each well inside the timeout.
-                        for i in range(len(body)):
-                            self.wfile.write(body[i : i + 1])
-                            self.wfile.flush()
-                            time.sleep(server.drip)
-                    else:
-                        self.wfile.write(body)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-
-            def log_message(self, *args):
-                pass
-
-        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.httpd.daemon_threads = True
-        self.url = "http://127.0.0.1:%d/2/chat/features" % self.httpd.server_address[1]
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-
-    def close(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-
-
-def _wait_for(predicate, timeout=10.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return predicate()
-
-
 class TestFeatureSwitches(unittest.TestCase):
-    """Every Chat fetches GET /2/chat/features by itself; nothing is called."""
+    """The feature switches (GET /2/chat/features) through the real package:
+    nothing is called, and each chat reads from a local server through the
+    internal hook."""
 
     @classmethod
     def setUpClass(cls):
@@ -95,45 +33,30 @@ class TestFeatureSwitches(unittest.TestCase):
             import chat_xdk  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+        from features_support import keep_offline
+
+        keep_offline()
 
     def setUp(self):
-        import chat_xdk
+        from features_support import FeatureServer
 
-        self.server = _FeatureServer()
+        self.server = FeatureServer()
         self.vectors = _load_vectors()
-        # The internal test hooks: the endpoint and shorter timings.
-        patches = [
-            mock.patch.dict(os.environ, {"CHAT_XDK_FEATURES_ENDPOINT": self.server.url}),
-            mock.patch.object(chat_xdk, "_FEATURE_TIMEOUT_SECONDS", 0.5),
-            mock.patch.object(chat_xdk, "_FEATURE_REFRESH_SECONDS", 3600.0),
-            mock.patch.object(chat_xdk, "_FEATURE_KEY_POLL_SECONDS", 0.02),
-        ]
-        for p in patches:
-            p.start()
-            self.addCleanup(p.stop)
 
     def tearDown(self):
         self.server.close()
 
-    def _chat(self, with_keys=True):
-        from chat_xdk import Chat
-
-        chat = Chat()
-        if with_keys:
-            self._import_keys(chat)
-        return chat
-
-    def _import_keys(self, chat):
+    def _chat(self, timeout=2.0, url=None):
         from chat_xdk import ImportKeysParams, SetIdentityParams
+        from features_support import reading
+
+        chat = reading(url or self.server.url, timeout)
         chat.import_keys(ImportKeysParams(base64.b64decode(self.vectors["private_keys_concat_b64"])))
         chat.set_identity(SetIdentityParams("1001", "1"))
-
-    def _keyed_request(self, chat):
-        """Wait for a request carrying ``chat``'s key bucket."""
-        bucket = str(chat._feature_bucket())
-        self.assertTrue(_wait_for(lambda: bucket in self.server.buckets), self.server.buckets)
+        return chat
 
     def _send(self, chat):
+        """The signature version of a send: "7" for v0, "10" for v1."""
         from chat_xdk import EncryptMessageParams
 
         return chat.encrypt_message(
@@ -143,211 +66,157 @@ class TestFeatureSwitches(unittest.TestCase):
                 conversation_key=base64.b64decode(self.vectors["conversation_key_b64"]),
                 conversation_key_version="1",
             )
-        )
+        ).signature_info.signature_version
+
+    def _wait_for(self, predicate, timeout=10.0):
+        from features_support import wait_for
+
+        return wait_for(predicate, timeout)
 
     def test_feature_switches_are_not_public_api(self):
         import chat_xdk
 
-        chat = self._chat(with_keys=False)
-        for name in [
-            "load_feature_config",
-            "is_enabled",
-            "feature_bucket",
-            "apply_feature_config",
-            "feature_refetch_due",
-        ]:
-            self.assertFalse(hasattr(chat, name), name)
-        for name in ["FEATURES_ENDPOINT", "LoadFeatureConfigParams"]:
-            self.assertFalse(hasattr(chat_xdk, name), name)
-            self.assertNotIn(name, chat_xdk.__all__)
+        public = [name for name in dir(chat_xdk.Chat()) + dir(chat_xdk) if not name.startswith("_")]
+        self.assertEqual([name for name in public + chat_xdk.__all__ if "feature" in name.lower()], [])
 
-    def test_creating_a_chat_never_waits_for_the_fetch(self):
+    def test_a_new_chat_reads_the_switches_once(self):
+        from chat_xdk import ImportKeysParams, SetIdentityParams
+
+        chat = self._chat()
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1), self.server.queries)
+        self.assertEqual(self.server.queries[0], "", "the request carries no query")
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
+        chat.import_keys(ImportKeysParams(base64.b64decode(self.vectors["private_keys_concat_b64"])))
+        chat.set_identity(SetIdentityParams("1001", "1"))
+        for _ in range(5):
+            self._send(chat)
+        time.sleep(0.3)
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+
+    def test_the_public_constructor_reads_the_default_endpoint(self):
+        import chat_xdk
+        from chat_xdk import ImportKeysParams, SetIdentityParams
+        from features_support import keep_offline
+
+        chat_xdk._native._feature_set_default_endpoint(self.server.url)
+        try:
+            chat = chat_xdk.Chat()
+            self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1))
+            chat.import_keys(ImportKeysParams(base64.b64decode(self.vectors["private_keys_concat_b64"])))
+            chat.set_identity(SetIdentityParams("1001", "1"))
+            self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
+        finally:
+            keep_offline()
+
+    def test_a_send_never_waits_for_the_request(self):
         self.server.delay = 2.0
+        chat = self._chat(timeout=3.0)
         started = time.monotonic()
-        chat = self._chat()
+        self.assertEqual(self._send(chat), "7")
         self.assertLess(time.monotonic() - started, 1.0)
-        self.assertEqual(self._send(chat).signature_info.signature_version, "7")
 
-    def test_every_flag_is_off_and_sends_are_v0_until_a_response_applies(self):
-        self.server.status = 503
+    def test_chats_created_while_a_request_is_in_flight_share_it(self):
+        self.server.delay = 0.8
+        chats = [self._chat() for _ in range(4)]
+        self.assertTrue(self._wait_for(lambda: all(self._send(c) == "10" for c in chats)))
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+
+        later = self._chat()
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2), "the later chat asks for itself")
+        self.assertTrue(self._wait_for(lambda: self._send(later) == "10"))
+
+    def test_the_answer_holds_for_the_chats_lifetime(self):
         chat = self._chat()
-        self._keyed_request(chat)
-        self.assertFalse(chat._is_enabled("v1_send"))
-        payload = self._send(chat)
-        self.assertEqual(payload.signature_info.signature_version, "7")
-        self.assertTrue(payload.xdk_version)
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
+        self.server.body = '{"features":{}}'
+        other = self._chat()
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2))
+        time.sleep(0.2)
+        self.assertEqual(self._send(other), "7", "the second chat reads its own answer")
+        self.assertEqual(self._send(chat), "10", "the first chat's answer holds")
 
-    def test_a_chat_fetches_on_creation_and_again_with_the_key_bucket(self):
-        chat = self._chat(with_keys=False)
-        self.assertIsNone(chat._feature_bucket())
-        self.assertTrue(_wait_for(lambda: self.server.buckets == [None]), self.server.buckets)
-
-        self._import_keys(chat)
-        bucket = chat._feature_bucket()
-        self.assertIsInstance(bucket, int)
-        self.assertTrue(0 <= bucket < 10000)
-        self._keyed_request(chat)
-        self.assertTrue(_wait_for(lambda: chat._is_enabled("v1_send")))
-        self.assertFalse(chat._feature_refetch_due())
-        self.assertEqual(self._send(chat).signature_info.signature_version, "10")
-
-    def test_the_key_bucket_answer_replaces_the_ip_answer(self):
-        # An IP-bucketed "on" reads off once keys load, and the key's own
-        # answer decides.
-        chat = self._chat(with_keys=False)
-        self.assertTrue(_wait_for(lambda: chat._is_enabled("v1_send")))
-        self.server.body = '{"features":{"v1_send":false}}'
-        self._import_keys(chat)
-        self.assertFalse(chat._is_enabled("v1_send"))
-        self._keyed_request(chat)
-        self.assertTrue(_wait_for(lambda: not chat._feature_refetch_due()))
-        self.assertFalse(chat._is_enabled("v1_send"))
-
-        # ...and the key's answer can turn a flag on that the IP answer left off.
-        self.server.body = '{"features":{"v1_send":false}}'
-        chat2 = self._chat(with_keys=False)
-        self.assertTrue(_wait_for(lambda: len(self.server.buckets) >= 3))
-        self.server.body = '{"features":{"v1_send":true}}'
-        self._import_keys(chat2)
-        self.assertTrue(_wait_for(lambda: chat2._is_enabled("v1_send")))
-
-    def test_unknown_keys_are_readable_and_missing_keys_are_off(self):
-        self.server.body = '{"features":{"later_flag":true,"v1_send":"yes"},"extra":1}'
-        chat = self._chat()
-        self.assertTrue(_wait_for(lambda: chat._is_enabled("later_flag")))
-        self.assertFalse(chat._is_enabled("v1_send"))
-        self.assertFalse(chat._is_enabled("missing"))
-
-    def test_any_failure_leaves_every_flag_off(self):
+    def test_any_failure_leaves_sends_on_v0(self):
         cases = [
             (404, '{"features":{"v1_send":true}}', 0.0),
             (500, '{"features":{"v1_send":true}}', 0.0),
             (200, "not json", 0.0),
             (200, '{"v1_send":true}', 0.0),
-            (200, '{"features":{"v1_send":true}}', 1.5),
+            (200, '{"features":{"v1_send":"true"}}', 0.0),
             (200, '{"features":{"v1_send":true}}' + " " * (64 * 1024), 0.0),
+            (200, '{"features":{"v1_send":true}}', 1.0),
         ]
+        from features_support import FeatureServer
+
         for status, body, delay in cases:
             with self.subTest(status=status, body=body[:40], size=len(body), delay=delay):
-                self.server.status, self.server.body, self.server.delay = status, body, delay
-                self.server.buckets.clear()
-                chat = self._chat()
-                self._keyed_request(chat)
-                time.sleep(0.6 if delay else 0.1)
-                self.assertFalse(chat._is_enabled("v1_send"))
-                self.assertEqual(self._send(chat).signature_info.signature_version, "7")
+                self.server.close()
+                self.server = FeatureServer(body)
+                self.server.status, self.server.delay = status, delay
+                chat = self._chat(timeout=0.5)
+                self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1))
+                time.sleep(delay + 0.2)
+                self.assertEqual(self._send(chat), "7")
+                self.assertEqual(len(self.server.queries), 1, "a failure is not retried")
 
-    def test_an_unreachable_endpoint_leaves_every_flag_off(self):
+    def test_an_unreachable_endpoint_leaves_sends_on_v0(self):
         url = self.server.url
         self.server.close()
-        self.server = _FeatureServer()
-        with mock.patch.dict(os.environ, {"CHAT_XDK_FEATURES_ENDPOINT": url}):
-            chat = self._chat()
-        time.sleep(0.3)
-        self.assertFalse(chat._is_enabled("v1_send"))
-        self.assertTrue(chat._feature_refetch_due())
-        self.assertEqual(self._send(chat).signature_info.signature_version, "7")
+        chat = self._chat(timeout=0.5, url=url)
+        time.sleep(0.7)
+        self.assertEqual(self._send(chat), "7")
+        from features_support import FeatureServer
 
-    def test_the_recheck_turns_flags_off_but_never_on(self):
-        import chat_xdk
+        self.server = FeatureServer()
 
-        with mock.patch.object(chat_xdk, "_FEATURE_REFRESH_SECONDS", 0.3):
-            chat = self._chat()
-        self.assertTrue(_wait_for(lambda: chat._is_enabled("v1_send")))
+    def test_a_request_still_open_at_its_timeout_fails(self):
+        self.server.delay = 3.0
+        chat = self._chat(timeout=0.3)
+        time.sleep(1.0)
+        self.assertEqual(self._send(chat), "7")
+        self.assertEqual(len(self.server.queries), 1)
 
-        self.server.body = '{"features":{}}'
-        self.assertTrue(_wait_for(lambda: not chat._is_enabled("v1_send")))
-        self.assertEqual(self._send(chat).signature_info.signature_version, "7")
-
-        self.server.body = '{"features":{"v1_send":true}}'
-        seen = len(self.server.buckets)
-        self.assertTrue(_wait_for(lambda: len(self.server.buckets) >= seen + 2))
-        self.assertFalse(chat._is_enabled("v1_send"))
-
-    def test_a_failed_recheck_changes_nothing(self):
-        import chat_xdk
-
-        with mock.patch.object(chat_xdk, "_FEATURE_REFRESH_SECONDS", 0.3):
-            chat = self._chat()
-        self.assertTrue(_wait_for(lambda: chat._is_enabled("v1_send")))
-        self.server.status = 503
-        seen = len(self.server.buckets)
-        self.assertTrue(_wait_for(lambda: len(self.server.buckets) >= seen + 2))
-        self.assertTrue(chat._is_enabled("v1_send"))
-
-    def test_the_refresher_ends_with_the_chat(self):
-        import chat_xdk
-
-        with mock.patch.object(chat_xdk, "_FEATURE_REFRESH_SECONDS", 0.3):
-            chat = self._chat()
-        self.assertTrue(_wait_for(lambda: chat._is_enabled("v1_send")))
-        del chat
+    def test_a_request_ends_safely_for_a_collected_chat(self):
+        self.server.delay = 0.8
+        self._chat()
         gc.collect()
-        time.sleep(0.8)
-        seen = len(self.server.buckets)
-        time.sleep(1.2)
-        self.assertEqual(len(self.server.buckets), seen)
+        kept = self._chat()
+        self.assertTrue(self._wait_for(lambda: self._send(kept) == "10"))
+        self.assertEqual(len(self.server.queries), 1)
 
-    def test_chats_asking_at_once_share_a_request(self):
-        from chat_xdk import ImportKeysParams
-        self.server.delay = 0.3
-        chats = [self._chat(with_keys=False) for _ in range(4)]
-        self.assertTrue(_wait_for(lambda: all(c._is_enabled("v1_send") for c in chats)))
-        self.assertEqual(self.server.buckets, [None])
+    def test_exit_cuts_short_a_request_under_way(self):
+        # In a process of its own, since the exit hook ends every request.
+        self.server.delay = 30.0
+        script = textwrap.dedent(
+            """
+            import sys, time
+            import chat_xdk
+            from features_support import keep_offline, reading, wait_for
 
-        keys = base64.b64decode(self.vectors["private_keys_concat_b64"])
-        for chat in chats:
-            chat.import_keys(ImportKeysParams(keys))
-        self.assertTrue(_wait_for(lambda: not any(c._feature_refetch_due() for c in chats)))
-        self.assertEqual(self.server.buckets, [None, str(chats[0]._feature_bucket())])
-
-    def test_a_body_still_arriving_at_the_timeout_is_dropped(self):
-        import chat_xdk
-
-        self.server.drip = 0.1
-        started = time.monotonic()
-        self.assertIsNone(chat_xdk._get_features(self.server.url, 0.5))
-        self.assertLess(time.monotonic() - started, 1.0)
-
-    def _feature_threads(self):
-        return [t for t in threading.enumerate() if t.name == "chat-xdk-features"]
-
-    def test_a_dropped_chat_stops_its_thread_without_waiting_for_the_recheck(self):
-        baseline = len(self._feature_threads())
-        chats = [self._chat() for _ in range(5)]
-        for chat in chats:
-            self.assertTrue(_wait_for(lambda chat=chat: not chat._feature_refetch_due()))
-        self.assertEqual(len(self._feature_threads()), baseline + 5)
-        # With keys answered, each thread sleeps until the hour-long re-check.
-        del chat, chats
-        gc.collect()
-        self.assertTrue(
-            _wait_for(lambda: len(self._feature_threads()) == baseline, timeout=3.0),
-            self._feature_threads(),
+            keep_offline()
+            chat = reading(sys.argv[1], 60.0)
+            assert wait_for(lambda: len(chat_xdk._requests) == 1), "no request under way"
+            (request,) = list(chat_xdk._requests)
+            started = time.monotonic()
+            chat_xdk._end_feature_requests()
+            assert time.monotonic() - started < 1.0, time.monotonic() - started
+            assert not request.is_alive() and not chat_xdk._requests
+            print("ok")
+            """
         )
-
-    def test_close_stops_the_thread(self):
-        baseline = len(self._feature_threads())
-        chat = self._chat()
-        self.assertTrue(_wait_for(lambda: not chat._feature_refetch_due()))
-        self.assertEqual(len(self._feature_threads()), baseline + 1)
-        chat.close()
-        self.assertTrue(_wait_for(lambda: len(self._feature_threads()) == baseline, timeout=3.0))
-        self.assertEqual(self._send(chat).signature_info.signature_version, "10")
-
-    def test_a_malformed_body_is_rejected_and_changes_nothing(self):
-        # The fetch never applies anything, so only the calls below change
-        # the flags.
-        self.server.status = 503
-        chat = self._chat()
-        self._keyed_request(chat)
-        bucket = chat._feature_bucket()
-        chat._apply_feature_config('{"features":{"v1_send":true}}', bucket)
-        with self.assertRaises(ValueError):
-            chat._apply_feature_config("[]", bucket, True)
-        self.assertTrue(chat._is_enabled("v1_send"))
-        chat._apply_feature_config('{"features":{}}', bucket, True)
-        self.assertFalse(chat._is_enabled("v1_send"))
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [os.path.join(_repo_root(), "crates", "pyo3", "python"), tests_dir, env.get("PYTHONPATH", "")]
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, self.server.url],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@ use super::test_support::{
 };
 use super::*;
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
-use crate::features::FeatureApply;
 use crate::thrift::event::{MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail};
 use crate::thrift::product::{
     MessageAttachment as ThriftAttachment, MessageEntryContents as Contents,
@@ -154,9 +153,76 @@ fn the_v0_signature_covers_the_0_5_payload() {
         .unwrap());
 }
 
+/// Point `core`'s read of the feature switches at an endpoint of its own, so
+/// tests running at once never share a GET, and start the read.
+#[cfg(feature = "bindings")]
+fn start_own_read(core: &ChatCore) -> crate::features::Fetch {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let endpoint = format!(
+        "https://features.test/{}/2/chat/features",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    core.configure_features(&endpoint, 2_000);
+    core.start_features().expect("the chat's read starts a GET")
+}
+
+#[cfg(feature = "bindings")]
+fn complete(fetch: &crate::features::Fetch, status: u16, body: &str) {
+    crate::bindings::complete_fetch(fetch.id, status, body.as_bytes());
+}
+
+#[cfg(feature = "bindings")]
+#[test]
+fn sends_are_v0_until_the_answer_turns_v1_on() {
+    let party = author();
+    let fetch = start_own_read(&party.core);
+    let ckey = key(3);
+    let first = party
+        .core
+        .encrypt_message(&message_params("first", &ckey))
+        .unwrap();
+    assert_v0(&party, &ckey, "before the answer", &first);
+
+    complete(&fetch, 200, r#"{"features":{"v1_send":true}}"#);
+    let second = party
+        .core
+        .encrypt_message(&message_params("second", &ckey))
+        .unwrap();
+    assert_v1(&party, &ckey, "after the answer", &second);
+    assert_eq!(party.core.start_features(), None, "a chat reads once");
+}
+
+#[cfg(feature = "bindings")]
+#[test]
+fn a_chat_created_while_a_read_is_in_flight_takes_its_answer() {
+    let party = author();
+    let fetch = start_own_read(&party.core);
+    let twin = Party::new(AUTHOR);
+    twin.core
+        .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
+    twin.core.configure_features(&fetch.url, 2_000);
+    assert_eq!(twin.core.start_features(), None, "no second GET");
+    let dropped = ChatCore::new();
+    dropped.configure_features(&fetch.url, 2_000);
+    assert_eq!(dropped.start_features(), None);
+    drop(dropped);
+
+    complete(&fetch, 200, r#"{"features":{"v1_send":true}}"#);
+    let ckey = key(3);
+    for chat in [&party, &twin] {
+        let payload = chat
+            .core
+            .encrypt_message(&message_params("shared", &ckey))
+            .unwrap();
+        assert_v1(chat, &ckey, "shared answer", &payload);
+    }
+}
+
+#[cfg(feature = "bindings")]
 #[test]
 fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
-    let party = author();
     let ckey = key(3);
     for body in [
         r#"{"features":{}}"#,
@@ -165,11 +231,9 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
         r#"{"features":{"v1_send":1}}"#,
         r#"{"features":{"other":true}}"#,
     ] {
-        party
-            .core
-            .apply_feature_config(body, FeatureApply::Full, Some(1))
-            .unwrap();
-        assert!(!party.core.is_enabled(crate::features::V1_SEND), "{body}");
+        let party = author();
+        let fetch = start_own_read(&party.core);
+        complete(&fetch, 200, body);
         let payload = party
             .core
             .encrypt_message(&message_params("hi", &ckey))
@@ -178,109 +242,73 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
     }
 }
 
+#[cfg(feature = "bindings")]
 #[test]
-fn an_unparsable_response_changes_nothing() {
+fn a_failed_read_leaves_sends_on_v0_for_the_chats_lifetime() {
     let party = author();
-    enable_v1_send(&party.core);
-    for body in [
-        "",
-        "<html>",
-        r#"{"v1_send":false}"#,
-        r#"{"features":false}"#,
-    ] {
-        assert!(party
-            .core
-            .apply_feature_config(body, FeatureApply::DowngradeOnly, Some(1))
-            .is_err());
-        assert!(party.core.is_enabled(crate::features::V1_SEND), "{body}");
-    }
-}
-
-#[test]
-fn a_recheck_turns_v1_send_off_and_never_back_on() {
-    let party = author();
+    let fetch = start_own_read(&party.core);
+    complete(&fetch, 503, r#"{"features":{"v1_send":true}}"#);
+    assert_eq!(party.core.start_features(), None, "no second read");
     let ckey = key(3);
-    enable_v1_send(&party.core);
-    party
-        .core
-        .apply_feature_config(
-            r#"{"features":{"v1_send":false}}"#,
-            FeatureApply::DowngradeOnly,
-            Some(1),
-        )
-        .unwrap();
     let payload = party
         .core
-        .encrypt_message(&message_params("after the kill switch", &ckey))
+        .encrypt_message(&message_params("hi", &ckey))
         .unwrap();
-    assert_v0(&party, &ckey, "after downgrade", &payload);
+    assert_v0(&party, &ckey, "after a 503", &payload);
+}
 
+#[cfg(feature = "bindings")]
+#[test]
+fn the_answer_holds_for_the_chats_lifetime() {
+    let party = author();
+    let fetch = start_own_read(&party.core);
+    complete(&fetch, 200, r#"{"features":{"v1_send":true}}"#);
+
+    // A later chat on the same endpoint reads an answer of its own.
+    let later = author();
+    later.core.configure_features(&fetch.url, 2_000);
+    let again = later.core.start_features().expect("its own GET");
+    complete(&again, 200, r#"{"features":{"v1_send":false}}"#);
+
+    let other = ChatCore::new();
+    other.generate_keypairs().unwrap();
     party
         .core
-        .apply_feature_config(
-            r#"{"features":{"v1_send":true}}"#,
-            FeatureApply::DowngradeOnly,
-            Some(1),
-        )
+        .import_keys(&ImportKeysParams::new(
+            other.export_keys().unwrap().to_vec(),
+        ))
         .unwrap();
-    assert!(!party.core.is_enabled(crate::features::V1_SEND));
-}
-
-#[test]
-fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
-    let core = ChatCore::new();
-    assert_eq!(core.feature_bucket(), None);
-    core.apply_feature_config(r#"{"features":{"v1_send":true}}"#, FeatureApply::Full, None)
+    party
+        .core
+        .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
         .unwrap();
-    assert!(core.is_enabled(crate::features::V1_SEND));
-    assert!(!core.feature_refetch_due());
-
-    core.generate_keypairs().unwrap();
-    core.set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
-        .unwrap();
-    assert!(core.feature_refetch_due());
-    assert!(!core.is_enabled(crate::features::V1_SEND));
+    assert_eq!(party.core.start_features(), None, "new keys read nothing");
     let ckey = key(3);
-    let payload = core
-        .encrypt_message(&message_params("before refetch", &ckey))
-        .unwrap();
-    assert_eq!(payload.signature_info.signature_version, "7");
-
-    let bucket = core.feature_bucket();
-    assert!(bucket.is_some());
-    core.apply_feature_config(
-        r#"{"features":{"v1_send":true}}"#,
-        FeatureApply::Full,
-        bucket,
-    )
-    .unwrap();
-    assert!(!core.feature_refetch_due());
-    assert!(core.is_enabled(crate::features::V1_SEND));
-    let payload = core
-        .encrypt_message(&message_params("refetched", &ckey))
+    let payload = party
+        .core
+        .encrypt_message(&message_params("still v1", &ckey))
         .unwrap();
     assert_eq!(payload.signature_info.signature_version, "10");
+    let payload = later
+        .core
+        .encrypt_message(&message_params("v0", &ckey))
+        .unwrap();
+    assert_v0(&later, &ckey, "the later chat's answer", &payload);
 }
 
+#[cfg(not(feature = "bindings"))]
 #[test]
-fn the_feature_bucket_follows_the_identity_key() {
-    let core = ChatCore::new();
-    assert_eq!(core.feature_bucket(), None);
-    let registration = core.generate_keypairs().unwrap();
-    let bucket = core.feature_bucket().unwrap();
-    assert!(bucket < 10_000);
-
-    let spki = base64_decode(&registration.public_key.public_key).unwrap();
-    assert_eq!(bucket, crate::features::bucket_for_public_key(&spki));
-
-    let restored = ChatCore::new();
-    restored
-        .import_keys(&ImportKeysParams::new(core.export_keys().unwrap().to_vec()))
-        .unwrap();
-    assert_eq!(restored.feature_bucket(), Some(bucket));
-
-    core.lock();
-    assert_eq!(core.feature_bucket(), None);
+fn without_the_bindings_every_send_is_v0() {
+    let party = author();
+    assert_eq!(party.core.start_features(), None, "nothing to fetch");
+    let ckey = key(3);
+    for text in ["first", "second"] {
+        let payload = party
+            .core
+            .encrypt_message(&message_params(text, &ckey))
+            .unwrap();
+        assert_v0(&party, &ckey, text, &payload);
+    }
 }
 
 #[test]

@@ -5,9 +5,6 @@ import sys
 import unittest
 import uuid
 
-# Keep every chat's automatic feature fetch off the network.
-os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
-
 
 def _repo_root() -> str:
     # .../crates/pyo3/python/tests/test_sdk_vectors.py -> repo root is 4 levels up
@@ -92,6 +89,9 @@ class TestPythonSdkVectors(unittest.TestCase):
             from chat_xdk import Chat  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+        from features_support import keep_offline
+
+        keep_offline()
 
     def test_public_keys_and_signature_match_fixture(self):
         from chat_xdk import Chat, ImportKeysParams
@@ -371,10 +371,13 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(event["verified"])
         return event["content"]
 
-    def _identity_chat(self, v):
+    def _identity_chat(self, v, v1=False):
+        """A chat with the fixture's keys and identity. With ``v1``, its
+        feature switches turn v1_send on."""
         from chat_xdk import Chat, ImportKeysParams, SetIdentityParams
+        from features_support import v1_chat
 
-        chat = Chat()
+        chat = v1_chat() if v1 else Chat()
         chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
         chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
         return chat
@@ -713,8 +716,9 @@ class TestPythonSdkVectors(unittest.TestCase):
         """Send a v1 message with ``attachments``, check it verifies, and
         return its payload."""
         from chat_xdk import EncryptMessageParams
+        from features_support import wait_for_v1
 
-        chat._apply_feature_config('{"features":{"v1_send":true}}', chat._feature_bucket())
+        wait_for_v1(chat)
         payload = chat.encrypt_message(
             EncryptMessageParams(
                 v["event_conversation_id"],
@@ -738,7 +742,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
 
         v = _load_vectors()
-        chat = self._identity_chat(v)
+        chat = self._identity_chat(v, v1=True)
         key = base64.b64decode(v["conversation_key_b64"])
         keys = {v["event_conversation_key_version"]: key}
         photos = [b"\x01" * 3000, b"\x02" * 5000]
@@ -786,7 +790,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         from chat_xdk import EncryptFileParams
 
         v = _load_vectors()
-        chat = self._identity_chat(v)
+        chat = self._identity_chat(v, v1=True)
         keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
         card = {
             "attachment_type": "url",
@@ -807,7 +811,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         from chat_xdk import EncryptFileParams
 
         v = _load_vectors()
-        chat = self._identity_chat(v)
+        chat = self._identity_chat(v, v1=True)
         keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
         draft = self._send_files(chat, v, "draft", [_media("photo-0"), _media("photo-1")])
         encrypted = chat.encrypt_file(EncryptFileParams(b"photo", draft.event_b64, "photo-1", **_key_kwargs(keys)))
@@ -824,7 +828,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         from chat_xdk import EncryptFileParams, EncryptReplyParams
 
         v = _load_vectors()
-        chat = self._identity_chat(v)
+        chat = self._identity_chat(v, v1=True)
         keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
         original = self._send_files(chat, v, "a photo", [_media("original-photo")])
         with self.assertRaisesRegex(ValueError, "reply_to_event carries no sequence_id"):

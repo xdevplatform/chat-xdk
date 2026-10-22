@@ -781,7 +781,7 @@ func TestEncryptDecryptEmptyString(t *testing.T) {
 // sender as its session identity.
 func mediaSender(t *testing.T, v sdkVectors) *Chat {
 	t.Helper()
-	chat := New()
+	chat := newV1Chat(t)
 	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		chat.Close()
 		t.Fatalf("ImportKeys failed: %v", err)
@@ -810,7 +810,7 @@ func mediaAttachment(mediaHashKey string) AttachmentDescriptor {
 // and returns its payload.
 func sendFiles(t *testing.T, chat *Chat, v sdkVectors, text string, attachments []AttachmentDescriptor) *SendPayload {
 	t.Helper()
-	enableV1Send(t, chat)
+	waitForV1(t, chat)
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
 		ConversationID:         v.EventConversationID,
 		Text:                   text,
@@ -2965,12 +2965,12 @@ func TestEventUnknownType(t *testing.T) {
 func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	v := loadVectors(t)
 
-	chat := New()
+	chat := newV1Chat(t)
 	defer chat.Close()
 	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
-	enableV1Send(t, chat)
+	waitForV1(t, chat)
 
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
 		SenderID:               v.EventSenderID,

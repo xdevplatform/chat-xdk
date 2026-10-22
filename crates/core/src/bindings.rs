@@ -1,82 +1,67 @@
 //! Feature switches for this repository's language bindings.
 //!
-//! Not part of the public API. Each binding fetches `GET /2/chat/features`
-//! with its own HTTP stack when a chat is created, again with the key's bucket
-//! once keys load, and re-checks it periodically, all without user
-//! involvement. These are the calls it makes on the chat; sends then pick the
-//! wire format from the applied flags.
+//! Not part of the public API. A chat reads `GET /2/chat/features` once, when
+//! it is created, and keeps the answer for its lifetime (see
+//! `crate::features`). The core decides what to fetch and what an answer
+//! means; a binding only performs the GET, with its own HTTP stack. Its chat
+//! constructor calls [`FeatureSwitches::start_features`], performs the GET it
+//! returns, if any, in the background, and reports the result with
+//! [`complete_fetch`].
 
-pub use crate::features::{FeatureApply, FEATURES_ENDPOINT, V1_SEND};
+pub use crate::features::Fetch;
 
-use crate::error::SdkError;
+use crate::features::shared;
 
-/// The feature-switch state of a chat, as the bindings drive it.
+/// Register the millisecond clock the core times GETs by. Only WebAssembly
+/// needs one: it has no system clock.
+pub fn set_clock(clock: fn() -> u64) {
+    shared::set_clock(clock);
+}
+
+/// Report the result of the GET `id`: its HTTP status, 0 when no response
+/// arrived, and the body, read to its end or to [`Fetch::max_bytes`] plus one
+/// byte, whichever comes first. A request that ended any other way reports
+/// status 0.
+pub fn complete_fetch(id: u64, status: u16, body: &[u8]) {
+    shared::complete_fetch(id, status, body);
+}
+
+/// For this repository's tests: the endpoint of every chat that does not set
+/// its own, or the X API's when `None`.
+pub fn set_default_endpoint(endpoint: Option<&str>) {
+    shared::set_default_endpoint(endpoint);
+}
+
+/// A chat's part in the feature switches, as the bindings drive it.
 pub trait FeatureSwitches {
-    /// The bucket `GET /2/chat/features` evaluates this chat's flags for,
-    /// derived from the loaded identity public key; `None` until keys load.
-    fn feature_bucket(&self) -> Option<u16>;
+    /// For this repository's tests: read this chat's switches from
+    /// `endpoint`, within `timeout_ms`. Only a read started after this call
+    /// uses them.
+    fn configure_features(&self, endpoint: &str, timeout_ms: u64);
 
-    /// Apply a `GET /2/chat/features` response body. `bucket` is the bucket
-    /// the request carried, or `None` when it carried none. A body that is not
-    /// a JSON object with a `features` object is an error and changes nothing.
-    fn apply_feature_config(
-        &self,
-        json: &str,
-        mode: FeatureApply,
-        bucket: Option<u16>,
-    ) -> Result<(), SdkError>;
-
-    /// Whether the feature switch `name` is on.
-    fn is_enabled(&self, name: &str) -> bool;
-
-    /// Whether keys are loaded but no response to a request carrying their
-    /// bucket has applied, so the flags must be fetched with the key's bucket.
-    fn feature_refetch_due(&self) -> bool;
+    /// Start this chat's one read of the switches: the GET to perform, or
+    /// `None` when the chat takes the answer of a GET already in flight or
+    /// has started its read already.
+    fn start_features(&self) -> Option<Fetch>;
 }
 
 impl FeatureSwitches for crate::ChatCore {
-    fn feature_bucket(&self) -> Option<u16> {
-        crate::ChatCore::feature_bucket(self)
+    fn configure_features(&self, endpoint: &str, timeout_ms: u64) {
+        crate::ChatCore::configure_features(self, endpoint, timeout_ms);
     }
 
-    fn apply_feature_config(
-        &self,
-        json: &str,
-        mode: FeatureApply,
-        bucket: Option<u16>,
-    ) -> Result<(), SdkError> {
-        crate::ChatCore::apply_feature_config(self, json, mode, bucket)
-    }
-
-    fn is_enabled(&self, name: &str) -> bool {
-        crate::ChatCore::is_enabled(self, name)
-    }
-
-    fn feature_refetch_due(&self) -> bool {
-        crate::ChatCore::feature_refetch_due(self)
+    fn start_features(&self) -> Option<Fetch> {
+        crate::ChatCore::start_features(self)
     }
 }
 
 #[cfg(feature = "juicebox")]
 impl FeatureSwitches for crate::Chat {
-    fn feature_bucket(&self) -> Option<u16> {
-        crate::Chat::feature_bucket(self)
+    fn configure_features(&self, endpoint: &str, timeout_ms: u64) {
+        FeatureSwitches::configure_features(self.core(), endpoint, timeout_ms);
     }
 
-    fn apply_feature_config(
-        &self,
-        json: &str,
-        mode: FeatureApply,
-        bucket: Option<u16>,
-    ) -> Result<(), SdkError> {
-        crate::Chat::apply_feature_config(self, json, mode, bucket)
-    }
-
-    fn is_enabled(&self, name: &str) -> bool {
-        crate::Chat::is_enabled(self, name)
-    }
-
-    fn feature_refetch_due(&self) -> bool {
-        crate::Chat::feature_refetch_due(self)
+    fn start_features(&self) -> Option<Fetch> {
+        FeatureSwitches::start_features(self.core())
     }
 }

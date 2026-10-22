@@ -140,19 +140,14 @@ provisioning step in both modes.
 
 The SDK makes one kind of request itself: an anonymous
 `GET https://api.x.com/2/chat/features`, which reads the X API's feature
-switches. They pick the format the SDK sends in. Each chat makes the request
-in the background when it is created, again once keys load (with a `bucket`
-query parameter, 0–9999, derived from the identity public key), and every
-5 minutes after that. Chats in one process that ask for the same bucket at
-the same time share one request.
+switches. They pick the format the SDK sends in. Each chat reads them once,
+when it is created, and keeps the answer for its lifetime; chats created while
+a request is in flight share it.
 
-The request carries no credentials and never delays or fails an SDK call. If
-it fails or is blocked, every switch stays off and sends stay in v0, the
-format 0.5.x sends; a failed request is retried with a backoff that grows to
-5 minutes. A chat stops when you release it (`free()` in JS, `close()` in
-Python and the JVM, `Close()` in Go, `Dispose()` in .NET) or when it is
-garbage-collected. The Rust crate never makes the request, so its sends are
-always v0.
+The request carries no credentials and never delays or fails an SDK call.
+Until it answers, and for the chat's lifetime if it fails or is blocked, every
+switch stays off and sends stay in v0, the format 0.5.x sends. The Rust crate
+never makes the request, so its sends are always v0.
 
 ## Cryptography
 

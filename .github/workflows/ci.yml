@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: ["**"]
 
-# Keeps the feature-switch fetch of every chat the suites create off the
-# network.
-env:
-  CHAT_XDK_FEATURES_ENDPOINT: http://127.0.0.1:9/2/chat/features
-
 jobs:
   test:
     name: test (${{ matrix.os }})

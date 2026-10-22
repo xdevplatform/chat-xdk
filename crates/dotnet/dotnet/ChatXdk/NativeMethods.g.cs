@@ -91,44 +91,42 @@ namespace ChatXdk
         /// <summary>
         ///  Internal, for this repository's bindings; not part of the API.
         ///
-        ///  The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
-        ///  flags for, derived from the loaded identity public key; -1 until keys
-        ///  load (or for a null handle).
+        ///  Start this chat's one read of the feature switches. Returns in `data` the
+        ///  GET to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
+        ///  "max_bytes": …}`. Both fields are NULL when the chat takes the answer of a
+        ///  GET already in flight, or has started its read already.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_bucket", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_internal_feature_bucket(ChatHandle* handle);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_start", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_internal_feature_start(ChatHandle* handle);
 
         /// <summary>
         ///  Internal, for this repository's bindings; not part of the API.
         ///
-        ///  Apply a `GET /2/chat/features` response body.
-        ///
-        ///  `bucket` is the bucket the request carried, or negative when it carried
-        ///  none. A non-zero `downgrade_only` only turns flags off (a re-check);
-        ///  zero replaces them. A body that is not a JSON object with a `features`
-        ///  object is an error and changes nothing.
+        ///  Report the result of the feature-switch GET `id`: its HTTP status, 0 when
+        ///  no response arrived, and `body_len` bytes of its body, read to the end or
+        ///  to one byte past the GET's `max_bytes`. `body` may be NULL when
+        ///  `body_len` is 0.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_apply_feature_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_internal_apply_feature_config(ChatHandle* handle, byte* json, int bucket, int downgrade_only);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_complete", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void chat_xdk_internal_feature_complete(ulong id, int status, byte* body, nuint body_len);
 
         /// <summary>
-        ///  Internal, for this repository's bindings; not part of the API.
+        ///  Internal, for this repository's tests; not part of the API.
         ///
-        ///  Whether the feature switch `name` is on: 1 on, 0 off, -1 on a null
-        ///  handle or invalid name.
+        ///  Read this chat's feature switches from `endpoint`, within `timeout_ms`
+        ///  milliseconds, when its read starts.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_is_enabled", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_internal_is_enabled(ChatHandle* handle, byte* name);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_configure", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_internal_feature_configure(ChatHandle* handle, byte* endpoint, ulong timeout_ms);
 
         /// <summary>
-        ///  Internal, for this repository's bindings; not part of the API.
+        ///  Internal, for this repository's tests; not part of the API.
         ///
-        ///  Whether keys are loaded but no response to a request carrying their
-        ///  bucket has applied, so the flags must be fetched with the key's bucket:
-        ///  1 yes, 0 no, -1 on a null handle.
+        ///  The feature-switch endpoint of every chat that does not set its own;
+        ///  NULL for the X API's.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_refetch_due", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_internal_feature_refetch_due(ChatHandle* handle);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_set_default_endpoint", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_internal_feature_set_default_endpoint(byte* endpoint);
 
         /// <summary>
         ///  Store signing keys to use when a decrypt call passes an empty

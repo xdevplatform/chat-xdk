@@ -30,7 +30,7 @@
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
+use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
@@ -120,11 +120,44 @@ pub fn detect_image_dimensions(bytes: &[u8]) -> JsValue {
     }
 }
 
+// Feature switches (GET /2/chat/features). A chat reads them once, when it is
+// created: the core decides what to fetch and what an answer means, and the JS
+// wrapper performs the GET. None of this is API, and all of it is left out of
+// the TypeScript declarations.
+
+/// Milliseconds from `performance.now()`, or `Date.now()` without it.
+fn feature_clock() -> u64 {
+    let performance = js_sys::Reflect::get(&js_sys::global(), &"performance".into()).ok();
+    let now = performance.and_then(|performance| {
+        let now: js_sys::Function = js_sys::Reflect::get(&performance, &"now".into())
+            .ok()?
+            .dyn_into()
+            .ok()?;
+        now.call0(&performance).ok()?.as_f64()
+    });
+    now.unwrap_or_else(js_sys::Date::now) as u64
+}
+
+/// Report the result of the GET `id`: its HTTP status, 0 when no complete
+/// response arrived, and its body.
+#[wasm_bindgen(js_name = __featureComplete, skip_typescript)]
+pub fn feature_complete(id: f64, status: u16, body: &[u8]) {
+    bindings::complete_fetch(id as u64, status, body);
+}
+
+/// For this repository's tests: the endpoint of every chat that does not set
+/// its own, or the X API's when absent.
+#[wasm_bindgen(js_name = __featureSetDefaultEndpoint, skip_typescript)]
+pub fn feature_set_default_endpoint(endpoint: Option<String>) {
+    bindings::set_default_endpoint(endpoint.as_deref());
+}
+
 /// Initialize panic hook for better error messages in console.
 #[wasm_bindgen(start)]
 pub fn init() {
     #[cfg(feature = "panic_hook")]
     console_error_panic_hook::set_once();
+    bindings::set_clock(feature_clock);
 }
 
 /// The X Chat encryption SDK for JavaScript (crypto-only WASM layer).
@@ -222,40 +255,33 @@ impl Chat {
         self.inner.set_cache_keys(enabled);
     }
 
-    // Feature switches. Internal: the JS wrapper fetches
-    // `GET /2/chat/features` itself and drives these; they are not API and
-    // are left out of the TypeScript declarations.
-
-    #[wasm_bindgen(js_name = __featureBucket, skip_typescript)]
-    pub fn feature_bucket(&self) -> Option<u16> {
-        self.inner.feature_bucket()
+    /// For this repository's tests: read this chat's feature switches from
+    /// `endpoint`, within `timeoutMs`. Call it before the wrapper starts the
+    /// read. Not API.
+    #[wasm_bindgen(js_name = __configureFeatures, skip_typescript)]
+    pub fn configure_features(&self, endpoint: &str, timeout_ms: f64) {
+        self.inner.configure_features(endpoint, timeout_ms as u64);
     }
 
-    #[wasm_bindgen(js_name = __applyFeatureConfig, skip_typescript)]
-    pub fn apply_feature_config(
-        &self,
-        json: &str,
-        bucket: Option<u16>,
-        downgrade_only: Option<bool>,
-    ) -> Result<(), JsError> {
-        let mode = if downgrade_only.unwrap_or(false) {
-            FeatureApply::DowngradeOnly
-        } else {
-            FeatureApply::Full
+    /// Start this chat's one read of the feature switches:
+    /// `{ id, url, timeoutMs, maxBytes }` for the wrapper to GET, or
+    /// `undefined` when the chat takes the answer of a GET in flight or has
+    /// started its read already. Not API.
+    #[wasm_bindgen(js_name = __featureStart, skip_typescript)]
+    pub fn feature_start(&self) -> JsValue {
+        let Some(fetch) = self.inner.start_features() else {
+            return JsValue::UNDEFINED;
         };
-        self.inner
-            .apply_feature_config(json, mode, bucket)
-            .map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    #[wasm_bindgen(js_name = __isEnabled, skip_typescript)]
-    pub fn is_enabled(&self, name: &str) -> bool {
-        self.inner.is_enabled(name)
-    }
-
-    #[wasm_bindgen(js_name = __featureRefetchDue, skip_typescript)]
-    pub fn feature_refetch_due(&self) -> bool {
-        self.inner.feature_refetch_due()
+        let request = js_sys::Object::new();
+        for (name, value) in [
+            ("id", JsValue::from(fetch.id as f64)),
+            ("url", fetch.url.into()),
+            ("timeoutMs", (fetch.timeout_ms as f64).into()),
+            ("maxBytes", (fetch.max_bytes as f64).into()),
+        ] {
+            js_sys::Reflect::set(&request, &name.into(), &value).ok();
+        }
+        request.into()
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`

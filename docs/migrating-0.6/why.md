@@ -43,13 +43,12 @@ v0. Upgrade the apps that read your conversations first:
 
 The bindings read the switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, in the background. It carries no
-credentials; its `bucket` query parameter, 0–9999, derived from the
-identity public key, lets the answer differ between keys. It never delays or
-fails a call, and any failure leaves every switch off, so sends stay in v0,
-the format every reader opens. Chats that ask at once share a request. The
-5-minute re-checks can only turn a switch off, so `v1_send` turning off
-reaches running chats, while it turning on reaches chats created after.
-Releasing a chat stops its requests:
+credentials and no query parameters. Each chat reads the switches once, when
+it is created, and keeps the answer for its lifetime, so a change to a switch
+reaches the chats created after it; chats created while a request is in
+flight share it. The request never delays or fails a call, and any failure
+leaves every switch off for the chat's lifetime, so its sends stay in v0, the
+format every reader opens:
 [Python](python.md#the-feature-switch-request),
 [JavaScript](javascript.md#the-feature-switch-request),
 [Go](go.md#the-feature-switch-request),
