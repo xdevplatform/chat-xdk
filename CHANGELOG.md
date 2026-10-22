@@ -447,9 +447,7 @@ prepared = chat.prepare_conversation_key_change(
   of a single `ActionSignature`; read the action's `message_id` from that
   entry. Go, .NET and the JVM omit an absent `signature_payload` when
   serializing (.NET `SignaturePayload` is `string?` and the JVM field is
-  `null` when absent). The mark-read shape is pending: the X API's mark-read
-  route does not take `action_signatures` yet, so the shape may change when
-  it does.
+  `null` when absent).
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.

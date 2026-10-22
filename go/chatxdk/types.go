@@ -545,9 +545,7 @@ type MessageEventSignature struct {
 }
 
 // PreparedAction is a signed message delete or read receipt: the
-// action_signatures a request carries for it, one entry. The X API's
-// mark-read route does not take action_signatures yet, so that request
-// shape is not final.
+// action_signatures a request carries for it, one entry.
 type PreparedAction struct {
 	ActionSignatures []ActionSignature `json:"action_signatures"`
 }

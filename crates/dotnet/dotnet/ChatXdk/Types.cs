@@ -197,8 +197,7 @@ namespace ChatXdk
 
     /// <summary>
     /// A signed message delete or read receipt: the <c>action_signatures</c> a request
-    /// carries for it, one entry. The X API's mark-read route does not take
-    /// <c>action_signatures</c> yet, so that request shape is not final.
+    /// carries for it, one entry.
     /// </summary>
     public sealed class PreparedAction
     {

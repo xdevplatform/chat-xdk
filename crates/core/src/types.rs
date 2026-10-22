@@ -1392,8 +1392,7 @@ pub struct PreparedConversationChange {
 /// request carries for it.
 ///
 /// Returned by `prepare_message_delete` and `prepare_mark_conversation_read`,
-/// each with one entry. The X API's mark-read route does not take
-/// `action_signatures` yet, so its request shape is not final.
+/// each with one entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct PreparedAction {

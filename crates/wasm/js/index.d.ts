@@ -103,8 +103,7 @@ export interface MessageEventSignature {
 
 /**
  * A signed message delete or read receipt: the `actionSignatures` a request
- * carries for it, one entry. The X API's mark-read route does not take
- * `actionSignatures` yet, so that request shape is not final.
+ * carries for it, one entry.
  */
 export interface PreparedAction {
   actionSignatures: ActionSignature[];
@@ -1086,9 +1085,9 @@ interface ChatCrypto {
   prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
 
   /**
-   * Build the signed action for marking a conversation read: the request's
-   * `actionSignatures`, one entry. The X API's mark-read route does not take
-   * them yet, so that request shape is not final.
+   * Build the signed action for marking a conversation read: the
+   * `actionSignatures` of the mark-read request
+   * (`POST /2/chat/conversations/{id}/read`), one entry.
    */
   prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
 
