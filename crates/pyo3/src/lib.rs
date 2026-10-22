@@ -2511,6 +2511,7 @@ impl FileDecryptor {
 
 #[pymodule]
 fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<Chat>()?;
     m.add_class::<FileEncryptor>()?;
     m.add_class::<FileDecryptor>()?;

@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -70,6 +71,15 @@ class TestUtilityFunctions(unittest.TestCase):
             import chat_xdk  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+
+    def test_version_is_the_release_version(self):
+        import chat_xdk
+
+        with open(os.path.join(_repo_root(), "Cargo.toml"), encoding="utf-8") as f:
+            cargo = f.read()
+        workspace = cargo[cargo.index("[workspace.package]"):]
+        version = re.search(r'^version\s*=\s*"([^"]+)"', workspace, re.M).group(1)
+        self.assertEqual(chat_xdk.__version__, version)
 
     def test_base64_roundtrip(self):
         from chat_xdk import base64_to_bytes, bytes_to_base64
