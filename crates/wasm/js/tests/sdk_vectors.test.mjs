@@ -83,13 +83,14 @@ async function main() {
   // file fixtures use the deterministic conversation key
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // A message with files is built first; each file is then encrypted from
-  // the returned eventB64 and the media hash key its attachment names, and
-  // opens from the sent message's event.
+  // A v1 message with files is built first; each file is then encrypted
+  // from the returned eventB64 and the media hash key its attachment names,
+  // and opens from the sent message's event.
   const fixtureKeys = { [v.event_conversation_key_version]: convKey };
   const sender = new Chat();
   sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
   sender.setIdentity(v.event_sender_id, v.event_signing_key_version);
+  sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
   const media = (mediaHashKey) => ({
     attachment_type: "media",
     media_hash_key: mediaHashKey,

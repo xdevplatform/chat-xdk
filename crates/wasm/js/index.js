@@ -319,6 +319,8 @@ export class ChatWithJuicebox {
   // getter. Called before every Juicebox network operation so sequential use
   // of multiple instances presents the right tokens (last-armed wins).
   #armAuthTokenHook;
+  // This instance's feature-switch fetches (see startFeatureSwitches).
+  #features;
 
   constructor(
     wasmChat,
@@ -336,6 +338,7 @@ export class ChatWithJuicebox {
     this.#JuiceboxConfiguration = JuiceboxConfiguration;
     this.#JuiceboxClient = JuiceboxClientCtor;
     this.#armAuthTokenHook = armAuthTokenHook ?? (() => {});
+    this.#features = startFeatureSwitches(wasmChat);
   }
 
   // Juicebox lifecycle (handled in this JS layer)
@@ -511,8 +514,180 @@ export class ChatWithJuicebox {
    * hygiene.
    */
   free() {
+    stopFeatureSwitches(this.#features);
     this.#inner.lock();
     this.#inner.free();
+  }
+}
+
+// Feature switches (GET /2/chat/features). Internal: every ChatWithJuicebox
+// fetches them itself, without blocking or failing, and sends stay v0 unless
+// a response turns v1_send on. Nothing here is API. The environment
+// variables read below exist for this repository's tests.
+
+const FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
+const MAX_FEATURES_BODY = 64 * 1024;
+const MAX_FEATURE_REFETCH_BACKOFF_MS = 60_000;
+
+/** A non-empty environment variable in Node; undefined anywhere else. */
+function envVar(name) {
+  try {
+    return globalThis.process?.env?.[name] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function featureSettings() {
+  const number = (name, fallback) => {
+    const value = Number(envVar(name));
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  };
+  return {
+    endpoint: envVar("CHAT_XDK_FEATURES_ENDPOINT") ?? FEATURES_ENDPOINT,
+    timeoutMs: number("CHAT_XDK_FEATURES_TIMEOUT_MS", 2000),
+    refreshMs: number("CHAT_XDK_FEATURES_REFRESH_SECONDS", 300) * 1000,
+    keyPollMs: number("CHAT_XDK_FEATURES_KEY_POLL_MS", 1000),
+  };
+}
+
+/**
+ * Fetch the flags for `wasmChat` now (retrying once), again with the key's
+ * bucket once keys load (retrying with backoff), and re-check them every
+ * refresh interval with a fetch that can only turn flags off, until
+ * `stopFeatureSwitches`. The chat is held weakly so an instance dropped
+ * without `free()` can still be collected; the fetches end with it.
+ */
+function startFeatureSwitches(wasmChat) {
+  const run = {
+    chat: weakRef(wasmChat),
+    settings: featureSettings(),
+    stopped: false,
+    timer: null,
+    request: null,
+  };
+  featureLoop(run).catch(() => {});
+  return run;
+}
+
+// Its own function: a closure over `target` in startFeatureSwitches would
+// share that function's scope with the loop's catch handler and keep the
+// chat alive for as long as the loop runs.
+function weakRef(target) {
+  return typeof WeakRef === "function" ? new WeakRef(target) : { deref: () => target };
+}
+
+function stopFeatureSwitches(run) {
+  run.stopped = true;
+  clearTimeout(run.timer);
+  run.request?.abort();
+}
+
+/**
+ * `use(chat)`, or `gone` once the chat was freed or collected. The async
+ * functions below reach the chat only through this, so they never hold it
+ * across an await.
+ */
+function withChat(run, use, gone) {
+  const chat = run.stopped ? undefined : run.chat.deref();
+  return chat === undefined ? gone : use(chat);
+}
+
+async function featureLoop(run) {
+  const { refreshMs, keyPollMs } = run.settings;
+  (await fetchFeatures(run, false)) || (await fetchFeatures(run, false));
+  let nextRecheck = Date.now() + refreshMs;
+  let retryAt = 0;
+  let backoffMs = 1000;
+  for (;;) {
+    let keyed = false;
+    try {
+      const now = Date.now();
+      if (withChat(run, (chat) => chat.__featureRefetchDue(), false)) {
+        if (now >= retryAt) {
+          if (await fetchFeatures(run, false)) {
+            backoffMs = 1000;
+            nextRecheck = Date.now() + refreshMs;
+          } else {
+            retryAt = Date.now() + backoffMs;
+            backoffMs = Math.min(backoffMs * 2, MAX_FEATURE_REFETCH_BACKOFF_MS);
+          }
+        }
+      } else if (refreshMs > 0 && now >= nextRecheck) {
+        await fetchFeatures(run, true);
+        nextRecheck = Date.now() + refreshMs;
+      }
+      keyed = withChat(
+        run,
+        (chat) => chat.__featureBucket() !== undefined && !chat.__featureRefetchDue(),
+        false,
+      );
+    } catch {
+      // A failed step changes nothing; the next one retries.
+    }
+    if (!withChat(run, () => true, false) || (keyed && refreshMs <= 0)) return;
+    // Until a response for the key's bucket applies, watch for keys to load;
+    // afterwards, wake only for the re-check.
+    const waitMs = keyed ? Math.max(0, nextRecheck - Date.now()) : keyPollMs;
+    await new Promise((resolve) => {
+      run.timer = unrefTimer(setTimeout(resolve, waitMs));
+    });
+  }
+}
+
+/** Fetch the flags for the chat's bucket and apply them; true on success. */
+async function fetchFeatures(run, downgradeOnly) {
+  const bucket = withChat(run, (chat) => chat.__featureBucket() ?? null, undefined);
+  if (bucket === undefined) return false;
+  const request = new AbortController();
+  run.request = request;
+  const body = await getFeatures(
+    featuresUrl(run.settings.endpoint, bucket),
+    run.settings.timeoutMs,
+    request,
+  );
+  if (run.request === request) run.request = null;
+  if (body === null) return false;
+  try {
+    return withChat(
+      run,
+      (chat) => {
+        chat.__applyFeatureConfig(body, bucket ?? undefined, downgradeOnly);
+        return true;
+      },
+      false,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function featuresUrl(endpoint, bucket) {
+  if (bucket === null) return endpoint;
+  return `${endpoint}${endpoint.includes("?") ? "&" : "?"}bucket=${bucket}`;
+}
+
+/** In Node, keep a pending refresh from holding the process open. */
+function unrefTimer(timer) {
+  timer?.unref?.();
+  return timer;
+}
+
+/** The body of a 200 response from `url`, or null on any failure. */
+async function getFeatures(url, timeoutMs, request) {
+  const timer = setTimeout(() => request.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: request.signal,
+    });
+    if (response.status !== 200) return null;
+    const body = await response.text();
+    return body.length > MAX_FEATURES_BODY ? null : body;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

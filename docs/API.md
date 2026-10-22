@@ -767,15 +767,17 @@ and the files encrypted for it stay valid. The text does not affect the id. A
 message without files takes a random id. Each file needs its own media hash
 key: an empty one, or one listed in more than one attachment, is rejected.
 
-**Messages are sent under per-message keys.** Every encrypted send —
-message, reply, reaction, edit — encrypts its contents under a key derived
-from the conversation key, the sender id, and the message id, marks the
-`MessageCreateEvent` with `contents_encryption_version` 1, and signs at
-signature version 10, which covers that field (see
-[CRYPTO.md — Message Keys](CRYPTO.md#message-keys)). The sender id must be
-the sender's numeric user id and the conversation key version an integer, as
-the key-change event carries it; anything else is rejected, since recipients
-derive the key from the numeric id and look the key up by the version.
+**The SDK picks each send's format.** An encrypted send (message, reply,
+reaction, edit) is either v0, the 0.5.x format, with contents under the
+conversation key, no `contents_encryption_version`, and signature version 7,
+or v1, with contents encrypted under a key derived from the conversation key,
+the sender id, and the message id, the `MessageCreateEvent` marked with
+`contents_encryption_version` 1, and signature version 10, which covers that
+field (see [CRYPTO.md — Message Keys](CRYPTO.md#message-keys)). Files follow
+their message's format. The sender id must be the sender's numeric user id
+and the conversation key version an integer, as the key-change event carries
+it; anything else is rejected, since v1 recipients derive the key from the
+numeric id and look the key up by the version.
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
 while **JS, Python, and Go** take positional `[start, end, type]` tuples
@@ -1844,9 +1846,10 @@ pub struct SendPayload {
     pub encrypted_content: String,       // Base64-encoded Thrift MessageCreateEvent
     pub signature: String,               // Base64-encoded ECDSA signature
     pub encoded_event_signature: String, // Base64-encoded Thrift MessageEventSignature
-    pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "10" }
+    pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
+    pub xdk_version: String,             // SDK version; send as the optional xdk_version field
 }
 
 // Python (SendPayload class attributes)
@@ -1858,6 +1861,7 @@ pub struct SendPayload {
 // signature_info: SignatureInfo
 // conversation_key_version: str
 // should_notify: bool
+// xdk_version: str
 ```
 
 ### EntityDescriptor (Rust, .NET, JVM) / EntityTuple (Go, JS) / tuple (Python)

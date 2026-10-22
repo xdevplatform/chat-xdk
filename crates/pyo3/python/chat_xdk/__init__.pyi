@@ -81,6 +81,7 @@ class SendPayload:
     signature_info: SignatureInfo
     conversation_key_version: str
     should_notify: bool
+    xdk_version: str
 
 # ---------------------------------------------------------------------------
 # Params

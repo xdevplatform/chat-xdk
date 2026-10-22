@@ -8,6 +8,14 @@ cpp_compat = true
 include = [
     "FfiResult",
 ]
+# Internal entry points for the Go package's feature switches; it declares
+# them itself. Not part of the C API.
+exclude = [
+    "chat_xdk_internal_feature_bucket",
+    "chat_xdk_internal_apply_feature_config",
+    "chat_xdk_internal_is_enabled",
+    "chat_xdk_internal_feature_refetch_due",
+]
 
 [export.rename]
 

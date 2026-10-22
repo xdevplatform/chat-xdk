@@ -35,6 +35,7 @@ use pyo3::Py;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, QuickReply, SigningKeyEntry};
@@ -327,6 +328,7 @@ fn to_py_send_payload(payload: chat_xdk_core::SendPayload) -> SendPayload {
         },
         conversation_key_version: payload.conversation_key_version,
         should_notify: payload.should_notify,
+        xdk_version: payload.xdk_version,
     }
 }
 
@@ -417,6 +419,10 @@ pub struct SendPayload {
     /// Whether to send push notification.
     #[pyo3(get)]
     pub should_notify: bool,
+    /// Version of the Chat XDK that built this payload. Send it as the
+    /// message's optional ``xdk_version`` field.
+    #[pyo3(get)]
+    pub xdk_version: String,
 }
 
 // Params
@@ -1396,7 +1402,7 @@ impl FileDecryptorParams {
 ///                          conversation_key=key, conversation_key_version=version)
 /// )
 /// ```
-#[pyclass]
+#[pyclass(subclass)]
 pub struct Chat {
     inner: chat_xdk_core::Chat,
     runtime: tokio::runtime::Runtime,
@@ -1475,6 +1481,41 @@ impl Chat {
     /// from it. Disabling clears the cache.
     fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
+    }
+
+    // Feature switches. Internal: the Python ``Chat`` fetches
+    // ``GET /2/chat/features`` itself and drives these; they are not API.
+
+    #[pyo3(name = "_feature_bucket")]
+    fn feature_bucket(&self) -> Option<u16> {
+        self.inner.feature_bucket()
+    }
+
+    #[pyo3(name = "_apply_feature_config", signature = (json, bucket=None, downgrade_only=false))]
+    fn apply_feature_config(
+        &self,
+        json: &str,
+        bucket: Option<u16>,
+        downgrade_only: bool,
+    ) -> PyResult<()> {
+        let mode = if downgrade_only {
+            FeatureApply::DowngradeOnly
+        } else {
+            FeatureApply::Full
+        };
+        self.inner
+            .apply_feature_config(json, mode, bucket)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+
+    #[pyo3(name = "_is_enabled")]
+    fn is_enabled(&self, name: &str) -> bool {
+        self.inner.is_enabled(name)
+    }
+
+    #[pyo3(name = "_feature_refetch_due")]
+    fn feature_refetch_due(&self) -> bool {
+        self.inner.feature_refetch_due()
     }
 
     /// Store signing keys to use when a decrypt call's ``signing_keys`` is

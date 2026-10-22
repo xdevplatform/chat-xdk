@@ -14,7 +14,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 # Core SDK with full Juicebox support
-chat-xdk-core = { workspace = true, features = ["juicebox"] }
+chat-xdk-core = { workspace = true, features = ["juicebox", "bindings"] }
 
 # Async runtime (Juicebox calls are async; we block_on them in the FFI layer)
 tokio = { workspace = true, features = ["rt-multi-thread"] }

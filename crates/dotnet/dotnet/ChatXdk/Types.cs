@@ -115,6 +115,13 @@ namespace ChatXdk
         /// <summary>Whether the X API should send a push notification.</summary>
         [JsonPropertyName("should_notify")]
         public bool ShouldNotify { get; init; }
+
+        /// <summary>
+        /// Version of the Chat XDK that built this payload. Send it as the message's
+        /// optional <c>xdk_version</c> field.
+        /// </summary>
+        [JsonPropertyName("xdk_version")]
+        public string XdkVersion { get; init; } = "";
     }
 
     // Action signatures (group operations)

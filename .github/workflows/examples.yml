@@ -11,6 +11,12 @@ on:
 # Runs the OFFLINE test for each example bot (real binding, no SDK mocking, no
 # network). The live e2e (CHATXDK_E2E=1) is intentionally not run in CI — it
 # needs real X API credentials.
+
+# Keeps the feature-switch fetch of every chat the examples create off the
+# network.
+env:
+  CHAT_XDK_FEATURES_ENDPOINT: http://127.0.0.1:9/2/chat/features
+
 jobs:
   examples:
     name: example offline tests

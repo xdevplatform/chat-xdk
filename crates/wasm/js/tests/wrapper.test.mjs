@@ -22,6 +22,8 @@ if (typeof globalThis.crypto === "undefined") {
   globalThis.crypto = webcrypto;
 }
 
+// Keep every chat's automatic feature fetch off the network.
+process.env.CHAT_XDK_FEATURES_ENDPOINT ??= "http://127.0.0.1:9/2/chat/features";
 
 async function loadVectors() {
   const path = new URL("../../../../tests/fixtures/sdk_vectors.json", import.meta.url);
@@ -274,7 +276,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.equal(sendPayload.signatureInfo.signatureVersion, "10");
+  assert.equal(sendPayload.signatureInfo.signatureVersion, "7");
   assert.ok(sendPayload.messageId.length > 0);
   const replyPayload = chat.encryptReply({
     senderId: "111",

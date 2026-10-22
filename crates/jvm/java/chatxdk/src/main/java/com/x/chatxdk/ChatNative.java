@@ -12,7 +12,7 @@ import com.sun.jna.ptr.PointerByReference;
  */
 public interface ChatNative extends Library {
 
-    ChatNative INSTANCE = NativeLoader.load();
+    ChatNative INSTANCE = NativeLoader.load(ChatNative.class);
 
     Pointer chat_xdk_new();
 

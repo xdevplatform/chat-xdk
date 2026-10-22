@@ -4,25 +4,28 @@
 
 ### Breaking changes
 
-#### Messages are sent under per-message keys
+#### Sends can use per-message keys
 
-Every encrypted send (message, reply, reaction and edit) now encrypts its
-contents under a key derived from the conversation key, the sender id and
-the message id. It sets `contents_encryption_version` 1 on the
-`MessageCreateEvent` and signs at signature version 10, which covers that
-field. Other signed actions (conversation-key changes, group changes and
-deletes) still sign at version 7.
+Every encrypted send (message, reply, reaction and edit) is in one of two
+wire formats, and the SDK picks which:
 
-Readers need per-message-key support to read these sends. chat-xdk 0.5.x
-and earlier decrypt every message with the conversation key, so they return
-a decryption error for each message, reply, reaction and edit this release
-sends. Native clients that predate per-message keys cannot read them either.
-Upgrade readers before senders.
+- **v0**, the 0.5.x format: contents are encrypted under the conversation
+  key, `contents_encryption_version` is unset, and the send is signed at
+  signature version 7.
+- **v1**, per-message keys: contents are encrypted under a key derived from
+  the conversation key, the sender id and the message id, the
+  `MessageCreateEvent` carries `contents_encryption_version` 1, and the send
+  is signed at signature version 10, which covers that field.
+
+Sends are v0 unless the X API turns v1 on. Readers need per-message-key
+support for v1 sends, and 0.5.x returns a decryption error for each of them,
+so upgrade readers first. Other signed actions (conversation-key changes,
+group changes and deletes) still sign at version 7.
 
 `sender_id` must be the sender's numeric user id, and
 `conversation_key_version` an integer as its key-change event carries it.
-Other values are now rejected, since recipients derive the key from the
-numeric id and look it up by the version.
+Other values are now rejected in both formats, since v1 recipients derive
+the key from the numeric id and look it up by the version.
 
 #### Key registration sends only the public key
 
@@ -377,6 +380,11 @@ prepared = chat.prepare_conversation_key_change(
 
 ### Added
 
+- Each chat fetches its feature switches from `GET /2/chat/features` in the
+  background, without delaying or failing anything; there is nothing to call.
+- `SendPayload` carries `xdk_version`, the SDK version that built it
+  (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Forward it as the send
+  request's optional `xdk_version` field once the X API accepts it.
 - Messages encrypted under per-message keys (`contents_encryption_version`
   1 or more) decrypt, as do their reply previews, edits and files. A reply
   to such a message carries the original's key, and an edit names the

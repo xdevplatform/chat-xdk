@@ -5,6 +5,9 @@ import sys
 import unittest
 import uuid
 
+# Keep every chat's automatic feature fetch off the network.
+os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
+
 
 def _repo_root() -> str:
     # .../crates/pyo3/python/tests/test_sdk_vectors.py -> repo root is 4 levels up
@@ -693,10 +696,11 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertFalse(chat.verify(public_key, signature, v["payload_message_v10"].encode()))
 
     def _send_files(self, chat, v, text, attachments):
-        """Send a message with ``attachments``, check it verifies, and return
-        its payload."""
+        """Send a v1 message with ``attachments``, check it verifies, and
+        return its payload."""
         from chat_xdk import EncryptMessageParams
 
+        chat._apply_feature_config('{"features":{"v1_send":true}}', chat._feature_bucket())
         payload = chat.encrypt_message(
             EncryptMessageParams(
                 v["event_conversation_id"],

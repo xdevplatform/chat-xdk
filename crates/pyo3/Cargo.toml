@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Core library (with Juicebox support for native builds)
-chat-xdk-core = { workspace = true, features = ["juicebox"] }
+chat-xdk-core = { workspace = true, features = ["juicebox", "bindings"] }
 
 # Python bindings
 pyo3.workspace = true

@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroize;
 
+use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
@@ -219,6 +220,42 @@ impl Chat {
     #[wasm_bindgen(js_name = setCacheKeys)]
     pub fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
+    }
+
+    // Feature switches. Internal: the JS wrapper fetches
+    // `GET /2/chat/features` itself and drives these; they are not API and
+    // are left out of the TypeScript declarations.
+
+    #[wasm_bindgen(js_name = __featureBucket, skip_typescript)]
+    pub fn feature_bucket(&self) -> Option<u16> {
+        self.inner.feature_bucket()
+    }
+
+    #[wasm_bindgen(js_name = __applyFeatureConfig, skip_typescript)]
+    pub fn apply_feature_config(
+        &self,
+        json: &str,
+        bucket: Option<u16>,
+        downgrade_only: Option<bool>,
+    ) -> Result<(), JsError> {
+        let mode = if downgrade_only.unwrap_or(false) {
+            FeatureApply::DowngradeOnly
+        } else {
+            FeatureApply::Full
+        };
+        self.inner
+            .apply_feature_config(json, mode, bucket)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = __isEnabled, skip_typescript)]
+    pub fn is_enabled(&self, name: &str) -> bool {
+        self.inner.is_enabled(name)
+    }
+
+    #[wasm_bindgen(js_name = __featureRefetchDue, skip_typescript)]
+    pub fn feature_refetch_due(&self) -> bool {
+        self.inner.feature_refetch_due()
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`

@@ -1,8 +1,8 @@
 //! Per-message keys, and reply previews that carry message keys.
 
 use super::test_support::{
-    decrypt_message, frame, hex_key, holder, key, keys, known_answer_media_message, media,
-    message_event, message_key, sent_event, Party, CONVERSATION, KAT_CONVERSATION_KEY,
+    decrypt_message, enable_v1_send, frame, hex_key, holder, key, keys, known_answer_media_message,
+    media, message_event, message_key, sent_event, Party, CONVERSATION, KAT_CONVERSATION_KEY,
     KAT_KEY_SENDER, SIGNING_KEY_VERSION,
 };
 use super::*;
@@ -196,10 +196,13 @@ struct ReplyFixture {
 }
 
 impl ReplyFixture {
-    /// An original v10 message-key message from the author with one photo.
+    /// An original v10 message-key message from the author with one photo;
+    /// both parties send v1.
     fn new() -> Self {
         let author = Party::new(AUTHOR);
         let replier = Party::new(REPLIER);
+        enable_v1_send(&author.core);
+        enable_v1_send(&replier.core);
         let ckey = key(7);
         let original_key = message_key(&ckey, AUTHOR, "orig-1");
         let contents = holder(MessageContents {
@@ -708,6 +711,7 @@ fn a_reply_to_a_message_key_original_carries_its_key_and_its_edits_key() {
 fn a_reply_to_a_conversation_key_original_carries_no_key() {
     let author = Party::new(AUTHOR);
     let replier = Party::new(REPLIER);
+    enable_v1_send(&replier.core);
     let ckey = key(7);
     let original = message_event(
         &author,

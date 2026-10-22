@@ -27,11 +27,16 @@ Quick Start:
 
 __version__ = "0.1.0"
 
+import os as _os
 import re as _re
+import threading as _threading
+import time as _time
+import urllib.request as _urllib_request
+import weakref as _weakref
 from typing import Optional, TypedDict
 
+from chat_xdk._native import Chat as _NativeChat
 from chat_xdk._native import (
-    Chat,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -62,6 +67,108 @@ from chat_xdk._native import (
     encrypted_file_size,
     hex_to_bytes,
 )
+
+# Feature switches (GET /2/chat/features). Internal: every Chat fetches them
+# itself, without blocking or failing, and sends stay v0 unless a response
+# turns v1_send on. Nothing here is API. The module-level settings exist for
+# this repository's tests; CHAT_XDK_FEATURES_ENDPOINT overrides the endpoint.
+_FEATURES_ENDPOINT = "https://api.x.com/2/chat/features"
+_FEATURES_ENDPOINT_ENV = "CHAT_XDK_FEATURES_ENDPOINT"
+_FEATURE_TIMEOUT_SECONDS = 2.0
+_FEATURE_REFRESH_SECONDS = 300.0
+_FEATURE_KEY_POLL_SECONDS = 1.0
+_MAX_FEATURES_BODY = 64 * 1024
+_MAX_REFETCH_BACKOFF_SECONDS = 60.0
+
+
+class Chat(_NativeChat):
+    __doc__ = _NativeChat.__doc__
+
+    def __init__(self, *args, **kwargs):
+        # The native constructor already ran; this only starts the
+        # feature-switch thread.
+        _start_feature_switches(self)
+
+
+def _start_feature_switches(chat):
+    """Fetch the flags for ``chat`` on a daemon thread that holds it weakly."""
+    settings = (
+        _os.environ.get(_FEATURES_ENDPOINT_ENV) or _FEATURES_ENDPOINT,
+        _FEATURE_TIMEOUT_SECONDS,
+        _FEATURE_REFRESH_SECONDS,
+        _FEATURE_KEY_POLL_SECONDS,
+    )
+    _threading.Thread(
+        target=_feature_loop,
+        args=(_weakref.ref(chat), settings),
+        name="chat-xdk-features",
+        daemon=True,
+    ).start()
+
+
+def _fetch_features(chat, endpoint, timeout, downgrade_only):
+    """Fetch the flags for ``chat``'s bucket and apply them; True on success."""
+    try:
+        bucket = chat._feature_bucket()
+        url = endpoint
+        if bucket is not None:
+            url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
+        request = _urllib_request.Request(url, headers={"Accept": "application/json"})
+        with _urllib_request.urlopen(request, timeout=timeout) as response:
+            if response.status != 200:
+                return False
+            body = response.read(_MAX_FEATURES_BODY + 1)
+        if len(body) > _MAX_FEATURES_BODY:
+            return False
+        chat._apply_feature_config(body.decode("utf-8"), bucket, downgrade_only)
+    except Exception:
+        return False
+    return True
+
+
+def _feature_loop(chat_ref, settings):
+    """Fetch once now (retrying once), then again with the key's bucket once
+    keys load, retrying with backoff, and re-check every refresh interval
+    with a fetch that can only turn flags off. Ends with the chat."""
+    endpoint, timeout, refresh, key_poll = settings
+    chat = chat_ref()
+    if chat is None:
+        return
+    _fetch_features(chat, endpoint, timeout, False) or _fetch_features(
+        chat, endpoint, timeout, False
+    )
+    del chat
+    next_recheck = _time.monotonic() + refresh
+    retry_at = 0.0
+    backoff = 1.0
+    while True:
+        chat = chat_ref()
+        if chat is None:
+            return
+        keyed = False
+        try:
+            now = _time.monotonic()
+            if chat._feature_refetch_due():
+                if now >= retry_at:
+                    if _fetch_features(chat, endpoint, timeout, False):
+                        backoff = 1.0
+                        next_recheck = now + refresh
+                    else:
+                        retry_at = now + backoff
+                        backoff = min(backoff * 2, _MAX_REFETCH_BACKOFF_SECONDS)
+            elif refresh and now >= next_recheck:
+                _fetch_features(chat, endpoint, timeout, True)
+                next_recheck = now + refresh
+            keyed = chat._feature_bucket() is not None and not chat._feature_refetch_due()
+        except Exception:
+            pass
+        del chat
+        if keyed and not refresh:
+            return
+        # Until a response for the key's bucket applies, watch for keys to
+        # load; afterwards, wake only for the re-check.
+        wait = max(0.0, next_recheck - _time.monotonic()) if keyed else key_poll
+        _time.sleep(wait)
 
 
 class QuickReplyOption(TypedDict, total=False):

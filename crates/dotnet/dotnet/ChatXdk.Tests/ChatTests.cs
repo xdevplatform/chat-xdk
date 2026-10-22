@@ -439,8 +439,9 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(payload.Signature);
             Assert.NotEmpty(payload.EncodedEventSignature);
             Assert.Equal("1", payload.ConversationKeyVersion);
-            Assert.Equal("10", payload.SignatureInfo.SignatureVersion);
+            Assert.Equal("7", payload.SignatureInfo.SignatureVersion);
             Assert.True(payload.ShouldNotify);
+            Assert.NotEmpty(payload.XdkVersion);
             // The SDK generates and returns the message id.
             Assert.NotEmpty(payload.MessageId);
         }
@@ -807,10 +808,11 @@ namespace ChatXdk.Tests
         private static AttachmentDescriptor Photo(string mediaHashKey) =>
             AttachmentDescriptor.Media(mediaHashKey, 4, 3, 64, mediaHashKey + ".jpg", mediaType: 1);
 
-        /// <summary>Send a message carrying <paramref name="attachments"/>, check it verifies,
-        /// and return its payload.</summary>
+        /// <summary>Send a v1 message carrying <paramref name="attachments"/>, check it
+        /// verifies, and return its payload.</summary>
         private static SendPayload SendFiles(Chat chat, SdkVectors v, string text, params AttachmentDescriptor[] attachments)
         {
+            chat.ApplyFeatureConfig("{\"features\":{\"v1_send\":true}}", chat.FeatureBucket());
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, text)
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),

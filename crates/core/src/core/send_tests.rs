@@ -1,8 +1,9 @@
-//! Sending: contents under the message's own key, signed at the message
+//! Sending v1: contents under the message's own key, signed at the message
 //! signature version, and files encrypted from the sent message.
 
 use super::test_support::{
-    decrypt_message, frame, key, keys, sent_event, Party, CONVERSATION, SIGNING_KEY_VERSION,
+    decrypt_message, enable_v1_send, frame, key, keys, sent_event, Party, CONVERSATION,
+    SIGNING_KEY_VERSION,
 };
 use super::*;
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
@@ -17,10 +18,11 @@ use crate::utils::encrypted_file_size;
 const AUTHOR: &str = "1001";
 const KEY_VERSION: &str = "7";
 
-/// A party whose session identity is its own user id.
+/// A party whose session identity is its own user id, sending v1.
 fn author() -> Party {
     let party = Party::new(AUTHOR);
     party.core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
+    enable_v1_send(&party.core);
     party
 }
 
@@ -711,6 +713,7 @@ fn a_rebuilt_message_keeps_its_encrypted_files_valid() {
     // Another session of the same sender, with other signing keys.
     let restarted = Party::new(AUTHOR);
     restarted.core.set_identity(AUTHOR, "2");
+    enable_v1_send(&restarted.core);
     for (what, rebuilt) in [
         ("rebuilt", build(&author, "final text")),
         (

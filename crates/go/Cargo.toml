@@ -14,7 +14,7 @@ default = ["juicebox"]
 juicebox = ["chat-xdk-core/juicebox", "dep:tokio"]
 
 [dependencies]
-chat-xdk-core = { workspace = true, default-features = false }
+chat-xdk-core = { workspace = true, default-features = false, features = ["bindings"] }
 tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 serde.workspace = true
 serde_json.workspace = true

@@ -67,6 +67,8 @@ export interface SendPayload {
   conversationKeyVersion: string;
   /** Whether the X API should send a push notification for this message. */
   shouldNotify: boolean;
+  /** Version of the Chat XDK that built this payload. Send it as the message's optional `xdk_version` field. */
+  xdkVersion: string;
 }
 
 /**

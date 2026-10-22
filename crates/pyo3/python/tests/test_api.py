@@ -4,6 +4,9 @@ import os
 import sys
 import unittest
 
+# Keep every chat's automatic feature fetch off the network.
+os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
+
 
 def _repo_root() -> str:
     # .../crates/pyo3/python/tests/test_api.py -> repo root is 4 levels up
@@ -414,23 +417,32 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.public_key.identity_public_key_signature)
         self.assertIsInstance(payload.public_key.registration_method, str)
 
-    def test_encrypt_message_signs_at_version_10(self):
+    def test_encrypt_message_signs_at_version_7_until_v1_send_is_on(self):
         from chat_xdk import EncryptMessageParams
 
         chat, v = self._unlocked_chat()
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
-        payload = chat.encrypt_message(
-            EncryptMessageParams(
-                "conv-1", "hello from python",
-                sender_id="1001",
-                signing_key_version="1",
-                conversation_key=conv_key,
-                conversation_key_version="1",
-            )
-        )
 
+        def send():
+            return chat.encrypt_message(
+                EncryptMessageParams(
+                    "conv-1", "hello from python",
+                    sender_id="1001",
+                    signing_key_version="1",
+                    conversation_key=conv_key,
+                    conversation_key_version="1",
+                )
+            )
+
+        self.assertEqual(send().signature_info.signature_version, "7")
+        chat._apply_feature_config(
+            '{"features":{"v1_send":true}}', chat._feature_bucket()
+        )
+        self.assertTrue(chat._is_enabled("v1_send"))
+        payload = send()
         self.assertEqual(payload.signature_info.signature_version, "10")
+        self.assertTrue(payload.xdk_version)
         # The SDK generates and returns the message id.
         self.assertTrue(payload.message_id)
         self.assertTrue(payload.event_b64)
@@ -504,7 +516,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.signature)
         self.assertTrue(payload.encoded_event_signature)
         self.assertEqual(payload.conversation_key_version, "1")
-        self.assertEqual(payload.signature_info.signature_version, "10")
+        self.assertEqual(payload.signature_info.signature_version, "7")
 
     def test_encrypt_reply_without_target_rejected(self):
         from chat_xdk import EncryptReplyParams

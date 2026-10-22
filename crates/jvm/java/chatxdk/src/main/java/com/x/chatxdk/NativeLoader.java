@@ -1,5 +1,6 @@
 package com.x.chatxdk;
 
+import com.sun.jna.Library;
 import com.sun.jna.Native;
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,18 +21,30 @@ final class NativeLoader {
 
     private static final String LIB_BASENAME = "chat_xdk_dotnet";
 
+    // The library every interface loads from, once the first load picks it, so they all share
+    // one copy of the native state.
+    private static String library;
+
     private NativeLoader() {}
 
-    static ChatNative load() {
+    static synchronized <T extends Library> T load(Class<T> type) {
+        if (library != null) {
+            return Native.load(library, type);
+        }
         try {
             Path extracted = extractBundledLibrary();
             if (extracted != null) {
-                return Native.load(extracted.toAbsolutePath().toString(), ChatNative.class);
+                String path = extracted.toAbsolutePath().toString();
+                T loaded = Native.load(path, type);
+                library = path;
+                return loaded;
             }
         } catch (IOException | UnsatisfiedLinkError e) {
             // Fall through to system / jna.library.path lookup.
         }
-        return Native.load(LIB_BASENAME, ChatNative.class);
+        T loaded = Native.load(LIB_BASENAME, type);
+        library = LIB_BASENAME;
+        return loaded;
     }
 
     /**

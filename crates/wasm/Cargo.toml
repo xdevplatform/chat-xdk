@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 # Core SDK (pure-Rust crypto, works in WASM)
 # Disable juicebox feature for WASM - users manage keys via JS
 # Enable js feature for camelCase wrapper types
-chat-xdk-core = { workspace = true, default-features = false, features = ["js"] }
+chat-xdk-core = { workspace = true, default-features = false, features = ["js", "bindings"] }
 
 # WASM bindings
 wasm-bindgen = "0.2"

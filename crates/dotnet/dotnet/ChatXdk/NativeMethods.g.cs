@@ -88,6 +88,48 @@ namespace ChatXdk
         internal static extern void chat_xdk_set_cache_keys(ChatHandle* handle, int enabled);
 
         /// <summary>
+        ///  Internal, for this repository's bindings; not part of the API.
+        ///
+        ///  The bucket (0-9999) `GET /2/chat/features` evaluates this instance's
+        ///  flags for, derived from the loaded identity public key; -1 until keys
+        ///  load (or for a null handle).
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_bucket", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern int chat_xdk_internal_feature_bucket(ChatHandle* handle);
+
+        /// <summary>
+        ///  Internal, for this repository's bindings; not part of the API.
+        ///
+        ///  Apply a `GET /2/chat/features` response body.
+        ///
+        ///  `bucket` is the bucket the request carried, or negative when it carried
+        ///  none. A non-zero `downgrade_only` only turns flags off (a re-check);
+        ///  zero replaces them. A body that is not a JSON object with a `features`
+        ///  object is an error and changes nothing.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_apply_feature_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_internal_apply_feature_config(ChatHandle* handle, byte* json, int bucket, int downgrade_only);
+
+        /// <summary>
+        ///  Internal, for this repository's bindings; not part of the API.
+        ///
+        ///  Whether the feature switch `name` is on: 1 on, 0 off, -1 on a null
+        ///  handle or invalid name.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_is_enabled", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern int chat_xdk_internal_is_enabled(ChatHandle* handle, byte* name);
+
+        /// <summary>
+        ///  Internal, for this repository's bindings; not part of the API.
+        ///
+        ///  Whether keys are loaded but no response to a request carrying their
+        ///  bucket has applied, so the flags must be fetched with the key's bucket:
+        ///  1 yes, 0 no, -1 on a null handle.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_refetch_due", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern int chat_xdk_internal_feature_refetch_due(ChatHandle* handle);
+
+        /// <summary>
         ///  Store signing keys to use when a decrypt call passes an empty
         ///  `signing_keys_json`. Only this explicit call populates the store — a key
         ///  carried inside an event is never trusted for verification. Each call
