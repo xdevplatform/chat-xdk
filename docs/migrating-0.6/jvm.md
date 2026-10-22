@@ -371,13 +371,13 @@ List<ActionSignature> actionSignatures = prepared.actionSignatures;
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests the
-change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
-`/{id}/members`): `conversationParticipantKeys`, a list of
-`ConversationParticipantKey` whose fields (`userId`,
-`encryptedConversationKey`, `publicKeyVersion`) serialize as `user_id`,
-`encrypted_conversation_key` and `public_key_version`, the names a received
-key change uses too
+A prepared change's participant keys carry the names the X API gives them in
+every request that takes them (`POST /2/chat/conversations/{id}/keys`,
+`/group` and `/{id}/members`, and `PUT /2/chat/conversations/{id}`):
+`conversationParticipantKeys`, a list of `ConversationParticipantKey` whose
+fields (`userId`, `encryptedConversationKey`, `publicKeyVersion`) serialize
+as `user_id`, `encrypted_conversation_key` and `public_key_version`, the
+names a received key change uses too
 (see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
 and pass them through as returned:
 
