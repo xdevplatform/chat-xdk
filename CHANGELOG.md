@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+To move code from 0.5.x, follow [docs/MIGRATING-0.6.md](docs/MIGRATING-0.6.md):
+it walks through each binding's changes with before/after code.
+
 ### Breaking changes
 
 #### Sends can use per-message keys
