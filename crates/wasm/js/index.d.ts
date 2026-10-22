@@ -432,6 +432,26 @@ export interface MessageDeleteParams {
 }
 
 /**
+ * Parameters for prepareMarkConversationRead.
+ *
+ * A read receipt is a signed plaintext event, not an encrypted message, so
+ * no conversation key is involved: the result is an action signature the
+ * caller submits alongside the mark-read request.
+ */
+export interface MarkConversationReadParams {
+  /** ID of the conversation being marked read. */
+  conversationId: string;
+  /** The sequenceId of the newest event read. */
+  seenUntilSequenceId: string;
+  /** When the conversation was read, in milliseconds since the Unix epoch; the current time when omitted. */
+  seenAtMsec?: number | null;
+  /** User ID of the sender signing the read receipt; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the read receipt; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
+/**
  * Parameters for prepareConversationKeyChange.
  */
 export interface ConversationKeyChangeParams {
@@ -1017,6 +1037,9 @@ interface ChatCrypto {
   /** Build the signed action for deleting messages from a conversation. */
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
 
+  /** Build the signed action for marking a conversation read. */
+  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+
   /**
    * Encrypt a file of an outgoing message, after the message is built.
    *
@@ -1137,6 +1160,7 @@ declare class Chat implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
   encryptFile(params: EncryptFileParams): Uint8Array;
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
@@ -1205,6 +1229,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
   encryptFile(params: EncryptFileParams): Uint8Array;
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;

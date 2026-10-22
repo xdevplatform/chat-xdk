@@ -290,6 +290,22 @@ class MessageDeleteParams:
         signing_key_version: Optional[str] = None,
     ) -> None: ...
 
+class MarkConversationReadParams:
+    conversation_id: str
+    seen_until_sequence_id: str
+    seen_at_msec: Optional[int]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        seen_until_sequence_id: str,
+        *,
+        seen_at_msec: Optional[int] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
 class DecryptEventParams:
     event_b64: str
     conversation_keys: dict[str, bytes]
@@ -405,6 +421,7 @@ class Chat:
     def prepare_group_members_change(self, params: GroupMembersChangeParams) -> dict: ...
     def prepare_group_create(self, params: GroupCreateParams) -> dict: ...
     def prepare_message_delete(self, params: MessageDeleteParams) -> dict: ...
+    def prepare_mark_conversation_read(self, params: MarkConversationReadParams) -> dict: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> dict: ...

@@ -1081,6 +1081,60 @@ impl MessageDeleteParams {
     }
 }
 
+/// Parameters for ``Chat.prepare_mark_conversation_read``.
+///
+/// A read receipt is a signed plaintext event, not an encrypted message, so
+/// no conversation key is involved.
+#[pyclass(get_all, set_all)]
+pub struct MarkConversationReadParams {
+    /// ID of the conversation being marked read.
+    conversation_id: String,
+    /// The ``sequence_id`` of the newest event read.
+    seen_until_sequence_id: String,
+    /// When the conversation was read, in milliseconds since the Unix epoch;
+    /// defaults to the current time.
+    seen_at_msec: Option<i64>,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl MarkConversationReadParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, seen_until_sequence_id, *, seen_at_msec=None, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        seen_until_sequence_id: String,
+        seen_at_msec: Option<i64>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            seen_until_sequence_id,
+            seen_at_msec,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl MarkConversationReadParams {
+    fn to_core(&self) -> chat_xdk_core::MarkConversationReadParams {
+        let mut params = chat_xdk_core::MarkConversationReadParams::new(
+            self.conversation_id.as_str(),
+            self.seen_until_sequence_id.as_str(),
+        );
+        params.seen_at_msec = self.seen_at_msec;
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
 /// Parameters for ``Chat.decrypt_event``.
 #[pyclass(get_all, set_all)]
 pub struct DecryptEventParams {
@@ -2048,6 +2102,32 @@ impl Chat {
         Ok(action_signature_to_pydict(py, &signature)?.into())
     }
 
+    /// Build the signed action for marking a conversation read.
+    ///
+    /// A read receipt is a signed plaintext event, not an encrypted message,
+    /// so no conversation key is involved: the result is a single
+    /// action-signature dict to submit alongside the mark-read request. The
+    /// SDK generates the action's message id; read it back from the result.
+    ///
+    /// Args:
+    ///     params: A ``MarkConversationReadParams``.
+    ///
+    /// Returns:
+    ///     A dict with ``message_id``, ``encoded_message_event_detail``,
+    ///     ``signature``, ``signature_version``, ``public_key_version``,
+    ///     ``signature_payload``.
+    fn prepare_mark_conversation_read(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, MarkConversationReadParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let signature = self
+            .inner
+            .prepare_mark_conversation_read(&params.to_core())
+            .map_err(to_py_err)?;
+        Ok(action_signature_to_pydict(py, &signature)?.into())
+    }
+
     /// Export private keys as raw bytes for secure storage.
     ///
     /// Warning: Handle with care — these are your secret keys!
@@ -2304,6 +2384,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<GroupMembersChangeParams>()?;
     m.add_class::<GroupCreateParams>()?;
     m.add_class::<MessageDeleteParams>()?;
+    m.add_class::<MarkConversationReadParams>()?;
     m.add_class::<DecryptEventParams>()?;
     m.add_class::<DecryptEventsParams>()?;
     m.add_class::<EncryptFileParams>()?;

@@ -278,6 +278,40 @@ pub fn build_message_delete_signature(
     sign_payload(signing_key, public_key_version, message_id, &components)
 }
 
+/// Build and sign a MarkConversationRead action signature.
+///
+/// Payload format:
+/// ```text
+/// MarkConversationReadEvent,{msg_id},{sender_id},{conv_id},{seen_until_sequence_id},{seen_at_msec}
+/// ```
+///
+/// The payload is comma-joined with no escaping, so signing fails with a
+/// parse error if any component contains a comma.
+pub fn build_mark_conversation_read_signature(
+    signing_key: &XChatPrivateKey,
+    public_key_version: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    seen_until_sequence_id: &str,
+    seen_at_msec: i64,
+) -> Result<ActionSignature, SdkError> {
+    let seen_at = seen_at_msec.to_string();
+    sign_payload(
+        signing_key,
+        public_key_version,
+        message_id,
+        &[
+            "MarkConversationReadEvent",
+            message_id,
+            sender_id,
+            conversation_id,
+            seen_until_sequence_id,
+            &seen_at,
+        ],
+    )
+}
+
 /// Sign a comma-joined payload and return an [`ActionSignature`].
 ///
 /// Rejects any component containing `,`: the payload has no escaping, so an

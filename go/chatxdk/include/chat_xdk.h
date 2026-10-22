@@ -319,6 +319,21 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
                                                  const char *params_json);
 
 /**
+ * Build the signed action for marking a conversation read.
+ *
+ * `params_json` — single JSON document: `conversation_id`,
+ * `seen_until_sequence_id` (the sequence id of the newest event read), plus
+ * optional `seen_at_msec` (when it was read, in milliseconds since the Unix
+ * epoch; unset takes the current time) and `sender_id` /
+ * `signing_key_version` (unset resolves from the session identity).
+ *
+ * Returns JSON `ActionSignature` to submit alongside the mark-read request;
+ * the SDK-generated `message_id` is a field on it.
+ */
+struct FfiResult chat_xdk_prepare_mark_conversation_read(const struct ChatHandle *handle,
+                                                         const char *params_json);
+
+/**
  * Decrypt a webhook event.
  *
  * `params_json` — single JSON document: `event_b64` (the base64 event),

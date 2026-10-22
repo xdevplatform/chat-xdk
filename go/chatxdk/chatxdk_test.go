@@ -12,8 +12,10 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type sdkVectors struct {
@@ -1293,6 +1295,91 @@ func TestPrepareMessageDelete(t *testing.T) {
 	want = fmt.Sprintf("MessageDeleteEvent,%s,111,g999,1,seq-1", selfSig.MessageID)
 	if selfSig.SignaturePayload != want {
 		t.Errorf("expected signature_payload %q, got %q", want, selfSig.SignaturePayload)
+	}
+}
+
+func TestPrepareMarkConversationRead(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	// A 1:1 id is signed in its canonical colon form, followed by the read
+	// point and its time.
+	seenAt := int64(1700000000123)
+	sig, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
+		SenderID:            "111",
+		SigningKeyVersion:   "1",
+		ConversationID:      "222-111",
+		SeenUntilSequenceID: "2011626338877079553",
+		SeenAtMsec:          &seenAt,
+	})
+	if err != nil {
+		t.Fatalf("PrepareMarkConversationRead failed: %v", err)
+	}
+	if sig.MessageID == "" {
+		t.Error("expected non-empty message_id")
+	}
+	if sig.EncodedMessageEventDetail == "" {
+		t.Error("expected non-empty encoded_message_event_detail")
+	}
+	if sig.PublicKeyVersion != "1" {
+		t.Errorf("expected public_key_version 1, got %q", sig.PublicKeyVersion)
+	}
+	want := fmt.Sprintf(
+		"MarkConversationReadEvent,%s,111,111:222,2011626338877079553,1700000000123",
+		sig.MessageID,
+	)
+	if sig.SignaturePayload != want {
+		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
+	}
+	rawSig, err := base64.RawStdEncoding.DecodeString(sig.Signature)
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	valid, err := chat.Verify(v.SigningPublicB64, rawSig, []byte(sig.SignaturePayload))
+	if err != nil {
+		t.Fatalf("Verify failed: %v", err)
+	}
+	if !valid {
+		t.Error("expected the read receipt signature to verify")
+	}
+
+	// With no identity in the params the session identity signs, and a nil
+	// SeenAtMsec takes the current time.
+	if err := chat.SetIdentity("111", "7"); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	before := time.Now().UnixMilli()
+	nowSig, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
+		ConversationID:      "g999",
+		SeenUntilSequenceID: "seq-1",
+	})
+	after := time.Now().UnixMilli()
+	if err != nil {
+		t.Fatalf("PrepareMarkConversationRead (defaults) failed: %v", err)
+	}
+	if nowSig.PublicKeyVersion != "7" {
+		t.Errorf("expected public_key_version 7, got %q", nowSig.PublicKeyVersion)
+	}
+	prefix := fmt.Sprintf("MarkConversationReadEvent,%s,111,g999,seq-1,", nowSig.MessageID)
+	if !strings.HasPrefix(nowSig.SignaturePayload, prefix) {
+		t.Fatalf("expected signature_payload to start with %q, got %q", prefix, nowSig.SignaturePayload)
+	}
+	readAt, err := strconv.ParseInt(strings.TrimPrefix(nowSig.SignaturePayload, prefix), 10, 64)
+	if err != nil {
+		t.Fatalf("parse seen_at from %q: %v", nowSig.SignaturePayload, err)
+	}
+	if readAt < before || readAt > after {
+		t.Errorf("expected seen_at in [%d, %d], got %d", before, after, readAt)
+	}
+
+	_, err = chat.PrepareMarkConversationRead(MarkConversationReadParams{ConversationID: "g999"})
+	if err == nil || !strings.Contains(err.Error(), "seen_until_sequence_id is empty") {
+		t.Errorf("expected an empty seen_until_sequence_id error, got %v", err)
 	}
 }
 

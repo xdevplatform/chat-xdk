@@ -69,6 +69,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_message_delete(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_prepare_mark_conversation_read(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_decrypt_event(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_message(Pointer handle, Pointer paramsJson);
