@@ -25,8 +25,6 @@ Quick Start:
     # payload.message_id, payload.encoded_message_create_event, payload.signature, etc.
 """
 
-__version__ = "0.1.0"
-
 import os as _os
 import re as _re
 import threading as _threading
@@ -36,6 +34,7 @@ import weakref as _weakref
 from typing import Optional, TypedDict
 
 from chat_xdk._native import Chat as _NativeChat
+from chat_xdk._native import __version__
 from chat_xdk._native import (
     ConversationKeyChangeParams,
     DecryptEventParams,

@@ -506,15 +506,21 @@ prepared = chat.prepare_conversation_key_change(
 
 - Rust: `SendPayload` gains `event_b64` and `xdk_version` and is
   `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
-  builds it with a struct literal. A payload stored by 0.5.x still
-  deserializes, with both new fields empty.
+  builds it with a struct literal.
 - `SendPayload`'s `encrypted_content` and `encoded_event_signature` are
   `encoded_message_create_event` and `encoded_message_event_signature`, the
   send request's field names, in every binding
   (`encodedMessageCreateEvent` / `encodedMessageEventSignature` in JS and
   the JVM, `EncodedMessageCreateEvent` / `EncodedMessageEventSignature` in
-  Go and .NET), so the request takes them as they are. A payload stored
-  under the old names still deserializes in Rust, Go, .NET and the JVM.
+  Go and .NET), so the request takes them as they are.
+- `PreparedConversationChange`'s `participant_keys` is
+  `conversation_participant_keys`, and each entry's `encrypted_key` is
+  `encrypted_conversation_key`, the field names of the requests that take
+  them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+  `/{id}/members`), in every binding (`conversationParticipantKeys` /
+  `encryptedConversationKey` in JS and the JVM,
+  `ConversationParticipantKeys` / `EncryptedConversationKey` in Go and
+  .NET), so the requests take them as they are.
 - Rust: every encrypt and prepare method takes its params by reference:
   `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
   edit, delete and mark-read methods, and also `encrypt_file`,
@@ -599,7 +605,7 @@ prepared = chat.prepare_conversation_key_change(
   (the sequence id of the newest event read) and an optional
   `seen_at_msec`, which defaults to the current time. It returns a
   `PreparedAction` whose `action_signatures` the mark-read request
-  (`POST /2/chat/conversations/:id/read`) takes as they are, nested as the
+  (`POST /2/chat/conversations/{id}/read`) takes as they are, nested as the
   conversation-change requests nest theirs.
   Recipients' `decrypt_event` returns a signed receipt as a verified
   `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.

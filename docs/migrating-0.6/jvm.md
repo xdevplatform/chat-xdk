@@ -23,6 +23,7 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Know which calls throw `ChatXdkException`](#exceptions)
@@ -232,10 +233,10 @@ Map<String, String> body = Map.of(
         "encoded_message_event_signature", payload.encodedMessageEventSignature);
 ```
 
-A `SendPayload` that 0.5.x code serialized with Jackson still deserializes
-into the new fields, without `eventB64` or `xdkVersion`. A payload also
-carries `eventB64`, the message as recipients receive it. It isn't part of
-the send request: keep it to encrypt the message's files (see
+Read them under those names wherever your code reads a payload, including
+code that stores payloads. A payload also carries `eventB64`, the message
+as recipients receive it. It isn't part of the send request: keep it to
+encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
 ## Encrypt a file from its message
@@ -365,9 +366,28 @@ for (ActionSignature sig : prepared.actionSignatures) {
 List<ActionSignature> actionSignatures = prepared.actionSignatures;
 ```
 
-A prepared change's `participantKeys` keep their shape (`userId`,
-`encryptedKey`, `publicKeyVersion`): map them to the key-change request's
-`conversation_participant_keys` as you do today.
+## Participant keys take the key requests' names
+
+A prepared change's participant keys carry the names of the requests that
+take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `conversationParticipantKeys`, whose entries
+(`userId`, `encryptedConversationKey`, `publicKeyVersion`) serialize as
+`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
+through as returned:
+
+```java
+// 0.5.x
+List<Map<String, String>> conversationParticipantKeys = new ArrayList<>();
+for (EncryptedKeyForRecipient key : prepared.participantKeys) {
+    conversationParticipantKeys.add(Map.of(
+            "user_id", key.userId,
+            "encrypted_conversation_key", key.encryptedKey,
+            "public_key_version", key.publicKeyVersion));
+}
+
+// 0.6.0
+List<EncryptedKeyForRecipient> conversationParticipantKeys = prepared.conversationParticipantKeys;
+```
 
 ## Deletes return a `PreparedAction`
 

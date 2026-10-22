@@ -96,8 +96,8 @@ class ChatCoreTest {
             input.keyVersion = "1";
             PreparedConversationChange prepared =
                     core.prepareConversationKeyChange(List.of(input), "conv-1");
-            assertEquals(1, prepared.participantKeys.size());
-            byte[] decrypted = core.decryptConversationKey(prepared.participantKeys.get(0).encryptedKey);
+            assertEquals(1, prepared.conversationParticipantKeys.size());
+            byte[] decrypted = core.decryptConversationKey(prepared.conversationParticipantKeys.get(0).encryptedConversationKey);
             assertArrayEquals(prepared.conversationKey, decrypted);
         }
     }

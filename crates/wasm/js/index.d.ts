@@ -175,7 +175,7 @@ export interface ImageDimensions {
  */
 export interface EncryptedKeyForRecipient {
   userId: string;
-  encryptedKey: string;
+  encryptedConversationKey: string;
   publicKeyVersion: string;
 }
 
@@ -211,8 +211,8 @@ export interface PreparedConversationChange {
   conversationKey: Uint8Array;
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;
-  /** Encrypted keys for each participant, ready to POST to the API. */
-  participantKeys: EncryptedKeyForRecipient[];
+  /** Encrypted keys for each participant: the request's `conversation_participant_keys`, ready to POST to the API. */
+  conversationParticipantKeys: EncryptedKeyForRecipient[];
   /** Action signatures authenticating the change, ready to POST to the API. */
   actionSignatures: ActionSignature[];
 }

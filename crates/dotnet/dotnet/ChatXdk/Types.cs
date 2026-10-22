@@ -107,25 +107,6 @@ namespace ChatXdk
         [JsonPropertyName("encoded_message_event_signature")]
         public string EncodedMessageEventSignature { get; init; } = "";
 
-        // A payload stored by 0.5.x carries the two fields above under these names.
-        [JsonInclude]
-        [JsonPropertyName("encrypted_content")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private string? StoredEncryptedContent
-        {
-            get => null;
-            init => EncodedMessageCreateEvent = value ?? EncodedMessageCreateEvent;
-        }
-
-        [JsonInclude]
-        [JsonPropertyName("encoded_event_signature")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private string? StoredEncodedEventSignature
-        {
-            get => null;
-            init => EncodedMessageEventSignature = value ?? EncodedMessageEventSignature;
-        }
-
         /// <summary>Signing key and signature version metadata for this payload.</summary>
         [JsonPropertyName("signature_info")]
         public SignatureInfo SignatureInfo { get; init; } = new();
@@ -271,8 +252,8 @@ namespace ChatXdk
         public string ConversationKeyVersion { get; init; } = "";
 
         /// <summary>The conversation key encrypted once per participant.</summary>
-        [JsonPropertyName("participant_keys")]
-        public List<EncryptedKeyForRecipient> ParticipantKeys { get; init; } = new();
+        [JsonPropertyName("conversation_participant_keys")]
+        public List<EncryptedKeyForRecipient> ConversationParticipantKeys { get; init; } = new();
 
         /// <summary>Action signatures authenticating the change, ready to POST.</summary>
         [JsonPropertyName("action_signatures")]
@@ -331,8 +312,8 @@ namespace ChatXdk
         [JsonPropertyName("user_id")]
         public string UserId { get; init; } = "";
 
-        [JsonPropertyName("encrypted_key")]
-        public string EncryptedKey { get; init; } = "";
+        [JsonPropertyName("encrypted_conversation_key")]
+        public string EncryptedConversationKey { get; init; } = "";
 
         [JsonPropertyName("public_key_version")]
         public string PublicKeyVersion { get; init; } = "";

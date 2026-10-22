@@ -1,6 +1,5 @@
 package com.x.chatxdk;
 
-import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -103,11 +102,9 @@ public final class Types {
 
         /**
          * Base64-encoded Thrift {@code MessageCreateEvent} carrying the encrypted contents: the
-         * send request's {@code encoded_message_create_event}. A payload stored by 0.5.x carries
-         * it as {@code encrypted_content}, which also reads.
+         * send request's {@code encoded_message_create_event}.
          */
         @JsonProperty("encoded_message_create_event")
-        @JsonAlias("encrypted_content")
         public String encodedMessageCreateEvent = "";
 
         /** Base64-encoded raw r||s signature over the encrypted content. */
@@ -116,11 +113,9 @@ public final class Types {
 
         /**
          * Base64-encoded Thrift {@code MessageEventSignature}: the send request's
-         * {@code encoded_message_event_signature}. A payload stored by 0.5.x carries it as
-         * {@code encoded_event_signature}, which also reads.
+         * {@code encoded_message_event_signature}.
          */
         @JsonProperty("encoded_message_event_signature")
-        @JsonAlias("encoded_event_signature")
         public String encodedMessageEventSignature = "";
 
         /** Signing key and signature version metadata for this payload. */
@@ -263,8 +258,8 @@ public final class Types {
         public String conversationKeyVersion = "";
 
         /** The conversation key encrypted once per participant. */
-        @JsonProperty("participant_keys")
-        public List<EncryptedKeyForRecipient> participantKeys = Collections.emptyList();
+        @JsonProperty("conversation_participant_keys")
+        public List<EncryptedKeyForRecipient> conversationParticipantKeys = Collections.emptyList();
 
         /** Action signatures authenticating the change, ready to POST. */
         @JsonProperty("action_signatures")
@@ -324,8 +319,8 @@ public final class Types {
         public String userId = "";
 
         /** Base64-encoded conversation key encrypted to the recipient (ECIES). */
-        @JsonProperty("encrypted_key")
-        public String encryptedKey = "";
+        @JsonProperty("encrypted_conversation_key")
+        public String encryptedConversationKey = "";
 
         /** Version of the recipient's public key used to encrypt the conversation key. */
         @JsonProperty("public_key_version")
