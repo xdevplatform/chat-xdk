@@ -405,16 +405,16 @@ prepared = chat.prepare_conversation_key_change(
 - Participant keys take the X API's names, on send and on receive. A
   prepared change's `participant_keys` is `conversation_participant_keys`,
   and each entry's `encrypted_key` is `encrypted_conversation_key`: the
-  field names of the requests the change goes into
-  (`POST /2/chat/conversations/{id}/keys`, `/group` and `/{id}/members`), so
-  apps pass the keys through unchanged instead of renaming them. A decrypted
-  `KeyChange` event carries its keys under the same names, as Thrift's
-  `ConversationKeyChangeEvent` does. `ParticipantKey` (Rust, Go, TypeScript)
-  and `EncryptedKeyForRecipient` (every binding but Python) are one type,
-  `ConversationParticipantKey`, in both directions. The names are
-  `conversationParticipantKeys` / `encryptedConversationKey` in JS and the
-  JVM, and `ConversationParticipantKeys` / `EncryptedConversationKey` in Go
-  and .NET.
+  field names the X API uses in every request that takes participant keys
+  (`POST /2/chat/conversations/{id}/keys`, `/group` and `/{id}/members`, and
+  `PUT /2/chat/conversations/{id}`), so apps pass the keys through unchanged
+  instead of renaming them. A decrypted `KeyChange` event carries its keys
+  under the same names, as Thrift's `ConversationKeyChangeEvent` does.
+  `ParticipantKey` (Rust, Go, TypeScript) and `EncryptedKeyForRecipient`
+  (every binding but Python) are one type, `ConversationParticipantKey`, in
+  both directions. The names are `conversationParticipantKeys` /
+  `encryptedConversationKey` in JS and the JVM, and
+  `ConversationParticipantKeys` / `EncryptedConversationKey` in Go and .NET.
 - Decrypted messages and key changes carry their conversation key version
   as `conversation_key_version`, the name the X API's events and Thrift give
   it: `key_version` is `conversation_key_version` in every binding
