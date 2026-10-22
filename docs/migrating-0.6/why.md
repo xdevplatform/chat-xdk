@@ -150,9 +150,9 @@ nested; what is signed is the same:
 `SendPayload`'s encoded fields are `encoded_message_create_event` and
 `encoded_message_event_signature`, the field names of
 `POST /2/chat/conversations/{id}/messages`, so the payload maps onto the
-request field for field. It also carries `event_b64`, the message as
-recipients receive it, which the file calls take, and `xdk_version`, the
-version of the SDK that built it:
+request field for field. Its `xdk_version`, the version of the SDK that
+built it, is a field of the same request. It also carries `event_b64`, the
+message as recipients receive it, which the file calls take:
 [Rust](rust.md#sendpayload-fields-take-the-send-requests-names),
 [Python](python.md#sendpayload-fields-take-the-send-requests-names),
 [JavaScript](javascript.md#sendpayload-fields-take-the-send-requests-names),

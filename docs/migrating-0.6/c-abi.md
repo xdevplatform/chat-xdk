@@ -19,7 +19,7 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Import keys with `chat_xdk_import_keys_params`](#import-keys-with-a-params-document)
 - [ ] [Pass user ids and key versions as strings of digits](#user-ids-and-key-versions-are-strings-of-digits)
 - [ ] [Decrypt with `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params`](#decrypt-with-params-documents)
-- [ ] [Read the send payload under the send request's field names](#the-send-payload-takes-the-send-requests-field-names)
+- [ ] [Read the send payload under the send request's field names and send `xdk_version`](#the-send-payload-takes-the-send-requests-field-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use the file encryptor and decryptor for large files](#encrypt-and-decrypt-large-files-in-chunks)
@@ -140,7 +140,8 @@ The encrypt calls keep their names, and the send payload they return names
 its two encoded fields `encoded_message_create_event` and
 `encoded_message_event_signature`, the field names of the send request,
 `POST /2/chat/conversations/{id}/messages`, so the request takes them as
-they are. It also carries `event_b64`, the message as
+they are, along with the payload's `xdk_version`, the version of the SDK
+that built it. The payload also carries `event_b64`, the message as
 recipients receive it: keep it to encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 

@@ -18,7 +18,7 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
 - [ ] [Pass a `DecryptEventsParams` to `decryptEvents`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decryptEvent`](#decryptevent-takes-decrypteventparams)
-- [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
@@ -212,7 +212,8 @@ JsonNode fromBundle = chat.decryptEvent(fromBundleParams);
 
 The two encoded fields carry the names of the fields of the send request,
 `POST /2/chat/conversations/{id}/messages`, camelCased, so the request takes
-them as they are:
+them as they are. The request also takes the payload's `xdkVersion`, the
+version of the SDK that built it, as `xdk_version`:
 
 ```java
 // 0.5.x
@@ -225,7 +226,8 @@ Map<String, String> body = Map.of(
 Map<String, String> body = Map.of(
         "message_id", payload.messageId,
         "encoded_message_create_event", payload.encodedMessageCreateEvent,
-        "encoded_message_event_signature", payload.encodedMessageEventSignature);
+        "encoded_message_event_signature", payload.encodedMessageEventSignature,
+        "xdk_version", payload.xdkVersion);
 ```
 
 Read them under those names wherever your code reads a payload, including
