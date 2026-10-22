@@ -140,6 +140,54 @@ impl From<&SentFromSurface> for i32 {
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BotMessageType(pub i32);
+
+impl BotMessageType {
+  pub const WIDGET: BotMessageType = BotMessageType(1);
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::WIDGET,
+  ];
+}
+
+impl TSerializable for BotMessageType {
+  #[allow(clippy::trivially_copy_pass_by_ref)]
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    o_prot.write_i32(self.0)
+  }
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BotMessageType> {
+    let enum_value = i_prot.read_i32()?;
+    Ok(BotMessageType::from(enum_value))
+  }
+}
+
+impl From<i32> for BotMessageType {
+  fn from(i: i32) -> Self {
+    match i {
+      1 => BotMessageType::WIDGET,
+      _ => BotMessageType(i)
+    }
+  }
+}
+
+impl From<&i32> for BotMessageType {
+  fn from(i: &i32) -> Self {
+    BotMessageType::from(*i)
+  }
+}
+
+impl From<BotMessageType> for i32 {
+  fn from(e: BotMessageType) -> i32 {
+    e.0
+  }
+}
+
+impl From<&BotMessageType> for i32 {
+  fn from(e: &BotMessageType) -> i32 {
+    e.0
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MediaType(pub i32);
 
 impl MediaType {
@@ -285,6 +333,7 @@ pub enum MessageEntryContents {
   NicknameMessage(Box<NicknameMessage>),
   SetVerifiedStatus(Box<SetVerifiedStatus>),
   AvCallStarted(Box<AVCallStarted>),
+  XNumberUsed(Box<XNumberUsed>),
 }
 
 impl TSerializable for MessageEntryContents {
@@ -409,6 +458,13 @@ impl TSerializable for MessageEntryContents {
           let val = Box::new(AVCallStarted::read_from_in_protocol(i_prot)?);
           if ret.is_none() {
             ret = Some(MessageEntryContents::AvCallStarted(val));
+          }
+          received_field_count += 1;
+        },
+        17 => {
+          let val = Box::new(XNumberUsed::read_from_in_protocol(i_prot)?);
+          if ret.is_none() {
+            ret = Some(MessageEntryContents::XNumberUsed(val));
           }
           received_field_count += 1;
         },
@@ -538,6 +594,11 @@ impl TSerializable for MessageEntryContents {
       },
       MessageEntryContents::AvCallStarted(ref f) => {
         o_prot.write_field_begin(&TFieldIdentifier::new("av_call_started", TType::Struct, 16))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageEntryContents::XNumberUsed(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("x_number_used", TType::Struct, 17))?;
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
@@ -1182,6 +1243,43 @@ impl TSerializable for AcceptMessageRequest {
   }
   fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("AcceptMessageRequest");
+    o_prot.write_struct_begin(&struct_ident)?;
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// XNumberUsed
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct XNumberUsed {
+}
+
+impl XNumberUsed {
+  pub fn new() -> XNumberUsed {
+    XNumberUsed {}
+  }
+}
+
+impl TSerializable for XNumberUsed {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<XNumberUsed> {
+    i_prot.read_struct_begin()?;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      i_prot.skip(field_ident.field_type)?;
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = XNumberUsed {};
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("XNumberUsed");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
@@ -2069,10 +2167,12 @@ pub struct ReplyingToPreview {
   pub raw_event_ckces: Option<Vec<event::MessageEvent>>,
   pub av_call_card: Option<Box<ReplyAVCallCard>>,
   pub replying_to_attachment_id: Option<String>,
+  pub raw_event_message_key: Option<Vec<u8>>,
+  pub raw_event_edit_message_key: Option<Vec<u8>>,
 }
 
 impl ReplyingToPreview {
-  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12>(sender_id: F1, message_text: F2, entities: F3, attachments: F4, sender_display_name: F5, replying_to_message_sequence_id: F6, replying_to_message_id: F7, raw_event_message_create: F8, raw_event_edit_message: F9, raw_event_ckces: F10, av_call_card: F11, replying_to_attachment_id: F12) -> ReplyingToPreview where F1: Into<Option<i64>>, F2: Into<Option<String>>, F3: Into<Option<Vec<RichTextEntity>>>, F4: Into<Option<Vec<Box<MessageAttachment>>>>, F5: Into<Option<String>>, F6: Into<Option<String>>, F7: Into<Option<String>>, F8: Into<Option<event::MessageEvent>>, F9: Into<Option<event::MessageEvent>>, F10: Into<Option<Vec<event::MessageEvent>>>, F11: Into<Option<Box<ReplyAVCallCard>>>, F12: Into<Option<String>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14>(sender_id: F1, message_text: F2, entities: F3, attachments: F4, sender_display_name: F5, replying_to_message_sequence_id: F6, replying_to_message_id: F7, raw_event_message_create: F8, raw_event_edit_message: F9, raw_event_ckces: F10, av_call_card: F11, replying_to_attachment_id: F12, raw_event_message_key: F13, raw_event_edit_message_key: F14) -> ReplyingToPreview where F1: Into<Option<i64>>, F2: Into<Option<String>>, F3: Into<Option<Vec<RichTextEntity>>>, F4: Into<Option<Vec<Box<MessageAttachment>>>>, F5: Into<Option<String>>, F6: Into<Option<String>>, F7: Into<Option<String>>, F8: Into<Option<event::MessageEvent>>, F9: Into<Option<event::MessageEvent>>, F10: Into<Option<Vec<event::MessageEvent>>>, F11: Into<Option<Box<ReplyAVCallCard>>>, F12: Into<Option<String>>, F13: Into<Option<Vec<u8>>>, F14: Into<Option<Vec<u8>>> {
     ReplyingToPreview {
       sender_id: sender_id.into(),
       message_text: message_text.into(),
@@ -2086,6 +2186,8 @@ impl ReplyingToPreview {
       raw_event_ckces: raw_event_ckces.into(),
       av_call_card: av_call_card.into(),
       replying_to_attachment_id: replying_to_attachment_id.into(),
+      raw_event_message_key: raw_event_message_key.into(),
+      raw_event_edit_message_key: raw_event_edit_message_key.into(),
     }
   }
 }
@@ -2105,6 +2207,8 @@ impl TSerializable for ReplyingToPreview {
     let mut f_10: Option<Vec<event::MessageEvent>> = None;
     let mut f_11: Option<Box<ReplyAVCallCard>> = None;
     let mut f_12: Option<String> = None;
+    let mut f_13: Option<Vec<u8>> = None;
+    let mut f_14: Option<Vec<u8>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -2185,6 +2289,14 @@ impl TSerializable for ReplyingToPreview {
           let val = i_prot.read_string()?;
           f_12 = Some(val);
         },
+        13 => {
+          let val = i_prot.read_bytes()?;
+          f_13 = Some(val);
+        },
+        14 => {
+          let val = i_prot.read_bytes()?;
+          f_14 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -2205,6 +2317,8 @@ impl TSerializable for ReplyingToPreview {
       raw_event_ckces: f_10,
       av_call_card: f_11,
       replying_to_attachment_id: f_12,
+      raw_event_message_key: f_13,
+      raw_event_edit_message_key: f_14,
     };
     Ok(ret)
   }
@@ -2281,6 +2395,16 @@ impl TSerializable for ReplyingToPreview {
     if let Some(ref fld_var) = self.replying_to_attachment_id {
       o_prot.write_field_begin(&TFieldIdentifier::new("replying_to_attachment_id", TType::String, 12))?;
       o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.raw_event_message_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("raw_event_message_key", TType::String, 13))?;
+      o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.raw_event_edit_message_key {
+      o_prot.write_field_begin(&TFieldIdentifier::new("raw_event_edit_message_key", TType::String, 14))?;
+      o_prot.write_bytes(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -2484,6 +2608,76 @@ impl TSerializable for ForwardedMessage {
 }
 
 //
+// GrokAttachments
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GrokAttachments {
+  pub attachments: Option<Vec<Box<MessageAttachment>>>,
+}
+
+impl GrokAttachments {
+  pub fn new<F1>(attachments: F1) -> GrokAttachments where F1: Into<Option<Vec<Box<MessageAttachment>>>> {
+    GrokAttachments {
+      attachments: attachments.into(),
+    }
+  }
+}
+
+impl TSerializable for GrokAttachments {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<GrokAttachments> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<Vec<Box<MessageAttachment>>> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<Box<MessageAttachment>> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            match MessageAttachment::read_from_in_protocol(i_prot) {
+              Ok(elem) => { val.push(Box::new(elem)); },
+              Err(thrift::Error::Protocol(ref e)) if e.kind == ProtocolErrorKind::UnknownUnionVariant => { continue; },
+              Err(e) => return Err(e),
+            }
+          }
+          i_prot.read_list_end()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = GrokAttachments {
+      attachments: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("GrokAttachments");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.attachments {
+      o_prot.write_field_begin(&TFieldIdentifier::new("attachments", TType::List, 1))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::Struct, fld_var.len() as i32))?;
+      for e in fld_var {
+        e.write_to_out_protocol(o_prot)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // MessageAttachment
 //
 
@@ -2495,6 +2689,8 @@ pub enum MessageAttachment {
   UnifiedCard(Box<UnifiedCardAttachment>),
   Money(Box<MoneyAttachment>),
   Jetfuel(Box<JetfuelAttachment>),
+  PaymentReceipt(Box<PaymentReceiptAttachment>),
+  BotMessage(Box<BotMessageAttachment>),
 }
 
 impl TSerializable for MessageAttachment {
@@ -2549,6 +2745,20 @@ impl TSerializable for MessageAttachment {
           let val = Box::new(JetfuelAttachment::read_from_in_protocol(i_prot)?);
           if ret.is_none() {
             ret = Some(MessageAttachment::Jetfuel(val));
+          }
+          received_field_count += 1;
+        },
+        7 => {
+          let val = Box::new(PaymentReceiptAttachment::read_from_in_protocol(i_prot)?);
+          if ret.is_none() {
+            ret = Some(MessageAttachment::PaymentReceipt(val));
+          }
+          received_field_count += 1;
+        },
+        8 => {
+          let val = Box::new(BotMessageAttachment::read_from_in_protocol(i_prot)?);
+          if ret.is_none() {
+            ret = Some(MessageAttachment::BotMessage(val));
           }
           received_field_count += 1;
         },
@@ -2631,6 +2841,99 @@ impl TSerializable for MessageAttachment {
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
+      MessageAttachment::PaymentReceipt(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("payment_receipt", TType::Struct, 7))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      MessageAttachment::BotMessage(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("bot_message", TType::Struct, 8))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// BotMessageAttachment
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BotMessageAttachment {
+  pub entry_id: Option<String>,
+  pub type_: Option<BotMessageType>,
+  pub payload_json: Option<String>,
+}
+
+impl BotMessageAttachment {
+  pub fn new<F1, F2, F3>(entry_id: F1, type_: F2, payload_json: F3) -> BotMessageAttachment where F1: Into<Option<String>>, F2: Into<Option<BotMessageType>>, F3: Into<Option<String>> {
+    BotMessageAttachment {
+      entry_id: entry_id.into(),
+      type_: type_.into(),
+      payload_json: payload_json.into(),
+    }
+  }
+}
+
+impl TSerializable for BotMessageAttachment {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BotMessageAttachment> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    let mut f_2: Option<BotMessageType> = None;
+    let mut f_3: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        2 => {
+          let val = BotMessageType::read_from_in_protocol(i_prot)?;
+          f_2 = Some(val);
+        },
+        3 => {
+          let val = i_prot.read_string()?;
+          f_3 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = BotMessageAttachment {
+      entry_id: f_1,
+      type_: f_2,
+      payload_json: f_3,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("BotMessageAttachment");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.entry_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("entry_id", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.type_ {
+      o_prot.write_field_begin(&TFieldIdentifier::new("type", TType::I32, 2))?;
+      fld_var.write_to_out_protocol(o_prot)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.payload_json {
+      o_prot.write_field_begin(&TFieldIdentifier::new("payload_json", TType::String, 3))?;
+      o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
@@ -2783,6 +3086,63 @@ impl TSerializable for MoneyAttachment {
     if let Some(ref fld_var) = self.payload {
       o_prot.write_field_begin(&TFieldIdentifier::new("payload", TType::String, 2))?;
       o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
+// PaymentReceiptAttachment
+//
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PaymentReceiptAttachment {
+  pub receipt_token: Option<String>,
+}
+
+impl PaymentReceiptAttachment {
+  pub fn new<F1>(receipt_token: F1) -> PaymentReceiptAttachment where F1: Into<Option<String>> {
+    PaymentReceiptAttachment {
+      receipt_token: receipt_token.into(),
+    }
+  }
+}
+
+impl TSerializable for PaymentReceiptAttachment {
+  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PaymentReceiptAttachment> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<String> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_string()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = PaymentReceiptAttachment {
+      receipt_token: f_1,
+    };
+    Ok(ret)
+  }
+  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("PaymentReceiptAttachment");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(ref fld_var) = self.receipt_token {
+      o_prot.write_field_begin(&TFieldIdentifier::new("receipt_token", TType::String, 1))?;
+      o_prot.write_string(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -3164,10 +3524,11 @@ pub struct MediaAttachment {
   pub legacy_media_url_https: Option<String>,
   pub legacy_media_preview_url: Option<String>,
   pub grok_tag: Option<String>,
+  pub plaintext_sha256: Option<Vec<u8>>,
 }
 
 impl MediaAttachment {
-  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10>(media_hash_key: F1, dimensions: F2, type_: F3, duration_millis: F4, filesize_bytes: F5, filename: F6, attachment_id: F7, legacy_media_url_https: F8, legacy_media_preview_url: F9, grok_tag: F10) -> MediaAttachment where F1: Into<Option<String>>, F2: Into<Option<Box<MediaDimensions>>>, F3: Into<Option<Box<MediaType>>>, F4: Into<Option<i64>>, F5: Into<Option<i64>>, F6: Into<Option<String>>, F7: Into<Option<String>>, F8: Into<Option<String>>, F9: Into<Option<String>>, F10: Into<Option<String>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11>(media_hash_key: F1, dimensions: F2, type_: F3, duration_millis: F4, filesize_bytes: F5, filename: F6, attachment_id: F7, legacy_media_url_https: F8, legacy_media_preview_url: F9, grok_tag: F10, plaintext_sha256: F11) -> MediaAttachment where F1: Into<Option<String>>, F2: Into<Option<Box<MediaDimensions>>>, F3: Into<Option<Box<MediaType>>>, F4: Into<Option<i64>>, F5: Into<Option<i64>>, F6: Into<Option<String>>, F7: Into<Option<String>>, F8: Into<Option<String>>, F9: Into<Option<String>>, F10: Into<Option<String>>, F11: Into<Option<Vec<u8>>> {
     MediaAttachment {
       media_hash_key: media_hash_key.into(),
       dimensions: dimensions.into(),
@@ -3179,6 +3540,7 @@ impl MediaAttachment {
       legacy_media_url_https: legacy_media_url_https.into(),
       legacy_media_preview_url: legacy_media_preview_url.into(),
       grok_tag: grok_tag.into(),
+      plaintext_sha256: plaintext_sha256.into(),
     }
   }
 }
@@ -3196,6 +3558,7 @@ impl TSerializable for MediaAttachment {
     let mut f_8: Option<String> = None;
     let mut f_9: Option<String> = None;
     let mut f_10: Option<String> = None;
+    let mut f_11: Option<Vec<u8>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -3243,6 +3606,10 @@ impl TSerializable for MediaAttachment {
           let val = i_prot.read_string()?;
           f_10 = Some(val);
         },
+        11 => {
+          let val = i_prot.read_bytes()?;
+          f_11 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -3261,6 +3628,7 @@ impl TSerializable for MediaAttachment {
       legacy_media_url_https: f_8,
       legacy_media_preview_url: f_9,
       grok_tag: f_10,
+      plaintext_sha256: f_11,
     };
     Ok(ret)
   }
@@ -3315,6 +3683,11 @@ impl TSerializable for MediaAttachment {
     if let Some(ref fld_var) = self.grok_tag {
       o_prot.write_field_begin(&TFieldIdentifier::new("grok_tag", TType::String, 10))?;
       o_prot.write_string(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.plaintext_sha256 {
+      o_prot.write_field_begin(&TFieldIdentifier::new("plaintext_sha256", TType::String, 11))?;
+      o_prot.write_bytes(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -3567,14 +3940,16 @@ pub struct MessageEdit {
   pub message_sequence_id: Option<String>,
   pub updated_text: Option<String>,
   pub entities: Option<Vec<RichTextEntity>>,
+  pub message_id: Option<String>,
 }
 
 impl MessageEdit {
-  pub fn new<F1, F2, F3>(message_sequence_id: F1, updated_text: F2, entities: F3) -> MessageEdit where F1: Into<Option<String>>, F2: Into<Option<String>>, F3: Into<Option<Vec<RichTextEntity>>> {
+  pub fn new<F1, F2, F3, F4>(message_sequence_id: F1, updated_text: F2, entities: F3, message_id: F4) -> MessageEdit where F1: Into<Option<String>>, F2: Into<Option<String>>, F3: Into<Option<Vec<RichTextEntity>>>, F4: Into<Option<String>> {
     MessageEdit {
       message_sequence_id: message_sequence_id.into(),
       updated_text: updated_text.into(),
       entities: entities.into(),
+      message_id: message_id.into(),
     }
   }
 }
@@ -3585,6 +3960,7 @@ impl TSerializable for MessageEdit {
     let mut f_1: Option<String> = None;
     let mut f_2: Option<String> = None;
     let mut f_3: Option<Vec<RichTextEntity>> = None;
+    let mut f_4: Option<String> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -3604,11 +3980,15 @@ impl TSerializable for MessageEdit {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<RichTextEntity> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_9 = RichTextEntity::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_9);
+            let list_elem_10 = RichTextEntity::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_10);
           }
           i_prot.read_list_end()?;
           f_3 = Some(val);
+        },
+        4 => {
+          let val = i_prot.read_string()?;
+          f_4 = Some(val);
         },
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -3621,6 +4001,7 @@ impl TSerializable for MessageEdit {
       message_sequence_id: f_1,
       updated_text: f_2,
       entities: f_3,
+      message_id: f_4,
     };
     Ok(ret)
   }
@@ -3644,6 +4025,11 @@ impl TSerializable for MessageEdit {
         e.write_to_out_protocol(o_prot)?;
       }
       o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.message_id {
+      o_prot.write_field_begin(&TFieldIdentifier::new("message_id", TType::String, 4))?;
+      o_prot.write_string(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -3786,8 +4172,8 @@ impl TSerializable for QuickReplyOptionsRequest {
           let list_ident = i_prot.read_list_begin()?;
           let mut val: Vec<QuickReplyOption> = Vec::with_capacity(list_ident.size as usize);
           for _ in 0..list_ident.size {
-            let list_elem_10 = QuickReplyOption::read_from_in_protocol(i_prot)?;
-            val.push(list_elem_10);
+            let list_elem_11 = QuickReplyOption::read_from_in_protocol(i_prot)?;
+            val.push(list_elem_11);
           }
           i_prot.read_list_end()?;
           f_2 = Some(val);

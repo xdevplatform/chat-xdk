@@ -27,6 +27,7 @@ union MessageEntryContents {
     14: NicknameMessage nickname_message
     15: SetVerifiedStatus set_verified_status
     16: AVCallStarted av_call_started
+    17: XNumberUsed x_number_used
 }
 
 struct MarkConversationRead {
@@ -81,6 +82,9 @@ struct DraftMessage {
 
 struct AcceptMessageRequest {}
 
+// Sent by the verifier after entering the owner's X Number; the sender is implicit in the envelope.
+struct XNumberUsed {}
+
 struct NicknameMessage {
     1: optional i64 user_id
     2: optional string nickname_text
@@ -94,7 +98,6 @@ struct SetVerifiedStatus {
 struct MessageContents {
     1: optional string message_text
     2: optional list<RichTextEntity> entities
-    // Note: we currently only ever send one attachment, this is just a list for possible future improvements
     3: optional list<MessageAttachment> attachments
     4: optional ReplyingToPreview replying_to_preview
     // 5 was editEventIds but wasn't actually used and had a serialization bug, DO NOT REUSE
@@ -154,7 +157,6 @@ struct ReplyingToPreview {
     1: optional i64 sender_id
     2: optional string message_text
     3: optional list<RichTextEntity> entities
-    // Note: we currently only ever send one attachment, this is just a list for possible future improvements
     4: optional list<MessageAttachment> attachments
     5: optional string sender_display_name
     6: optional string replying_to_message_sequence_id
@@ -164,6 +166,9 @@ struct ReplyingToPreview {
     10: optional list<event.MessageEvent> raw_event_ckces
     11: optional ReplyAVCallCard av_call_card
     12: optional string replying_to_attachment_id
+    // Per-message keys for fields 8 and 9; never a conversation key.
+    13: optional binary raw_event_message_key
+    14: optional binary raw_event_edit_message_key
 }
 
 union ReplyAVCallCard {
@@ -177,6 +182,14 @@ struct ForwardedMessage {
     2: optional list<RichTextEntity> entities
 }
 
+// Declared before MessageAttachment: the Rust generator boxes the elements of
+// a list of unions only when the union is declared after the list's struct.
+// Wrapper carried (thrift-serialized) in GrokResponseEvent.encoded_attachments so a Grok
+// reply's attachments decode into the same MessageAttachment model as regular messages.
+struct GrokAttachments {
+    1: optional list<MessageAttachment> attachments
+}
+
 union MessageAttachment {
     1: MediaAttachment media
     2: PostAttachment post
@@ -184,6 +197,18 @@ union MessageAttachment {
     4: UnifiedCardAttachment unified_card
     5: MoneyAttachment money
     6: JetfuelAttachment jetfuel
+    7: PaymentReceiptAttachment payment_receipt
+    8: BotMessageAttachment bot_message
+}
+
+enum BotMessageType {
+    WIDGET = 1
+}
+
+struct BotMessageAttachment {
+    1: optional string entry_id
+    2: optional BotMessageType type
+    3: optional string payload_json
 }
 
 struct JetfuelAttachment {
@@ -197,6 +222,13 @@ struct JetfuelAttachment {
 struct MoneyAttachment {
     1: optional string fallbackText
     2: optional binary payload
+}
+
+// A peer-to-peer payment receipt. receipt_token is a signed JWT issued by X Money
+// describing the transfer (amount, parties, timestamp); clients render the card from
+// its claims and verify the signature against the X Money JWKS.
+struct PaymentReceiptAttachment {
+    1: optional string receipt_token
 }
 
 // Posts are hydrated on the receiver side
@@ -240,6 +272,8 @@ struct MediaAttachment {
     8: optional string legacy_media_url_https
     9: optional string legacy_media_preview_url
     10: optional string grok_tag
+    // SHA-256 of the decrypted media bytes
+    11: optional binary plaintext_sha256
 }
 
 struct MediaDimensions {
@@ -272,6 +306,7 @@ struct MessageEdit {
     1: optional string message_sequence_id
     2: optional string updated_text
     3: optional list<RichTextEntity> entities
+    4: optional string message_id
 }
 
 struct QuickReplyOption {
