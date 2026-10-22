@@ -7,10 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,10 +18,8 @@ import (
 )
 
 // offlineFeatures is an endpoint nothing listens on: a chat no test points at
-// a server of its own fetches from it, fails, and stays on v0.
+// a server of its own reads from it, fails, and stays on v0.
 const offlineFeatures = "http://127.0.0.1:9/2/chat/features"
-
-const driverHelperEnv = "CHATXDK_FEATURE_DRIVER_HELPER"
 
 func TestMain(m *testing.M) {
 	if err := ffiFeatureSetDefaultEndpoint(offlineFeatures); err != nil {
@@ -32,11 +28,20 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// configureFeatures points this chat's feature fetch at endpoint, with these
-// timings; for tests only.
-func (c *Chat) configureFeatures(endpoint string, timeout, recheck, firstRetry time.Duration) error {
-	defer runtime.KeepAlive(c)
-	return ffiFeatureConfigure(c.h, endpoint, timeout, recheck, firstRetry)
+// newChatReading is a chat that reads its feature switches from endpoint,
+// within timeout; for tests only.
+func newChatReading(t *testing.T, endpoint string, timeout time.Duration) *Chat {
+	t.Helper()
+	chat := newChat()
+	if chat == nil {
+		t.Fatal("newChat returned nil")
+	}
+	if err := ffiFeatureConfigure(chat.h, endpoint, timeout); err != nil {
+		chat.Close()
+		t.Fatalf("ffiFeatureConfigure failed: %v", err)
+	}
+	chat.startFeatures()
+	return chat
 }
 
 var (
@@ -44,23 +49,26 @@ var (
 	v1Server     *httptest.Server
 )
 
-// enableV1Send turns v1_send on for chat as the X API would: it points the
-// chat's feature fetch at a local server that answers it, then sends until a
-// send is v1.
-func enableV1Send(t *testing.T, chat *Chat) {
+// newV1Chat is a chat whose feature switches turn v1_send on, as the X API
+// would: it reads them from a local server that answers so. waitForV1 waits
+// for the answer.
+func newV1Chat(t *testing.T) *Chat {
 	t.Helper()
 	v1ServerOnce.Do(func() {
 		v1Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
 		}))
 	})
-	if err := chat.configureFeatures(v1Server.URL, 2*time.Second, time.Hour, 50*time.Millisecond); err != nil {
-		t.Fatalf("configureFeatures failed: %v", err)
-	}
+	return newChatReading(t, v1Server.URL, 2*time.Second)
+}
+
+// waitForV1 sends from chat, which has keys, until a send is v1.
+func waitForV1(t *testing.T, chat *Chat) {
+	t.Helper()
 	params := EncryptMessageParams{
 		SenderID:               "1",
 		ConversationID:         "feature-switches",
-		Text:                   "turn v1 on",
+		Text:                   "wait for v1",
 		ConversationKey:        make([]byte, 32),
 		ConversationKeyVersion: "1",
 		SigningKeyVersion:      "1",
@@ -75,7 +83,7 @@ func enableV1Send(t *testing.T, chat *Chat) {
 }
 
 // featureServer is a local GET /2/chat/features that records each request's
-// bucket.
+// query string.
 type featureServer struct {
 	*httptest.Server
 	id      int64
@@ -83,7 +91,7 @@ type featureServer struct {
 	status  int
 	body    string
 	delay   time.Duration
-	buckets []string
+	queries []string
 }
 
 func newFeatureServer(t *testing.T) *featureServer {
@@ -93,7 +101,7 @@ func newFeatureServer(t *testing.T) *featureServer {
 		// The answer is fixed when the request is recorded, so a test that
 		// sees the request can change the next answer.
 		s.mu.Lock()
-		s.buckets = append(s.buckets, r.URL.Query().Get("bucket"))
+		s.queries = append(s.queries, r.URL.RawQuery)
 		status, body, delay := s.status, s.body, s.delay
 		s.mu.Unlock()
 		if delay > 0 {
@@ -111,9 +119,9 @@ func newFeatureServer(t *testing.T) *featureServer {
 	return s
 }
 
-// featureServerIDs give each server an endpoint of its own: the core reuses an
-// answer per endpoint and bucket for 5 minutes, and a server can get the port
-// of one that came before it.
+// featureServerIDs give each server an endpoint of its own: chats created
+// while a GET for their endpoint is in flight share it, and a server can get
+// the port of one that came before it.
 var featureServerIDs atomic.Int64
 
 func (s *featureServer) endpoint() string {
@@ -135,28 +143,15 @@ func (s *featureServer) setDelay(delay time.Duration) {
 func (s *featureServer) seen() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.buckets...)
+	return append([]string(nil), s.queries...)
 }
 
-// featureTimings are a chat's request timeout, re-check interval and first
-// retry delay.
-type featureTimings struct {
-	timeout, recheck, firstRetry time.Duration
-}
-
-var defaultTestTimings = featureTimings{2 * time.Second, time.Hour, 50 * time.Millisecond}
-
-// featureChat is a keyed chat whose feature fetch goes to endpoint.
-func featureChat(t *testing.T, v sdkVectors, endpoint string, timings featureTimings) *Chat {
+// featureChat is a keyed chat that reads its feature switches from endpoint,
+// within timeout.
+func featureChat(t *testing.T, v sdkVectors, endpoint string, timeout time.Duration) *Chat {
 	t.Helper()
-	chat := New()
-	if chat == nil {
-		t.Fatal("New returned nil")
-	}
+	chat := newChatReading(t, endpoint, timeout)
 	t.Cleanup(chat.Close)
-	if err := chat.configureFeatures(endpoint, timings.timeout, timings.recheck, timings.firstRetry); err != nil {
-		t.Fatalf("configureFeatures failed: %v", err)
-	}
 	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
@@ -183,12 +178,7 @@ func sendVersion(t *testing.T, chat *Chat, v sdkVectors) string {
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	waitForWithin(t, what, 10*time.Second, cond)
-}
-
-func waitForWithin(t *testing.T, what string, within time.Duration, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(within)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
@@ -236,43 +226,58 @@ func TestFeatureSwitchesAreNotPublicAPI(t *testing.T) {
 	}
 }
 
-func TestNoRequestIsMadeUntilTheFirstSend(t *testing.T) {
+func TestANewChatReadsTheSwitchesOnce(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
-	time.Sleep(300 * time.Millisecond)
-	if got := server.seen(); len(got) != 0 {
-		t.Fatalf("requests before a send: %v", got)
-	}
-
-	if got := sendVersion(t, chat, v); got != "7" {
-		t.Fatalf("first send is %q, want 7: it does not wait for the answer", got)
-	}
+	chat := featureChat(t, v, server.endpoint(), 2*time.Second)
 	waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
-	bucket, err := strconv.Atoi(server.seen()[0])
-	if err != nil || bucket < 0 || bucket >= 10000 {
-		t.Fatalf("bucket %q", server.seen()[0])
+	if got := server.seen()[0]; got != "" {
+		t.Fatalf("query %q, want none", got)
+	}
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		sendVersion(t, chat, v)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1", len(got))
 	}
 }
 
-func TestV1StartsOnceTheAnswerTurnsItOn(t *testing.T) {
+func TestNewReadsTheDefaultEndpoint(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
-	if got := sendVersion(t, chat, v); got != "7" {
-		t.Fatalf("first send is %q, want 7", got)
+	if err := ffiFeatureSetDefaultEndpoint(server.endpoint()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ffiFeatureSetDefaultEndpoint(offlineFeatures); err != nil {
+			t.Fatal(err)
+		}
+	})
+	chat := New()
+	t.Cleanup(chat.Close)
+	waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
-	if got := server.seen(); len(got) != 1 {
-		t.Fatalf("requests: %v", got)
-	}
 }
 
 func TestASendNeverWaitsForTheRequest(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	server.setDelay(2 * time.Second)
-	chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	chat := featureChat(t, v, server.endpoint(), 3*time.Second)
 	started := time.Now()
 	if got := sendVersion(t, chat, v); got != "7" {
 		t.Fatalf("send is %q, want 7", got)
@@ -282,17 +287,13 @@ func TestASendNeverWaitsForTheRequest(t *testing.T) {
 	}
 }
 
-func TestChatsWithOneKeyShareOneRequest(t *testing.T) {
+func TestChatsCreatedWhileARequestIsInFlightShareIt(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	server.setDelay(300 * time.Millisecond)
+	server.setDelay(800 * time.Millisecond)
 	var chats []*Chat
 	for i := 0; i < 4; i++ {
-		chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
-		if got := sendVersion(t, chat, v); got != "7" {
-			t.Fatalf("send is %q, want 7", got)
-		}
-		chats = append(chats, chat)
+		chats = append(chats, featureChat(t, v, server.endpoint(), 2*time.Second))
 	}
 	waitFor(t, "v1 everywhere", func() bool {
 		for _, chat := range chats {
@@ -303,43 +304,29 @@ func TestChatsWithOneKeyShareOneRequest(t *testing.T) {
 		return true
 	})
 	if got := server.seen(); len(got) != 1 {
-		t.Fatalf("requests: %v", got)
+		t.Fatalf("requests: %d, want 1", len(got))
 	}
 
-	later := featureChat(t, v, server.endpoint(), defaultTestTimings)
-	if got := sendVersion(t, later, v); got != "10" {
-		t.Fatalf("a later chat sends %q, want 10: it takes the answer at hand", got)
-	}
-	if got := server.seen(); len(got) != 1 {
-		t.Fatalf("requests: %v", got)
-	}
+	later := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "the later chat's own request", func() bool { return len(server.seen()) == 2 })
+	waitFor(t, "v1 for the later chat", func() bool { return sendVersion(t, later, v) == "10" })
 }
 
-func TestChatsWithDifferentKeysAskSeparately(t *testing.T) {
+func TestTheAnswerHoldsForTheChatsLifetime(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	first := featureChat(t, v, server.endpoint(), defaultTestTimings)
-	second := featureChat(t, v, server.endpoint(), defaultTestTimings)
-	other := New()
-	defer other.Close()
-	if _, err := other.GenerateKeypairs(); err != nil {
-		t.Fatalf("GenerateKeypairs failed: %v", err)
+	chat := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+
+	server.set(http.StatusOK, `{"features":{}}`)
+	other := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "the second request", func() bool { return len(server.seen()) == 2 })
+	time.Sleep(200 * time.Millisecond)
+	if got := sendVersion(t, other, v); got != "7" {
+		t.Fatalf("the second chat sends %q, want 7: it reads its own answer", got)
 	}
-	keys, err := other.ExportKeys()
-	if err != nil {
-		t.Fatalf("ExportKeys failed: %v", err)
-	}
-	if err := second.ImportKeys(ImportKeysParams{Keys: keys}); err != nil {
-		t.Fatalf("ImportKeys failed: %v", err)
-	}
-	if err := second.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
-		t.Fatalf("SetIdentity failed: %v", err)
-	}
-	sendVersion(t, first, v)
-	sendVersion(t, second, v)
-	waitFor(t, "two requests", func() bool { return len(server.seen()) == 2 })
-	if got := server.seen(); got[0] == got[1] {
-		t.Fatalf("both requests carry bucket %s", got[0])
+	if got := sendVersion(t, chat, v); got != "10" {
+		t.Fatalf("the first chat sends %q, want 10: its answer holds", got)
 	}
 }
 
@@ -360,23 +347,17 @@ func TestAnyFailureLeavesSendsOnV0(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(strconv.Itoa(c.status)+"/"+strconv.Itoa(len(c.body))+"/"+c.delay.String(), func(t *testing.T) {
-			// A server of its own: chats share an answer per endpoint and
-			// bucket, and the case before may have left one.
 			server := newFeatureServer(t)
 			server.set(c.status, c.body)
 			server.setDelay(c.delay)
-			chat := featureChat(t, v, server.endpoint(), featureTimings{500 * time.Millisecond, time.Hour, time.Minute})
-			if got := sendVersion(t, chat, v); got != "7" {
-				t.Fatalf("send is %q, want 7", got)
-			}
+			chat := featureChat(t, v, server.endpoint(), 500*time.Millisecond)
 			waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
-			if c.delay > 0 {
-				time.Sleep(1200 * time.Millisecond)
-			} else {
-				time.Sleep(200 * time.Millisecond)
-			}
+			time.Sleep(c.delay + 200*time.Millisecond)
 			if got := sendVersion(t, chat, v); got != "7" {
 				t.Fatalf("send is %q, want 7", got)
+			}
+			if got := server.seen(); len(got) != 1 {
+				t.Fatalf("requests: %d, want 1: a failure is not retried", len(got))
 			}
 		})
 	}
@@ -387,173 +368,47 @@ func TestAnUnreachableEndpointLeavesSendsOnV0(t *testing.T) {
 	server := newFeatureServer(t)
 	endpoint := server.endpoint()
 	server.Close()
-	chat := featureChat(t, v, endpoint, featureTimings{500 * time.Millisecond, time.Hour, 50 * time.Millisecond})
-	if got := sendVersion(t, chat, v); got != "7" {
-		t.Fatalf("send is %q, want 7", got)
-	}
-	time.Sleep(500 * time.Millisecond)
+	chat := featureChat(t, v, endpoint, 500*time.Millisecond)
+	time.Sleep(700 * time.Millisecond)
 	if got := sendVersion(t, chat, v); got != "7" {
 		t.Fatalf("send is %q, want 7", got)
 	}
 }
 
-func TestARequestStillOpenAtItsTimeoutFailsAndIsRetried(t *testing.T) {
+func TestARequestStillOpenAtItsTimeoutFails(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	server.setDelay(3 * time.Second)
-	chat := featureChat(t, v, server.endpoint(), featureTimings{300 * time.Millisecond, time.Hour, 200 * time.Millisecond})
-	if got := sendVersion(t, chat, v); got != "7" {
-		t.Fatalf("send is %q, want 7", got)
-	}
-	waitForWithin(t, "a retry", 2500*time.Millisecond, func() bool { return len(server.seen()) >= 2 })
-	if got := sendVersion(t, chat, v); got != "7" {
-		t.Fatalf("send is %q, want 7", got)
-	}
-}
-
-func TestTheRecheckTurnsV1OffAndNeverBackOn(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	rechecking := featureTimings{2 * time.Second, 300 * time.Millisecond, 50 * time.Millisecond}
-	chat := featureChat(t, v, server.endpoint(), rechecking)
-	sendVersion(t, chat, v)
-	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
-
-	server.set(http.StatusOK, `{"features":{}}`)
-	waitFor(t, "the re-check to turn v1 off", func() bool { return sendVersion(t, chat, v) == "7" })
-
-	server.set(http.StatusOK, `{"features":{"v1_send":true}}`)
-	seen := len(server.seen())
-	waitFor(t, "two more re-checks", func() bool { return len(server.seen()) >= seen+2 })
-	if got := sendVersion(t, chat, v); got != "7" {
-		t.Fatalf("a running chat sends %q, want 7: it never sees v1 turn on", got)
-	}
-	later := featureChat(t, v, server.endpoint(), rechecking)
-	if got := sendVersion(t, later, v); got != "10" {
-		t.Fatalf("a new chat sends %q, want 10: it takes the latest answer", got)
-	}
-}
-
-func TestAFailedRecheckChangesNothing(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	chat := featureChat(t, v, server.endpoint(), featureTimings{2 * time.Second, 300 * time.Millisecond, 50 * time.Millisecond})
-	sendVersion(t, chat, v)
-	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
-	server.set(http.StatusServiceUnavailable, "")
-	seen := len(server.seen())
-	waitFor(t, "two failed re-checks", func() bool { return len(server.seen()) >= seen+2 })
-	if got := sendVersion(t, chat, v); got != "10" {
-		t.Fatalf("send is %q, want 10", got)
-	}
-}
-
-func TestCloseStopsTheRequests(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	chat := featureChat(t, v, server.endpoint(), featureTimings{2 * time.Second, 300 * time.Millisecond, 50 * time.Millisecond})
-	sendVersion(t, chat, v)
-	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
-	chat.Close()
-	seen := len(server.seen())
+	chat := featureChat(t, v, server.endpoint(), 300*time.Millisecond)
 	time.Sleep(time.Second)
-	if got := len(server.seen()); got != seen {
-		t.Fatalf("%d requests after Close", got-seen)
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7", got)
+	}
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1", len(got))
 	}
 }
 
-// startUnreferencedChat leaves a re-checking chat that nothing references.
-func startUnreferencedChat(t *testing.T, v sdkVectors, endpoint string) {
-	chat := New()
-	if err := chat.configureFeatures(endpoint, 2*time.Second, 300*time.Millisecond, 50*time.Millisecond); err != nil {
-		t.Fatalf("configureFeatures failed: %v", err)
-	}
-	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
-		t.Fatalf("ImportKeys failed: %v", err)
-	}
-	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
-		t.Fatalf("SetIdentity failed: %v", err)
-	}
-	sendVersion(t, chat, v)
-	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+// startUnreferencedChat leaves a chat that nothing references, with its
+// request in flight.
+func startUnreferencedChat(t *testing.T, endpoint string) {
+	newChatReading(t, endpoint, 2*time.Second)
 }
 
-func TestTheRequestsEndWithAnUnreferencedChat(t *testing.T) {
+func TestARequestEndsSafelyForAClosedOrCollectedChat(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	startUnreferencedChat(t, v, server.endpoint())
-	running := len(server.seen())
-	waitFor(t, "a re-check", func() bool { return len(server.seen()) > running })
+	server.setDelay(800 * time.Millisecond)
+	closed := featureChat(t, v, server.endpoint(), 2*time.Second)
+	closed.Close()
+	startUnreferencedChat(t, server.endpoint())
 	for i := 0; i < 5; i++ {
 		runtime.GC()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	time.Sleep(800 * time.Millisecond)
-	seen := len(server.seen())
-	time.Sleep(1200 * time.Millisecond)
-	if got := len(server.seen()); got != seen {
-		t.Fatalf("%d requests once the chat was collected", got-seen)
-	}
-}
-
-// featureDrivers counts the goroutines running featureDriver.
-func featureDrivers() int {
-	buf := make([]byte, 1<<20)
-	return strings.Count(string(buf[:runtime.Stack(buf, true)]), "chatxdk.featureDriver(")
-}
-
-// TestTheDriverEndsWithTheLastChat runs in a process of its own, so no chat of
-// another test keeps the driver running.
-func TestTheDriverEndsWithTheLastChat(t *testing.T) {
-	cmd := exec.Command(os.Args[0], "-test.run=^TestFeatureDriverHelper$", "-test.v")
-	cmd.Env = append(os.Environ(), driverHelperEnv+"=1")
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "PASS") {
-		t.Fatalf("helper process failed: %v\n%s", err, out)
-	}
-}
-
-func TestFeatureDriverHelper(t *testing.T) {
-	if os.Getenv(driverHelperEnv) != "1" {
-		t.Skip("run by TestTheDriverEndsWithTheLastChat")
-	}
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	if n := featureDrivers(); n != 0 {
-		t.Fatalf("%d drivers before a send", n)
-	}
-	var chats []*Chat
-	for i := 0; i < 3; i++ {
-		chat := New()
-		if err := chat.configureFeatures(server.endpoint(), 2*time.Second, 300*time.Millisecond, 50*time.Millisecond); err != nil {
-			t.Fatal(err)
-		}
-		if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
-			t.Fatal(err)
-		}
-		if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
-			t.Fatal(err)
-		}
-		chats = append(chats, chat)
-	}
-	for _, chat := range chats {
-		sendVersion(t, chat, v)
-	}
-	waitFor(t, "v1 everywhere", func() bool {
-		return !slices.ContainsFunc(chats, func(c *Chat) bool { return sendVersion(t, c, v) != "10" })
-	})
-	if n := featureDrivers(); n != 1 {
-		t.Fatalf("%d drivers, want 1", n)
-	}
-	waitFor(t, "re-checks while chats remain", func() bool { return len(server.seen()) >= 3 })
-
-	for _, chat := range chats {
-		chat.Close()
-	}
-	waitForWithin(t, "the driver to end", 3*time.Second, func() bool { return featureDrivers() == 0 })
-	seen := len(server.seen())
-	time.Sleep(time.Second)
-	if got := len(server.seen()); got != seen {
-		t.Fatalf("%d requests once no chat remains", got-seen)
+	kept := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "v1 for the chat still open", func() bool { return sendVersion(t, kept, v) == "10" })
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1", len(got))
 	}
 }

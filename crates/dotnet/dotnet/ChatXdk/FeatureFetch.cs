@@ -1,24 +1,29 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ChatXdk
 {
     /// <summary>
-    /// Performs the <c>GET /2/chat/features</c> requests the native core asks for. The core
-    /// decides when to fetch and what an answer means; this class starts a driver thread when
-    /// the core calls its waker, runs each GET the driver is handed with <see cref="HttpClient"/>,
-    /// and hands the status and body back. Nothing here is API.
+    /// Reads a chat's feature switches (<c>GET /2/chat/features</c>) once, when the chat is
+    /// created. The native core decides what to fetch and what an answer means; this class
+    /// performs the GET with <see cref="HttpClient"/> on the thread pool and hands the status
+    /// and body back. Nothing here is API.
     /// </summary>
-    internal static class FeatureDriver
+    internal static class FeatureFetch
     {
         private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-        private static readonly bool Registered = RegisterWaker();
-
-        /// <summary>Lets the core start a driver; registers the waker once.</summary>
-        internal static void Register() => _ = Registered;
+        /// <summary>
+        /// Start <paramref name="chat"/>'s one read of the feature switches: nothing to do when
+        /// it takes the answer of a GET already in flight.
+        /// </summary>
+        internal static void Start(Chat chat)
+        {
+            var json = chat.StartFeatures();
+            if (json.Length == 0) return;
+            var fetch = JsonSerializer.Deserialize<Fetch>(json)!;
+            _ = Task.Run(() => PerformAsync(fetch));
+        }
 
         /// <summary>
         /// For this repository's tests: the endpoint of every chat that does not set its own,
@@ -34,44 +39,6 @@ namespace ChatXdk
             var endpointBytes = Chat.Utf8Z(endpoint);
             fixed (byte* endpointPtr = endpointBytes)
                 Chat.ConsumeResult(NativeMethods.chat_xdk_internal_feature_set_default_endpoint(endpointPtr));
-        }
-
-        private static unsafe bool RegisterWaker()
-        {
-            NativeMethods.chat_xdk_internal_feature_set_waker(&Wake);
-            return true;
-        }
-
-        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Wake()
-        {
-            try
-            {
-                new Thread(Run) { IsBackground = true, Name = "chat-xdk-features" }.Start();
-            }
-            catch (Exception)
-            {
-                // Without a driver every switch stays off.
-            }
-        }
-
-        private static void Run()
-        {
-            try
-            {
-                while (Next() is { } fetch)
-                    _ = Task.Run(() => PerformAsync(fetch));
-            }
-            catch (Exception)
-            {
-                // Without a driver every switch stays off.
-            }
-        }
-
-        private static Fetch? Next()
-        {
-            var json = Chat.ConsumeResult(NativeMethods.chat_xdk_internal_feature_next());
-            return json.Length == 0 ? null : JsonSerializer.Deserialize<Fetch>(json);
         }
 
         private static async Task PerformAsync(Fetch fetch)

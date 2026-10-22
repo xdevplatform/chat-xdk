@@ -85,13 +85,25 @@ public final class Chat implements AutoCloseable {
      *     (e.g. the shared library is not on {@code jna.library.path}).
      */
     public Chat() {
+        this(null, null);
+    }
+
+    /**
+     * For this repository's tests: a chat that reads its feature switches from
+     * {@code featureEndpoint} within {@code featureTimeout}, or from the default endpoint when
+     * it is null.
+     */
+    Chat(String featureEndpoint, Duration featureTimeout) {
         handle = ChatNative.INSTANCE.chat_xdk_new();
         if (handle == null) {
             throw new IllegalStateException(
                     "chat_xdk_new() returned null — ensure libchat_xdk_dotnet is on jna.library.path.");
         }
-        FeatureDriver.register();
         cleanable = CLEANER.register(this, new FreeHandle(handle));
+        if (featureEndpoint != null) {
+            configureFeatures(featureEndpoint, featureTimeout);
+        }
+        FeatureFetch.start(this);
     }
 
     /**
@@ -190,15 +202,22 @@ public final class Chat implements AutoCloseable {
         }
     }
 
-    /**
-     * For this repository's tests: fetch this chat's feature switches from {@code endpoint},
-     * with these timings.
-     */
-    void configureFeatures(String endpoint, Duration timeout, Duration recheck, Duration firstRetry) {
-        throwIfDisposed();
+    private void configureFeatures(String endpoint, Duration timeout) {
         try (Memory e = FfiStrings.utf8(endpoint)) {
             FfiStrings.consume(FeatureNative.INSTANCE.chat_xdk_internal_feature_configure(
-                    handle, e, timeout.toMillis(), recheck.toMillis(), firstRetry.toMillis()));
+                    handle, e, timeout.toMillis()));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Start this chat's one read of the feature switches: the GET to perform as JSON, or an empty
+     * string when the chat takes the answer of a GET already in flight.
+     */
+    String startFeatures() {
+        try {
+            return FfiStrings.consume(FeatureNative.INSTANCE.chat_xdk_internal_feature_start(handle));
         } finally {
             Reference.reachabilityFence(this);
         }

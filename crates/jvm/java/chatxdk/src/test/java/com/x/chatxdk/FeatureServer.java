@@ -14,25 +14,25 @@ import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** A local GET /2/chat/features that records each request's bucket. */
+/** A local GET /2/chat/features that records each request's query string. */
 final class FeatureServer implements AutoCloseable {
 
     /**
-     * Nothing listens here: a chat no test points at a server of its own fetches from this
-     * endpoint, fails, and stays on v0.
+     * Nothing listens here: a chat no test points at a server of its own reads its feature
+     * switches from this endpoint, fails, and stays on v0.
      */
     static final String OFFLINE = "http://127.0.0.1:9/2/chat/features";
 
     private static FeatureServer v1Server;
 
     /**
-     * Each server gets an endpoint of its own: the core reuses an answer per endpoint and bucket
-     * for 5 minutes, and a server can get the port of one that came before it.
+     * Each server gets an endpoint of its own: chats created while a GET for their endpoint is in
+     * flight share it, and a server can get the port of one that came before it.
      */
     private static final AtomicInteger IDS = new AtomicInteger();
 
     private final HttpServer server;
-    private final List<String> buckets = new ArrayList<>();
+    private final List<String> queries = new ArrayList<>();
     private int status = 200;
     private String body;
     private long delayMs;
@@ -46,22 +46,14 @@ final class FeatureServer implements AutoCloseable {
         this.body = body;
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
-            String query = exchange.getRequestURI().getQuery();
-            String bucket = null;
-            if (query != null) {
-                for (String pair : query.split("&")) {
-                    if (pair.startsWith("bucket=")) {
-                        bucket = pair.substring("bucket=".length());
-                    }
-                }
-            }
+            String query = exchange.getRequestURI().getRawQuery();
             // The answer is fixed when the request is recorded, so a test that sees the request
             // can change the next answer.
             int replyStatus;
             String replyBody;
             long replyDelay;
             synchronized (this) {
-                buckets.add(bucket);
+                queries.add(query == null ? "" : query);
                 replyStatus = status;
                 replyBody = this.body;
                 replyDelay = delayMs;
@@ -98,8 +90,8 @@ final class FeatureServer implements AutoCloseable {
         this.delayMs = delayMs;
     }
 
-    synchronized List<String> buckets() {
-        return new ArrayList<>(buckets);
+    synchronized List<String> queries() {
+        return new ArrayList<>(queries);
     }
 
     @Override
@@ -109,19 +101,23 @@ final class FeatureServer implements AutoCloseable {
 
     /** Point every chat that does not set its own endpoint at {@link #OFFLINE}. */
     static void keepOffline() {
-        FeatureDriver.setDefaultEndpoint(OFFLINE);
+        FeatureFetch.setDefaultEndpoint(OFFLINE);
     }
 
     /**
-     * Turn v1_send on for {@code chat} as the X API would: point its feature fetch at a local
-     * server that answers it, then send until a send is v1.
+     * A chat whose feature switches turn v1_send on, as the X API would: it reads them from a
+     * local server that answers so. {@link #waitForV1} waits for the answer.
      */
-    static synchronized void enableV1Send(Chat chat) throws Exception {
+    static synchronized Chat v1Chat() throws Exception {
         if (v1Server == null) {
             v1Server = new FeatureServer();
         }
-        chat.configureFeatures(v1Server.endpoint, Duration.ofSeconds(2), Duration.ofHours(1), Duration.ofMillis(50));
-        EncryptMessageParams send = new EncryptMessageParams("feature-switches", "turn v1 on");
+        return new Chat(v1Server.endpoint, Duration.ofSeconds(2));
+    }
+
+    /** Send from {@code chat}, which has keys, until a send is v1. */
+    static void waitForV1(Chat chat) throws Exception {
+        EncryptMessageParams send = new EncryptMessageParams("feature-switches", "wait for v1");
         send.senderId = "1";
         send.signingKeyVersion = "1";
         send.conversationKey = new byte[32];

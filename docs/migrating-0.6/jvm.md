@@ -10,7 +10,7 @@ was made, and the [index](README.md) lists the other bindings' pages.
 ## Checklist
 
 - [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
-- [ ] [Allow or block the feature-switch request, and close chats you're done with](#the-feature-switch-request)
+- [ ] [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `setIdentity`](#setidentity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `importKeys`](#importkeys-takes-importkeysparams)
@@ -65,30 +65,18 @@ files. There's no code to change: to see which format a send used, read
 Chats read the X API's feature switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, which runs in the background:
 
-- a chat asks on its first send, never earlier, so a program that never
-  sends makes no request;
-- chats in one process share one request per bucket (a `bucket` query
-  parameter, 0–9999, derived from the identity public key), re-checked every
-  5 minutes while any chat uses it; a chat that asks in the meantime takes
-  the answer without a request;
-- it carries no credentials, and never delays or fails a call;
-- if it fails or is blocked, every switch stays off and sends stay v0; a
-  failed request is retried after 1 second, then after twice the previous
-  delay, up to once every 5 minutes;
-- for a chat that is already sending, a re-check can only turn a switch off:
-  a switch turning on reaches only chats that start sending after it.
+- a chat reads them once, when it is created, and keeps the answer for its
+  lifetime; chats created while a request is in flight share it;
+- it carries no credentials and no query parameters, and never delays or
+  fails a call;
+- every switch is off until the answer arrives, so a chat's first sends can
+  be v0;
+- if the request fails or is blocked, every switch stays off for the chat's
+  lifetime and its sends stay v0; a failed request is not repeated;
+- a switch that changes reaches the chats created after it.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
-switch, or block it to keep them v0. Close each chat when you're done with
-it, or let it be garbage-collected: the requests stop once no chat in the
-process uses them:
-
-```java
-// 0.6.0
-try (Chat chat = new Chat()) {
-    chat.importKeys(new ImportKeysParams(privateKeys, signingKeyVersion));
-}
-```
+switch, or block it to keep them v0. There's no code to change.
 
 ## Register keys with the public key only
 

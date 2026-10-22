@@ -8,21 +8,15 @@ package chatxdk
 
 // Internal entry points for this package's feature switches. They are left
 // out of chat_xdk.h because they are not part of the C API.
-void chat_xdk_internal_feature_set_waker(void (*waker)(void));
-struct FfiResult chat_xdk_internal_feature_next(void);
+struct FfiResult chat_xdk_internal_feature_start(const struct ChatHandle *handle);
 void chat_xdk_internal_feature_complete(uint64_t id,
                                         int32_t status,
                                         const uint8_t *body,
                                         uintptr_t body_len);
 struct FfiResult chat_xdk_internal_feature_configure(const struct ChatHandle *handle,
                                                      const char *endpoint,
-                                                     uint64_t timeout_ms,
-                                                     uint64_t recheck_ms,
-                                                     uint64_t first_retry_ms);
+                                                     uint64_t timeout_ms);
 struct FfiResult chat_xdk_internal_feature_set_default_endpoint(const char *endpoint);
-
-// Exported from features.go: starts a feature driver.
-extern void chatxdkFeatureWake(void);
 */
 import "C"
 import (
@@ -144,14 +138,10 @@ func ffiSetCacheKeys(h handle, enabled bool) {
 	C.chat_xdk_set_cache_keys(h, v)
 }
 
-func ffiFeatureSetWaker() {
-	C.chat_xdk_internal_feature_set_waker((*[0]byte)(C.chatxdkFeatureWake))
-}
-
-// ffiFeatureNext waits until a feature GET is due and returns it as JSON, or
-// "" once no chat needs one.
-func ffiFeatureNext() (string, error) {
-	return ffiResult(C.chat_xdk_internal_feature_next())
+// ffiFeatureStart starts the chat's one read of the feature switches and
+// returns the GET to perform as JSON, or "" when there is none to perform.
+func ffiFeatureStart(h handle) (string, error) {
+	return ffiResult(C.chat_xdk_internal_feature_start(h))
 }
 
 func ffiFeatureComplete(id uint64, status int, body []byte) {
@@ -162,15 +152,10 @@ func ffiFeatureComplete(id uint64, status int, body []byte) {
 	C.chat_xdk_internal_feature_complete(C.uint64_t(id), C.int32_t(status), p, C.uintptr_t(len(body)))
 }
 
-func ffiFeatureConfigure(h handle, endpoint string, timeout, recheck, firstRetry time.Duration) error {
+func ffiFeatureConfigure(h handle, endpoint string, timeout time.Duration) error {
 	c := C.CString(endpoint)
 	defer C.free(unsafe.Pointer(c))
-	_, err := ffiResult(C.chat_xdk_internal_feature_configure(
-		h, c,
-		C.uint64_t(timeout.Milliseconds()),
-		C.uint64_t(recheck.Milliseconds()),
-		C.uint64_t(firstRetry.Milliseconds()),
-	))
+	_, err := ffiResult(C.chat_xdk_internal_feature_configure(h, c, C.uint64_t(timeout.Milliseconds())))
 	return err
 }
 

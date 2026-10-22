@@ -1358,7 +1358,7 @@ class ChatTest {
         p.conversationKey = b64(v, "conversation_key_b64");
         p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
         p.attachments = attachments.length == 0 ? null : List.of(attachments);
-        FeatureServer.enableV1Send(chat);
+        FeatureServer.waitForV1(chat);
         SendPayload payload = chat.encryptMessage(p);
         assertEquals("10", payload.signatureInfo.signatureVersion);
         assertEquals(text, decryptOwnContent(chat, v, payload).get("text").asText());
@@ -1376,7 +1376,7 @@ class ChatTest {
     @Test
     void encryptDecryptFileRoundTrip() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v); Chat worker = new Chat()) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat()); Chat worker = new Chat()) {
             byte[] plaintext = new byte[1024];
             new java.util.Random(42).nextBytes(plaintext);
             SendPayload payload = sendFiles(chat, v, "a photo", photo("photo"));
@@ -1393,7 +1393,7 @@ class ChatTest {
     @Test
     void decryptFileWrongKeyThrows() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v)) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat())) {
             SendPayload payload = sendFiles(chat, v, "a photo", photo("photo"));
             Map<String, byte[]> wrongKeys =
                     Map.of(v.get("event_conversation_key_version").asText(), newConvKey(chat));
@@ -1406,7 +1406,7 @@ class ChatTest {
     @Test
     void incrementalFileRoundTripAndTruncationThrows() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v)) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat())) {
             // A multi-frame file so chunking and re-framing are exercised, sent as the
             // second of two photos.
             byte[] plaintext = new byte[5000];
@@ -1468,7 +1468,7 @@ class ChatTest {
     @Test
     void fileCallsDeclareNoCheckedExceptions() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v)) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat())) {
             SendPayload payload = sendFiles(chat, v, "a photo", photo("only"));
             byte[] file = "photo bytes".getBytes(StandardCharsets.UTF_8);
             assertArrayEquals(file, roundTripWithoutThrowsClause(chat, v, payload, "only", file));
@@ -1478,7 +1478,7 @@ class ChatTest {
     @Test
     void linkCardImagesTakeTheCardsKey() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v)) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat())) {
             SendPayload payload = sendFiles(chat, v, "a link", Types.AttachmentDescriptor.urlCard(
                     "https://example.com",
                     null,
@@ -1497,7 +1497,7 @@ class ChatTest {
     @Test
     void aMessageWithFilesTakesTheIdItsFilesDerive() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v)) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat())) {
             SendPayload draft = sendFiles(chat, v, "draft", photo("photo-a"), photo("photo-b"));
             assertTrue(draft.messageId.matches("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"),
                     draft.messageId);
@@ -1519,7 +1519,7 @@ class ChatTest {
     @Test
     void fileSendInputIsChecked() throws Exception {
         JsonNode v = loadVectors();
-        try (Chat chat = quickReplyChat(v)) {
+        try (Chat chat = quickReplyChat(v, FeatureServer.v1Chat())) {
             byte[] ckey = b64(v, "conversation_key_b64");
             String conversationId = v.get("event_conversation_id").asText();
             String keyVersion = v.get("event_conversation_key_version").asText();
@@ -1755,7 +1755,10 @@ class ChatTest {
     }
 
     private static Chat quickReplyChat(JsonNode v) throws Exception {
-        Chat chat = new Chat();
+        return quickReplyChat(v, new Chat());
+    }
+
+    private static Chat quickReplyChat(JsonNode v, Chat chat) throws Exception {
         chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
         chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
         return chat;

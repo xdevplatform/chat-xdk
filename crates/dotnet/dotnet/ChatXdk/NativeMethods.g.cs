@@ -91,24 +91,13 @@ namespace ChatXdk
         /// <summary>
         ///  Internal, for this repository's bindings; not part of the API.
         ///
-        ///  Register the function the core calls to start a feature-switch driver: a
-        ///  thread that calls `chat_xdk_internal_feature_next` until it returns no
-        ///  GET, performs each GET it returns, and reports each result with
-        ///  `chat_xdk_internal_feature_complete`. The core calls it from inside the
-        ///  send that needs a driver, so it must only start one and return.
+        ///  Start this chat's one read of the feature switches. Returns in `data` the
+        ///  GET to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
+        ///  "max_bytes": …}`. Both fields are NULL when the chat takes the answer of a
+        ///  GET already in flight, or has started its read already.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_set_waker", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern void chat_xdk_internal_feature_set_waker(delegate* unmanaged[Cdecl]<void> waker);
-
-        /// <summary>
-        ///  Internal, for this repository's bindings; not part of the API.
-        ///
-        ///  Wait until a feature-switch GET is due and return it in `data` as JSON:
-        ///  `{"id": …, "url": "…", "timeout_ms": …, "max_bytes": …}`. Both fields
-        ///  are NULL once no chat needs the switches; the driver then ends.
-        /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_next", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_internal_feature_next();
+        [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_start", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_internal_feature_start(ChatHandle* handle);
 
         /// <summary>
         ///  Internal, for this repository's bindings; not part of the API.
@@ -124,11 +113,11 @@ namespace ChatXdk
         /// <summary>
         ///  Internal, for this repository's tests; not part of the API.
         ///
-        ///  Fetch this chat's feature switches from `endpoint`, with the given
-        ///  request timeout, re-check interval and first retry delay in milliseconds.
+        ///  Read this chat's feature switches from `endpoint`, within `timeout_ms`
+        ///  milliseconds, when its read starts.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_configure", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_internal_feature_configure(ChatHandle* handle, byte* endpoint, ulong timeout_ms, ulong recheck_ms, ulong first_retry_ms);
+        internal static extern FfiResult chat_xdk_internal_feature_configure(ChatHandle* handle, byte* endpoint, ulong timeout_ms);
 
         /// <summary>
         ///  Internal, for this repository's tests; not part of the API.

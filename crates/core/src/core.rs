@@ -464,50 +464,33 @@ impl ChatCore {
 
     // Feature switches (see `crate::features`); none of this is public API.
 
-    /// The bucket `GET /2/chat/features` evaluates this instance's flags for,
-    /// derived from the loaded identity public key; `None` until keys load.
-    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn feature_bucket(&self) -> Option<u16> {
-        let identity = self.keypair_manager.get_identity_keypair().ok()?;
-        let spki = Self::public_key_spki_bytes(&identity.public).ok()?;
-        Some(crate::features::bucket_for_public_key(&spki))
-    }
-
-    /// Whether the feature switch `name` is on for this instance. Asking is
-    /// what joins the process's feature-switch schedule, so only a send asks.
+    /// Whether the feature switch `name` is on for this instance.
     pub(crate) fn feature_enabled(&self, name: &str) -> bool {
-        #[cfg(feature = "bindings")]
-        let bucket = self.feature_bucket();
-        #[cfg(not(feature = "bindings"))]
-        let bucket = None;
-        let (enabled, wake) = self
-            .features
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .enabled(bucket, name);
-        crate::features::wake(wake);
-        enabled
-    }
-
-    /// Fetch this instance's feature switches from `endpoint`, with `timings`.
-    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn configure_features(&self, endpoint: &str, timings: crate::features::Timings) {
         self.features
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .configure(endpoint, timings);
+            .enabled(name)
     }
 
-    /// Stop taking part in the feature-switch fetch, keeping the switches'
-    /// current values.
+    /// Read this instance's feature switches from `endpoint`, within
+    /// `timeout_ms`, when its read starts.
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn release_features(&self) {
-        let wake = self
-            .features
+    pub(crate) fn configure_features(&self, endpoint: &str, timeout_ms: u64) {
+        self.features
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .release();
-        crate::features::wake(wake);
+            .configure(endpoint, timeout_ms);
+    }
+
+    /// Start this instance's one read of the feature switches: the GET to
+    /// perform, or `None` when it shares a GET in flight or has started its
+    /// read already.
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn start_features(&self) -> Option<crate::features::Fetch> {
+        self.features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .start()
     }
 
     /// Read exactly `on` as on from now on, without any fetch.

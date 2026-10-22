@@ -5,8 +5,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { setFlagsFromString } from "node:v8";
-import { runInNewContext } from "node:vm";
 
 import init, { Chat, __featureSetDefaultEndpoint } from "../pkg/chat_xdk_wasm.js";
 import * as pkg from "../index.js";
@@ -28,14 +26,11 @@ function b64ToBytes(b64) {
   return Uint8Array.from(Buffer.from(b64, "base64"));
 }
 
-/**
- * A keyed ChatWithJuicebox whose feature fetch goes to `endpoint`; `inner` is
- * the wasm Chat underneath.
- */
-function newChat(v, endpoint, { timeoutMs = 2000, recheckMs = 3_600_000, firstRetryMs = 50, keys } = {}) {
+/** A keyed ChatWithJuicebox that reads its feature switches from `endpoint`. */
+function newChat(v, endpoint, { timeoutMs = 2000 } = {}) {
   const inner = new Chat();
-  inner.__configureFeatures(endpoint, timeoutMs, recheckMs, firstRetryMs);
-  inner.importKeys({ keys: keys ?? b64ToBytes(v.private_keys_concat_b64) });
+  inner.__configureFeatures(endpoint, timeoutMs);
+  inner.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
   const chat = new ChatWithJuicebox(inner, null, undefined, null, null, null);
   chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
   return chat;
@@ -49,12 +44,6 @@ function send(chat, v) {
     conversationKeyVersion: "1",
     text: "hello",
   }).signatureInfo.signatureVersion;
-}
-
-function exposeGc() {
-  if (typeof globalThis.gc === "function") return globalThis.gc;
-  setFlagsFromString("--expose-gc");
-  return runInNewContext("gc");
 }
 
 /** Run `body` in a child Node process; resolves with its exit code and run time. */
@@ -95,75 +84,66 @@ async function featureSwitchesAreNotPublicApi() {
   }
 }
 
-async function noRequestIsMadeUntilTheFirstSend(v, server) {
+async function aNewChatReadsTheSwitchesOnce(v, server) {
   const chat = newChat(v, server.endpoint);
+  await waitFor("the request", () => server.queries.length === 1);
+  assert.equal(server.queries[0], "", "the request carries no query");
+  await waitFor("v1", () => send(chat, v) === "10");
+  chat.generateKeypairs();
+  chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
+  for (let i = 0; i < 5; i++) send(chat, v);
   await sleep(300);
-  assert.deepEqual(server.buckets, []);
-
-  assert.equal(send(chat, v), "7", "the first send does not wait for the answer");
-  await waitFor("the request", () => server.buckets.length === 1);
-  const bucket = Number(server.buckets[0]);
-  assert.ok(Number.isInteger(bucket) && bucket >= 0 && bucket < 10000, String(server.buckets[0]));
+  assert.equal(server.queries.length, 1, server.queries.join());
   chat.free();
 }
 
-async function creatingAChatMakesNoRequest(server) {
+async function createChatReadsTheSwitches(v, server) {
   __featureSetDefaultEndpoint(server.endpoint);
   try {
     const juiceboxModule = { Client: class {}, Configuration: class {} };
     const created = await createChat({ getAuthToken: async () => "", juiceboxModule });
+    await waitFor("the request", () => server.queries.length === 1);
     created.generateKeypairs();
     created.setIdentity({ userId: "111", signingKeyVersion: "1" });
-    await sleep(200);
-    assert.deepEqual(server.buckets, []);
+    await waitFor("v1", () => send(created, v) === "10");
     created.free();
   } finally {
     keepOffline();
   }
 }
 
-async function v1StartsOnceTheAnswerTurnsItOn(v, server) {
-  const chat = newChat(v, server.endpoint);
-  assert.equal(send(chat, v), "7");
-  await waitFor("v1", () => send(chat, v) === "10");
-  assert.equal(server.buckets.length, 1);
-  chat.free();
-}
-
 async function aSendNeverWaitsForTheRequest(v, server) {
   server.delayMs = 2000;
-  const chat = newChat(v, server.endpoint);
+  const chat = newChat(v, server.endpoint, { timeoutMs: 3000 });
   const started = Date.now();
   assert.equal(send(chat, v), "7");
   assert.ok(Date.now() - started < 1000);
   chat.free();
 }
 
-async function chatsWithOneKeyShareOneRequest(v, server) {
-  server.delayMs = 300;
+async function chatsCreatedWhileARequestIsInFlightShareIt(v, server) {
+  server.delayMs = 800;
   const chats = [0, 1, 2, 3].map(() => newChat(v, server.endpoint));
-  for (const chat of chats) assert.equal(send(chat, v), "7");
   await waitFor("v1 everywhere", () => chats.every((chat) => send(chat, v) === "10"));
-  assert.equal(server.buckets.length, 1, server.buckets.join());
+  assert.equal(server.queries.length, 1, server.queries.join());
 
   const later = newChat(v, server.endpoint);
-  assert.equal(send(later, v), "10", "a later chat takes the answer at hand");
-  assert.equal(server.buckets.length, 1);
+  await waitFor("the later chat to ask for itself", () => server.queries.length === 2);
+  await waitFor("v1 for the later chat", () => send(later, v) === "10");
   for (const chat of [...chats, later]) chat.free();
 }
 
-async function chatsWithDifferentKeysAskSeparately(v, server) {
-  const generated = new Chat();
-  generated.generateKeypairs();
-  const first = newChat(v, server.endpoint);
-  const second = newChat(v, server.endpoint, { keys: generated.exportKeys() });
-  generated.free();
-  send(first, v);
-  send(second, v);
-  await waitFor("two requests", () => server.buckets.length === 2);
-  assert.notEqual(server.buckets[0], server.buckets[1]);
-  first.free();
-  second.free();
+async function theAnswerHoldsForTheChatsLifetime(v, server) {
+  const chat = newChat(v, server.endpoint);
+  await waitFor("v1", () => send(chat, v) === "10");
+  server.body = '{"features":{}}';
+  const other = newChat(v, server.endpoint);
+  await waitFor("the second request", () => server.queries.length === 2);
+  await sleep(200);
+  assert.equal(send(other, v), "7", "the second chat reads its own answer");
+  assert.equal(send(chat, v), "10", "the first chat's answer holds");
+  chat.free();
+  other.free();
 }
 
 async function anyFailureLeavesSendsOnV0(v) {
@@ -178,16 +158,14 @@ async function anyFailureLeavesSendsOnV0(v) {
   ];
   for (const [status, body, delayMs] of cases) {
     const label = `${status} ${body.slice(0, 40)} (${body.length} bytes) ${delayMs}`;
-    // A server of its own: chats share an answer per endpoint and bucket,
-    // and the case before may have left one.
     const server = await featureServer(body);
     Object.assign(server, { status, delayMs });
     try {
-      const chat = newChat(v, server.endpoint, { timeoutMs: 500, firstRetryMs: 60_000 });
+      const chat = newChat(v, server.endpoint, { timeoutMs: 500 });
+      await waitFor(`the request (${label})`, () => server.queries.length === 1);
+      await sleep(delayMs + 200);
       assert.equal(send(chat, v), "7", label);
-      await waitFor(`the request (${label})`, () => server.buckets.length === 1);
-      await sleep(delayMs ? 1200 : 200);
-      assert.equal(send(chat, v), "7", label);
+      assert.equal(server.queries.length, 1, `a failure is not retried (${label})`);
       chat.free();
     } finally {
       await server.close();
@@ -199,119 +177,47 @@ async function anUnreachableEndpointLeavesSendsOnV0(v, server) {
   const endpoint = server.endpoint;
   await server.close();
   const chat = newChat(v, endpoint, { timeoutMs: 500 });
-  assert.equal(send(chat, v), "7");
-  await sleep(500);
+  await sleep(700);
   assert.equal(send(chat, v), "7");
   chat.free();
 }
 
-async function aRequestStillOpenAtItsTimeoutFailsAndIsRetried(v, server) {
+async function aRequestStillOpenAtItsTimeoutFails(v, server) {
   server.delayMs = 3000;
-  const chat = newChat(v, server.endpoint, { timeoutMs: 300, firstRetryMs: 200 });
-  assert.equal(send(chat, v), "7");
-  await waitFor("a retry", () => server.buckets.length >= 2, 2500);
-  assert.equal(send(chat, v), "7");
-  chat.free();
-}
-
-async function theRecheckTurnsV1OffAndNeverBackOn(v, server) {
-  const chat = newChat(v, server.endpoint, { recheckMs: 300 });
-  send(chat, v);
-  await waitFor("v1", () => send(chat, v) === "10");
-
-  server.body = '{"features":{}}';
-  await waitFor("the re-check to turn v1 off", () => send(chat, v) === "7");
-
-  server.body = '{"features":{"v1_send":true}}';
-  const seen = server.buckets.length;
-  await waitFor("two more re-checks", () => server.buckets.length >= seen + 2);
-  assert.equal(send(chat, v), "7", "a running chat never sees it turn on");
-  const later = newChat(v, server.endpoint, { recheckMs: 300 });
-  assert.equal(send(later, v), "10", "a new chat takes the latest answer");
-  chat.free();
-  later.free();
-}
-
-async function aFailedRecheckChangesNothing(v, server) {
-  const chat = newChat(v, server.endpoint, { recheckMs: 300 });
-  send(chat, v);
-  await waitFor("v1", () => send(chat, v) === "10");
-  server.status = 503;
-  const seen = server.buckets.length;
-  await waitFor("two failed re-checks", () => server.buckets.length >= seen + 2);
-  assert.equal(send(chat, v), "10");
-  chat.free();
-}
-
-async function freeStopsTheRequests(v, server) {
-  const chat = newChat(v, server.endpoint, { recheckMs: 300 });
-  send(chat, v);
-  await waitFor("v1", () => send(chat, v) === "10");
-  chat.free();
-  const seen = server.buckets.length;
+  const chat = newChat(v, server.endpoint, { timeoutMs: 300 });
   await sleep(1000);
-  assert.equal(server.buckets.length, seen, "no request after free()");
+  assert.equal(send(chat, v), "7");
+  assert.equal(server.queries.length, 1);
+  chat.free();
 }
 
-/** A re-checking chat that nothing references once this returns. */
-async function startUnreferencedChat(v, endpoint) {
-  const chat = newChat(v, endpoint, { recheckMs: 300 });
-  send(chat, v);
-  await waitFor("v1", () => send(chat, v) === "10");
-}
-
-async function theRequestsEndWithACollectedChat(v, server) {
-  const gc = exposeGc();
-  await startUnreferencedChat(v, server.endpoint);
-  const running = server.buckets.length;
-  await waitFor("a re-check", () => server.buckets.length > running);
-  for (let i = 0; i < 5; i++) {
-    await sleep(50);
-    gc();
-  }
-  await sleep(800);
-  const seen = server.buckets.length;
-  await sleep(1200);
-  assert.equal(server.buckets.length, seen, "no request once the chat is collected");
-}
-
-/** A Node process whose chats never send exits at once, on any Node version. */
-async function aProcessThatNeverSendsExitsAtOnce(server) {
-  const { code, elapsed } = await runNode(`
-    __featureSetDefaultEndpoint(${JSON.stringify(server.endpoint)});
-    const chat = new ChatWithJuicebox(new Chat(), null, undefined, null, null, null);
-    chat.generateKeypairs();
-    chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
-  `);
-  assert.equal(code, 0);
-  assert.deepEqual(server.buckets, [], "no request without a send");
-  assert.ok(elapsed < 5000, `the process exited after ${elapsed} ms`);
+async function aRequestEndsSafelyForAFreedChat(v, server) {
+  server.delayMs = 800;
+  newChat(v, server.endpoint).free();
+  const kept = newChat(v, server.endpoint);
+  await waitFor("v1", () => send(kept, v) === "10");
+  assert.equal(server.queries.length, 1);
+  kept.free();
 }
 
 /**
- * A Node process whose request is still in flight exits once its own work is
- * done. Runtimes without `process.getBuiltinModule` use fetch(), which holds
- * the process until the request ends or times out.
+ * A Node process whose read is still in flight exits once its own work is
+ * done: at once where Node's http module is at hand, and within the read's
+ * timeout where fetch() performs it.
  */
-async function aRequestInFlightNeverKeepsNodeRunning(v, server) {
-  if (typeof process.getBuiltinModule !== "function") return;
+async function aReadInFlightNeverKeepsNodeRunning(server) {
   server.delayMs = 60_000;
   const { code, elapsed } = await runNode(`
+    __featureSetDefaultEndpoint(${JSON.stringify(server.endpoint)});
     const chat = new ChatWithJuicebox(new Chat(), null, undefined, null, null, null);
     chat.generateKeypairs();
     chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
-    __featureSetDefaultEndpoint(${JSON.stringify(server.endpoint)});
-    chat.encryptMessage({
-      conversationId: "conv-1",
-      conversationKey: Uint8Array.from(Buffer.from(${JSON.stringify(v.conversation_key_b64)}, "base64")),
-      conversationKeyVersion: "1",
-      text: "hello",
-    });
     await new Promise((resolve) => setTimeout(resolve, 300));
   `);
   assert.equal(code, 0);
-  assert.ok(server.buckets.length >= 1, "a feature request was in flight");
-  assert.ok(elapsed < 5000, `the process exited after ${elapsed} ms`);
+  assert.equal(server.queries.length, 1, "the chat's read was in flight");
+  const limitMs = typeof process.getBuiltinModule === "function" ? 5000 : 7000;
+  assert.ok(elapsed < limitMs, `the process exited after ${elapsed} ms`);
 }
 
 async function main() {
@@ -322,21 +228,16 @@ async function main() {
 
   const tests = [
     () => featureSwitchesAreNotPublicApi(),
-    (server) => noRequestIsMadeUntilTheFirstSend(v, server),
-    (server) => creatingAChatMakesNoRequest(server),
-    (server) => v1StartsOnceTheAnswerTurnsItOn(v, server),
+    (server) => aNewChatReadsTheSwitchesOnce(v, server),
+    (server) => createChatReadsTheSwitches(v, server),
     (server) => aSendNeverWaitsForTheRequest(v, server),
-    (server) => chatsWithOneKeyShareOneRequest(v, server),
-    (server) => chatsWithDifferentKeysAskSeparately(v, server),
+    (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
+    (server) => theAnswerHoldsForTheChatsLifetime(v, server),
     () => anyFailureLeavesSendsOnV0(v),
     (server) => anUnreachableEndpointLeavesSendsOnV0(v, server),
-    (server) => aRequestStillOpenAtItsTimeoutFailsAndIsRetried(v, server),
-    (server) => theRecheckTurnsV1OffAndNeverBackOn(v, server),
-    (server) => aFailedRecheckChangesNothing(v, server),
-    (server) => freeStopsTheRequests(v, server),
-    (server) => theRequestsEndWithACollectedChat(v, server),
-    (server) => aProcessThatNeverSendsExitsAtOnce(server),
-    (server) => aRequestInFlightNeverKeepsNodeRunning(v, server),
+    (server) => aRequestStillOpenAtItsTimeoutFails(v, server),
+    (server) => aRequestEndsSafelyForAFreedChat(v, server),
+    (server) => aReadInFlightNeverKeepsNodeRunning(server),
   ];
   for (const test of tests) {
     const server = await featureServer();

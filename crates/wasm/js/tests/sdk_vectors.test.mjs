@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
 import init, { Chat } from "../pkg/chat_xdk_wasm.js";
-import { enableV1Send, keepOffline } from "./feature_server.mjs";
+import { keepOffline, v1Chat, waitForV1 } from "./feature_server.mjs";
 import { delivered } from "./frame.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
@@ -95,10 +95,10 @@ async function main() {
   // from the returned eventB64 and the media hash key its attachment names,
   // and opens from the sent message's event.
   const fixtureKeys = { [v.event_conversation_key_version]: convKey };
-  const sender = new Chat();
+  const sender = await v1Chat();
   sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
   sender.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
-  await enableV1Send(sender, () =>
+  await waitForV1(() =>
     sender.encryptMessage({
       conversationId: v.event_conversation_id,
       text: "turn v1 on",

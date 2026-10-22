@@ -1292,8 +1292,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
 
   /**
-   * Release the WASM-side crypto engine: clears key material (`lock()`),
-   * ends this instance's part in the background feature-switch fetch, and
+   * Release the WASM-side crypto engine: clears key material (`lock()`) and
    * frees the underlying WASM object. The instance must not be used
    * afterwards. When reusing the instance, `lock()` alone suffices for key
    * hygiene.

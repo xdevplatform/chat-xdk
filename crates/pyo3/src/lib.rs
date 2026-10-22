@@ -1515,17 +1515,8 @@ pub struct Chat {
     runtime: tokio::runtime::Runtime,
 }
 
-#[pymethods]
 impl Chat {
-    /// Create a new Chat instance.
-    ///
-    /// Args:
-    ///     config_json: Juicebox configuration JSON.
-    ///         Pass ``None`` or an empty JSON object (e.g. ``"{}"``) for
-    ///         manual key management without Juicebox.
-    #[new]
-    #[pyo3(signature = (config_json=None))]
-    fn new(config_json: Option<&str>) -> PyResult<Self> {
+    fn create(config_json: Option<&str>) -> PyResult<Self> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
@@ -1544,6 +1535,40 @@ impl Chat {
         let inner = chat_xdk_core::Chat::with_juicebox(config, Arc::new(JuiceboxClient::new()));
 
         Ok(Self { inner, runtime })
+    }
+}
+
+#[pymethods]
+impl Chat {
+    /// Create a new Chat instance.
+    ///
+    /// Args:
+    ///     config_json: Juicebox configuration JSON.
+    ///         Pass ``None`` or an empty JSON object (e.g. ``"{}"``) for
+    ///         manual key management without Juicebox.
+    #[new]
+    #[pyo3(signature = (config_json=None))]
+    fn new(py: Python<'_>, config_json: Option<&str>) -> PyResult<Self> {
+        let chat = Self::create(config_json)?;
+        start_feature_read(py, &chat.inner);
+        Ok(chat)
+    }
+
+    /// For this repository's tests: a chat that reads its feature switches
+    /// from ``endpoint``, within ``timeout`` seconds.
+    #[staticmethod]
+    #[pyo3(name = "_reading_features_from", signature = (endpoint, timeout, config_json=None))]
+    fn reading_features_from(
+        py: Python<'_>,
+        endpoint: &str,
+        timeout: f64,
+        config_json: Option<&str>,
+    ) -> PyResult<Self> {
+        let chat = Self::create(config_json)?;
+        chat.inner
+            .configure_features(endpoint, (timeout * 1000.0) as u64);
+        start_feature_read(py, &chat.inner);
+        Ok(chat)
     }
 
     /// Update the Juicebox configuration (e.g. to refresh auth tokens).
@@ -1593,22 +1618,6 @@ impl Chat {
     /// from it. Disabling clears the cache.
     fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
-    }
-
-    /// Release this chat's part in the background fetch of the X API's
-    /// feature switches; a chat that is garbage-collected releases it too.
-    /// The chat stays usable, and its sends keep the format they use now.
-    fn close(&self) {
-        self.inner.release_features();
-    }
-
-    /// For this repository's tests: fetch this chat's feature switches from
-    /// ``endpoint``, with these timings in seconds.
-    #[pyo3(name = "_configure_features")]
-    fn configure_features(&self, endpoint: &str, timeout: f64, recheck: f64, first_retry: f64) {
-        let ms = |seconds: f64| (seconds * 1000.0) as u64;
-        self.inner
-            .configure_features(endpoint, ms(timeout), ms(recheck), ms(first_retry));
     }
 
     /// Store signing keys to use when a decrypt call's ``signing_keys`` is
@@ -2490,93 +2499,51 @@ impl FileDecryptor {
     }
 }
 
-// Feature switches (GET /2/chat/features). The core decides when to fetch and
-// what an answer means; the Python package only runs a driver thread that polls
-// the core, waits in Python, and performs each GET it is handed. None of this is
-// API.
+// Feature switches (GET /2/chat/features). A chat reads them once, when it is
+// created: the core decides what to fetch and what an answer means, and the
+// Python package performs the GET on a thread of its own. None of this is API.
 
-static FEATURE_WAKER: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+static FEATURE_STARTER: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
 
-thread_local! {
-    /// Whether this thread is inside one of the driver's own calls, and
-    /// whether that call asked to wake the driver. The driver's threads are
-    /// daemon threads, so they must not run the Python waker inside native
-    /// code: their calls report the wake, and the driver acts on it in Python.
-    static DRIVER_CALL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-fn wake_feature_driver() {
-    if DRIVER_CALL.with(|call| call.get().is_some()) {
-        DRIVER_CALL.with(|call| call.set(Some(true)));
+/// Start `chat`'s one read of the feature switches: hand the GET the core
+/// returns, if any, to the starter the package registered. A GET that cannot
+/// start fails at once, and the chat keeps every switch off.
+fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
+    let Some(fetch) = chat.start_features() else {
         return;
-    }
-    Python::attach(|py| {
-        if let Some(waker) = FEATURE_WAKER.get(py) {
-            let _ = waker.call0(py);
-        }
-    });
-}
-
-/// Run `call` as one of the driver's own calls: the result, and whether it
-/// asked to wake the driver.
-fn driver_call<T>(call: impl FnOnce() -> T) -> (T, bool) {
-    struct Leave;
-    impl Drop for Leave {
-        fn drop(&mut self) {
-            DRIVER_CALL.with(|call| call.set(None));
-        }
-    }
-    DRIVER_CALL.with(|call| call.set(Some(false)));
-    let _leave = Leave;
-    let out = call();
-    (out, DRIVER_CALL.with(|call| call.get() == Some(true)))
-}
-
-/// Register the callable the core calls to start the feature driver, or to
-/// have it poll again: from inside a send or a chat leaving, always with the
-/// interpreter lock held.
-#[pyfunction]
-#[pyo3(name = "_feature_set_waker")]
-fn feature_set_waker(py: Python<'_>, waker: Py<PyAny>) {
-    let _ = FEATURE_WAKER.set(py, waker);
-    bindings::set_polling_waker(wake_feature_driver);
-}
-
-/// The feature driver's next step: ``(id, url, timeout_seconds, max_bytes)``
-/// to perform a GET, the seconds to wait before polling again (unless woken),
-/// or ``None`` when no chat needs the switches.
-#[pyfunction]
-#[pyo3(name = "_feature_poll")]
-fn feature_poll(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let (step, woken) = driver_call(|| -> PyResult<Py<PyAny>> {
-        Ok(match bindings::poll_fetch() {
-            bindings::Poll::Fetch(fetch) => (
-                fetch.id,
-                fetch.url,
-                fetch.timeout_ms as f64 / 1000.0,
-                fetch.max_bytes,
+    };
+    let started = FEATURE_STARTER.get(py).is_some_and(|starter| {
+        starter
+            .call1(
+                py,
+                (
+                    fetch.id,
+                    fetch.url.as_str(),
+                    fetch.timeout_ms as f64 / 1000.0,
+                    fetch.max_bytes,
+                ),
             )
-                .into_pyobject(py)?
-                .into_any()
-                .unbind(),
-            bindings::Poll::Wait(ms) => (ms as f64 / 1000.0).into_pyobject(py)?.into_any().unbind(),
-            bindings::Poll::Idle => py.None(),
-        })
+            .is_ok()
     });
-    let step = step?;
-    if woken && !step.bind(py).is_instance_of::<pyo3::types::PyTuple>() {
-        return Ok(0.0f64.into_pyobject(py)?.into_any().unbind());
+    if !started {
+        bindings::complete_fetch(fetch.id, 0, &[]);
     }
-    Ok(step)
+}
+
+/// Register the callable that performs a chat's feature GET:
+/// ``starter(id, url, timeout_seconds, max_bytes)`` starts it and returns.
+#[pyfunction]
+#[pyo3(name = "_feature_set_starter")]
+fn feature_set_starter(py: Python<'_>, starter: Py<PyAny>) {
+    let _ = FEATURE_STARTER.set(py, starter);
 }
 
 /// Report the result of the feature GET ``fetch_id``: its HTTP status, 0 when
-/// no complete response arrived, and its body. True when the driver should
-/// poll again.
+/// no complete response arrived, and its body.
 #[pyfunction]
 #[pyo3(name = "_feature_complete")]
-fn feature_complete(fetch_id: u64, status: u16, body: &[u8]) -> bool {
-    driver_call(|| bindings::complete_fetch(fetch_id, status, body)).1
+fn feature_complete(fetch_id: u64, status: u16, body: &[u8]) {
+    bindings::complete_fetch(fetch_id, status, body);
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
@@ -2625,8 +2592,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hex_to_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(detect_mime_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_image_dimensions, m)?)?;
-    m.add_function(wrap_pyfunction!(feature_set_waker, m)?)?;
-    m.add_function(wrap_pyfunction!(feature_poll, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_set_starter, m)?)?;
     m.add_function(wrap_pyfunction!(feature_complete, m)?)?;
     m.add_function(wrap_pyfunction!(feature_set_default_endpoint, m)?)?;
 

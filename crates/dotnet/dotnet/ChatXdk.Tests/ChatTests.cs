@@ -895,7 +895,7 @@ namespace ChatXdk.Tests
         /// verifies, and return its payload.</summary>
         private static SendPayload SendFiles(Chat chat, SdkVectors v, string text, params AttachmentDescriptor[] attachments)
         {
-            FeatureTestEnvironment.EnableV1Send(chat);
+            FeatureTestEnvironment.WaitForV1(chat);
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, text)
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
@@ -920,7 +920,7 @@ namespace ChatXdk.Tests
         public void EncryptDecryptFile_RoundTrip()
         {
             var v = LoadVectors();
-            using var chat = QuickReplyChat(v);
+            using var chat = QuickReplyChat(v, v1: true);
             var plaintext = new byte[1024];
             new Random(42).NextBytes(plaintext);
             var payload = SendFiles(chat, v, "a photo", Photo("photo"));
@@ -937,7 +937,7 @@ namespace ChatXdk.Tests
         public void DecryptFile_WrongKey_Throws()
         {
             var v = LoadVectors();
-            using var chat = QuickReplyChat(v);
+            using var chat = QuickReplyChat(v, v1: true);
             var payload = SendFiles(chat, v, "a photo", Photo("photo"));
             var wrongKeys = new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = NewConvKey(chat) };
             var ex = Assert.Throws<ChatXdkException>(() => chat.DecryptFile(
@@ -949,7 +949,7 @@ namespace ChatXdk.Tests
         public void FileDecryptor_RoundTripAndTruncation()
         {
             var v = LoadVectors();
-            using var chat = QuickReplyChat(v);
+            using var chat = QuickReplyChat(v, v1: true);
             var plaintext = Enumerable.Repeat((byte)0xAB, 5000).ToArray();
             var payload = SendFiles(chat, v, "two photos", Photo("first"), Photo("second"));
 
@@ -983,7 +983,7 @@ namespace ChatXdk.Tests
         public void EncryptFile_LinkCardImagesTakeTheCardsKey()
         {
             var v = LoadVectors();
-            using var chat = QuickReplyChat(v);
+            using var chat = QuickReplyChat(v, v1: true);
             var payload = SendFiles(chat, v, "a link", AttachmentDescriptor.UrlCard(
                 "https://example.com",
                 bannerImage: new UrlAttachmentImageDescriptor { MediaHashKey = "banner", FilesizeBytes = 12, Filename = "banner.png" },
@@ -1000,7 +1000,7 @@ namespace ChatXdk.Tests
         public void AMessageWithFiles_TakesTheIdItsFilesDerive()
         {
             var v = LoadVectors();
-            using var chat = QuickReplyChat(v);
+            using var chat = QuickReplyChat(v, v1: true);
             var draft = SendFiles(chat, v, "draft", Photo("photo-a"), Photo("photo-b"));
             Assert.Matches("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", draft.MessageId);
             var encrypted = chat.EncryptFile(EncryptFileParamsFor(v, System.Text.Encoding.UTF8.GetBytes("photo b"), draft.EventB64, "photo-b"));
@@ -1019,7 +1019,7 @@ namespace ChatXdk.Tests
         public void FileSendInput_IsChecked()
         {
             var v = LoadVectors();
-            using var chat = QuickReplyChat(v);
+            using var chat = QuickReplyChat(v, v1: true);
             var ckey = Convert.FromBase64String(v.ConversationKeyB64);
 
             var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
@@ -2079,9 +2079,9 @@ namespace ChatXdk.Tests
                 },
             };
 
-        private static Chat QuickReplyChat(SdkVectors v)
+        private static Chat QuickReplyChat(SdkVectors v, bool v1 = false)
         {
-            var chat = new Chat();
+            var chat = v1 ? FeatureTestEnvironment.V1Chat() : new Chat();
             chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
             chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
             return chat;

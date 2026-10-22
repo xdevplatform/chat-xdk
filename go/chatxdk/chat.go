@@ -61,10 +61,20 @@ type Chat struct {
 	h handle
 }
 
-// New creates a new Chat SDK instance.
+// New creates a new Chat SDK instance. It reads the X API's feature switches
+// once, in the background.
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func New() *Chat {
+	c := newChat()
+	if c != nil {
+		c.startFeatures()
+	}
+	return c
+}
+
+// newChat creates a Chat that has not started reading its feature switches.
+func newChat() *Chat {
 	h := ffiNew()
 	if h == nil {
 		return nil

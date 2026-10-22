@@ -15,25 +15,27 @@ namespace ChatXdk.Tests
 {
     internal static class FeatureTestEnvironment
     {
-        /// <summary>Nothing listens here: a chat no test points at a server of its own fetches
-        /// from this endpoint, fails, and stays on v0.</summary>
+        /// <summary>Nothing listens here: a chat no test points at a server of its own reads
+        /// its feature switches from this endpoint, fails, and stays on v0.</summary>
         internal const string Offline = "http://127.0.0.1:9/2/chat/features";
 
 #pragma warning disable CA2255 // This is the test assembly's own setup, not a library's.
         [ModuleInitializer]
-        internal static void KeepFeatureFetchesOffTheNetwork() => FeatureDriver.SetDefaultEndpoint(Offline);
+        internal static void KeepFeatureReadsOffTheNetwork() => FeatureFetch.SetDefaultEndpoint(Offline);
 #pragma warning restore CA2255
 
         private static readonly Lazy<FeatureServer> V1Server = new(() => new FeatureServer(), LazyThreadSafetyMode.ExecutionAndPublication);
 
         /// <summary>
-        /// Turn v1_send on for <paramref name="chat"/> as the X API would: point its feature
-        /// fetch at a local server that answers it, then send until a send is v1.
+        /// A chat whose feature switches turn v1_send on, as the X API would: it reads them
+        /// from a local server that answers so. <see cref="WaitForV1"/> waits for the answer.
         /// </summary>
-        internal static void EnableV1Send(Chat chat)
+        internal static Chat V1Chat() => new(V1Server.Value.Endpoint, TimeSpan.FromSeconds(2));
+
+        /// <summary>Send from <paramref name="chat"/>, which has keys, until a send is v1.</summary>
+        internal static void WaitForV1(Chat chat)
         {
-            chat.ConfigureFeatures(V1Server.Value.Endpoint, TimeSpan.FromSeconds(2), TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(50));
-            var send = new EncryptMessageParams("feature-switches", "turn v1 on")
+            var send = new EncryptMessageParams("feature-switches", "wait for v1")
             {
                 SenderId = "1",
                 SigningKeyVersion = "1",
@@ -50,7 +52,7 @@ namespace ChatXdk.Tests
     }
 
     /// <summary>
-    /// A local GET /2/chat/features that records each request's bucket. It speaks just
+    /// A local GET /2/chat/features that records each request's query string. It speaks just
     /// enough HTTP over a <see cref="TcpListener"/> for one request per connection, and
     /// handles a client that gives up mid-request itself.
     /// </summary>
@@ -59,14 +61,14 @@ namespace ChatXdk.Tests
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource _stop = new();
         private readonly object _sync = new();
-        private readonly List<string?> _buckets = new();
+        private readonly List<string> _queries = new();
         private int _status = 200;
         private string _body;
         private int _delayMs;
 
-        // Each server gets an endpoint of its own: the core reuses an answer
-        // per endpoint and bucket for 5 minutes, and a server can get the port
-        // of one that came before it.
+        // Each server gets an endpoint of its own: chats created while a GET
+        // for their endpoint is in flight share it, and a server can get the
+        // port of one that came before it.
         private static int s_lastId;
 
         public string Endpoint { get; }
@@ -89,11 +91,11 @@ namespace ChatXdk.Tests
             }
         }
 
-        public List<string?> Buckets
+        public List<string> Queries
         {
             get
             {
-                lock (_sync) return new List<string?>(_buckets);
+                lock (_sync) return new List<string>(_queries);
             }
         }
 
@@ -122,15 +124,8 @@ namespace ChatXdk.Tests
                 {
                     var stream = client.GetStream();
                     var target = (await ReadRequestHeadAsync(stream)).Split(' ')[1];
-                    string? bucket = null;
-                    var query = target.IndexOf('?');
-                    if (query >= 0)
-                    {
-                        foreach (var pair in target[(query + 1)..].Split('&'))
-                        {
-                            if (pair.StartsWith("bucket=", StringComparison.Ordinal)) bucket = pair["bucket=".Length..];
-                        }
-                    }
+                    var queryStart = target.IndexOf('?');
+                    var query = queryStart >= 0 ? target[(queryStart + 1)..] : "";
                     // The answer is fixed when the request is recorded, so a test that sees the
                     // request can change the next answer.
                     int status;
@@ -138,7 +133,7 @@ namespace ChatXdk.Tests
                     int delayMs;
                     lock (_sync)
                     {
-                        _buckets.Add(bucket);
+                        _queries.Add(query);
                         status = _status;
                         body = _body;
                         delayMs = _delayMs;

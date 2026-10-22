@@ -7,8 +7,8 @@ import threading
 import time
 import urllib.parse
 
-# Nothing listens here: a chat no test points at a server of its own fetches
-# from this endpoint, fails, and stays on v0.
+# Nothing listens here: a chat no test points at a server of its own reads its
+# feature switches from this endpoint, fails, and stays on v0.
 OFFLINE = "http://127.0.0.1:9/2/chat/features"
 
 
@@ -28,20 +28,20 @@ def wait_for(predicate, timeout=10.0):
     return predicate()
 
 
-# Each server gets an endpoint of its own: the core reuses an answer per
-# endpoint and bucket for 5 minutes, and a server can get the port of one that
+# Each server gets an endpoint of its own: chats created while a GET for their
+# endpoint is in flight share it, and a server can get the port of one that
 # came before it.
 _server_ids = itertools.count(1)
 
 
 class FeatureServer:
-    """A local GET /2/chat/features that records each request's bucket."""
+    """A local GET /2/chat/features that records each request's query string."""
 
     def __init__(self, body='{"features":{"v1_send":true}}'):
         self.status = 200
         self.body = body
         self.delay = 0.0
-        self.buckets = []
+        self.queries = []
         server = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -49,8 +49,7 @@ class FeatureServer:
                 # The answer is fixed before the request is recorded, so a
                 # test that sees the request can change the next answer.
                 status, body, delay = server.status, server.body.encode("utf-8"), server.delay
-                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                server.buckets.append(query.get("bucket", [None])[0])
+                server.queries.append(urllib.parse.urlparse(self.path).query)
                 if delay:
                     time.sleep(delay)
                 try:
@@ -75,23 +74,36 @@ class FeatureServer:
         self.httpd.server_close()
 
 
+def reading(url, timeout=2.0):
+    """A chat that reads its feature switches from ``url``, within
+    ``timeout`` seconds."""
+    from chat_xdk import Chat
+
+    return Chat._reading_features_from(url, timeout)
+
+
 _v1_server = None
 
 
-def enable_v1_send(chat, **identity):
-    """Turn v1_send on for ``chat`` as the X API would: point its feature
-    fetch at a local server that answers it, then send until a send is v1.
-    ``identity`` is the ``sender_id`` / ``signing_key_version`` of a chat
-    without a session identity."""
+def v1_chat():
+    """A chat whose feature switches turn v1_send on, as the X API would: it
+    reads them from a local server that answers so. ``wait_for_v1`` waits for
+    the answer."""
     global _v1_server
-    from chat_xdk import EncryptMessageParams
-
     if _v1_server is None:
         _v1_server = FeatureServer()
-    chat._configure_features(_v1_server.url, 2.0, 3600.0, 0.05)
+    return reading(_v1_server.url)
+
+
+def wait_for_v1(chat, **identity):
+    """Send from ``chat``, which has keys, until a send is v1. ``identity`` is
+    the ``sender_id`` / ``signing_key_version`` of a chat without a session
+    identity."""
+    from chat_xdk import EncryptMessageParams
+
     params = EncryptMessageParams(
         "feature-switches",
-        "turn v1 on",
+        "wait for v1",
         conversation_key=bytes(32),
         conversation_key_version="1",
         **identity,

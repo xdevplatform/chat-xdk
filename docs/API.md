@@ -16,7 +16,7 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`; `juiceboxConfig` optional; free with `free()`) | `Chat(config_json?: str)` (stop its background work with `close()`) | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
+| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`; `juiceboxConfig` optional; free with `free()`) | `Chat(config_json?: str)` | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
 | 2 | **update_config** | `update_config(&mut self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&mut self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 
@@ -806,8 +806,8 @@ integer written without a sign or leading zeros, and anything else fails
 with an error naming the field.
 
 The format follows the X API's `v1_send` feature switch, which the JS,
-Python, Go, .NET and JVM bindings fetch in the background from a chat's
-first send on (see
+Python, Go, .NET and JVM bindings read in the background once, when a chat
+is created (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
 **The Rust crate never fetches it, so `ChatCore` and `Chat` always send
 v0.** They read v1 sends like every binding. The fetch logs nothing; to see

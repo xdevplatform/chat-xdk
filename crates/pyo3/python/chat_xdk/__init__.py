@@ -72,65 +72,19 @@ from chat_xdk._native import (
     hex_to_bytes,
 )
 
-# Feature switches (GET /2/chat/features). The native core decides when to
-# fetch and what an answer means; this module runs a driver thread that polls
-# the core, waits here between steps, and performs each GET it is handed.
-# Nothing here is API.
+# Feature switches (GET /2/chat/features). A chat reads them once, when it is
+# created: the native core decides what to fetch and what an answer means, and
+# this module performs the GET on a daemon thread. Nothing here is API.
 
 
-class _FeatureDriver:
-    """One daemon thread at a time that polls the core for feature GETs.
-
-    Its threads run no Python code inside the core, and the core runs none of
-    theirs: a daemon thread that takes the interpreter lock back from native
-    code while the interpreter shuts down is ended in a way native frames
-    cannot unwind. So it waits here, and the native calls it makes report a
-    wake for it to act on once they return."""
-
-    def __init__(self):
-        self._lock = _threading.Lock()
-        self._woken = _threading.Event()
-        self._running = False
-
-    def wake(self):
-        """Start the driver, or have it poll again: the core calls this when
-        its plan changes."""
-        with self._lock:
-            self._woken.set()
-            if self._running:
-                return
-            self._running = True
-        try:
-            _threading.Thread(target=self._run, name="chat-xdk-features", daemon=True).start()
-        except RuntimeError:
-            # The interpreter is shutting down and starts no more threads.
-            with self._lock:
-                self._running = False
-
-    def _run(self):
-        while True:
-            self._woken.clear()
-            step = _native._feature_poll()
-            if step is None:
-                with self._lock:
-                    if not self._woken.is_set():
-                        self._running = False
-                        return
-            elif isinstance(step, tuple):
-                try:
-                    _threading.Thread(
-                        target=_perform_feature_fetch,
-                        args=step,
-                        name="chat-xdk-features-request",
-                        daemon=True,
-                    ).start()
-                except RuntimeError:
-                    return
-            else:
-                self._woken.wait(step)
-
-
-_driver = _FeatureDriver()
+def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
+    """Start a chat's feature GET; the core calls this from the constructor."""
+    _threading.Thread(
+        target=_perform_feature_fetch,
+        args=(fetch_id, url, timeout, max_bytes),
+        name="chat-xdk-features",
+        daemon=True,
+    ).start()
 
 
 def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
@@ -138,8 +92,7 @@ def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
         status, body = _get_features(url, timeout, max_bytes)
     except Exception:
         status, body = 0, b""
-    if _native._feature_complete(fetch_id, status, body):
-        _driver.wake()
+    _native._feature_complete(fetch_id, status, body)
 
 
 # The sockets of the GETs under way, by thread. At exit they are cut short and
@@ -223,7 +176,7 @@ def _end_feature_requests():
         thread.join(max(0.0, deadline - _time.monotonic()))
 
 
-_native._feature_set_waker(_driver.wake)
+_native._feature_set_starter(_start_feature_fetch)
 
 
 class QuickReplyOption(TypedDict, total=False):

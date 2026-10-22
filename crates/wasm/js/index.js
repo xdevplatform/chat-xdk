@@ -15,11 +15,7 @@
  * calls.
  */
 
-import {
-  __featureComplete,
-  __featurePoll,
-  __featureSetWaker,
-} from './pkg/chat_xdk_wasm.js';
+import { __featureComplete } from './pkg/chat_xdk_wasm.js';
 
 function isNodeRuntime() {
   return (
@@ -342,7 +338,7 @@ export class ChatWithJuicebox {
     this.#JuiceboxConfiguration = JuiceboxConfiguration;
     this.#JuiceboxClient = JuiceboxClientCtor;
     this.#armAuthTokenHook = armAuthTokenHook ?? (() => {});
-    registerFeatureDriver();
+    startFeatureFetch(wasmChat);
   }
 
   // Juicebox lifecycle (handled in this JS layer)
@@ -523,36 +519,20 @@ export class ChatWithJuicebox {
   }
 }
 
-// Feature switches (GET /2/chat/features). The wasm core decides when to fetch
-// and what an answer means; this module steps a driver when the core wakes it
-// and performs each GET the driver is handed. Nothing here is API.
+// Feature switches (GET /2/chat/features). A chat reads them once, when it is
+// created: the wasm core decides what to fetch and what an answer means, and
+// this module performs the GET. Nothing here is API.
 
-const featureDriver = { registered: false, timer: undefined };
-
-function registerFeatureDriver() {
-  if (featureDriver.registered) return;
-  featureDriver.registered = true;
-  __featureSetWaker(() => queueMicrotask(stepFeatureDriver));
+/** Start the one read of `wasmChat`'s feature switches. */
+function startFeatureFetch(wasmChat) {
+  const request = wasmChat.__featureStart();
+  if (request === undefined) return;
+  getFeatures(request.url, request.timeoutMs, request.maxBytes).then(({ status, body }) =>
+    __featureComplete(request.id, status, body),
+  );
 }
 
-/** Start every GET that is due, then sleep until the step the core asks for. */
-function stepFeatureDriver() {
-  clearTimeout(featureDriver.timer);
-  featureDriver.timer = undefined;
-  for (;;) {
-    const step = __featurePoll();
-    if (step === undefined) return;
-    if (step.waitMs !== undefined) {
-      featureDriver.timer = unrefTimer(setTimeout(stepFeatureDriver, step.waitMs));
-      return;
-    }
-    getFeatures(step.url, step.timeoutMs, step.maxBytes).then(({ status, body }) =>
-      __featureComplete(step.id, status, body),
-    );
-  }
-}
-
-/** In Node, keep a scheduled timer from holding the process open. */
+/** In Node, keep a request's timer from holding the process open. */
 function unrefTimer(timer) {
   timer?.unref?.();
   return timer;

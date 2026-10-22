@@ -1,9 +1,8 @@
-// Feature switches (GET /2/chat/features). Nothing is called: each chat is pointed at a
-// local server through the internal hook, and sends show the format: signature version "7"
+// Feature switches (GET /2/chat/features). Nothing is called: each chat reads from a local
+// server through the internal constructor, and sends show the format: signature version "7"
 // is v0, "10" is v1.
 
 using System;
-using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -14,29 +13,13 @@ namespace ChatXdk.Tests
 {
     public class FeatureSwitchTests
     {
-        private static readonly TimeSpan Hour = TimeSpan.FromHours(1);
-
-        /// <summary>A keyed chat whose feature fetch goes to <paramref name="endpoint"/>.</summary>
-        private static Chat NewChat(
-            string endpoint, byte[] keys, int timeoutMs = 2000, int recheckMs = 3_600_000, int firstRetryMs = 50)
+        /// <summary>A keyed chat that reads its feature switches from <paramref name="endpoint"/>.</summary>
+        private static Chat NewChat(string endpoint, int timeoutMs = 2000)
         {
-            var chat = new Chat();
-            chat.ConfigureFeatures(
-                endpoint,
-                TimeSpan.FromMilliseconds(timeoutMs),
-                TimeSpan.FromMilliseconds(recheckMs),
-                TimeSpan.FromMilliseconds(firstRetryMs));
-            chat.ImportKeys(new ImportKeysParams(keys));
+            var chat = new Chat(endpoint, TimeSpan.FromMilliseconds(timeoutMs));
+            chat.GenerateKeypairs();
             chat.SetIdentity(new SetIdentityParams("1001", "1"));
             return chat;
-        }
-
-        /// <summary>Fresh private keys, each set with its own bucket.</summary>
-        private static byte[] NewKeys()
-        {
-            using var chat = new Chat();
-            chat.GenerateKeypairs();
-            return chat.ExportKeys()!;
         }
 
         /// <summary>The signature version of a send: "7" for v0, "10" for v1.</summary>
@@ -72,27 +55,18 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
-        public async Task NoRequestIsMadeUntilTheFirstSend()
+        public async Task ANewChatReadsTheSwitchesOnce()
         {
             using var server = new FeatureServer();
-            using var chat = NewChat(server.Endpoint, NewKeys());
-            await Task.Delay(300);
-            Assert.Empty(server.Buckets);
-
-            Assert.Equal("7", SendVersion(chat));
-            await WaitFor("the request", () => server.Buckets.Count == 1);
-            var bucket = int.Parse(server.Buckets[0]!, CultureInfo.InvariantCulture);
-            Assert.InRange(bucket, 0, 9999);
-        }
-
-        [Fact]
-        public async Task V1StartsOnceTheAnswerTurnsItOn()
-        {
-            using var server = new FeatureServer();
-            using var chat = NewChat(server.Endpoint, NewKeys());
-            Assert.Equal("7", SendVersion(chat));
+            using var chat = NewChat(server.Endpoint);
+            await WaitFor("the request", () => server.Queries.Count == 1);
+            Assert.Equal("", server.Queries[0]);
             await WaitFor("v1", () => SendVersion(chat) == "10");
-            Assert.Single(server.Buckets);
+            chat.GenerateKeypairs();
+            chat.SetIdentity(new SetIdentityParams("1001", "1"));
+            for (var i = 0; i < 5; i++) SendVersion(chat);
+            await Task.Delay(300);
+            Assert.Single(server.Queries);
         }
 
         [Fact]
@@ -100,28 +74,26 @@ namespace ChatXdk.Tests
         {
             using var server = new FeatureServer();
             server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 2000);
-            using var chat = NewChat(server.Endpoint, NewKeys());
+            using var chat = NewChat(server.Endpoint, timeoutMs: 3000);
             var started = DateTime.UtcNow;
             Assert.Equal("7", SendVersion(chat));
             Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(1));
         }
 
         [Fact]
-        public async Task ChatsWithOneKeyShareOneRequest()
+        public async Task ChatsCreatedWhileARequestIsInFlightShareIt()
         {
             using var server = new FeatureServer();
-            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 300);
-            var keys = NewKeys();
-            var chats = Enumerable.Range(0, 4).Select(_ => NewChat(server.Endpoint, keys)).ToList();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 800);
+            var chats = Enumerable.Range(0, 4).Select(_ => NewChat(server.Endpoint)).ToList();
             try
             {
-                foreach (var chat in chats) Assert.Equal("7", SendVersion(chat));
                 await WaitFor("v1 everywhere", () => chats.All(chat => SendVersion(chat) == "10"));
-                Assert.Single(server.Buckets);
+                Assert.Single(server.Queries);
 
-                using var later = NewChat(server.Endpoint, keys);
-                Assert.Equal("10", SendVersion(later));
-                Assert.Single(server.Buckets);
+                using var later = NewChat(server.Endpoint);
+                await WaitFor("the later chat to ask for itself", () => server.Queries.Count == 2);
+                await WaitFor("v1 for the later chat", () => SendVersion(later) == "10");
             }
             finally
             {
@@ -130,15 +102,17 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
-        public async Task ChatsWithDifferentKeysAskSeparately()
+        public async Task TheAnswerHoldsForTheChatsLifetime()
         {
             using var server = new FeatureServer();
-            using var first = NewChat(server.Endpoint, NewKeys());
-            using var second = NewChat(server.Endpoint, NewKeys());
-            SendVersion(first);
-            SendVersion(second);
-            await WaitFor("two requests", () => server.Buckets.Count == 2);
-            Assert.NotEqual(server.Buckets[0], server.Buckets[1]);
+            using var chat = NewChat(server.Endpoint);
+            await WaitFor("v1", () => SendVersion(chat) == "10");
+            server.Set(200, "{\"features\":{}}");
+            using var other = NewChat(server.Endpoint);
+            await WaitFor("the second request", () => server.Queries.Count == 2);
+            await Task.Delay(200);
+            Assert.Equal("7", SendVersion(other));
+            Assert.Equal("10", SendVersion(chat));
         }
 
         [Fact]
@@ -156,15 +130,13 @@ namespace ChatXdk.Tests
             };
             foreach (var (status, body, delayMs) in cases)
             {
-                // A server of its own: chats share an answer per endpoint and bucket, and the
-                // case before may have left one.
                 using var server = new FeatureServer();
                 server.Set(status, body, delayMs);
-                using var chat = NewChat(server.Endpoint, NewKeys(), timeoutMs: 500, firstRetryMs: 60_000);
+                using var chat = NewChat(server.Endpoint, timeoutMs: 500);
+                await WaitFor("the request", () => server.Queries.Count == 1);
+                await Task.Delay(delayMs + 200);
                 Assert.Equal("7", SendVersion(chat));
-                await WaitFor("the request", () => server.Buckets.Count == 1);
-                await Task.Delay(delayMs > 0 ? 1200 : 200);
-                Assert.Equal("7", SendVersion(chat));
+                Assert.Single(server.Queries);
             }
         }
 
@@ -173,94 +145,37 @@ namespace ChatXdk.Tests
         {
             string endpoint;
             using (var server = new FeatureServer()) endpoint = server.Endpoint;
-            using var chat = NewChat(endpoint, NewKeys(), timeoutMs: 500);
-            Assert.Equal("7", SendVersion(chat));
-            await Task.Delay(500);
+            using var chat = NewChat(endpoint, timeoutMs: 500);
+            await Task.Delay(700);
             Assert.Equal("7", SendVersion(chat));
         }
 
         [Fact]
-        public async Task ARequestStillOpenAtItsTimeoutFailsAndIsRetried()
+        public async Task ARequestStillOpenAtItsTimeoutFails()
         {
             using var server = new FeatureServer();
             server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 3000);
-            using var chat = NewChat(server.Endpoint, NewKeys(), timeoutMs: 300, firstRetryMs: 200);
-            Assert.Equal("7", SendVersion(chat));
-            await WaitFor("a retry", () => server.Buckets.Count >= 2, timeoutMs: 2500);
-            Assert.Equal("7", SendVersion(chat));
-        }
-
-        [Fact]
-        public async Task TheRecheckTurnsV1OffAndNeverBackOn()
-        {
-            using var server = new FeatureServer();
-            var keys = NewKeys();
-            using var chat = NewChat(server.Endpoint, keys, recheckMs: 300);
-            SendVersion(chat);
-            await WaitFor("v1", () => SendVersion(chat) == "10");
-
-            server.Set(200, "{\"features\":{}}");
-            await WaitFor("the re-check to turn v1 off", () => SendVersion(chat) == "7");
-
-            server.Set(200, "{\"features\":{\"v1_send\":true}}");
-            var seen = server.Buckets.Count;
-            await WaitFor("two more re-checks", () => server.Buckets.Count >= seen + 2);
-            Assert.Equal("7", SendVersion(chat));
-            using var later = NewChat(server.Endpoint, keys, recheckMs: 300);
-            Assert.Equal("10", SendVersion(later));
-        }
-
-        [Fact]
-        public async Task AFailedRecheckChangesNothing()
-        {
-            using var server = new FeatureServer();
-            using var chat = NewChat(server.Endpoint, NewKeys(), recheckMs: 300);
-            SendVersion(chat);
-            await WaitFor("v1", () => SendVersion(chat) == "10");
-            server.Set(503, "");
-            var seen = server.Buckets.Count;
-            await WaitFor("two failed re-checks", () => server.Buckets.Count >= seen + 2);
-            Assert.Equal("10", SendVersion(chat));
-        }
-
-        [Fact]
-        public async Task DisposeStopsTheRequests()
-        {
-            using var server = new FeatureServer();
-            var chat = NewChat(server.Endpoint, NewKeys(), recheckMs: 300);
-            SendVersion(chat);
-            await WaitFor("v1", () => SendVersion(chat) == "10");
-            chat.Dispose();
-            var seen = server.Buckets.Count;
+            using var chat = NewChat(server.Endpoint, timeoutMs: 300);
             await Task.Delay(1000);
-            Assert.Equal(seen, server.Buckets.Count);
+            Assert.Equal("7", SendVersion(chat));
+            Assert.Single(server.Queries);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static async Task StartUnreferencedChat(string endpoint)
-        {
-            var chat = NewChat(endpoint, NewKeys(), recheckMs: 300);
-            SendVersion(chat);
-            await WaitFor("v1", () => SendVersion(chat) == "10");
-        }
+        private static void StartUnreferencedChat(string endpoint) => NewChat(endpoint);
 
         [Fact]
-        public async Task TheRequestsEndWithAFinalizedChat()
+        public async Task ARequestEndsSafelyForADisposedOrFinalizedChat()
         {
             using var server = new FeatureServer();
-            await StartUnreferencedChat(server.Endpoint);
-            var running = server.Buckets.Count;
-            await WaitFor("a re-check", () => server.Buckets.Count > running);
-            for (var i = 0; i < 5; i++)
-            {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                await Task.Delay(50);
-            }
-            await Task.Delay(800);
-            var seen = server.Buckets.Count;
-            await Task.Delay(1200);
-            Assert.Equal(seen, server.Buckets.Count);
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 800);
+            NewChat(server.Endpoint).Dispose();
+            StartUnreferencedChat(server.Endpoint);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            using var kept = NewChat(server.Endpoint);
+            await WaitFor("v1", () => SendVersion(kept) == "10");
+            Assert.Single(server.Queries);
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.x.chatxdk;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.jna.Memory;
 
@@ -17,30 +18,37 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Performs the {@code GET /2/chat/features} requests the native core asks for. The core decides
- * when to fetch and what an answer means; this class starts a driver thread when the core calls
- * its waker, runs each GET the driver is handed with {@link HttpClient}, and hands the status and
- * body back. Nothing here is API.
+ * Reads a chat's feature switches ({@code GET /2/chat/features}) once, when the chat is created.
+ * The native core decides what to fetch and what an answer means; this class performs the GET with
+ * {@link HttpClient} and hands the status and body back. Nothing here is API.
  */
-final class FeatureDriver {
+final class FeatureFetch {
     private static final HttpClient HTTP =
             HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
 
-    // Referenced for the life of the class: the native library keeps only its address.
-    private static final FeatureNative.Waker WAKER = FeatureDriver::start;
+    private FeatureFetch() {}
 
-    static {
-        try {
-            FeatureNative.INSTANCE.chat_xdk_internal_feature_set_waker(WAKER);
-        } catch (LinkageError e) {
-            // A native library without the internal entry points: every switch stays off.
+    /**
+     * Start {@code chat}'s one read of the feature switches: nothing to do when it takes the answer
+     * of a GET already in flight.
+     */
+    static void start(Chat chat) {
+        String json = chat.startFeatures();
+        if (json.isEmpty()) {
+            return;
         }
+        JsonNode fetch;
+        try {
+            fetch = ChatJson.MAPPER.readTree(json);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        perform(
+                fetch.get("id").asLong(),
+                fetch.get("url").asText(),
+                fetch.get("timeout_ms").asLong(),
+                fetch.get("max_bytes").asInt());
     }
-
-    private FeatureDriver() {}
-
-    /** Lets the core start a driver; registers the waker once. */
-    static void register() {}
 
     /**
      * For this repository's tests: the endpoint of every chat that does not set its own, or the X
@@ -54,31 +62,6 @@ final class FeatureDriver {
         try (Memory e = FfiStrings.utf8(endpoint)) {
             FfiStrings.consume(FeatureNative.INSTANCE.chat_xdk_internal_feature_set_default_endpoint(e));
         }
-    }
-
-    private static void start() {
-        Thread thread = new Thread(FeatureDriver::run, "chat-xdk-features");
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private static void run() {
-        try {
-            for (String json = next(); !json.isEmpty(); json = next()) {
-                JsonNode fetch = ChatJson.MAPPER.readTree(json);
-                perform(
-                        fetch.get("id").asLong(),
-                        fetch.get("url").asText(),
-                        fetch.get("timeout_ms").asLong(),
-                        fetch.get("max_bytes").asInt());
-            }
-        } catch (Exception | LinkageError e) {
-            // Without a driver every switch stays off.
-        }
-    }
-
-    private static String next() {
-        return FfiStrings.consume(FeatureNative.INSTANCE.chat_xdk_internal_feature_next());
     }
 
     /**

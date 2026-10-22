@@ -549,45 +549,23 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
 
 /// Internal, for this repository's bindings; not part of the API.
 ///
-/// Register the function the core calls to start a feature-switch driver: a
-/// thread that calls `chat_xdk_internal_feature_next` until it returns no
-/// GET, performs each GET it returns, and reports each result with
-/// `chat_xdk_internal_feature_complete`. The core calls it from inside the
-/// send that needs a driver, so it must only start one and return.
+/// Start this chat's one read of the feature switches. Returns in `data` the
+/// GET to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
+/// "max_bytes": …}`. Both fields are NULL when the chat takes the answer of a
+/// GET already in flight, or has started its read already.
 #[no_mangle]
-pub extern "C" fn chat_xdk_internal_feature_set_waker(waker: Option<extern "C" fn()>) {
-    catch_ffi_or((), || {
-        *FEATURE_WAKER
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = waker;
-        bindings::set_waker(wake_feature_driver);
-    })
-}
-
-static FEATURE_WAKER: std::sync::RwLock<Option<extern "C" fn()>> = std::sync::RwLock::new(None);
-
-fn wake_feature_driver() {
-    let waker = *FEATURE_WAKER
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(waker) = waker {
-        waker();
-    }
-}
-
-/// Internal, for this repository's bindings; not part of the API.
-///
-/// Wait until a feature-switch GET is due and return it in `data` as JSON:
-/// `{"id": …, "url": "…", "timeout_ms": …, "max_bytes": …}`. Both fields
-/// are NULL once no chat needs the switches; the driver then ends.
-#[no_mangle]
-pub extern "C" fn chat_xdk_internal_feature_next() -> FfiResult {
-    catch_ffi(|| match bindings::next_fetch() {
-        Some(fetch) => match serde_json::to_string(&fetch) {
-            Ok(json) => ok_data(&json),
-            Err(e) => err_from(e),
-        },
-        None => ok_void(),
+pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        match unsafe { &*handle }.inner.start_features() {
+            Some(fetch) => match serde_json::to_string(&fetch) {
+                Ok(json) => ok_data(&json),
+                Err(e) => err_from(e),
+            },
+            None => ok_void(),
+        }
     })
 }
 
@@ -616,27 +594,22 @@ pub extern "C" fn chat_xdk_internal_feature_complete(
 
 /// Internal, for this repository's tests; not part of the API.
 ///
-/// Fetch this chat's feature switches from `endpoint`, with the given
-/// request timeout, re-check interval and first retry delay in milliseconds.
+/// Read this chat's feature switches from `endpoint`, within `timeout_ms`
+/// milliseconds, when its read starts.
 #[no_mangle]
 pub extern "C" fn chat_xdk_internal_feature_configure(
     handle: *const ChatHandle,
     endpoint: *const c_char,
     timeout_ms: u64,
-    recheck_ms: u64,
-    first_retry_ms: u64,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let endpoint = try_str!(endpoint);
-        unsafe { &*handle }.inner.configure_features(
-            endpoint,
-            timeout_ms,
-            recheck_ms,
-            first_retry_ms,
-        );
+        unsafe { &*handle }
+            .inner
+            .configure_features(endpoint, timeout_ms);
         ok_void()
     })
 }

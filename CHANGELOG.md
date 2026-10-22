@@ -564,14 +564,11 @@ prepared = chat.prepare_conversation_key_change(
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
   `SdkError::InvalidState` is left for values neither passed nor set on the
   chat, such as a missing session identity or an empty key cache.
-- Every binding but Rust now makes an outbound HTTPS request once a chat
-  sends: `GET https://api.x.com/2/chat/features`, in the background (see
+- Every binding but Rust now makes an outbound HTTPS request when a chat is
+  created: `GET https://api.x.com/2/chat/features`, in the background (see
   Added). Allow it through egress filters for v1 sends; blocked, sends stay
-  v0. The requests stop once no chat in the process uses them: release each
-  chat when you're done with it (`free()` in JS, `close()` in Python and the
-  JVM, `Close()` in Go, `Dispose()` in .NET), or let it be garbage-collected.
-  A program that never sends makes no request. In Node before 20.16 a request
-  still in flight can delay exit until it ends, at most 2 seconds.
+  v0. In Node before 20.16 a request still in flight can delay exit until it
+  ends, at most 2 seconds.
 - JS typings export only what the module exports. `Chat` and `ChatCrypto`,
   which the module never exported, no longer import, and `FileEncryptor` /
   `FileDecryptor`, which it returns but does not export, are interfaces.
@@ -580,13 +577,11 @@ prepared = chat.prepare_conversation_key_change(
 
 - The bindings fetch the feature switches from
   `GET https://api.x.com/2/chat/features` in the background, without
-  delaying or failing anything; there is nothing to call. A chat asks on its
-  first send, and chats in one process share one request per bucket, a
-  0–9999 number derived from the identity public key, re-checked every 5
-  minutes while any chat uses it. The request is anonymous; if it fails or is
+  delaying or failing anything; there is nothing to call. Each chat reads
+  them once, when it is created, and keeps the answer for its lifetime;
+  chats created while a request is in flight share it. The request is
+  anonymous; until it answers, and for the chat's lifetime if it fails or is
   blocked, sends stay v0. See "Network access" in the README.
-- Python: `Chat.close()` releases a chat's part in that request. The chat
-  stays usable and keeps the format it sends in.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
   (`xdkVersion` in JS, `XdkVersion` in Go and .NET).
 - Messages encrypted under per-message keys (`contents_encryption_version`

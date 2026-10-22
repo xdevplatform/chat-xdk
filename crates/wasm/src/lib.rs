@@ -120,22 +120,10 @@ pub fn detect_image_dimensions(bytes: &[u8]) -> JsValue {
     }
 }
 
-// Feature switches (GET /2/chat/features). The core decides when to fetch and
-// what an answer means; the JS wrapper only steps a driver when the core wakes
-// it and performs each GET it is handed. None of this is API, and all of it is
-// left out of the TypeScript declarations.
-
-thread_local! {
-    static FEATURE_WAKER: std::cell::RefCell<Option<js_sys::Function>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-fn wake_feature_driver() {
-    let waker = FEATURE_WAKER.with(|waker| waker.borrow().clone());
-    if let Some(waker) = waker {
-        let _ = waker.call0(&JsValue::NULL);
-    }
-}
+// Feature switches (GET /2/chat/features). A chat reads them once, when it is
+// created: the core decides what to fetch and what an answer means, and the JS
+// wrapper performs the GET. None of this is API, and all of it is left out of
+// the TypeScript declarations.
 
 /// Milliseconds from `performance.now()`, or `Date.now()` without it.
 fn feature_clock() -> u64 {
@@ -148,37 +136,6 @@ fn feature_clock() -> u64 {
         now.call0(&performance).ok()?.as_f64()
     });
     now.unwrap_or_else(js_sys::Date::now) as u64
-}
-
-/// Register the function the core calls to start the feature driver, or to
-/// have it poll again, whenever its plan changes.
-#[wasm_bindgen(js_name = __featureSetWaker, skip_typescript)]
-pub fn feature_set_waker(waker: js_sys::Function) {
-    FEATURE_WAKER.with(|slot| *slot.borrow_mut() = Some(waker));
-    bindings::set_clock(feature_clock);
-    bindings::set_polling_waker(wake_feature_driver);
-}
-
-/// The driver's next step: `{ id, url, timeoutMs, maxBytes }` to perform a
-/// GET, `{ waitMs }` to poll again after that long (or when woken), or
-/// `undefined` when no chat needs the switches.
-#[wasm_bindgen(js_name = __featurePoll, skip_typescript)]
-pub fn feature_poll() -> JsValue {
-    let step = js_sys::Object::new();
-    let set = |name: &str, value: JsValue| {
-        js_sys::Reflect::set(&step, &name.into(), &value).ok();
-    };
-    match bindings::poll_fetch() {
-        bindings::Poll::Fetch(fetch) => {
-            set("id", (fetch.id as f64).into());
-            set("url", fetch.url.into());
-            set("timeoutMs", (fetch.timeout_ms as f64).into());
-            set("maxBytes", (fetch.max_bytes as f64).into());
-        }
-        bindings::Poll::Wait(ms) => set("waitMs", (ms as f64).into()),
-        bindings::Poll::Idle => return JsValue::UNDEFINED,
-    }
-    step.into()
 }
 
 /// Report the result of the GET `id`: its HTTP status, 0 when no complete
@@ -200,6 +157,7 @@ pub fn feature_set_default_endpoint(endpoint: Option<String>) {
 pub fn init() {
     #[cfg(feature = "panic_hook")]
     console_error_panic_hook::set_once();
+    bindings::set_clock(feature_clock);
 }
 
 /// The X Chat encryption SDK for JavaScript (crypto-only WASM layer).
@@ -297,22 +255,33 @@ impl Chat {
         self.inner.set_cache_keys(enabled);
     }
 
-    /// For this repository's tests: fetch this chat's feature switches from
-    /// `endpoint`, with these timings in milliseconds. Not API.
+    /// For this repository's tests: read this chat's feature switches from
+    /// `endpoint`, within `timeoutMs`. Call it before the wrapper starts the
+    /// read. Not API.
     #[wasm_bindgen(js_name = __configureFeatures, skip_typescript)]
-    pub fn configure_features(
-        &self,
-        endpoint: &str,
-        timeout_ms: f64,
-        recheck_ms: f64,
-        first_retry_ms: f64,
-    ) {
-        self.inner.configure_features(
-            endpoint,
-            timeout_ms as u64,
-            recheck_ms as u64,
-            first_retry_ms as u64,
-        );
+    pub fn configure_features(&self, endpoint: &str, timeout_ms: f64) {
+        self.inner.configure_features(endpoint, timeout_ms as u64);
+    }
+
+    /// Start this chat's one read of the feature switches:
+    /// `{ id, url, timeoutMs, maxBytes }` for the wrapper to GET, or
+    /// `undefined` when the chat takes the answer of a GET in flight or has
+    /// started its read already. Not API.
+    #[wasm_bindgen(js_name = __featureStart, skip_typescript)]
+    pub fn feature_start(&self) -> JsValue {
+        let Some(fetch) = self.inner.start_features() else {
+            return JsValue::UNDEFINED;
+        };
+        let request = js_sys::Object::new();
+        for (name, value) in [
+            ("id", JsValue::from(fetch.id as f64)),
+            ("url", fetch.url.into()),
+            ("timeoutMs", (fetch.timeout_ms as f64).into()),
+            ("maxBytes", (fetch.max_bytes as f64).into()),
+        ] {
+            js_sys::Reflect::set(&request, &name.into(), &value).ok();
+        }
+        request.into()
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`

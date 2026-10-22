@@ -11,7 +11,7 @@ import init, {
   detectImageDimensions,
   encryptedFileSize,
 } from "../pkg/chat_xdk_wasm.js";
-import { enableV1Send, keepOffline } from "./feature_server.mjs";
+import { featureServer, keepOffline, reading, v1Chat, waitForV1 } from "./feature_server.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
 const withKey = ({ conversationKeys, ...rest }) => {
@@ -291,8 +291,11 @@ async function main() {
   // the returned eventB64 and the media hash key its attachment names, and
   // decrypts through the sent message's event.
   const sender = new Chat();
-  sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
-  sender.setIdentity({ userId: "111", signingKeyVersion: "1" });
+  const v1Sender = await v1Chat();
+  for (const from of [sender, v1Sender]) {
+    from.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+    from.setIdentity({ userId: "111", signingKeyVersion: "1" });
+  }
   const mediaHashKey = "photo";
   const mediaKeys = { "1": convKey };
   const photoAttachment = (hash) => ({
@@ -304,14 +307,16 @@ async function main() {
     filename: `${hash}.jpg`,
     media_type: 1,
   });
-  const sendPhotos = (text, hashes) =>
-    sender.encryptMessage({
+  const photosFrom = (from) => (text, hashes) =>
+    from.encryptMessage({
       conversationId: "conv-1",
       text,
       conversationKey: convKey,
       conversationKeyVersion: "1",
       attachments: hashes.map(photoAttachment),
     });
+  const sendPhotos = photosFrom(sender);
+  const sendV1Photos = photosFrom(v1Sender);
   const photoPayload = sendPhotos("a photo", [mediaHashKey]);
   const mediaEvent = photoPayload.eventB64;
   const fileParams = { eventB64: mediaEvent, conversationKeys: mediaKeys, mediaHashKey };
@@ -329,15 +334,15 @@ async function main() {
 
   // A v1 message with files takes the id its files derive: building it again
   // gives the same id, so files already encrypted stay valid.
-  await enableV1Send(sender, () => sendPhotos("turn v1 on", ["turn-v1-on"]));
-  const v1PhotoPayload = sendPhotos("a photo", [mediaHashKey]);
-  assert.equal(sendPhotos("another caption", [mediaHashKey]).messageId, v1PhotoPayload.messageId);
-  assert.notEqual(sendPhotos("a photo", ["other"]).messageId, v1PhotoPayload.messageId);
+  await waitForV1(() => sendV1Photos("turn v1 on", ["turn-v1-on"]));
+  const v1PhotoPayload = sendV1Photos("a photo", [mediaHashKey]);
+  assert.equal(sendV1Photos("another caption", [mediaHashKey]).messageId, v1PhotoPayload.messageId);
+  assert.notEqual(sendV1Photos("a photo", ["other"]).messageId, v1PhotoPayload.messageId);
   assert.match(v1PhotoPayload.messageId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 
   // Each file needs its own media hash key.
   assert.throws(
-    () => sendPhotos("twice", [mediaHashKey, mediaHashKey]),
+    () => sendV1Photos("twice", [mediaHashKey, mediaHashKey]),
     /media_hash_key 'photo' is in more than one attachment/,
   );
 
@@ -443,11 +448,14 @@ async function main() {
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
   // 4c. Once the feature switches turn v1_send on, sends switch to v1
-  //     (signature version 10). A chat of its own, so `chat` keeps sending v0.
-  const v1Chat = new Chat();
-  v1Chat.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
+  //     (signature version 10). A chat of its own, so `chat` keeps sending v0;
+  //     its answer comes late, so its first send is v0.
+  const lateAnswer = await featureServer();
+  lateAnswer.delayMs = 500;
+  const switching = reading(lateAnswer.endpoint);
+  switching.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
   const sendHello = () =>
-    v1Chat.encryptMessage({
+    switching.encryptMessage({
       senderId: "111",
       conversationId: "conv-1",
       conversationKey: convKey,
@@ -456,9 +464,10 @@ async function main() {
       signingKeyVersion: "1",
     });
   assert.equal(sendHello().signatureInfo.signatureVersion, "7");
-  await enableV1Send(v1Chat, sendHello);
+  await waitForV1(sendHello);
   assert.equal(sendHello().signatureInfo.signatureVersion, "10");
-  v1Chat.free();
+  switching.free();
+  await lateAnswer.close();
 
   // Own sends decrypt through their eventB64, verified against the fixture
   // signing key registered to sender 111.
@@ -773,7 +782,7 @@ async function main() {
 
   // 4g. A URL card attachment carries encrypted banner/favicon image
   // references (media hash keys) for clickable preview cards.
-  const urlCardPayload = sender.encryptMessage({
+  const urlCardPayload = v1Sender.encryptMessage({
     conversationId: "conv-1",
     conversationKey: convKey,
     text: "check this out",
@@ -802,7 +811,7 @@ async function main() {
   assert.ok(urlCardPayload.signature.length > 0);
   assert.deepEqual(
     chat.decryptFile({
-      encrypted: sender.encryptFile(withKey({
+      encrypted: v1Sender.encryptFile(withKey({
         file: plaintext,
         eventB64: urlCardPayload.eventB64,
         conversationKeys: mediaKeys,

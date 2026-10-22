@@ -71,14 +71,25 @@ namespace ChatXdk
         /// <exception cref="InvalidOperationException">
         /// Thrown if the native library fails to initialise (e.g. missing shared library).
         /// </exception>
-        public Chat()
+        public Chat() : this(null, TimeSpan.Zero)
+        {
+        }
+
+        /// <summary>
+        /// For this repository's tests: a chat that reads its feature switches from
+        /// <paramref name="featureEndpoint"/> within <paramref name="featureTimeout"/>, or
+        /// from the default endpoint when it is null.
+        /// </summary>
+        internal Chat(string? featureEndpoint, TimeSpan featureTimeout)
         {
             _handle = NativeMethods.chat_xdk_new();
             if (_handle == null)
                 throw new InvalidOperationException(
                     "chat_xdk_new() returned NULL — ensure the native library " +
                     "(chat_xdk_dotnet.dylib / .so / .dll) is on the library search path.");
-            FeatureDriver.Register();
+            if (featureEndpoint != null)
+                ConfigureFeatures(featureEndpoint, featureTimeout);
+            FeatureFetch.Start(this);
         }
 
         /// <summary>
@@ -261,22 +272,24 @@ namespace ChatXdk
             GC.KeepAlive(this);
         }
 
-        /// <summary>
-        /// For this repository's tests: fetch this chat's feature switches from
-        /// <paramref name="endpoint"/>, with these timings.
-        /// </summary>
-        internal void ConfigureFeatures(string endpoint, TimeSpan timeout, TimeSpan recheck, TimeSpan firstRetry)
+        private void ConfigureFeatures(string endpoint, TimeSpan timeout)
         {
-            ThrowIfDisposed();
             var endpointBytes = Utf8Z(endpoint);
             fixed (byte* endpointPtr = endpointBytes)
                 ConsumeResult(NativeMethods.chat_xdk_internal_feature_configure(
-                    _handle,
-                    endpointPtr,
-                    (ulong)timeout.TotalMilliseconds,
-                    (ulong)recheck.TotalMilliseconds,
-                    (ulong)firstRetry.TotalMilliseconds));
+                    _handle, endpointPtr, (ulong)timeout.TotalMilliseconds));
             GC.KeepAlive(this);
+        }
+
+        /// <summary>
+        /// Start this chat's one read of the feature switches: the GET to perform as JSON, or
+        /// an empty string when the chat takes the answer of a GET already in flight.
+        /// </summary>
+        internal string StartFeatures()
+        {
+            var json = ConsumeResult(NativeMethods.chat_xdk_internal_feature_start(_handle));
+            GC.KeepAlive(this);
+            return json;
         }
 
         /// <summary>Clear all key material from memory without touching Juicebox.</summary>

@@ -78,11 +78,12 @@ See the **JVM** column of the unified tables in [`docs/API.md`](../../docs/API.m
 
 Each chat makes one kind of request itself: an anonymous
 `GET https://api.x.com/2/chat/features` in the background, which reads the X
-API's feature switches that pick the format the SDK sends in. A chat asks on
-its first send, never earlier, and chats in one process share the request,
-which is re-checked every 5 minutes while any chat uses it. It carries no
-credentials and never delays or fails a call; if it fails or is blocked,
-sends stay in v0, the format 0.5.x sends. Close the chat (try-with-resources, or `chat.close()`) when you're done with it, or let it be garbage-collected: the requests stop once no chat in the process uses them.
+API's feature switches that pick the format the SDK sends in. A chat reads
+them once, when it is created, and keeps the answer for its lifetime; chats
+created while a request is in flight share it. The request carries no
+credentials and never delays or fails a call; until it answers, and for the
+chat's lifetime if it fails or is blocked, sends stay in v0, the format 0.5.x
+sends.
 
 ## Security limitations
 
