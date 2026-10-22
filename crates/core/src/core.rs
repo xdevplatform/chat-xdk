@@ -2632,16 +2632,34 @@ impl ChatCore {
         Ok(output)
     }
 
-    /// Decrypt a stream.
+    /// Decrypt an encrypted media file.
+    ///
+    /// `event_b64` is the event of the message that carries the media and
+    /// `conversation_keys` its conversation's key map, as passed to
+    /// [`Self::decrypt_event`]. `media_hash_key` names the media: a media
+    /// attachment, a link card's banner or favicon, or media the message
+    /// quotes from another message in its reply preview. The SDK finds that
+    /// attachment in the event and derives its key from the key for the
+    /// message's version.
+    ///
+    /// Errors say what to pass instead when `conversation_keys` lacks the
+    /// message's key version, the event is not an encrypted message with
+    /// media, `media_hash_key` is not in it, or `encrypted` is not the
+    /// complete encrypted file. Signatures are not checked here; use the
+    /// `verified` flag from [`Self::decrypt_event`].
     pub fn decrypt_stream(
         &self,
         encrypted: &[u8],
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut reader = Cursor::new(encrypted);
-        let mut output: Vec<u8> = Vec::new();
-        crate::crypto::encryption::decrypt_stream(conversation_key, &mut reader, &mut output)?;
-        Ok(output)
+        let key = media::media_key(event_b64, conversation_keys, media_hash_key)?;
+        Ok(crate::crypto::encryption::decrypt_media(
+            &key,
+            media_hash_key,
+            encrypted,
+        )?)
     }
 
     /// Create an incremental stream encryptor for large payloads.
@@ -2654,13 +2672,20 @@ impl ChatCore {
         )?)
     }
 
-    /// Create an incremental stream decryptor for large payloads.
+    /// Create an incremental decryptor for an encrypted media file too large
+    /// to hold in memory. Takes the arguments of [`Self::decrypt_stream`]
+    /// apart from the bytes, which are fed to the decryptor; its errors say
+    /// which media failed and what to pass.
     pub fn stream_decryptor(
         &self,
-        conversation_key: &XChatConversationKey,
+        event_b64: &str,
+        conversation_keys: &HashMap<String, XChatConversationKey>,
+        media_hash_key: &str,
     ) -> Result<crate::crypto::encryption::StreamDecryptor, SdkError> {
-        Ok(crate::crypto::encryption::StreamDecryptor::new(
-            conversation_key,
+        let key = media::media_key(event_b64, conversation_keys, media_hash_key)?;
+        Ok(crate::crypto::encryption::StreamDecryptor::for_media(
+            &key,
+            media_hash_key,
         )?)
     }
 
@@ -4096,6 +4121,8 @@ pub(crate) fn convert_settings_change(
     }
 }
 
+mod media;
+
 // Tests
 
 #[cfg(test)]
@@ -4106,6 +4133,9 @@ mod signature_version_tests;
 
 #[cfg(test)]
 mod message_key_tests;
+
+#[cfg(test)]
+mod media_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7496,16 +7526,40 @@ mod tests {
 
     // Stream encryption tests
 
+    /// A conversation-key message under key version "1" with one media
+    /// attachment named `media_hash_key`, and the key map that opens it.
+    fn media_message(
+        ckey: &XChatConversationKey,
+        media_hash_key: &str,
+    ) -> (String, HashMap<String, XChatConversationKey>) {
+        let media = Box::new(ThriftMessageAttachment::Media(Box::new(
+            crate::thrift::product::MediaAttachment {
+                media_hash_key: Some(media_hash_key.to_string()),
+                ..Default::default()
+            },
+        )));
+        let content =
+            crate::pipeline::build_message_content("media", None, Some(vec![media]), None).unwrap();
+        let encrypted = crate::crypto::encryption::encrypt_message(ckey, &content).unwrap();
+        (
+            build_test_message_event(&encrypted, Some("1")),
+            [("1".to_string(), ckey.clone())].into_iter().collect(),
+        )
+    }
+
     #[test]
     fn encrypt_decrypt_stream_roundtrip() {
         let core = ChatCore::new();
         let ckey = core.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey, "hash-1");
 
         let plaintext = b"stream data for media encryption test";
         let encrypted = core.encrypt_stream(plaintext, &ckey).unwrap();
         assert_ne!(&encrypted[..], plaintext);
 
-        let decrypted = core.decrypt_stream(&encrypted, &ckey).unwrap();
+        let decrypted = core
+            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
 
@@ -7513,9 +7567,12 @@ mod tests {
     fn encrypt_decrypt_stream_empty() {
         let core = ChatCore::new();
         let ckey = core.generate_conversation_key().unwrap();
+        let (event, keys) = media_message(&ckey, "hash-1");
 
         let encrypted = core.encrypt_stream(b"", &ckey).unwrap();
-        let decrypted = core.decrypt_stream(&encrypted, &ckey).unwrap();
+        let decrypted = core
+            .decrypt_stream(&encrypted, &event, &keys, "hash-1")
+            .unwrap();
         assert!(decrypted.is_empty());
     }
 

@@ -20,7 +20,9 @@ use crate::thrift::event::{
     ConversationKeyChangeEvent, ConversationParticipantKey, FailureType, MessageCreateEvent,
     MessageEvent, MessageEventDetail, MessageEventSignature, MessageFailureEvent, RateLimitTier,
 };
-use crate::thrift::product::{MediaAttachment, MessageAttachment};
+use crate::thrift::product::{
+    MediaAttachment, MessageAttachment, UrlAttachment, UrlAttachmentImage,
+};
 use crate::types::SendPayload;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use std::io::Cursor;
@@ -95,25 +97,57 @@ pub fn frame_send_payload(
     )
 }
 
+/// An attachment of a framed message, without an attachment id.
+pub enum FixtureAttachment<'a> {
+    /// A media attachment with this media hash key.
+    Media(&'a str),
+    /// A link card whose banner and favicon carry these media hash keys.
+    LinkCard {
+        url: &'a str,
+        banner: &'a str,
+        favicon: &'a str,
+    },
+}
+
 #[allow(clippy::vec_box)]
-fn fixture_media(media_hash_keys: &[&str]) -> Vec<Box<MessageAttachment>> {
-    media_hash_keys
+fn fixture_attachments(attachments: &[FixtureAttachment]) -> Vec<Box<MessageAttachment>> {
+    let image = |hash: &str| {
+        Some(Box::new(UrlAttachmentImage {
+            media_hash_key: Some(hash.to_string()),
+            ..Default::default()
+        }))
+    };
+    attachments
         .iter()
-        .map(|hash| {
-            Box::new(MessageAttachment::Media(Box::new(MediaAttachment {
-                media_hash_key: Some(hash.to_string()),
-                filename: Some(format!("{}.bin", hash)),
-                ..Default::default()
-            })))
+        .map(|attachment| {
+            Box::new(match attachment {
+                FixtureAttachment::Media(hash) => {
+                    MessageAttachment::Media(Box::new(MediaAttachment {
+                        media_hash_key: Some(hash.to_string()),
+                        filename: Some(format!("{}.bin", hash)),
+                        ..Default::default()
+                    }))
+                }
+                FixtureAttachment::LinkCard {
+                    url,
+                    banner,
+                    favicon,
+                } => MessageAttachment::Url(Box::new(UrlAttachment {
+                    url: Some(url.to_string()),
+                    banner_image_media_hash_key: image(banner),
+                    favicon_image_media_hash_key: image(favicon),
+                    ..Default::default()
+                })),
+            })
         })
         .collect()
 }
 
 /// Build a signed `MessageCreateEvent` in the backend `MessageEvent` envelope
 /// (base64) whose contents use a per-message key: a text message carrying
-/// one media attachment, without an attachment id, per `media_hash_keys`,
-/// encrypted under `message_key` with `contents_encryption_version` 1, and
-/// signed at `signature_version` over the payload verifiers rebuild.
+/// `attachments`, encrypted under `message_key` with
+/// `contents_encryption_version` 1, and signed at `signature_version` over
+/// the payload verifiers rebuild.
 #[allow(clippy::too_many_arguments)]
 pub fn frame_message_key_event(
     signing_key: &XChatPrivateKey,
@@ -124,10 +158,10 @@ pub fn frame_message_key_event(
     conversation_key_version: &str,
     message_key: &XChatConversationKey,
     text: &str,
-    media_hash_keys: &[&str],
+    attachments: &[FixtureAttachment],
     signature_version: i32,
 ) -> Result<String, SdkError> {
-    let content = build_message_content(text, None, Some(fixture_media(media_hash_keys)), None)?;
+    let content = build_message_content(text, None, Some(fixture_attachments(attachments)), None)?;
     let detail = MessageEventDetail::MessageCreateEvent(MessageCreateEvent {
         contents: Some(encrypt_message(message_key, &content)?),
         conversation_key_version: Some(conversation_key_version.to_string()),
@@ -162,6 +196,25 @@ pub fn frame_message_key_event(
         detail,
         Some(signature),
     )
+}
+
+/// Frame an unencrypted, unsigned `MessageCreateEvent` (no conversation key
+/// version) carrying `text` and `attachments` in plaintext, in the backend
+/// `MessageEvent` envelope (base64).
+pub fn frame_unencrypted_message_event(
+    sender_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+    text: &str,
+    attachments: &[FixtureAttachment],
+) -> Result<String, SdkError> {
+    let content = build_message_content(text, None, Some(fixture_attachments(attachments)), None)?;
+    let detail = MessageEventDetail::MessageCreateEvent(MessageCreateEvent {
+        contents: Some(content),
+        should_notify: Some(true),
+        ..Default::default()
+    });
+    frame_event(message_id, sender_id, conversation_id, detail, None)
 }
 
 /// Build a signed `ConversationKeyChangeEvent` in the backend `MessageEvent`

@@ -44,6 +44,28 @@ struct Vectors {
     event_key_change_message_key_b64: String,
     event_reply_message_key_b64: String,
     event_reply_message_key_text: String,
+    media_first_hash_key: String,
+    media_first_encrypted_b64: String,
+    media_first_plaintext_b64: String,
+    media_second_hash_key: String,
+    media_second_encrypted_b64: String,
+    media_second_plaintext_b64: String,
+    media_short_hash_key: String,
+    media_short_encrypted_b64: String,
+    media_short_plaintext_b64: String,
+    event_link_card_b64: String,
+    media_banner_hash_key: String,
+    media_banner_encrypted_b64: String,
+    media_banner_plaintext_b64: String,
+    media_favicon_hash_key: String,
+    media_favicon_encrypted_b64: String,
+    media_favicon_plaintext_b64: String,
+    event_conversation_key_media_b64: String,
+    media_conversation_key_hash_key: String,
+    media_conversation_key_encrypted_b64: String,
+    media_conversation_key_plaintext_b64: String,
+    event_unencrypted_b64: String,
+    media_unencrypted_hash_key: String,
     payload_message_v10_cev1: String,
     payload_message_v10: String,
     signature_v10_cev1_public_key_b64: String,
@@ -348,6 +370,39 @@ fn message_key_map(v: &Vectors) -> std::collections::HashMap<String, XChatConver
     )
 }
 
+/// Decrypt `encrypted_b64` as the media `media_hash_key` names in
+/// `event_b64`, whole and in 700-byte chunks, checking both agree.
+fn open_media(
+    event_b64: &str,
+    keys: &std::collections::HashMap<String, XChatConversationKey>,
+    media_hash_key: &str,
+    encrypted_b64: &str,
+) -> Result<Vec<u8>, chat_xdk_core::error::SdkError> {
+    let core = chat_xdk_core::ChatCore::new();
+    let encrypted = B64.decode(encrypted_b64).unwrap();
+    let whole = core.decrypt_stream(&encrypted, event_b64, keys, media_hash_key)?;
+    let mut decryptor = core.stream_decryptor(event_b64, keys, media_hash_key)?;
+    let mut incremental = Vec::new();
+    for chunk in encrypted.chunks(700) {
+        incremental.extend(decryptor.push(chunk)?);
+    }
+    incremental.extend(decryptor.finish()?);
+    assert_eq!(whole, incremental);
+    Ok(whole)
+}
+
+fn media_error(
+    event_b64: &str,
+    keys: &std::collections::HashMap<String, XChatConversationKey>,
+    media_hash_key: &str,
+    encrypted: &[u8],
+) -> String {
+    chat_xdk_core::ChatCore::new()
+        .decrypt_stream(encrypted, event_b64, keys, media_hash_key)
+        .unwrap_err()
+        .to_string()
+}
+
 #[test]
 fn vectors_message_key_event_decrypts_with_the_conversation_key() {
     let v = load_vectors();
@@ -362,7 +417,177 @@ fn vectors_message_key_event_decrypts_with_the_conversation_key() {
     );
     assert!(message.verified);
     assert_eq!(message.text(), Some(v.event_message_key_text.as_str()));
-    assert_eq!(message.media_hashes.len(), 2);
+    let hashes: Vec<_> = message
+        .media_hashes
+        .iter()
+        .map(|h| h.media_hash_key.as_str())
+        .collect();
+    assert_eq!(
+        hashes,
+        vec![
+            v.media_first_hash_key.as_str(),
+            v.media_second_hash_key.as_str()
+        ]
+    );
+}
+
+#[test]
+fn vectors_one_media_file_opens_from_its_message() {
+    let v = load_vectors();
+    let keys = key_map(
+        &v.message_key_short_conversation_key_version,
+        &v.message_key_short_conversation_key_hex,
+    );
+    assert_eq!(
+        open_media(
+            &v.event_message_key_short_b64,
+            &keys,
+            &v.media_short_hash_key,
+            &v.media_short_encrypted_b64
+        )
+        .unwrap(),
+        B64.decode(&v.media_short_plaintext_b64).unwrap()
+    );
+}
+
+#[test]
+fn vectors_several_media_files_open_from_their_message() {
+    let v = load_vectors();
+    let keys = message_key_map(&v);
+    for (hash, encrypted, plaintext) in [
+        (
+            &v.media_first_hash_key,
+            &v.media_first_encrypted_b64,
+            &v.media_first_plaintext_b64,
+        ),
+        (
+            &v.media_second_hash_key,
+            &v.media_second_encrypted_b64,
+            &v.media_second_plaintext_b64,
+        ),
+    ] {
+        assert_eq!(
+            open_media(&v.event_message_key_b64, &keys, hash, encrypted).unwrap(),
+            B64.decode(plaintext).unwrap(),
+            "{hash}"
+        );
+    }
+}
+
+#[test]
+fn vectors_link_card_images_open_from_their_message() {
+    let v = load_vectors();
+    let keys = message_key_map(&v);
+    for (hash, encrypted, plaintext) in [
+        (
+            &v.media_banner_hash_key,
+            &v.media_banner_encrypted_b64,
+            &v.media_banner_plaintext_b64,
+        ),
+        (
+            &v.media_favicon_hash_key,
+            &v.media_favicon_encrypted_b64,
+            &v.media_favicon_plaintext_b64,
+        ),
+    ] {
+        assert_eq!(
+            open_media(&v.event_link_card_b64, &keys, hash, encrypted).unwrap(),
+            B64.decode(plaintext).unwrap(),
+            "{hash}"
+        );
+    }
+}
+
+#[test]
+fn vectors_conversation_key_media_opens_from_its_message() {
+    let v = load_vectors();
+    assert_eq!(
+        open_media(
+            &v.event_conversation_key_media_b64,
+            &fixture_key_map(&v),
+            &v.media_conversation_key_hash_key,
+            &v.media_conversation_key_encrypted_b64
+        )
+        .unwrap(),
+        B64.decode(&v.media_conversation_key_plaintext_b64).unwrap()
+    );
+}
+
+#[test]
+fn vectors_media_errors_say_what_to_pass() {
+    let v = load_vectors();
+    let keys = message_key_map(&v);
+    let first = B64.decode(&v.media_first_encrypted_b64).unwrap();
+    let second = B64.decode(&v.media_second_encrypted_b64).unwrap();
+    let cases = [
+        (
+            media_error(
+                &v.event_message_key_b64,
+                &fixture_key_map(&v),
+                &v.media_first_hash_key,
+                &first,
+            ),
+            format!(
+                "no key for version '{}'",
+                v.message_key_conversation_key_version
+            ),
+        ),
+        (
+            media_error(&v.event_message_key_b64, &keys, "not-a-hash-key", &first),
+            "is not in the message".to_string(),
+        ),
+        (
+            media_error(
+                &v.event_key_change_b64,
+                &keys,
+                &v.media_first_hash_key,
+                &first,
+            ),
+            "the event is not a message".to_string(),
+        ),
+        (
+            media_error(
+                &v.event_message_b64,
+                &fixture_key_map(&v),
+                &v.media_first_hash_key,
+                &first,
+            ),
+            "the message has no media".to_string(),
+        ),
+        (
+            media_error(
+                &v.event_message_key_b64,
+                &keys,
+                &v.media_first_hash_key,
+                &second,
+            ),
+            format!(
+                "encrypted file of media_hash_key '{}'",
+                v.media_first_hash_key
+            ),
+        ),
+        (
+            media_error(
+                &v.event_message_key_b64,
+                &keys,
+                &v.media_first_hash_key,
+                &first[..first.len() / 2],
+            ),
+            "truncated".to_string(),
+        ),
+        (
+            media_error(
+                &v.event_unencrypted_b64,
+                &keys,
+                &v.media_unencrypted_hash_key,
+                &first,
+            ),
+            "the message is not encrypted".to_string(),
+        ),
+    ];
+    for (error, expected) in cases {
+        assert!(error.contains(&expected), "{error:?} lacks {expected:?}");
+    }
 }
 
 #[test]
@@ -403,6 +628,16 @@ fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
         })
         .collect();
     assert_eq!(texts, vec![v.event_message_key_text.clone()]);
+    assert_eq!(
+        open_media(
+            &v.event_message_key_b64,
+            &result.conversation_keys.keys,
+            &v.media_second_hash_key,
+            &v.media_second_encrypted_b64
+        )
+        .unwrap(),
+        B64.decode(&v.media_second_plaintext_b64).unwrap()
+    );
 }
 
 #[test]
@@ -428,7 +663,7 @@ fn vectors_short_sender_message_key_event_verifies_at_v11() {
 }
 
 #[test]
-fn vectors_reply_carrying_a_message_key_validates() {
+fn vectors_reply_carrying_a_message_key_validates_and_opens_the_quoted_media() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new();
     let keys = fixture_key_map(&v);
@@ -455,6 +690,16 @@ fn vectors_reply_carrying_a_message_key_validates() {
     assert_eq!(
         message.reply_preview_validation,
         Some(chat_xdk_core::ReplyPreviewValidation::Valid)
+    );
+    assert_eq!(
+        open_media(
+            &v.event_reply_message_key_b64,
+            &keys,
+            &v.media_first_hash_key,
+            &v.media_first_encrypted_b64
+        )
+        .unwrap(),
+        B64.decode(&v.media_first_plaintext_b64).unwrap()
     );
 }
 

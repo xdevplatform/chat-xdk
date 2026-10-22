@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -65,11 +66,47 @@ class ChatTest {
         return entries;
     }
 
-    /** The key map that opens the message-key vectors. */
+    /** The key map of the fixture conversation key, which opens the conversation-key media message and the reply vectors. */
+    private static Map<String, byte[]> conversationKeys(JsonNode v) {
+        return Map.of(v.get("event_conversation_key_version").asText(), b64(v, "conversation_key_b64"));
+    }
+
+    /** The key map that opens the message-key and link-card vectors. */
     private static Map<String, byte[]> messageKeyConversationKeys(JsonNode v) {
         return Map.of(
                 v.get("message_key_conversation_key_version").asText(),
                 ChatXdkUtilities.hexToBytes(v.get("message_key_conversation_key_hex").asText()));
+    }
+
+    /** Decrypt media whole and in 700-byte chunks on a fresh instance, checking both agree. */
+    private static byte[] openMedia(
+            String eventB64, Map<String, byte[]> keys, String mediaHashKey, byte[] encrypted) throws Exception {
+        try (Chat chat = new Chat()) {
+            byte[] whole = chat.decryptStream(encrypted, eventB64, keys, mediaHashKey);
+            try (StreamDecryptor decryptor = chat.streamDecryptor(eventB64, keys, mediaHashKey)) {
+                ByteArrayOutputStream incremental = new ByteArrayOutputStream();
+                for (int i = 0; i < encrypted.length; i += 700) {
+                    incremental.write(decryptor.push(
+                            Arrays.copyOfRange(encrypted, i, Math.min(i + 700, encrypted.length))));
+                }
+                incremental.write(decryptor.finish());
+                assertArrayEquals(whole, incremental.toByteArray());
+            }
+            return whole;
+        }
+    }
+
+    /** {@link #openMedia} on the fixture's {@code media_<name>_*} entries, checked against the plaintext. */
+    private static void assertMediaOpens(JsonNode v, String eventField, Map<String, byte[]> keys, String name)
+            throws Exception {
+        assertArrayEquals(
+                b64(v, "media_" + name + "_plaintext_b64"),
+                openMedia(
+                        v.get(eventField).asText(),
+                        keys,
+                        v.get("media_" + name + "_hash_key").asText(),
+                        b64(v, "media_" + name + "_encrypted_b64")),
+                name);
     }
 
     /** Produce a fresh conversation key via a prepared key change (for crypto tests). */
@@ -938,9 +975,9 @@ class ChatTest {
         }
     }
 
-    // Message-key vectors: their contents are encrypted directly under the
-    // known message keys, so they open only if the SDK derives the same keys
-    // from the conversation key.
+    // Message-key vectors: their contents and media are encrypted directly
+    // under the known message and attachment keys, so they open only if the
+    // SDK derives the same keys from the conversation key.
     @Test
     void vectorsMessageKeyEventDecryptsWithTheConversationKey() throws Exception {
         JsonNode v = loadVectors();
@@ -952,7 +989,75 @@ class ChatTest {
             assertEquals("Message", event.path("type").asText());
             assertTrue(event.path("verified").asBoolean());
             assertEquals(v.get("event_message_key_text").asText(), event.path("content").path("text").asText());
-            assertEquals(2, event.path("media_hashes").size());
+            List<String> hashes = new ArrayList<>();
+            event.path("media_hashes").forEach(h -> hashes.add(h.path("media_hash_key").asText()));
+            assertEquals(
+                    List.of(v.get("media_first_hash_key").asText(), v.get("media_second_hash_key").asText()),
+                    hashes);
+        }
+    }
+
+    @Test
+    void vectorsSeveralMediaFilesOpenFromTheirMessage() throws Exception {
+        JsonNode v = loadVectors();
+        assertMediaOpens(v, "event_message_key_b64", messageKeyConversationKeys(v), "first");
+        assertMediaOpens(v, "event_message_key_b64", messageKeyConversationKeys(v), "second");
+    }
+
+    @Test
+    void vectorsOneMediaFileOpensFromItsMessage() throws Exception {
+        JsonNode v = loadVectors();
+        Map<String, byte[]> keys = Map.of(
+                v.get("message_key_short_conversation_key_version").asText(),
+                ChatXdkUtilities.hexToBytes(v.get("message_key_short_conversation_key_hex").asText()));
+        assertMediaOpens(v, "event_message_key_short_b64", keys, "short");
+    }
+
+    @Test
+    void vectorsLinkCardImagesOpenFromTheirMessage() throws Exception {
+        JsonNode v = loadVectors();
+        assertMediaOpens(v, "event_link_card_b64", messageKeyConversationKeys(v), "banner");
+        assertMediaOpens(v, "event_link_card_b64", messageKeyConversationKeys(v), "favicon");
+    }
+
+    @Test
+    void vectorsConversationKeyMediaOpensFromItsMessage() throws Exception {
+        JsonNode v = loadVectors();
+        assertMediaOpens(v, "event_conversation_key_media_b64", conversationKeys(v), "conversation_key");
+    }
+
+    @Test
+    void vectorsMediaErrorsSayWhatToPass() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            Map<String, byte[]> mkKeys = messageKeyConversationKeys(v);
+            byte[] first = b64(v, "media_first_encrypted_b64");
+            byte[] second = b64(v, "media_second_encrypted_b64");
+            String firstHash = v.get("media_first_hash_key").asText();
+            String mkEvent = v.get("event_message_key_b64").asText();
+            String mkVersion = v.get("message_key_conversation_key_version").asText();
+            Object[][] cases = {
+                {first, mkEvent, conversationKeys(v), firstHash, "no key for version '" + mkVersion + "'"},
+                {first, mkEvent, mkKeys, "not-a-hash-key", "is not in the message"},
+                {first, v.get("event_key_change_b64").asText(), mkKeys, firstHash, "the event is not a message"},
+                {first, v.get("event_message_b64").asText(), conversationKeys(v), firstHash, "the message has no media"},
+                {second, mkEvent, mkKeys, firstHash, "encrypted file of media_hash_key '" + firstHash + "'"},
+                {Arrays.copyOf(first, first.length / 2), mkEvent, mkKeys, firstHash, "truncated"},
+                {first, v.get("event_unencrypted_b64").asText(), mkKeys,
+                    v.get("media_unencrypted_hash_key").asText(), "the message is not encrypted"},
+                {first, mkEvent, Map.of(mkVersion, new byte[3]), firstHash, "is not 32 bytes"},
+            };
+            for (Object[] c : cases) {
+                @SuppressWarnings("unchecked")
+                Map<String, byte[]> keys = (Map<String, byte[]>) c[2];
+                ChatXdkException e = assertThrows(
+                        ChatXdkException.class,
+                        () -> chat.decryptStream((byte[]) c[0], (String) c[1], keys, (String) c[3]));
+                assertTrue(e.getMessage().contains((String) c[4]), e.getMessage() + " lacks " + c[4]);
+            }
+            ChatXdkException e = assertThrows(
+                    ChatXdkException.class, () -> chat.streamDecryptor(mkEvent, conversationKeys(v), firstHash));
+            assertTrue(e.getMessage().contains("no key for version"), e.getMessage());
         }
     }
 
@@ -977,6 +1082,7 @@ class ChatTest {
                 }
             }
             assertEquals(List.of(v.get("event_message_key_text").asText()), texts);
+            assertMediaOpens(v, "event_message_key_b64", result.conversationKeys.keys, "second");
         }
     }
 
@@ -996,7 +1102,7 @@ class ChatTest {
     }
 
     @Test
-    void vectorsReplyCarryingAMessageKeyValidates() throws Exception {
+    void vectorsReplyCarryingAMessageKeyValidatesAndOpensTheQuotedMedia() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
             byte[] key = b64(v, "conversation_key_b64");
@@ -1007,6 +1113,7 @@ class ChatTest {
             assertTrue(event.path("verified").asBoolean());
             assertEquals(v.get("event_reply_message_key_text").asText(), event.path("content").path("text").asText());
             assertEquals("Valid", event.path("reply_preview_validation").asText());
+            assertMediaOpens(v, "event_reply_message_key_b64", conversationKeys(v), "first");
         }
     }
 
@@ -1047,33 +1154,51 @@ class ChatTest {
         }
     }
 
+    // The fixture conversation-key message names one media file under the
+    // conversation key, so anything encrypted under that key decrypts through it.
+
     @Test
     void encryptDecryptStreamRoundTrip() throws Exception {
+        JsonNode v = loadVectors();
         try (Chat chat = createUnlocked()) {
-            byte[] ckey = newConvKey(chat);
+            byte[] ckey = b64(v, "conversation_key_b64");
             byte[] plaintext = new byte[1024];
             new java.util.Random(42).nextBytes(plaintext);
 
             byte[] encrypted = chat.encryptStream(plaintext, ckey);
             assertFalse(java.util.Arrays.equals(plaintext, encrypted));
-            assertArrayEquals(plaintext, chat.decryptStream(encrypted, ckey));
+            assertArrayEquals(
+                    plaintext,
+                    chat.decryptStream(
+                            encrypted,
+                            v.get("event_conversation_key_media_b64").asText(),
+                            conversationKeys(v),
+                            v.get("media_conversation_key_hash_key").asText()));
         }
     }
 
     @Test
     void decryptStreamWrongKeyThrows() throws Exception {
+        JsonNode v = loadVectors();
         try (Chat chat = createUnlocked()) {
-            byte[] ckey1 = newConvKey(chat);
-            byte[] ckey2 = newConvKey(chat);
-            byte[] encrypted = chat.encryptStream("secret content".getBytes(StandardCharsets.UTF_8), ckey1);
-            assertThrows(ChatXdkException.class, () -> chat.decryptStream(encrypted, ckey2));
+            byte[] otherKey = newConvKey(chat);
+            byte[] encrypted = chat.encryptStream("secret content".getBytes(StandardCharsets.UTF_8), otherKey);
+            String mediaHashKey = v.get("media_conversation_key_hash_key").asText();
+            ChatXdkException e = assertThrows(
+                    ChatXdkException.class,
+                    () -> chat.decryptStream(
+                            encrypted, v.get("event_conversation_key_media_b64").asText(), conversationKeys(v), mediaHashKey));
+            assertTrue(e.getMessage().contains("encrypted file of media_hash_key '" + mediaHashKey + "'"), e.getMessage());
         }
     }
 
     @Test
     void incrementalStreamRoundTripAndTruncationThrows() throws Exception {
+        JsonNode v = loadVectors();
+        String mediaEvent = v.get("event_conversation_key_media_b64").asText();
+        String mediaHashKey = v.get("media_conversation_key_hash_key").asText();
         try (Chat chat = createUnlocked()) {
-            byte[] ckey = newConvKey(chat);
+            byte[] ckey = b64(v, "conversation_key_b64");
             // A multi-frame payload so chunking and re-framing are exercised.
             byte[] plaintext = new byte[5000];
             java.util.Arrays.fill(plaintext, (byte) 0xAB);
@@ -1089,7 +1214,7 @@ class ChatTest {
             byte[] ct = ciphertext.toByteArray();
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            try (StreamDecryptor dec = chat.streamDecryptor(ckey)) {
+            try (StreamDecryptor dec = chat.streamDecryptor(mediaEvent, conversationKeys(v), mediaHashKey)) {
                 for (int i = 0; i < ct.length; i += 333) {
                     int end = Math.min(i + 333, ct.length);
                     out.write(dec.push(java.util.Arrays.copyOfRange(ct, i, end)));
@@ -1099,9 +1224,10 @@ class ChatTest {
             assertArrayEquals(plaintext, out.toByteArray());
 
             // A truncated stream is missing its final frame: finish() throws.
-            try (StreamDecryptor truncated = chat.streamDecryptor(ckey)) {
+            try (StreamDecryptor truncated = chat.streamDecryptor(mediaEvent, conversationKeys(v), mediaHashKey)) {
                 truncated.push(java.util.Arrays.copyOfRange(ct, 0, ct.length - 4));
-                assertThrows(ChatXdkException.class, truncated::finish);
+                ChatXdkException e = assertThrows(ChatXdkException.class, truncated::finish);
+                assertTrue(e.getMessage().contains("truncated"), e.getMessage());
             }
         }
     }

@@ -21,7 +21,9 @@ public class ChatCoreTests
         string SigningPublicB64,
         string EventMessageB64,
         string EventConversationId,
-        string EventConversationKeyVersion);
+        string EventConversationKeyVersion,
+        string EventConversationKeyMediaB64,
+        string MediaConversationKeyHashKey);
 
     private static Vectors LoadVectors()
     {
@@ -43,7 +45,9 @@ public class ChatCoreTests
             r.GetProperty("signing_public_b64").GetString()!,
             r.GetProperty("event_message_b64").GetString()!,
             r.GetProperty("event_conversation_id").GetString()!,
-            r.GetProperty("event_conversation_key_version").GetString()!);
+            r.GetProperty("event_conversation_key_version").GetString()!,
+            r.GetProperty("event_conversation_key_media_b64").GetString()!,
+            r.GetProperty("media_conversation_key_hash_key").GetString()!);
     }
 
     private static ChatCore LoadedCore(Vectors v)
@@ -195,18 +199,24 @@ public class ChatCoreTests
     public void Media_Stream_Encrypt_Decrypt_Roundtrip()
     {
         // The chunked stream path the media flow uses: multi-chunk payload in,
-        // identical bytes out, and truncation is detected.
+        // identical bytes out, and truncation is detected. The fixture
+        // conversation-key message names one media file under the conversation
+        // key, so the upload decrypts through that message.
         var v = LoadVectors();
         using var core = LoadedCore(v);
         var convKey = Convert.FromBase64String(v.ConversationKeyB64);
+        var convKeys = new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = convKey };
         var plaintext = new byte[300_000];
         for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
 
         var ciphertext = core.EncryptMedia(plaintext, convKey);
         Assert.False(ciphertext.AsSpan(0, plaintext.Length).SequenceEqual(plaintext));
-        Assert.Equal(plaintext, core.DecryptMedia(ciphertext, convKey));
+        Assert.Equal(
+            plaintext, core.DecryptMedia(ciphertext, v.EventConversationKeyMediaB64, convKeys, v.MediaConversationKeyHashKey));
 
-        Assert.ThrowsAny<Exception>(() => core.DecryptMedia(ciphertext[..^4], convKey));
+        var ex = Assert.Throws<ChatXdkException>(
+            () => core.DecryptMedia(ciphertext[..^4], v.EventConversationKeyMediaB64, convKeys, v.MediaConversationKeyHashKey));
+        Assert.Contains("truncated", ex.Message);
     }
 
     [Fact]

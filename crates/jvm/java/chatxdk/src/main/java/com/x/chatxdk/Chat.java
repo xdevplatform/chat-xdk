@@ -427,13 +427,7 @@ public final class Chat implements AutoCloseable {
             String eventB64, Map<String, byte[]> conversationKeys, List<SigningKeyEntry> signingKeys)
             throws Exception {
         throwIfDisposed();
-        Map<String, String> convKeysB64 = new LinkedHashMap<>();
-        if (conversationKeys != null) {
-            for (Map.Entry<String, byte[]> e : conversationKeys.entrySet()) {
-                convKeysB64.put(e.getKey(), Base64.getEncoder().encodeToString(e.getValue()));
-            }
-        }
-        String convKeysJson = ChatJson.MAPPER.writeValueAsString(convKeysB64);
+        String convKeysJson = conversationKeysJson(conversationKeys);
         List<SigningKeyEntry> sk = signingKeys == null ? List.of() : signingKeys;
         String signingKeysJson = ChatJson.MAPPER.writeValueAsString(sk);
         try (Memory ev = FfiStrings.utf8(eventB64);
@@ -683,19 +677,42 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    /** Serialise a version &#8594; key map as {@code {"version": "base64", ...}}. */
+    private static String conversationKeysJson(Map<String, byte[]> conversationKeys) {
+        ObjectNode json = ChatJson.MAPPER.createObjectNode();
+        if (conversationKeys != null) {
+            for (Map.Entry<String, byte[]> e : conversationKeys.entrySet()) {
+                json.put(e.getKey(), Base64.getEncoder().encodeToString(e.getValue()));
+            }
+        }
+        return json.toString();
+    }
+
     /**
-     * Decrypt a streaming-encrypted media payload (e.g. an image or video).
+     * Decrypt an encrypted media file (e.g. an image or video), as downloaded.
      *
      * @param encrypted Encrypted bytes.
-     * @param conversationKey Raw 32-byte conversation key.
+     * @param eventB64 Base64-encoded event of the message that carries the media, as passed to
+     *     {@link #decryptEvent}.
+     * @param conversationKeys Map of version &#8594; raw 32-byte key bytes from
+     *     {@link #extractConversationKeys} or {@link DecryptEventsResult#conversationKeys}. It
+     *     must hold the key for the message's version.
+     * @param mediaHashKey The media's hash key from the decrypted message: one of its media
+     *     attachments, a link card's banner or favicon, or media quoted in its reply preview.
      * @return Decrypted bytes.
+     * @throws ChatXdkException if the key version is missing, the event is not an encrypted
+     *     message with this media, or {@code encrypted} is not the media's complete encrypted
+     *     file. The message says what to pass instead.
      */
-    public byte[] decryptStream(byte[] encrypted, byte[] conversationKey) {
+    public byte[] decryptStream(
+            byte[] encrypted, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
         throwIfDisposed();
         try (Memory enc = FfiStrings.utf8(Base64.getEncoder().encodeToString(encrypted));
-                Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey))) {
-            String resultB64 =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_stream(handle, enc, key));
+                Memory ev = FfiStrings.utf8(eventB64);
+                Memory cj = FfiStrings.utf8(conversationKeysJson(conversationKeys));
+                Memory hash = FfiStrings.utf8(mediaHashKey)) {
+            String resultB64 = FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_decrypt_stream(handle, enc, ev, cj, hash));
             return Base64.getDecoder().decode(resultB64);
         } finally {
             Reference.reachabilityFence(this);
@@ -733,14 +750,21 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Create an incremental stream decryptor for large payloads.
+     * Create an incremental decryptor for an encrypted media file too large to hold in memory.
+     * Takes the arguments of {@link #decryptStream} apart from the bytes, which are fed to the
+     * decryptor.
      *
-     * @param conversationKey Raw 32-byte conversation key.
      * @return A new {@link StreamDecryptor}; close it when finished.
      */
-    public StreamDecryptor streamDecryptor(byte[] conversationKey) {
+    public StreamDecryptor streamDecryptor(
+            String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
         throwIfDisposed();
-        return StreamDecryptor.create(conversationKey);
+        try {
+            return StreamDecryptor.create(
+                    handle, eventB64, conversationKeysJson(conversationKeys), mediaHashKey);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
     }
 
     /**

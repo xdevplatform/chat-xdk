@@ -53,6 +53,28 @@ type sdkVectors struct {
 	EventKeyChangeMessageKeyB64           string `json:"event_key_change_message_key_b64"`
 	EventReplyMessageKeyB64               string `json:"event_reply_message_key_b64"`
 	EventReplyMessageKeyText              string `json:"event_reply_message_key_text"`
+	MediaFirstHashKey                     string `json:"media_first_hash_key"`
+	MediaFirstEncryptedB64                string `json:"media_first_encrypted_b64"`
+	MediaFirstPlaintextB64                string `json:"media_first_plaintext_b64"`
+	MediaSecondHashKey                    string `json:"media_second_hash_key"`
+	MediaSecondEncryptedB64               string `json:"media_second_encrypted_b64"`
+	MediaSecondPlaintextB64               string `json:"media_second_plaintext_b64"`
+	MediaShortHashKey                     string `json:"media_short_hash_key"`
+	MediaShortEncryptedB64                string `json:"media_short_encrypted_b64"`
+	MediaShortPlaintextB64                string `json:"media_short_plaintext_b64"`
+	EventLinkCardB64                      string `json:"event_link_card_b64"`
+	MediaBannerHashKey                    string `json:"media_banner_hash_key"`
+	MediaBannerEncryptedB64               string `json:"media_banner_encrypted_b64"`
+	MediaBannerPlaintextB64               string `json:"media_banner_plaintext_b64"`
+	MediaFaviconHashKey                   string `json:"media_favicon_hash_key"`
+	MediaFaviconEncryptedB64              string `json:"media_favicon_encrypted_b64"`
+	MediaFaviconPlaintextB64              string `json:"media_favicon_plaintext_b64"`
+	EventConversationKeyMediaB64          string `json:"event_conversation_key_media_b64"`
+	MediaConversationKeyHashKey           string `json:"media_conversation_key_hash_key"`
+	MediaConversationKeyEncryptedB64      string `json:"media_conversation_key_encrypted_b64"`
+	MediaConversationKeyPlaintextB64      string `json:"media_conversation_key_plaintext_b64"`
+	EventUnencryptedB64                   string `json:"event_unencrypted_b64"`
+	MediaUnencryptedHashKey               string `json:"media_unencrypted_hash_key"`
 	PayloadMessageV10Cev1                 string `json:"payload_message_v10_cev1"`
 	PayloadMessageV10                     string `json:"payload_message_v10"`
 	SignatureV10Cev1PublicKeyB64          string `json:"signature_v10_cev1_public_key_b64"`
@@ -140,11 +162,52 @@ func (v sdkVectors) conversationKey(t *testing.T) []byte {
 	return key
 }
 
-// messageKeyConversationKeys is the key map that opens the message-key
-// vectors.
+// conversationKeys is the key map of the fixture conversation key, which opens
+// the conversation-key media message and the reply vectors.
+func (v sdkVectors) conversationKeys(t *testing.T) map[string][]byte {
+	t.Helper()
+	return map[string][]byte{v.EventConversationKeyVersion: v.conversationKey(t)}
+}
+
+// messageKeyConversationKeys is the key map that opens the message-key and
+// link-card vectors.
 func (v sdkVectors) messageKeyConversationKeys(t *testing.T) map[string][]byte {
 	t.Helper()
 	return map[string][]byte{v.MessageKeyConversationKeyVersion: mustDecodeHex(t, v.MessageKeyConversationKeyHex)}
+}
+
+// openMedia decrypts media whole and in 700-byte chunks on a fresh instance,
+// failing the test unless both succeed and agree.
+func openMedia(t *testing.T, eventB64 string, keys map[string][]byte, mediaHashKey, encryptedB64 string) []byte {
+	t.Helper()
+	chat := New()
+	defer chat.Close()
+	encrypted := mustDecodeB64(t, encryptedB64)
+	whole, err := chat.DecryptStream(encrypted, eventB64, keys, mediaHashKey)
+	if err != nil {
+		t.Fatalf("DecryptStream(%s): %v", mediaHashKey, err)
+	}
+	dec, err := chat.StreamDecryptor(eventB64, keys, mediaHashKey)
+	if err != nil {
+		t.Fatalf("StreamDecryptor(%s): %v", mediaHashKey, err)
+	}
+	defer dec.Close()
+	var incremental []byte
+	for i := 0; i < len(encrypted); i += 700 {
+		out, err := dec.Push(encrypted[i:min(i+700, len(encrypted))])
+		if err != nil {
+			t.Fatalf("Push(%s): %v", mediaHashKey, err)
+		}
+		incremental = append(incremental, out...)
+	}
+	out, err := dec.Finish()
+	if err != nil {
+		t.Fatalf("Finish(%s): %v", mediaHashKey, err)
+	}
+	if !bytes.Equal(append(incremental, out...), whole) {
+		t.Fatalf("incremental and whole decryption of %s differ", mediaHashKey)
+	}
+	return whole
 }
 
 // privateKeys decodes the fixture's base64 private-key blob into the raw
@@ -730,8 +793,9 @@ func TestEncryptStreamDecryptStreamRoundtrip(t *testing.T) {
 		t.Fatal("expected non-empty encrypted stream")
 	}
 
-	// Decrypt back
-	decrypted, err := chat.DecryptStream(encrypted, v.conversationKey(t))
+	// Decrypt back through the conversation-key message whose media hash key
+	// names it; that message's media is under the conversation key.
+	decrypted, err := chat.DecryptStream(encrypted, v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
 	if err != nil {
 		t.Fatalf("DecryptStream failed: %v", err)
 	}
@@ -777,7 +841,7 @@ func TestStreamEncryptorDecryptorRoundtrip(t *testing.T) {
 	ciphertext = append(ciphertext, final...)
 	enc.Close()
 
-	dec, err := chat.StreamDecryptor(v.conversationKey(t))
+	dec, err := chat.StreamDecryptor(v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
 	if err != nil {
 		t.Fatalf("StreamDecryptor failed: %v", err)
 	}
@@ -807,7 +871,7 @@ func TestStreamEncryptorDecryptorRoundtrip(t *testing.T) {
 	}
 
 	// Truncating the ciphertext must surface an error at Finish.
-	dec2, err := chat.StreamDecryptor(v.conversationKey(t))
+	dec2, err := chat.StreamDecryptor(v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
 	if err != nil {
 		t.Fatalf("StreamDecryptor failed: %v", err)
 	}
@@ -2055,7 +2119,7 @@ func TestStreamEncryptDecryptLargerPayload(t *testing.T) {
 		t.Fatalf("EncryptStream (large) failed: %v", err)
 	}
 
-	decrypted, err := chat.DecryptStream(encrypted, v.conversationKey(t))
+	decrypted, err := chat.DecryptStream(encrypted, v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey)
 	if err != nil {
 		t.Fatalf("DecryptStream (large) failed: %v", err)
 	}
@@ -3137,9 +3201,9 @@ func TestEncryptMessageRejectsInvalidQuickReply(t *testing.T) {
 	}
 }
 
-// The message-key vectors' contents are encrypted directly under the known
-// message keys, so they open only if the SDK derives the same keys from the
-// conversation key.
+// The message-key vectors' contents and media are encrypted directly under the
+// known message and attachment keys, so they open only if the SDK derives the
+// same keys from the conversation key.
 func TestMessageKeyEventDecryptsWithTheConversationKey(t *testing.T) {
 	v := loadVectors(t)
 	chat := New()
@@ -3149,8 +3213,89 @@ func TestMessageKeyEventDecryptsWithTheConversationKey(t *testing.T) {
 	if !msg.Verified || msg.Text() != v.EventMessageKeyText {
 		t.Fatalf("unexpected message: verified=%v text=%q", msg.Verified, msg.Text())
 	}
-	if len(msg.MediaHashes) != 2 {
-		t.Fatalf("want 2 media hashes, got %d", len(msg.MediaHashes))
+	var hashes []string
+	for _, h := range msg.MediaHashes {
+		hashes = append(hashes, h.MediaHashKey)
+	}
+	if len(hashes) != 2 || hashes[0] != v.MediaFirstHashKey || hashes[1] != v.MediaSecondHashKey {
+		t.Fatalf("unexpected media hash keys: %q", hashes)
+	}
+}
+
+func TestSeveralMediaFilesOpenFromTheirMessage(t *testing.T) {
+	v := loadVectors(t)
+	keys := v.messageKeyConversationKeys(t)
+	for _, media := range []struct{ hash, encrypted, plaintext string }{
+		{v.MediaFirstHashKey, v.MediaFirstEncryptedB64, v.MediaFirstPlaintextB64},
+		{v.MediaSecondHashKey, v.MediaSecondEncryptedB64, v.MediaSecondPlaintextB64},
+	} {
+		if got := openMedia(t, v.EventMessageKeyB64, keys, media.hash, media.encrypted); !bytes.Equal(got, mustDecodeB64(t, media.plaintext)) {
+			t.Errorf("%s decrypted to the wrong bytes", media.hash)
+		}
+	}
+}
+
+func TestOneMediaFileOpensFromItsMessage(t *testing.T) {
+	v := loadVectors(t)
+	keys := map[string][]byte{v.MessageKeyShortConversationKeyVersion: mustDecodeHex(t, v.MessageKeyShortConversationKeyHex)}
+	got := openMedia(t, v.EventMessageKeyShortB64, keys, v.MediaShortHashKey, v.MediaShortEncryptedB64)
+	if !bytes.Equal(got, mustDecodeB64(t, v.MediaShortPlaintextB64)) {
+		t.Error("the file decrypted to the wrong bytes")
+	}
+}
+
+func TestLinkCardImagesOpenFromTheirMessage(t *testing.T) {
+	v := loadVectors(t)
+	keys := v.messageKeyConversationKeys(t)
+	for _, image := range []struct{ hash, encrypted, plaintext string }{
+		{v.MediaBannerHashKey, v.MediaBannerEncryptedB64, v.MediaBannerPlaintextB64},
+		{v.MediaFaviconHashKey, v.MediaFaviconEncryptedB64, v.MediaFaviconPlaintextB64},
+	} {
+		if got := openMedia(t, v.EventLinkCardB64, keys, image.hash, image.encrypted); !bytes.Equal(got, mustDecodeB64(t, image.plaintext)) {
+			t.Errorf("%s decrypted to the wrong bytes", image.hash)
+		}
+	}
+}
+
+func TestConversationKeyMediaOpensFromItsMessage(t *testing.T) {
+	v := loadVectors(t)
+	got := openMedia(t, v.EventConversationKeyMediaB64, v.conversationKeys(t), v.MediaConversationKeyHashKey, v.MediaConversationKeyEncryptedB64)
+	if !bytes.Equal(got, mustDecodeB64(t, v.MediaConversationKeyPlaintextB64)) {
+		t.Error("the file decrypted to the wrong bytes")
+	}
+}
+
+func TestMediaErrorsSayWhatToPass(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	mkKeys := v.messageKeyConversationKeys(t)
+	first := mustDecodeB64(t, v.MediaFirstEncryptedB64)
+	second := mustDecodeB64(t, v.MediaSecondEncryptedB64)
+	cases := []struct {
+		encrypted    []byte
+		event        string
+		keys         map[string][]byte
+		mediaHashKey string
+		want         string
+	}{
+		{first, v.EventMessageKeyB64, v.conversationKeys(t), v.MediaFirstHashKey, "no key for version '" + v.MessageKeyConversationKeyVersion + "'"},
+		{first, v.EventMessageKeyB64, mkKeys, "not-a-hash-key", "is not in the message"},
+		{first, v.EventKeyChangeB64, mkKeys, v.MediaFirstHashKey, "the event is not a message"},
+		{first, v.EventMessageB64, v.conversationKeys(t), v.MediaFirstHashKey, "the message has no media"},
+		{second, v.EventMessageKeyB64, mkKeys, v.MediaFirstHashKey, "encrypted file of media_hash_key '" + v.MediaFirstHashKey + "'"},
+		{first[:len(first)/2], v.EventMessageKeyB64, mkKeys, v.MediaFirstHashKey, "truncated"},
+		{first, v.EventUnencryptedB64, mkKeys, v.MediaUnencryptedHashKey, "the message is not encrypted"},
+		{first, v.EventMessageKeyB64, map[string][]byte{v.MessageKeyConversationKeyVersion: {1, 2, 3}}, v.MediaFirstHashKey, "is not 32 bytes"},
+	}
+	for _, c := range cases {
+		_, err := chat.DecryptStream(c.encrypted, c.event, c.keys, c.mediaHashKey)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("want an error containing %q, got %v", c.want, err)
+		}
+	}
+	if _, err := chat.StreamDecryptor(v.EventMessageKeyB64, v.conversationKeys(t), v.MediaFirstHashKey); err == nil || !strings.Contains(err.Error(), "no key for version") {
+		t.Errorf("want StreamDecryptor to name the missing key version, got %v", err)
 	}
 }
 
@@ -3184,6 +3329,10 @@ func TestMessageKeyEventDecryptsInABatchWithItsKeyChange(t *testing.T) {
 	if len(texts) != 1 || texts[0] != v.EventMessageKeyText {
 		t.Fatalf("unexpected messages: %q", texts)
 	}
+	got := openMedia(t, v.EventMessageKeyB64, result.ConversationKeys.Keys, v.MediaSecondHashKey, v.MediaSecondEncryptedB64)
+	if !bytes.Equal(got, mustDecodeB64(t, v.MediaSecondPlaintextB64)) {
+		t.Fatal("second media decrypted to the wrong bytes")
+	}
 }
 
 func TestShortSenderMessageKeyEventVerifiesAtV11(t *testing.T) {
@@ -3203,7 +3352,7 @@ func TestShortSenderMessageKeyEventVerifiesAtV11(t *testing.T) {
 	}
 }
 
-func TestReplyCarryingAMessageKeyValidates(t *testing.T) {
+func TestReplyCarryingAMessageKeyValidatesAndOpensTheQuotedMedia(t *testing.T) {
 	v := loadVectors(t)
 	chat := New()
 	defer chat.Close()
@@ -3216,6 +3365,10 @@ func TestReplyCarryingAMessageKeyValidates(t *testing.T) {
 	msg := mustMessage(t, event, err)
 	if msg.Text() != v.EventReplyMessageKeyText || msg.ReplyPreviewValidation != "Valid" {
 		t.Fatalf("unexpected reply: text=%q validation=%q", msg.Text(), msg.ReplyPreviewValidation)
+	}
+	got := openMedia(t, v.EventReplyMessageKeyB64, v.conversationKeys(t), v.MediaFirstHashKey, v.MediaFirstEncryptedB64)
+	if !bytes.Equal(got, mustDecodeB64(t, v.MediaFirstPlaintextB64)) {
+		t.Fatal("quoted media decrypted to the wrong bytes")
 	}
 }
 

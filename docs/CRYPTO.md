@@ -321,6 +321,48 @@ input is split. Because truncation is only proven absent once `finish`
 succeeds, plaintext returned by `push` must not be treated as complete until
 `finish` returns successfully.
 
+### Media Keys
+
+Each media file is stream-encrypted under one key, set by the message that
+carries it. A message without a [message key](#message-keys) encrypts its media
+under the conversation key. A message with one encrypts each attachment under
+its own key:
+
+```
+attachment_key = HKDF-SHA256(ikm  = message_key,
+                             salt = "xchat-attachment-key",
+                             info = attachment_id (UTF-8),
+                             length = 32)
+```
+
+`attachment_id` is the attachment's `attachment_id` when set (an empty string
+counts as set); otherwise it is the message id for the first attachment and
+`{message_id}#{index}` for later ones, by position in the message's attachment
+list, counting every attachment, including kinds the SDK does not surface. A
+URL card's banner and favicon images share the card's key.
+
+`decrypt_stream` and `stream_decryptor` take the event of the message that
+carries the media, the conversation key map, and the media hash key, and derive
+the key from those alone:
+
+1. Parse the event. It must be a `MessageCreateEvent` with a conversation key
+   version; one without is unencrypted, and so is its media.
+2. Take the key for that version from the map, derive the message key when the
+   message uses one, and decrypt the contents.
+3. Find the attachment whose media hash key matches: a media attachment, or a
+   URL card whose banner or favicon carries it. Its key follows from step 2 as
+   described above.
+4. Otherwise, when the message is a reply whose preview embeds the quoted
+   message from the same conversation, open the quoted message with the key for
+   its own version from the map — or, when the map lacks that version and the
+   quoted message uses a message key, with the key the reply carries for it —
+   and find the attachment there.
+5. Decrypt the bytes with that key alone.
+
+Nothing is kept between calls, so the result does not depend on what the
+instance decrypted before. Signatures are not checked here; the `verified` flag
+from `decrypt_event` covers the message.
+
 ---
 
 ## 7. Digital Signatures — ECDSA P-256
@@ -479,7 +521,8 @@ The `Chat::verify()` method automatically handles both 91-byte SPKI and 65-byte 
 ### HKDF-SHA256
 
 Used for deriving conversation keys from tree secrets, for
-[message keys](#message-keys), and for general key derivation.
+[message keys](#message-keys) and [attachment keys](#media-keys), and for
+general key derivation.
 
 ```
 HKDF-Extract (RFC 5869 §2.2):
@@ -494,8 +537,8 @@ HKDF-Expand:
 The extract step follows standard HKDF (RFC 5869).  The `hmac_sha256(message, key)` helper uses `(message, key)` argument order — so `hmac_sha256(secret, salt)` is `HMAC(key=salt, msg=IKM)`, which is the standard order.
 
 **Notes**:
-- Message keys pass an `info` string; every other derivation uses an empty
-  `info`, so its expand step is just `T(i-1) || counter`
+- Message and attachment keys pass an `info` string; every other derivation
+  uses an empty `info`, so its expand step is just `T(i-1) || counter`
 - Empty salt string is treated as 32 zero bytes
 
 ### X9.63 KDF (KDF2)

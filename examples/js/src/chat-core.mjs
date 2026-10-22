@@ -294,13 +294,16 @@ export class ChatCore {
   }
 
   /**
-   * Decrypt a media blob with the incremental stream API.
+   * Decrypt a downloaded media blob with the incremental stream API.
    *
+   * `eventB64` is the raw event of the message that carries the media and
+   * `conversationKeys` its conversation's key map, as passed to `decryptOne`;
+   * the SDK finds `mediaHashKey` in the event and derives that file's key.
    * `finish` throws if the stream was truncated, so plaintext from `push`
    * must not be treated as complete until it succeeds.
    */
-  decryptMedia(ciphertext, conversationKey) {
-    const dec = this.#chat.streamDecryptor(conversationKey);
+  decryptMedia(ciphertext, eventB64, conversationKeys, mediaHashKey) {
+    const dec = this.#chat.streamDecryptor(eventB64, conversationKeys, mediaHashKey);
     const parts = [];
     // As in encryptMedia: free() the decryptor if push throws mid-stream;
     // finish() consumes it even when it fails.

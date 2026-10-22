@@ -190,6 +190,27 @@ fn to_py_err(e: impl std::error::Error) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(msg)
 }
 
+/// The conversation keys of a media call. An entry that is not a 32-byte key
+/// is an error.
+fn media_conversation_keys(
+    keys: std::collections::HashMap<String, Vec<u8>>,
+) -> PyResult<std::collections::HashMap<String, chat_xdk_core::crypto::keys::XChatConversationKey>>
+{
+    keys.into_iter()
+        .map(|(version, bytes)| {
+            let key = chat_xdk_core::crypto::keys::XChatConversationKey::from_bytes(bytes)
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "the key for version '{}' in the conversation key map is not 32 bytes: \
+                         pass the raw 32-byte conversation keys",
+                        version
+                    ))
+                })?;
+            Ok((version, key))
+        })
+        .collect()
+}
+
 /// Parse a list of ``{user_id, public_key, key_version}`` dicts into core inputs.
 fn parse_public_key_inputs(
     public_keys: Vec<std::collections::HashMap<String, String>>,
@@ -1129,28 +1150,37 @@ impl Chat {
         Python::attach(|py| Ok(PyBytes::new(py, &output).into()))
     }
 
-    /// Decrypt a streaming-encrypted payload (e.g. media).
+    /// Decrypt an encrypted media file, as downloaded.
     ///
     /// Args:
-    ///     encrypted: Raw encrypted bytes.
-    ///     conversation_key: Raw 32-byte conversation key (``bytes``),
-    ///         from ``decrypt_conversation_key()``.
+    ///     encrypted: The encrypted bytes.
+    ///     event_b64: Base64-encoded event of the message that carries the media,
+    ///         as passed to ``decrypt_event``.
+    ///     conversation_keys: Dict mapping key version to raw 32-byte key (``bytes``),
+    ///         from ``extract_conversation_keys()["keys"]``. It must hold the key for
+    ///         the message's version.
+    ///     media_hash_key: The media's hash key from the decrypted message: one of its
+    ///         media attachments, a link card's banner or favicon, or media quoted in
+    ///         its reply preview.
     ///
     /// Returns:
     ///     Decrypted bytes.
-    fn decrypt_stream(&self, encrypted: &[u8], conversation_key: &[u8]) -> PyResult<Py<PyAny>> {
-        let ckey = chat_xdk_core::crypto::keys::XChatConversationKey::from_bytes(
-            conversation_key.to_vec(),
-        )
-        .ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid conversation key (expected 32 bytes)",
-            )
-        })?;
-
-        let mut reader = Cursor::new(encrypted);
-        let mut output: Vec<u8> = Vec::new();
-        chat_xdk_core::crypto::encryption::decrypt_stream(&ckey, &mut reader, &mut output)
+    ///
+    /// Raises:
+    ///     ValueError: The key version is missing, the event is not an encrypted
+    ///         message with this media, or ``encrypted`` is not the media's complete
+    ///         encrypted file. The message says what to pass instead.
+    fn decrypt_stream(
+        &self,
+        encrypted: &[u8],
+        event_b64: &str,
+        conversation_keys: std::collections::HashMap<String, Vec<u8>>,
+        media_hash_key: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let conv_keys = media_conversation_keys(conversation_keys)?;
+        let output = self
+            .inner
+            .decrypt_stream(encrypted, event_b64, &conv_keys, media_hash_key)
             .map_err(to_py_err)?;
 
         Python::attach(|py| Ok(PyBytes::new(py, &output).into()))
@@ -1170,17 +1200,20 @@ impl Chat {
         Ok(StreamEncryptor { inner: Some(inner) })
     }
 
-    /// Create an incremental stream decryptor for large payloads.
-    fn stream_decryptor(&self, conversation_key: &[u8]) -> PyResult<StreamDecryptor> {
-        let ckey = chat_xdk_core::crypto::keys::XChatConversationKey::from_bytes(
-            conversation_key.to_vec(),
-        )
-        .ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid conversation key (expected 32 bytes)",
-            )
-        })?;
-        let inner = self.inner.stream_decryptor(&ckey).map_err(to_py_err)?;
+    /// Create an incremental decryptor for an encrypted media file too large to
+    /// hold in memory. Takes the arguments of ``decrypt_stream`` apart from the
+    /// bytes, which are fed to the decryptor.
+    fn stream_decryptor(
+        &self,
+        event_b64: &str,
+        conversation_keys: std::collections::HashMap<String, Vec<u8>>,
+        media_hash_key: &str,
+    ) -> PyResult<StreamDecryptor> {
+        let conv_keys = media_conversation_keys(conversation_keys)?;
+        let inner = self
+            .inner
+            .stream_decryptor(event_b64, &conv_keys, media_hash_key)
+            .map_err(to_py_err)?;
         Ok(StreamDecryptor { inner: Some(inner) })
     }
 

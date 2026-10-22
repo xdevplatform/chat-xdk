@@ -338,7 +338,7 @@ func TestE2ELive(t *testing.T) {
 		if err := api.SendMessage(canonicalConv, mediaBody); err != nil {
 			t.Fatalf("SendMessage (media): %v", err)
 		}
-		mediaOne, _ := awaitDecrypted(t, api, core, conv, convKeys, mediaBody.MessageID)
+		mediaOne, mediaEventB64 := awaitDecrypted(t, api, core, conv, convKeys, mediaBody.MessageID)
 		if !mediaOne.Verified {
 			t.Fatal("media message failed signature verification")
 		}
@@ -350,7 +350,7 @@ func TestE2ELive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DownloadMedia: %v", err)
 		}
-		decryptedMedia, err := core.DecryptMedia(downloaded, key)
+		decryptedMedia, err := core.DecryptMedia(downloaded, mediaEventB64, convKeys, mediaHashKey)
 		if err != nil {
 			t.Fatalf("DecryptMedia: %v", err)
 		}
