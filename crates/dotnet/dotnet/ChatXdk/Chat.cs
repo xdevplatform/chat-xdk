@@ -35,9 +35,9 @@ namespace ChatXdk
     /// <code>
     /// using var chat = new Chat();
     /// chat.Unlock("2580", juiceboxConfigJson);
-    /// chat.SetIdentity(myUserId, mySigningKeyVersion); // session identity, once
-    /// chat.SetCacheKeys(true);                         // opt-in conversation-key cache
-    /// chat.SetSigningKeys(participantSigningKeys);     // default verification keys
+    /// chat.SetIdentity(new SetIdentityParams(myUserId, mySigningKeyVersion)); // session identity, once
+    /// chat.SetCacheKeys(true);                                               // opt-in conversation-key cache
+    /// chat.SetSigningKeys(participantSigningKeys);                           // default verification keys
     ///
     /// // Decrypt incoming events (keys are cached from verified KeyChange events)
     /// var result = chat.DecryptEvents(new DecryptEventsParams(eventsB64));

@@ -1,0 +1,416 @@
+# Migrating JVM code to chat-xdk 0.6.0
+
+This page lists every change that Java and other JVM code written for
+`com.x:chatxdk` 0.5.x (0.5.0, 0.5.1 or 0.5.2) runs into in 0.6.0, each with
+the lines to change. The other bindings have their own pages, listed in the
+[index](README.md). [API.md](../API.md) documents every call, and the
+[CHANGELOG](../../CHANGELOG.md) lists every change.
+
+## Checklist
+
+- [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
+- [ ] [Allow or block the feature-switch request, and close chats you're done with](#the-feature-switch-request)
+- [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
+- [ ] [Pass a `SetIdentityParams` to `setIdentity`](#setidentity-takes-setidentityparams)
+- [ ] [Pass an `ImportKeysParams` to `importKeys`](#importkeys-takes-importkeysparams)
+- [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
+- [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
+- [ ] [Pass a `DecryptEventsParams` to `decryptEvents`](#decryptevents-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventParams` to `decryptEvent`](#decryptevent-takes-decrypteventparams)
+- [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Don't send `xdkVersion` yet](#xdkversion-dont-send-it-yet)
+- [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
+- [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
+- [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
+- [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
+- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Know which calls throw `ChatXdkException`](#exceptions)
+- [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
+- [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
+
+## About the snippets
+
+Each snippet shows the lines that change, first as 0.5.x code writes them
+and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
+loaded, and the other names stand for your own values: ids, versions, keys
+and events as the X API returns them, `keys` for the conversation key map
+`decryptEvents` returns, `bundle` for a `ConversationKeyBundle`, `payload`
+for a `SendPayload` and `prepared` for a `PreparedConversationChange`.
+`startUpload`, `upload`, `finishUpload`, `photoAttachment` and
+`registerPublicKey` stand for your own upload and request code. The types
+import from `com.x.chatxdk` and `com.x.chatxdk.Types`.
+
+## Upgrade readers before v1 sends start
+
+0.6.0 sends each message, reply, reaction and edit in one of two formats.
+v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
+derived from the conversation key, the sender and the message id, and signs
+it at signature version 10. A chat sends v1 only once the X API turns on its
+`v1_send` feature switch (see
+[The feature-switch request](#the-feature-switch-request)); until then every
+send is v0.
+
+0.5.x rejects every v1 send as a signature verification failure, so upgrade
+every app that reads your conversations to 0.6.0 before your senders can
+send v1. 0.6.0 reads both formats, including v1 reply previews, edits and
+files. There's no code to change: to see which format a send used, read
+`payload.signatureInfo.signatureVersion`, `"7"` for v0 and `"10"` for v1.
+
+## The feature-switch request
+
+Each `Chat` reads the X API's feature switches with one anonymous request,
+`GET https://api.x.com/2/chat/features`, which runs in the background:
+
+- when the chat is created, again once its keys load (with a `bucket` query
+  parameter, 0–9999, derived from the identity public key), and every
+  5 minutes after that;
+- chats in one process that ask for the same bucket at the same time share
+  one request;
+- it carries no credentials, and never delays or fails a call;
+- if it fails or is blocked, every switch stays off and sends stay v0; a
+  failed request is retried with a backoff that grows to 5 minutes;
+- the 5-minute re-checks can only turn a switch off: a chat picks up a switch
+  turning on only when it is created again.
+
+**Pending:** the X API doesn't serve this route yet. Until it does, the
+request fails and every send is v0.
+
+Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
+switch, or block it to keep them v0. Close each chat when you're done with
+it to stop its requests; a chat that is garbage-collected stops them too:
+
+```java
+// 0.6.0
+try (Chat chat = new Chat()) {
+    chat.importKeys(new ImportKeysParams(privateKeys, signingKeyVersion));
+}
+```
+
+## Register keys with the public key only
+
+`generateKeypairs` returns a `PublicKeyRegistrationPayload` that holds only
+`publicKey`. Send it as the only field of the
+`POST /2/users/:id/public_keys` body, `public_key`. 0.6.0 doesn't pick a
+signing-key version for new keys: after you register, call `setIdentity`
+with the `public_key_version` the X API returns (see the next section). A
+signed call made without a version throws `Invalid state:
+signing_key_version is not set: pass it explicitly or call set_identity()
+first`.
+
+```java
+// 0.5.x
+PublicKeyRegistrationPayload registration = chat.generateKeypairs();
+Map<String, Object> body = Map.of(
+        "public_key", registration.publicKey,
+        "version", registration.version,
+        "generate_version", registration.generateVersion);
+String publicKeyVersion = registerPublicKey(userId, body);
+chat.setIdentity(userId, publicKeyVersion);
+
+// 0.6.0
+PublicKeyRegistrationPayload registration = chat.generateKeypairs();
+Map<String, Object> body = Map.of("public_key", registration.publicKey);
+String publicKeyVersion = registerPublicKey(userId, body);
+chat.setIdentity(new SetIdentityParams(userId, publicKeyVersion));
+```
+
+## `setIdentity` takes `SetIdentityParams`
+
+Pass the user id and the signing-key version in a `SetIdentityParams`. It
+throws `ChatXdkException` when either value is invalid (see
+[user ids](#user-ids-are-strings-of-digits) and
+[key versions](#key-versions-are-integers-written-as-strings)).
+
+```java
+// 0.5.x
+chat.setIdentity(userId, signingKeyVersion);
+
+// 0.6.0
+chat.setIdentity(new SetIdentityParams(userId, signingKeyVersion));
+```
+
+## `importKeys` takes `ImportKeysParams`
+
+Pass the saved key bytes in an `ImportKeysParams`, and optionally the
+signing-key version they were registered under. Without a version, call
+`setIdentity` before the first signed call.
+
+```java
+// 0.5.x
+chat.importKeys(privateKeys);
+chat.importKeys(privateKeys, signingKeyVersion);
+
+// 0.6.0
+chat.importKeys(new ImportKeysParams(privateKeys));
+chat.importKeys(new ImportKeysParams(privateKeys, signingKeyVersion));
+```
+
+## User ids are strings of digits
+
+Every user id is a string of digits: the `SetIdentityParams` user id,
+`senderId`, `replyToSenderId`, the `userId` of each `PublicKeyInput` and
+`SigningKeyEntry`, and group member, admin and pending-member ids. Each must
+be a positive integer written without a sign or leading zeros; anything else
+throws `ChatXdkException` naming the field, such as
+`Invalid sender_id 'user-1': pass a numeric user id (digits only)`.
+`EncryptReplyParams.replyToSenderId` is a `String`:
+
+```java
+// 0.5.x
+EncryptReplyParams reply = new EncryptReplyParams(conversationId, "pong", eventB64);
+reply.replyToSenderId = 4201L;
+
+// 0.6.0
+EncryptReplyParams reply = new EncryptReplyParams(conversationId, "pong", eventB64);
+reply.replyToSenderId = "4201";
+```
+
+## Key versions are integers written as strings
+
+Every key version is a non-negative integer written as a string of digits,
+as the X API returns it: the signing-key version (in `SetIdentityParams`,
+`ImportKeysParams`, a call's `signingKeyVersion` and each public key's
+`keyVersion`) and `conversationKeyVersion`. Anything else throws
+`ChatXdkException` naming the field, such as `Invalid signing_key_version
+'v1': pass the key version as the X API returns it, an integer in digits`.
+There's no code to change if you pass the versions the X API returns.
+
+## `decryptEvents` takes `DecryptEventsParams`
+
+Pass the events in a `DecryptEventsParams`, and the signing keys in its
+`signingKeys` field. Left `null`, the keys `setSigningKeys` stored verify
+the events. The result is unchanged, and per-event errors are still
+collected in it.
+
+```java
+// 0.5.x
+DecryptEventsResult result = chat.decryptEvents(events, signingKeys);
+
+// 0.6.0
+DecryptEventsParams batch = new DecryptEventsParams(events);
+batch.signingKeys = signingKeys;
+DecryptEventsResult result = chat.decryptEvents(batch);
+```
+
+## `decryptEvent` takes `DecryptEventParams`
+
+Pass the event and the conversation key map in a `DecryptEventParams`, and
+the signing keys in its `signingKeys` field. `new DecryptEventParams(eventB64)`
+resolves the key from the key cache (`setCacheKeys(true)`), and `null`
+signing keys verify with the keys `setSigningKeys` stored. For a
+`ConversationKeyBundle`, pass its `keys`.
+
+```java
+// 0.5.x
+JsonNode event = chat.decryptEvent(eventB64, keys, signingKeys);
+JsonNode fromBundle = chat.decryptEvent(eventB64, bundle, signingKeys);
+
+// 0.6.0
+DecryptEventParams one = new DecryptEventParams(eventB64, keys);
+one.signingKeys = signingKeys;
+JsonNode event = chat.decryptEvent(one);
+DecryptEventParams fromBundleParams = new DecryptEventParams(eventB64, bundle.keys);
+fromBundleParams.signingKeys = signingKeys;
+JsonNode fromBundle = chat.decryptEvent(fromBundleParams);
+```
+
+## `SendPayload` fields take the send request's names
+
+The two encoded fields carry the names of the send request's fields,
+camelCased, so the request takes them as they are:
+
+```java
+// 0.5.x
+Map<String, String> body = Map.of(
+        "message_id", payload.messageId,
+        "encoded_message_create_event", payload.encryptedContent,
+        "encoded_message_event_signature", payload.encodedEventSignature);
+
+// 0.6.0
+Map<String, String> body = Map.of(
+        "message_id", payload.messageId,
+        "encoded_message_create_event", payload.encodedMessageCreateEvent,
+        "encoded_message_event_signature", payload.encodedMessageEventSignature);
+```
+
+A `SendPayload` that 0.5.x code serialized with Jackson still deserializes
+into the new fields, without `eventB64` or `xdkVersion`. A payload also
+carries `eventB64`, the message as recipients receive it. It isn't part of
+the send request: keep it to encrypt the message's files (see
+[Encrypt a file from its message](#encrypt-a-file-from-its-message)).
+
+## `xdkVersion`: don't send it yet
+
+`payload.xdkVersion` is the version of the SDK that built the payload.
+Don't add it to the send request yet: the request takes it as an optional
+`xdk_version` field only once the X API documents that field.
+
+## Encrypt a file from its message
+
+Each file is encrypted from the message that carries it, so build the
+message first:
+
+1. Start each file's upload, declaring `ChatXdkUtilities.encryptedFileSize`
+   of the file's size, and keep its media hash key.
+2. Encrypt the message with attachments that name those media hash keys.
+3. Encrypt each file with `encryptFile`, passing the payload's `eventB64`
+   and the file's media hash key.
+4. Finish the uploads, then send the message.
+
+```java
+// 0.5.x
+byte[] encrypted = chat.encryptStream(photo, conversationKey);
+String mediaHashKey = upload(encrypted);
+EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo");
+params.attachments = List.of(photoAttachment(mediaHashKey));
+SendPayload payload = chat.encryptMessage(params);
+
+// 0.6.0
+String mediaHashKey = startUpload(ChatXdkUtilities.encryptedFileSize(photo.length));
+EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo");
+params.attachments = List.of(photoAttachment(mediaHashKey));
+SendPayload payload = chat.encryptMessage(params);
+byte[] encrypted = chat.encryptFile(new EncryptFileParams(photo, payload.eventB64, mediaHashKey));
+finishUpload(mediaHashKey, encrypted);
+```
+
+Like `EncryptMessageParams`, `EncryptFileParams` takes `conversationKey`
+and `conversationKeyVersion` (set both, or neither to resolve them from the
+key cache), and they must be the ones the message was encrypted under. The
+file call needs no session identity: it reads the sender, the message id
+and the key version from `eventB64`.
+
+Upload each file for one message only. In v1 the id of a message with files
+is derived from its conversation key and version, its sender, its
+conversation and its files' media hash keys, but not its text: encrypting
+the same message again gives the same id, so files you already encrypted
+for it stay valid, and a second message that reuses the first one's uploads
+gets the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected.
+
+## Decrypt a file with its message's event
+
+Pass the downloaded bytes, the base64 event of the message that carries the
+file and the conversation key map (the values `decryptEvent` takes), and
+the file's media hash key from the decrypted message: one of its media
+attachments, a link card's banner or favicon (both listed in
+`media_hashes`), or media quoted in its reply preview. The SDK finds the
+file in the event and derives its key. It doesn't check the message's
+signature: use `verified` from `decryptEvent` for that.
+
+```java
+// 0.5.x
+byte[] plaintext = chat.decryptStream(downloaded, keys.get(conversationKeyVersion));
+
+// 0.6.0
+byte[] plaintext = chat.decryptFile(new DecryptFileParams(downloaded, fileEventB64, keys, fileHashKey));
+```
+
+## Encrypt and decrypt large files in chunks
+
+`fileEncryptor` and `fileDecryptor` take the same values as `encryptFile`
+and `decryptFile`, without the file bytes, and return a `FileEncryptor` or
+a `FileDecryptor`; `push`, `finish` and `close` are unchanged. Size an
+upload with `ChatXdkUtilities.encryptedFileSize`.
+
+```java
+// 0.5.x
+long size = ChatXdkUtilities.encryptedStreamSize(photo.length);
+StreamEncryptor encryptor = chat.streamEncryptor(conversationKey);
+StreamDecryptor decryptor = chat.streamDecryptor(keys.get(conversationKeyVersion));
+
+// 0.6.0
+long size = ChatXdkUtilities.encryptedFileSize(photo.length);
+FileEncryptor encryptor = chat.fileEncryptor(new FileEncryptorParams(payload.eventB64, mediaHashKey));
+FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
+```
+
+## Action signatures come nested
+
+The prepare methods return each `ActionSignature` in the shape a request's
+`action_signatures` takes: `messageId`, `encodedMessageEventDetail`, the
+signature in `messageEventSignature` (a `MessageEventSignature` with
+`signingPublicKey`, your signing public key as `getPublicKeys` returns it)
+and, except for conversation-key changes, `signaturePayload`, which is
+`null` and left out of the JSON when absent. Serialize them as returned:
+
+```java
+// 0.5.x
+List<Map<String, Object>> actionSignatures = new ArrayList<>();
+for (ActionSignature sig : prepared.actionSignatures) {
+    actionSignatures.add(Map.of(
+            "message_id", sig.messageId,
+            "encoded_message_event_detail", sig.encodedMessageEventDetail,
+            "message_event_signature", Map.of(
+                    "signature", sig.signature,
+                    "signature_version", sig.signatureVersion,
+                    "public_key_version", sig.publicKeyVersion,
+                    "signing_public_key", signingPublicKey)));
+}
+
+// 0.6.0
+List<ActionSignature> actionSignatures = prepared.actionSignatures;
+```
+
+A prepared change's `participantKeys` keep their shape (`userId`,
+`encryptedKey`, `publicKeyVersion`): map them to the key-change request's
+`conversation_participant_keys` as you do today.
+
+## Deletes return a `PreparedAction`
+
+`prepareMessageDelete` returns a `PreparedAction` whose `actionSignatures`
+hold one entry, shaped as the previous section shows. Read the action's
+`messageId` from that entry, and send `actionSignatures` as returned:
+
+```java
+// 0.5.x
+ActionSignature deletion = chat.prepareMessageDelete(
+        new MessageDeleteParams(conversationId, sequenceIds, false));
+String messageId = deletion.messageId;
+
+// 0.6.0
+PreparedAction deletion = chat.prepareMessageDelete(
+        new MessageDeleteParams(conversationId, sequenceIds, false));
+String messageId = deletion.actionSignatures.get(0).messageId;
+```
+
+## Invalid input errors
+
+A missing or invalid parameter throws `ChatXdkException` with a message that
+names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
+(digits only)` or `too many attachments: at most 10 per message`, without an
+`Invalid state:` prefix. If your code looks for that prefix on these errors,
+match the message instead. Errors about state the chat lacks, such as a
+missing session identity or an empty key cache, keep their prefix.
+
+## Exceptions
+
+There's no code to change. `ChatXdkException` is unchecked. `setIdentity`
+and `importKeys` throw it on invalid input, and the file methods
+(`encryptFile`, `decryptFile`, `fileEncryptor`, `fileDecryptor`) declare no
+checked exceptions and throw it too. The methods that declare
+`throws Exception` keep that clause.
+
+## `ChatNative`
+
+`ChatNative`, the JNA interface to the native library, follows the C ABI:
+if your code calls it directly, apply the changes in [C ABI](c-abi.md).
+
+## Signed read receipts (new, pending)
+
+`prepareMarkConversationRead` signs a read receipt for the newest event you
+read. It takes a `MarkConversationReadParams` (the conversation id, that
+event's sequence id, and an optional `seenAtMsec` that defaults to now) and
+returns a `PreparedAction`. A recipient's `decryptEvent` returns a signed
+receipt as a verified `ReadReceipt` event.
+
+**Pending:** the X API's mark-read route doesn't take `action_signatures`
+yet, so the shape of that request may change when it does.
+
+```java
+// 0.6.0
+PreparedAction receipt = chat.prepareMarkConversationRead(
+        new MarkConversationReadParams(conversationId, seenUntilSequenceId));
+List<ActionSignature> actionSignatures = receipt.actionSignatures;
+```

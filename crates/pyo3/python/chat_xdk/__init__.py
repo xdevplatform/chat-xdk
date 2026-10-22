@@ -2,12 +2,12 @@
 chat-xdk - Python bindings for the X Chat encryption SDK.
 
 Quick Start:
-    from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams
+    from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams, SetIdentityParams
 
     chat = Chat(config_json)  # optional; None or an empty JSON object ("{}")
                               # selects manual key management
     chat.unlock("2580")
-    chat.set_identity(my_user_id, signing_key_version)
+    chat.set_identity(SetIdentityParams(my_user_id, signing_key_version))
 
     # Decrypt webhook events (returns a dict)
     event = chat.decrypt_event(
