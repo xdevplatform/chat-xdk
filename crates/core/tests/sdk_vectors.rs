@@ -225,6 +225,23 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
         key_changes[0].conversation_key_version,
         v.event_conversation_key_version
     );
+    let key_change_json = serde_json::to_value(key_changes[0]).unwrap();
+    let participant_keys = key_change_json["conversation_participant_keys"]
+        .as_array()
+        .expect("conversation_participant_keys");
+    assert!(!participant_keys.is_empty());
+    for key in participant_keys {
+        let mut names: Vec<&String> = key.as_object().unwrap().keys().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "encrypted_conversation_key",
+                "public_key_version",
+                "user_id"
+            ]
+        );
+    }
 
     // Exactly one verified message with the fixture text.
     let messages: Vec<_> = result

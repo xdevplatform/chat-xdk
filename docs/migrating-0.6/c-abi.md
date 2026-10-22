@@ -262,10 +262,11 @@ conversation-key changes.
 
 `chat_xdk_prepare_conversation_key_change`, `chat_xdk_prepare_group_create`
 and `chat_xdk_prepare_group_members_change` name the participant keys as the
-requests the change goes into do (`POST /2/chat/conversations/{id}/keys`,
-`/group` and `/{id}/members`): `conversation_participant_keys`, each entry
-with `user_id`, `encrypted_conversation_key` and `public_key_version`, the
-names a decrypted key change uses too
+X API does in every request that takes them
+(`POST /2/chat/conversations/{id}/keys`, `/group` and `/{id}/members`, and
+`PUT /2/chat/conversations/{id}`): `conversation_participant_keys`, each
+entry with `user_id`, `encrypted_conversation_key` and `public_key_version`,
+the names a decrypted key change uses too
 (see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Send them as
 returned, without renaming:
 
