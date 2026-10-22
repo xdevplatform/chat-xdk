@@ -27,7 +27,7 @@ import java.util.Objects;
  *   <li>Signed conversation-key changes ({@link #prepareConversationKeyChange}, {@link #prepareGroupCreate}, {@link #prepareGroupMembersChange})</li>
  *   <li>UTF-8 metadata encryption with the conversation key ({@link #encrypt}, {@link #decrypt})</li>
  *   <li>Message / reaction / reply encryption ({@link #encryptMessage}, etc.)</li>
- *   <li>Media streaming encryption ({@link #encryptStream}, {@link #decryptStream})</li>
+ *   <li>File encryption ({@link #encryptFile}, {@link #decryptFile}, {@link #fileEncryptor}, {@link #fileDecryptor})</li>
  *   <li>Stateless helpers on {@link ChatXdkUtilities} (base64/hex, MIME, image dimensions)</li>
  * </ul>
  *
@@ -43,7 +43,7 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Shared cleaner providing a GC backstop for native handles across the
-     * binding ({@link Chat}, {@link StreamEncryptor}, {@link StreamDecryptor}).
+     * binding ({@link Chat}, {@link FileEncryptor}, {@link FileDecryptor}).
      * Explicit {@code close()} remains the primary release mechanism; the
      * cleaner only frees handles whose owner was garbage-collected unclosed.
      */
@@ -392,7 +392,7 @@ public final class Chat implements AutoCloseable {
      * @param events Base64-encoded raw event strings received from the webhook.
      *     Pass only {@code KeyChange} events — other event types are ignored.
      * @return Decrypted keys and {@link ConversationKeyBundle#latestVersion}. Pass
-     *     {@link ConversationKeyBundle#keys} (or the whole bundle) to {@link #decryptEvent}.
+     *     {@link ConversationKeyBundle#keys} to {@link #decryptEvent}.
      */
     public ConversationKeyBundle extractConversationKeys(List<String> events) throws Exception {
         throwIfDisposed();
@@ -409,32 +409,24 @@ public final class Chat implements AutoCloseable {
     /**
      * Decrypt a webhook event and return it as a {@link JsonNode}.
      *
-     * @param eventB64 Base64-encoded raw event from the webhook.
-     * @param conversationKeys Map of version &#8594; raw 32-byte key bytes from
-     *     {@link #extractConversationKeys} or {@link DecryptEventsResult#conversationKeys}.
-     *     Pass {@code null} (or an empty map) for non-message events, or to fall back to
-     *     the opt-in key cache ({@link #setCacheKeys}).
-     * @param signingKeys Signing keys for the sender. The SDK picks the matching version
-     *     automatically. {@code null} (or an empty list) falls back to the keys stored via
-     *     {@link #setSigningKeys}; if none are stored either, every signed event throws
-     *     under the default reject-unverified policy (only after
-     *     {@link #setRejectUnverified}(false) are such events returned with
-     *     {@code verified: false}).
+     * <p>Under the default reject-unverified policy, a signed event with no usable signing key
+     * (passed or stored via {@link #setSigningKeys}) throws; only after
+     * {@link #setRejectUnverified}(false) are such events returned with {@code verified: false}.
+     *
      * @return A {@link JsonNode} with a {@code "type"} field indicating the event kind
      *     ({@code "Message"}, {@code "KeyChange"}, {@code "GroupChange"}, etc.).
      */
-    public JsonNode decryptEvent(
-            String eventB64, Map<String, byte[]> conversationKeys, List<SigningKeyEntry> signingKeys)
-            throws Exception {
+    public JsonNode decryptEvent(DecryptEventParams parameters) throws Exception {
         throwIfDisposed();
-        String convKeysJson = conversationKeysJson(conversationKeys);
-        List<SigningKeyEntry> sk = signingKeys == null ? List.of() : signingKeys;
-        String signingKeysJson = ChatJson.MAPPER.writeValueAsString(sk);
-        try (Memory ev = FfiStrings.utf8(eventB64);
-                Memory cj = FfiStrings.utf8(convKeysJson);
-                Memory sj = FfiStrings.utf8(signingKeysJson)) {
-            String resultJson =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_event(handle, ev, cj, sj));
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("event_b64", parameters.eventB64);
+        n.set("conversation_keys", conversationKeysJson(parameters.conversationKeys));
+        if (parameters.signingKeys != null) {
+            n.set("signing_keys", ChatJson.MAPPER.valueToTree(parameters.signingKeys));
+        }
+        try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(n))) {
+            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_event(handle, j));
             return ChatJson.MAPPER.readTree(resultJson);
         } finally {
             Reference.reachabilityFence(this);
@@ -442,32 +434,19 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Decrypt a single event using keys from {@link #extractConversationKeys} or
-     * {@link DecryptEventsResult#conversationKeys} (uses {@link ConversationKeyBundle#keys}).
-     */
-    public JsonNode decryptEvent(
-            String eventB64, ConversationKeyBundle conversationKeys, List<SigningKeyEntry> signingKeys)
-            throws Exception {
-        Map<String, byte[]> m = conversationKeys == null ? null : conversationKeys.keys;
-        return decryptEvent(eventB64, m, signingKeys);
-    }
-
-    /**
      * Decrypt a batch of webhook events in one call. Keys are extracted from {@code KeyChange} events in the batch;
      * failures are recorded in {@link DecryptEventsResult#errors} — this method never throws per-event.
-     * Passing {@code null} (or an empty list) for {@code signingKeys} falls back to the keys
-     * stored via {@link #setSigningKeys}.
      */
-    public DecryptEventsResult decryptEvents(List<String> events, List<SigningKeyEntry> signingKeys)
-            throws Exception {
+    public DecryptEventsResult decryptEvents(DecryptEventsParams parameters) throws Exception {
         throwIfDisposed();
-        String eventsJson = ChatJson.MAPPER.writeValueAsString(events);
-        List<SigningKeyEntry> sk = signingKeys == null ? List.of() : signingKeys;
-        String signingKeysJson = ChatJson.MAPPER.writeValueAsString(sk);
-        try (Memory ev = FfiStrings.utf8(eventsJson);
-                Memory sig = FfiStrings.utf8(signingKeysJson)) {
-            String resultJson =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events(handle, ev, sig));
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.set("events", ChatJson.MAPPER.valueToTree(parameters.events == null ? List.of() : parameters.events));
+        if (parameters.signingKeys != null) {
+            n.set("signing_keys", ChatJson.MAPPER.valueToTree(parameters.signingKeys));
+        }
+        try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(n))) {
+            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events(handle, j));
             JsonNode root = ChatJson.MAPPER.readTree(resultJson);
             DecryptEventsResult out = new DecryptEventsResult();
             List<DecryptedMessage> messages = new ArrayList<>();
@@ -610,7 +589,10 @@ public final class Chat implements AutoCloseable {
     /**
      * Encrypt a message for the X API.
      * POST the returned {@link SendPayload} fields to
-     * {@code POST /2/chat/conversations/{id}/messages}.
+     * {@code POST /2/chat/conversations/{id}/messages}. A message with files takes an id derived
+     * from its files, so building it again gives the same id; encrypt each file afterwards with
+     * {@link #encryptFile} or {@link #fileEncryptor} and the payload's
+     * {@link SendPayload#eventB64}.
      */
     public SendPayload encryptMessage(EncryptMessageParams parameters) throws Exception {
         throwIfDisposed();
@@ -619,7 +601,8 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Encrypt a reply message for the X API.
-     * Like {@link #encryptMessage} but includes a reply-to preview.
+     * Like {@link #encryptMessage} but includes a reply-to preview; the reply's id and files work
+     * the same way.
      */
     public SendPayload encryptReply(EncryptReplyParams parameters) throws Exception {
         throwIfDisposed();
@@ -677,91 +660,105 @@ public final class Chat implements AutoCloseable {
         }
     }
 
-    /** Serialise a version &#8594; key map as {@code {"version": "base64", ...}}. */
-    private static String conversationKeysJson(Map<String, byte[]> conversationKeys) {
+    /** Encode a version &#8594; key map as {@code {"version": "base64", ...}}. */
+    private static ObjectNode conversationKeysJson(Map<String, byte[]> conversationKeys) {
         ObjectNode json = ChatJson.MAPPER.createObjectNode();
         if (conversationKeys != null) {
             for (Map.Entry<String, byte[]> e : conversationKeys.entrySet()) {
                 json.put(e.getKey(), Base64.getEncoder().encodeToString(e.getValue()));
             }
         }
-        return json.toString();
+        return json;
+    }
+
+    private static String fileParamsJson(
+            String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("event_b64", eventB64);
+        n.set("conversation_keys", conversationKeysJson(conversationKeys));
+        n.put("media_hash_key", mediaHashKey);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private byte[] callFile(ObjectNode params, ParamsJsonFn fn) throws Exception {
+        try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(params))) {
+            return Base64.getDecoder().decode(FfiStrings.consume(fn.apply(handle, j)));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
     }
 
     /**
-     * Decrypt an encrypted media file (e.g. an image or video), as downloaded.
+     * Encrypt a file of an outgoing message, after the message is built. The SDK finds the
+     * attachment that names {@link EncryptFileParams#mediaHashKey} in the message
+     * {@link EncryptFileParams#eventB64} carries, and encrypts the file under that attachment's
+     * key. Upload the result under the same media hash key; its size is
+     * {@link ChatXdkUtilities#encryptedFileSize}.
      *
-     * @param encrypted Encrypted bytes.
-     * @param eventB64 Base64-encoded event of the message that carries the media, as passed to
-     *     {@link #decryptEvent}.
-     * @param conversationKeys Map of version &#8594; raw 32-byte key bytes from
-     *     {@link #extractConversationKeys} or {@link DecryptEventsResult#conversationKeys}. It
-     *     must hold the key for the message's version.
-     * @param mediaHashKey The media's hash key from the decrypted message: one of its media
-     *     attachments, a link card's banner or favicon, or media quoted in its reply preview.
+     * @return Encrypted bytes.
+     * @throws ChatXdkException if the event is not a message with this file, or the key map
+     *     lacks its key. The message says what to pass instead.
+     */
+    public byte[] encryptFile(EncryptFileParams parameters) throws Exception {
+        throwIfDisposed();
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("file", Base64.getEncoder().encodeToString(parameters.file == null ? new byte[0] : parameters.file));
+        n.put("event_b64", parameters.eventB64);
+        n.set("conversation_keys", conversationKeysJson(parameters.conversationKeys));
+        n.put("media_hash_key", parameters.mediaHashKey);
+        return callFile(n, ChatNative.INSTANCE::chat_xdk_encrypt_file);
+    }
+
+    /**
+     * Decrypt an encrypted file (e.g. an image or video), as downloaded.
+     *
      * @return Decrypted bytes.
      * @throws ChatXdkException if the key version is missing, the event is not an encrypted
-     *     message with this media, or {@code encrypted} is not the media's complete encrypted
-     *     file. The message says what to pass instead.
+     *     message with this file, or {@link DecryptFileParams#encrypted} is not the file's
+     *     complete encrypted bytes. The message says what to pass instead.
      */
-    public byte[] decryptStream(
-            byte[] encrypted, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+    public byte[] decryptFile(DecryptFileParams parameters) throws Exception {
         throwIfDisposed();
-        try (Memory enc = FfiStrings.utf8(Base64.getEncoder().encodeToString(encrypted));
-                Memory ev = FfiStrings.utf8(eventB64);
-                Memory cj = FfiStrings.utf8(conversationKeysJson(conversationKeys));
-                Memory hash = FfiStrings.utf8(mediaHashKey)) {
-            String resultB64 = FfiStrings.consume(
-                    ChatNative.INSTANCE.chat_xdk_decrypt_stream(handle, enc, ev, cj, hash));
-            return Base64.getDecoder().decode(resultB64);
-        } finally {
-            Reference.reachabilityFence(this);
-        }
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("encrypted", Base64.getEncoder().encodeToString(
+                parameters.encrypted == null ? new byte[0] : parameters.encrypted));
+        n.put("event_b64", parameters.eventB64);
+        n.set("conversation_keys", conversationKeysJson(parameters.conversationKeys));
+        n.put("media_hash_key", parameters.mediaHashKey);
+        return callFile(n, ChatNative.INSTANCE::chat_xdk_decrypt_file);
     }
 
     /**
-     * Encrypt a media payload (e.g. an image or video) with a conversation key.
+     * Create an incremental encryptor for a file too large to hold in memory. Takes the params of
+     * {@link #encryptFile} apart from the file, which is fed to the encryptor.
      *
-     * @param plaintext Raw bytes to encrypt.
-     * @param conversationKey Raw 32-byte conversation key.
-     * @return Encrypted bytes.
+     * @return A new {@link FileEncryptor}; close it when finished.
      */
-    public byte[] encryptStream(byte[] plaintext, byte[] conversationKey) {
+    public FileEncryptor fileEncryptor(FileEncryptorParams parameters) throws Exception {
         throwIfDisposed();
-        try (Memory pt = FfiStrings.utf8(Base64.getEncoder().encodeToString(plaintext));
-                Memory key = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey))) {
-            String resultB64 =
-                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_encrypt_stream(handle, pt, key));
-            return Base64.getDecoder().decode(resultB64);
-        } finally {
-            Reference.reachabilityFence(this);
-        }
-    }
-
-    /**
-     * Create an incremental stream encryptor for large payloads.
-     *
-     * @param conversationKey Raw 32-byte conversation key.
-     * @return A new {@link StreamEncryptor}; close it when finished.
-     */
-    public StreamEncryptor streamEncryptor(byte[] conversationKey) {
-        throwIfDisposed();
-        return StreamEncryptor.create(conversationKey);
-    }
-
-    /**
-     * Create an incremental decryptor for an encrypted media file too large to hold in memory.
-     * Takes the arguments of {@link #decryptStream} apart from the bytes, which are fed to the
-     * decryptor.
-     *
-     * @return A new {@link StreamDecryptor}; close it when finished.
-     */
-    public StreamDecryptor streamDecryptor(
-            String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
-        throwIfDisposed();
+        Objects.requireNonNull(parameters, "parameters");
         try {
-            return StreamDecryptor.create(
-                    handle, eventB64, conversationKeysJson(conversationKeys), mediaHashKey);
+            return FileEncryptor.create(
+                    handle, fileParamsJson(parameters.eventB64, parameters.conversationKeys, parameters.mediaHashKey));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Create an incremental decryptor for an encrypted file too large to hold in memory. Takes the
+     * params of {@link #decryptFile} apart from the encrypted bytes, which are fed to the decryptor.
+     *
+     * @return A new {@link FileDecryptor}; close it when finished.
+     */
+    public FileDecryptor fileDecryptor(FileDecryptorParams parameters) throws Exception {
+        throwIfDisposed();
+        Objects.requireNonNull(parameters, "parameters");
+        try {
+            return FileDecryptor.create(
+                    handle, fileParamsJson(parameters.eventB64, parameters.conversationKeys, parameters.mediaHashKey));
         } finally {
             Reference.reachabilityFence(this);
         }

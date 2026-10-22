@@ -12,9 +12,10 @@ type ImageDimensions struct {
 	Height uint32 `json:"height"`
 }
 
-// EncryptedStreamSize returns the exact ciphertext size produced by stream encryption.
-func EncryptedStreamSize(plaintextSize uint64) (uint64, error) {
-	value, err := ffiEncryptedStreamSize(plaintextSize)
+// EncryptedFileSize returns the exact size of a file once encrypted: the
+// size its upload declares before the file is encrypted.
+func EncryptedFileSize(plaintextSize uint64) (uint64, error) {
+	value, err := ffiEncryptedFileSize(plaintextSize)
 	if err != nil {
 		return 0, err
 	}

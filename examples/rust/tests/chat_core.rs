@@ -4,11 +4,12 @@
 //! bot uses — no mocking. They prove an actual encrypt -> decrypt round-trip and
 //! that the binding reproduces the committed key vectors.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
-use chat_xdk_core::{EntityDescriptor, PublicKeyInput};
+use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput};
 use chatbot_rs::chat_core::{prep_to_request, ChatCore, ReplyOptions};
 use serde_json::Value;
 
@@ -256,44 +257,93 @@ fn threaded_reply_with_entities_and_ttl() {
 }
 
 #[test]
-fn media_stream_encrypt_decrypt_roundtrip() {
-    // The chunked stream path the media flow uses: multi-chunk payload in,
-    // identical bytes out, and truncation is detected. The fixture
-    // conversation-key message names one media file under the conversation
-    // key, so the upload decrypts through that message.
+fn media_encrypt_decrypt_roundtrip() {
+    // The message-first media flow: the message names the file by the media
+    // hash key its upload started with, the file is encrypted from the
+    // message's event_b64 in chunks, and it decrypts through that event. A
+    // truncated file is detected.
     let v = load_vectors();
     let core = loaded_core(&v);
     let key = conversation_key(&v);
-    let keys = [(
-        v["event_conversation_key_version"]
-            .as_str()
-            .unwrap()
-            .to_string(),
-        key.clone(),
-    )]
-    .into_iter()
-    .collect();
-    let event = v["event_conversation_key_media_b64"].as_str().unwrap();
-    let media_hash_key = v["media_conversation_key_hash_key"].as_str().unwrap();
+    let keys = HashMap::from([("1".to_string(), key.clone())]);
     let plaintext: Vec<u8> = (0..300_000u32)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
+    let body = core
+        .encrypt_reply(
+            "1000:2000",
+            "a photo",
+            &key,
+            "1",
+            ReplyOptions {
+                attachments: Some(vec![AttachmentDescriptor::Media {
+                    media_hash_key: "photo".to_string(),
+                    width: 4,
+                    height: 3,
+                    filesize_bytes: plaintext.len() as i64,
+                    filename: "photo.bin".to_string(),
+                    media_type: Some(5),
+                    duration_millis: None,
+                }]),
+                ..Default::default()
+            },
+        )
+        .expect("encrypt_reply (media)");
+    assert!(!body.event_b64.is_empty());
 
-    let ciphertext = core.encrypt_media(&plaintext, &key).expect("encrypt_media");
-    assert_ne!(&ciphertext[..plaintext.len()], plaintext.as_slice());
+    let ciphertext = core
+        .encrypt_media(&plaintext, &body.event_b64, &keys, "photo")
+        .expect("encrypt_media");
     assert_eq!(
-        core.decrypt_media(&ciphertext, event, &keys, media_hash_key)
+        Some(ciphertext.len() as u64),
+        chat_xdk_core::utils::encrypted_file_size(plaintext.len() as u64)
+    );
+    assert_eq!(
+        core.decrypt_media(&ciphertext, &body.event_b64, &keys, "photo")
             .expect("decrypt_media"),
         plaintext
     );
-
     let err = core
         .decrypt_media(
             &ciphertext[..ciphertext.len() - 4],
-            event,
+            &body.event_b64,
             &keys,
-            media_hash_key,
+            "photo",
         )
         .unwrap_err();
     assert!(err.to_string().contains("truncated"), "{err}");
+}
+
+#[test]
+fn media_from_the_fixture_message_opens() {
+    // Media encrypted by another client opens through its message's event.
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let key = XChatConversationKey::from_bytes(
+        chat_xdk_core::utils::hex_to_bytes(v["message_key_conversation_key_hex"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let keys = HashMap::from([(
+        v["message_key_conversation_key_version"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+        key,
+    )]);
+    let b64 = |field: String| B64.decode(v[field.as_str()].as_str().unwrap()).unwrap();
+    for name in ["first", "second"] {
+        assert_eq!(
+            core.decrypt_media(
+                &b64(format!("media_{name}_encrypted_b64")),
+                v["event_message_key_b64"].as_str().unwrap(),
+                &keys,
+                v[format!("media_{name}_hash_key").as_str()]
+                    .as_str()
+                    .unwrap(),
+            )
+            .expect("decrypt_media"),
+            b64(format!("media_{name}_plaintext_b64")),
+        );
+    }
 }

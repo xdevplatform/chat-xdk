@@ -23,9 +23,10 @@ namespace ChatBot.Tests;
 ///      fetch it back, decrypt it via the single-event path, and verify it
 ///   4. react to the sent message (add + remove), decrypting the add back
 ///
-/// Optional extras: CHATXDK_E2E_MEDIA=1 also stream-encrypts a media blob,
-/// uploads it, sends a message referencing it, then downloads and
-/// stream-decrypts it back to the original bytes; CHATXDK_E2E_GROUPS=1 also
+/// Optional extras: CHATXDK_E2E_MEDIA=1 also starts a media upload, sends a
+/// message naming it, encrypts the file from that message, finishes the
+/// upload, then downloads and decrypts it back to the original bytes;
+/// CHATXDK_E2E_GROUPS=1 also
 /// creates a group (two-signature create), sends a group message, and adds
 /// the 1:1 partner as a member.
 /// </summary>
@@ -289,16 +290,15 @@ public class E2ELiveTests
         await api.SendMessageAsync(canonicalConv, remove);
         Console.WriteLine("reaction remove sent");
 
-        // -- 5. Optional: media — stream-encrypt, upload, send, download, decrypt
+        // -- 5. Optional: media — start upload, build message, encrypt, finish, send
         if (Env("CHATXDK_E2E_MEDIA") == "1")
         {
             // A deterministic multi-chunk payload, so the incremental encryptor
             // emits several frames and any corruption is byte-attributable.
             var plaintext = new byte[300_000];
             for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
-            var ciphertext = core.EncryptMedia(plaintext, key);
-            var mediaHashKey = await api.UploadMediaAsync(canonicalConv, ciphertext);
-            Console.WriteLine($"encrypted media uploaded: {mediaHashKey} ({ciphertext.Length} bytes)");
+            var (sessionId, mediaHashKey) = await api.StartMediaUploadAsync(
+                canonicalConv, ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length));
 
             var mediaMsg = core.EncryptReply(
                 canonicalConv,
@@ -310,6 +310,10 @@ public class E2ELiveTests
                     AttachmentDescriptor.Media(mediaHashKey, 0, 0, plaintext.Length, "e2e.bin", 5),
                 },
                 ttlMsec: 24L * 60 * 60 * 1000);
+            var ciphertext = core.EncryptMedia(
+                plaintext, mediaMsg.EventB64, new Dictionary<string, byte[]> { [kv] = key }, mediaHashKey);
+            await api.FinishMediaUploadAsync(canonicalConv, sessionId, mediaHashKey, ciphertext);
+            Console.WriteLine($"encrypted media uploaded: {mediaHashKey} ({ciphertext.Length} bytes)");
             await api.SendMessageAsync(canonicalConv, mediaMsg);
             var (mediaOne, mediaRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, mediaMsg.MessageId);
             Assert.True(mediaOne.TryGetProperty("verified", out var v5) && v5.GetBoolean(),
@@ -331,7 +335,7 @@ public class E2ELiveTests
             Assert.True(
                 core.DecryptMedia(downloaded, mediaRawB64, convKeys, mediaHashKey).AsSpan().SequenceEqual(plaintext),
                 "downloaded media did not decrypt to the original bytes");
-            Console.WriteLine("media downloaded + stream-decrypted to the original bytes");
+            Console.WriteLine("media downloaded + decrypted to the original bytes");
         }
 
         // -- 6. Optional: group create + message + member add --------------------

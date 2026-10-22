@@ -79,12 +79,21 @@ namespace ChatXdk
     public sealed class SendPayload
     {
         /// <summary>
-        /// SDK-generated message id (UUID) embedded in the signed event. Send it as
-        /// the message's <c>message_id</c>, keep it to dedup and to anchor replies,
-        /// and reuse the same encrypted payload on retries so an id is never minted twice.
+        /// Message id (UUID) the SDK generated and embedded in the signed event. Send it
+        /// as the message's <c>message_id</c>, keep it to dedup and to anchor replies, and
+        /// reuse the same encrypted payload on retries so an id is never minted twice.
         /// </summary>
         [JsonPropertyName("message_id")]
         public string MessageId { get; init; } = "";
+
+        /// <summary>
+        /// The outgoing message as a base64 event: what recipients receive, without the
+        /// fields the server assigns. Pass it to <see cref="Chat.EncryptFile"/> or
+        /// <see cref="Chat.FileEncryptor"/> to encrypt the message's files, or to
+        /// <see cref="Chat.DecryptEvent"/> to read the message back.
+        /// </summary>
+        [JsonPropertyName("event_b64")]
+        public string EventB64 { get; init; } = "";
 
         /// <summary>Base64-encoded ciphertext of the encrypted message event.</summary>
         [JsonPropertyName("encrypted_content")]
@@ -400,8 +409,10 @@ namespace ChatXdk
         /// <summary>
         /// Create a URL card attachment. Supplying <paramref name="displayTitle"/> and
         /// <paramref name="bannerImage"/> makes receiving clients render a full clickable
-        /// preview card: encrypt the image with <see cref="Chat.EncryptStream"/>, upload it
-        /// to the conversation's media store, and reference the returned media hash key.
+        /// preview card: start the image's upload to the conversation's media store,
+        /// reference the media hash key it returns, then encrypt the image with
+        /// <see cref="Chat.EncryptFile"/> and the message's <see cref="SendPayload.EventB64"/>
+        /// and finish the upload.
         /// </summary>
         public static AttachmentDescriptor UrlCard(
             string url,
@@ -437,11 +448,13 @@ namespace ChatXdk
     /// </summary>
     public sealed class UrlAttachmentImageDescriptor
     {
-        /// <summary>Media hash key returned by the media upload for the encrypted image.</summary>
+        /// <summary>Media hash key the image's upload started with.</summary>
         [JsonPropertyName("media_hash_key")]
         public string MediaHashKey { get; init; } = "";
 
-        /// <summary>Size of the encrypted image in bytes. Required.</summary>
+        /// <summary>
+        /// Size of the encrypted image in bytes: <c>EncryptedFileSize</c> of the image's size. Required.
+        /// </summary>
         [JsonPropertyName("filesize_bytes")]
         public long FilesizeBytes { get; init; }
 
@@ -578,7 +591,11 @@ namespace ChatXdk
         public string? ConversationKeyVersion { get; init; }
         /// <summary>Optional rich-text entities (URLs, mentions, hashtags) in the text.</summary>
         public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
-        /// <summary>Optional media, URL, or post attachments.</summary>
+        /// <summary>
+        /// Optional attachments: posts, links, and files (media, and link-card images). Each
+        /// file names the media hash key its upload started with; encrypt the files afterwards
+        /// with <see cref="Chat.EncryptFile"/> or <see cref="Chat.FileEncryptor"/>.
+        /// </summary>
         public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
         /// <summary>Optional quick reply: a request offering options, or a response selecting one.</summary>
         public QuickReply? QuickReply { get; init; }
@@ -648,7 +665,7 @@ namespace ChatXdk
         public string? ReplyToText { get; init; }
         /// <summary>Optional rich-text entities in the reply text.</summary>
         public IReadOnlyList<EntityDescriptor>? Entities { get; init; }
-        /// <summary>Optional attachments on the reply.</summary>
+        /// <summary>Optional attachments on the reply, as in <see cref="EncryptMessageParams.Attachments"/>.</summary>
         public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
         /// <summary>Rich-text entities of the quoted message (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public IReadOnlyList<EntityDescriptor>? ReplyToEntities { get; init; }
@@ -859,6 +876,199 @@ namespace ChatXdk
         public string? AvatarUrl { get; init; }
         /// <summary>Disappearing-message TTL in milliseconds, if set.</summary>
         public long? TtlMsec { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.DecryptEvent"/>.</summary>
+    public sealed class DecryptEventParams
+    {
+        /// <summary>Create params with the required fields; <see cref="SigningKeys"/> defaults to null.</summary>
+        /// <param name="eventB64">The base64 event, as delivered.</param>
+        /// <param name="conversationKeys">
+        /// Version → raw 32-byte conversation key, from <see cref="Chat.DecryptEvents"/> or
+        /// <see cref="Chat.ExtractConversationKeys"/>. Events without message contents need no
+        /// keys; an empty map also falls back to the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </param>
+        public DecryptEventParams(string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys)
+        {
+            EventB64 = eventB64;
+            ConversationKeys = conversationKeys;
+        }
+
+        /// <summary>The base64 event, as delivered.</summary>
+        public string EventB64 { get; }
+        /// <summary>Version → raw 32-byte conversation key.</summary>
+        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>
+        /// Signing keys to verify the event with; null or empty uses the keys stored via
+        /// <see cref="Chat.SetSigningKeys"/>. The SDK picks the sender's key for the version the
+        /// event carries.
+        /// </summary>
+        public IReadOnlyList<SigningKeyEntry>? SigningKeys { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.DecryptEvents"/>.</summary>
+    public sealed class DecryptEventsParams
+    {
+        /// <summary>Create params with the required fields; <see cref="SigningKeys"/> defaults to null.</summary>
+        /// <param name="events">
+        /// The base64 events, as delivered. Their key changes supply the conversation keys the
+        /// messages among them are decrypted with.
+        /// </param>
+        public DecryptEventsParams(IReadOnlyList<string> events)
+        {
+            Events = events;
+        }
+
+        /// <summary>The base64 events, as delivered.</summary>
+        public IReadOnlyList<string> Events { get; }
+        /// <summary>
+        /// Signing keys of all participants; null or empty uses the keys stored via
+        /// <see cref="Chat.SetSigningKeys"/>.
+        /// </summary>
+        public IReadOnlyList<SigningKeyEntry>? SigningKeys { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.EncryptFile"/>.</summary>
+    public sealed class EncryptFileParams
+    {
+        /// <summary>Create params with the required fields.</summary>
+        /// <param name="file">The file to encrypt.</param>
+        /// <param name="eventB64">
+        /// The <see cref="SendPayload.EventB64"/> of the payload that <see cref="Chat.EncryptMessage"/>
+        /// or <see cref="Chat.EncryptReply"/> returned for the message carrying the file.
+        /// </param>
+        /// <param name="conversationKeys">
+        /// Version → raw 32-byte conversation key; it must hold the key the message was encrypted under.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The media hash key the file's upload started with, as listed in the message's attachments.
+        /// </param>
+        public EncryptFileParams(
+            byte[] file,
+            string eventB64,
+            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            string mediaHashKey)
+        {
+            File = file;
+            EventB64 = eventB64;
+            ConversationKeys = conversationKeys;
+            MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>The file to encrypt.</summary>
+        public byte[] File { get; }
+        /// <summary>The <see cref="SendPayload.EventB64"/> of the message carrying the file.</summary>
+        public string EventB64 { get; }
+        /// <summary>Version → raw 32-byte conversation key.</summary>
+        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>The media hash key the file's upload started with.</summary>
+        public string MediaHashKey { get; }
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.FileEncryptor"/>: those of <see cref="EncryptFileParams"/>
+    /// apart from the file, which is fed to the encryptor.
+    /// </summary>
+    public sealed class FileEncryptorParams
+    {
+        /// <summary>Create params with the required fields.</summary>
+        /// <param name="eventB64">The <see cref="SendPayload.EventB64"/> of the message carrying the file.</param>
+        /// <param name="conversationKeys">
+        /// Version → raw 32-byte conversation key; it must hold the key the message was encrypted under.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The media hash key the file's upload started with, as listed in the message's attachments.
+        /// </param>
+        public FileEncryptorParams(
+            string eventB64,
+            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            string mediaHashKey)
+        {
+            EventB64 = eventB64;
+            ConversationKeys = conversationKeys;
+            MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>The <see cref="SendPayload.EventB64"/> of the message carrying the file.</summary>
+        public string EventB64 { get; }
+        /// <summary>Version → raw 32-byte conversation key.</summary>
+        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>The media hash key the file's upload started with.</summary>
+        public string MediaHashKey { get; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.DecryptFile"/>.</summary>
+    public sealed class DecryptFileParams
+    {
+        /// <summary>Create params with the required fields.</summary>
+        /// <param name="encrypted">The encrypted file, as downloaded.</param>
+        /// <param name="eventB64">
+        /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
+        /// </param>
+        /// <param name="conversationKeys">
+        /// The conversation's key map, as passed to <see cref="Chat.DecryptEvent"/>; it must hold the key
+        /// for the message's version.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The file's media hash key from the decrypted message: a media attachment, a link card's
+        /// banner or favicon, or media quoted in its reply preview.
+        /// </param>
+        public DecryptFileParams(
+            byte[] encrypted,
+            string eventB64,
+            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            string mediaHashKey)
+        {
+            Encrypted = encrypted;
+            EventB64 = eventB64;
+            ConversationKeys = conversationKeys;
+            MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>The encrypted file, as downloaded.</summary>
+        public byte[] Encrypted { get; }
+        /// <summary>The base64 event of the message that carries the file.</summary>
+        public string EventB64 { get; }
+        /// <summary>Version → raw 32-byte conversation key.</summary>
+        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>The file's media hash key from the decrypted message.</summary>
+        public string MediaHashKey { get; }
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.FileDecryptor"/>: those of <see cref="DecryptFileParams"/>
+    /// apart from the encrypted file, which is fed to the decryptor.
+    /// </summary>
+    public sealed class FileDecryptorParams
+    {
+        /// <summary>Create params with the required fields.</summary>
+        /// <param name="eventB64">
+        /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
+        /// </param>
+        /// <param name="conversationKeys">
+        /// The conversation's key map, as passed to <see cref="Chat.DecryptEvent"/>; it must hold the key
+        /// for the message's version.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The file's media hash key from the decrypted message: a media attachment, a link card's
+        /// banner or favicon, or media quoted in its reply preview.
+        /// </param>
+        public FileDecryptorParams(
+            string eventB64,
+            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            string mediaHashKey)
+        {
+            EventB64 = eventB64;
+            ConversationKeys = conversationKeys;
+            MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>The base64 event of the message that carries the file.</summary>
+        public string EventB64 { get; }
+        /// <summary>Version → raw 32-byte conversation key.</summary>
+        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>The file's media hash key from the decrypted message.</summary>
+        public string MediaHashKey { get; }
     }
 
     /// <summary>

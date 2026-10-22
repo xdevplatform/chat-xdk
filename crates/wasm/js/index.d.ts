@@ -44,11 +44,19 @@ export interface PublicKeyRegistrationPayload {
  */
 export interface SendPayload {
   /**
-   * SDK-generated message id (UUID) embedded in the signed event. Send it as
-   * the message's `messageId`, keep it to dedup and to anchor replies, and
-   * reuse the same encrypted payload on retries so an id is never minted twice.
+   * Message id (UUID) the SDK generated and embedded in the signed event.
+   * Send it as the message's `messageId`, keep it to dedup and to anchor
+   * replies, and reuse the same encrypted payload on retries so an id is
+   * never minted twice.
    */
   messageId: string;
+  /**
+   * The outgoing message as a base64 event: what recipients receive, without
+   * the fields the server assigns. Pass it to `encryptFile` or
+   * `fileEncryptor` to encrypt the message's files, or to `decryptEvent` to
+   * read the message back.
+   */
+  eventB64: string;
   /** Base64-encoded Thrift MessageCreateEvent. */
   encryptedContent: string;
   /** Base64-encoded ECDSA signature. */
@@ -260,7 +268,11 @@ export interface EncryptMessageParams {
   conversationKeyVersion?: string | null;
   /** Optional rich-text entities (URLs, mentions, etc.) to embed. */
   entities?: EntityTuple[] | null;
-  /** Optional attachments (posts, URLs, media, etc.) to include in the message. */
+  /**
+   * Optional attachments: posts, links, and files (media, and link-card
+   * images). Each file names the media hash key its upload started with;
+   * encrypt the files afterwards with `encryptFile` or `fileEncryptor`.
+   */
   attachments?: AttachmentDescriptor[] | null;
   /** Optional quick reply: a request offering options, or a response selecting one. */
   quickReply?: QuickReply | null;
@@ -322,7 +334,7 @@ export interface EncryptReplyParams {
   replyToText?: string | null;
   /** Optional rich-text entities (URLs, mentions, etc.) to embed in the outgoing message. */
   entities?: EntityTuple[] | null;
-  /** Optional attachments (posts, URLs, media, etc.) to include in the outgoing message. */
+  /** Optional attachments for the reply, as in `EncryptMessageParams.attachments`. */
   attachments?: AttachmentDescriptor[] | null;
   /** Rich-text entities from the original message (for the reply preview); derived from replyToEvent when omitted. */
   replyToEntities?: EntityTuple[] | null;
@@ -498,6 +510,98 @@ export interface GroupCreateParams {
   ttlMsec?: number | null;
 }
 
+/**
+ * Parameters for decryptEvent.
+ */
+export interface DecryptEventParams {
+  /** The base64 event, as delivered. */
+  eventB64: string;
+  /**
+   * The conversation's key map, from decryptEvents or
+   * extractConversationKeys (its `keys`). Events without message contents
+   * need no keys, so pass `{}` for them; an empty map also falls back to the
+   * opt-in key cache (setCacheKeys).
+   */
+  conversationKeys: ConversationKeyMap;
+  /** Signing keys to verify the event with; the keys stored via setSigningKeys are used when omitted or empty. */
+  signingKeys?: SigningKeyEntry[] | null;
+}
+
+/**
+ * Parameters for decryptEvents.
+ */
+export interface DecryptEventsParams {
+  /**
+   * The base64 events, as delivered. Their key changes supply the
+   * conversation keys the messages among them are decrypted with.
+   */
+  events: string[];
+  /** Signing keys for all participants; the keys stored via setSigningKeys are used when omitted or empty. */
+  signingKeys?: SigningKeyEntry[] | null;
+}
+
+/**
+ * Parameters for encryptFile.
+ */
+export interface EncryptFileParams {
+  /** The file to encrypt. */
+  file: Uint8Array;
+  /** The `eventB64` of the payload that encryptMessage or encryptReply returned for the message carrying the file. */
+  eventB64: string;
+  /** The conversation's key map; it must hold the key the message was encrypted under. */
+  conversationKeys: ConversationKeyMap;
+  /** The media hash key the file's upload started with, as listed in the message's attachments. */
+  mediaHashKey: string;
+}
+
+/**
+ * Parameters for fileEncryptor: those of encryptFile apart from the file,
+ * which is fed to the encryptor.
+ */
+export interface FileEncryptorParams {
+  /** The `eventB64` of the payload that encryptMessage or encryptReply returned for the message carrying the file. */
+  eventB64: string;
+  /** The conversation's key map; it must hold the key the message was encrypted under. */
+  conversationKeys: ConversationKeyMap;
+  /** The media hash key the file's upload started with, as listed in the message's attachments. */
+  mediaHashKey: string;
+}
+
+/**
+ * Parameters for decryptFile.
+ */
+export interface DecryptFileParams {
+  /** The encrypted file, as downloaded. */
+  encrypted: Uint8Array;
+  /** The base64 event of the message that carries the file, as passed to decryptEvent. */
+  eventB64: string;
+  /** The conversation's key map, as passed to decryptEvent; it must hold the key for the message's version. */
+  conversationKeys: ConversationKeyMap;
+  /**
+   * The file's media hash key from the decrypted message: a media
+   * attachment, a link card's banner or favicon, or media quoted in its
+   * reply preview.
+   */
+  mediaHashKey: string;
+}
+
+/**
+ * Parameters for fileDecryptor: those of decryptFile apart from the
+ * encrypted file, which is fed to the decryptor.
+ */
+export interface FileDecryptorParams {
+  /** The base64 event of the message that carries the file, as passed to decryptEvent. */
+  eventB64: string;
+  /** The conversation's key map, as passed to decryptEvent; it must hold the key for the message's version. */
+  conversationKeys: ConversationKeyMap;
+  /**
+   * The file's media hash key from the decrypted message: a media
+   * attachment, a link card's banner or favicon, or media quoted in its
+   * reply preview.
+   */
+  mediaHashKey: string;
+}
+
 // NOTE: AttachmentDescriptor uses snake_case as it's part of the Thrift protocol
 // and matches the wire format used by the X API
 /**
@@ -512,15 +616,17 @@ export type AttachmentDescriptor =
  * An encrypted preview image referenced by a URL card attachment.
  *
  * Supplying `display_title` plus a `banner_image` on a `url` attachment makes
- * receiving clients render a full clickable preview card. Encrypt the image
- * with `encryptStream`/`streamEncryptor`, upload it to the conversation's
- * media store, and reference the returned media hash key here.
+ * receiving clients render a full clickable preview card. Start the image's
+ * upload to the conversation's media store, reference the media hash key it
+ * returns here, then encrypt the image with `encryptFile` or `fileEncryptor`
+ * and the message's `eventB64` and finish the upload.
  */
 export interface UrlAttachmentImageDescriptor {
   media_hash_key: string;
   /**
-   * Size of the encrypted image in bytes. Required: receiving clients
-   * silently discard the preview image when this is missing on the wire.
+   * Size of the encrypted image in bytes: `encryptedFileSize` of the image's
+   * size. Required: receiving clients silently discard the preview image
+   * when this is missing on the wire.
    */
   filesize_bytes: number;
   /**
@@ -754,38 +860,38 @@ export interface CreateChatOptions {
 }
 
 /**
- * Incremental stream encryptor for large payloads.
+ * Incremental encryptor for one file of an outgoing message.
  *
- * Feed plaintext with `push`; call `finish` once to emit the final frame.
+ * Feed the file with `push`; call `finish` once to emit the final frame.
  * `finish()` consumes and frees the WASM object — do not call `free()` after
- * it (doing so throws). Call `free()` only when abandoning a stream without
+ * it (doing so throws). Call `free()` only when abandoning a file without
  * finishing it.
  */
-export declare class StreamEncryptor {
-  /** Encrypt a plaintext chunk, returning ciphertext available so far. */
+export declare class FileEncryptor {
+  /** Encrypt a chunk of the file, returning the encrypted bytes available so far. */
   push(plaintext: Uint8Array): Uint8Array;
   /** Emit the final frame; consumes and frees the encryptor. */
   finish(): Uint8Array;
-  /** Release the underlying WASM object when abandoning an unfinished stream. */
+  /** Release the underlying WASM object when abandoning an unfinished file. */
   free(): void;
 }
 
 /**
- * Incremental stream decryptor for large payloads.
+ * Incremental decryptor for one encrypted file.
  *
- * Feed ciphertext with `push`; call `finish` once at end of input. `finish`
- * throws if the stream ended before its final frame (truncation), so do not
- * treat plaintext from `push` as complete until `finish` succeeds.
+ * Feed the encrypted bytes with `push`; call `finish` once at end of input.
+ * `finish` throws if the file ended before its final frame (truncation), so
+ * do not treat bytes from `push` as complete until `finish` succeeds.
  * `finish()` consumes and frees the WASM object — do not call `free()` after
- * it (doing so throws). Call `free()` only when abandoning a stream without
+ * it (doing so throws). Call `free()` only when abandoning a file without
  * finishing it.
  */
-export declare class StreamDecryptor {
-  /** Decrypt a ciphertext chunk, returning plaintext available so far. */
+export declare class FileDecryptor {
+  /** Decrypt a chunk of the encrypted file, returning the bytes available so far. */
   push(ciphertext: Uint8Array): Uint8Array;
   /** Decrypt the final frame; consumes and frees the decryptor. */
   finish(): Uint8Array;
-  /** Release the underlying WASM object when abandoning an unfinished stream. */
+  /** Release the underlying WASM object when abandoning an unfinished file. */
   free(): void;
 }
 
@@ -860,27 +966,22 @@ interface ChatCrypto {
    * 2. For each message, finds the correct signing key by matching userId + version
    * 3. Decrypts the message using the appropriate conversation key
    *
-   * @param events - Raw base64-encoded event strings from the webhook
-   * @param signingKeys - All known signing keys for all participants (with
-   * userId). Omitting this falls back to the keys stored via
-   * `setSigningKeys`. Under the default reject-unverified policy, no signing
-   * keys from either source makes every signed event land in `errors`; only
-   * after `setRejectUnverified(false)` are such events returned with
+   * Under the default reject-unverified policy, no signing keys (passed or
+   * stored via `setSigningKeys`) makes every signed event land in `errors`;
+   * only after `setRejectUnverified(false)` are such events returned with
    * `verified: false`.
    */
-  decryptEvents(events: string[], signingKeys?: SigningKeyEntry[]): DecryptEventsResult;
+  decryptEvents(params: DecryptEventsParams): DecryptEventsResult;
 
   /**
    * Decrypt a raw webhook event payload.
    *
-   * Omitting `conversationKeys` falls back to the opt-in key cache
-   * (`setCacheKeys(true)`); omitting `signingKeys` falls back to the keys
-   * stored via `setSigningKeys`. Under the default reject-unverified policy,
-   * no signing keys from either source makes every signed event throw; only
-   * after `setRejectUnverified(false)` are such events returned with
+   * Under the default reject-unverified policy, no signing keys (passed or
+   * stored via `setSigningKeys`) makes every signed event throw; only after
+   * `setRejectUnverified(false)` are such events returned with
    * `verified: false`.
    */
-  decryptEvent(eventB64: string, conversationKeys?: ConversationKeyMap | null, signingKeys?: SigningKeyEntry[]): Event;
+  decryptEvent(params: DecryptEventParams): Event;
 
   /** Sign data. Returns raw signature bytes (64 bytes). */
   sign(data: Uint8Array): Uint8Array;
@@ -916,37 +1017,40 @@ interface ChatCrypto {
   /** Build the signed action for deleting messages from a conversation. */
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
 
-  /** Encrypt a stream (e.g. media). */
-  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
-
   /**
-   * Decrypt an encrypted media file, as downloaded.
+   * Encrypt a file of an outgoing message, after the message is built.
    *
-   * `eventB64` is the event of the message that carries the media and
-   * `conversationKeys` the conversation's key map, as passed to
-   * `decryptEvent`; the map must hold the key for the message's version.
-   * `mediaHashKey` names the media: one of the message's media attachments,
-   * a link card's banner or favicon, or media quoted in its reply preview.
-   * Throws, saying what to pass instead, when the key version is missing,
-   * the event is not an encrypted message with this media, or `encrypted`
-   * is not the media's complete encrypted file.
+   * The SDK finds the attachment that names `params.mediaHashKey` in the
+   * message `params.eventB64` carries, and encrypts the file under that
+   * attachment's key. Upload the result under the same media hash key; its
+   * size is `encryptedFileSize(file.length)`. Throws, saying what to pass
+   * instead, when the event is not a message with this file or the key map
+   * lacks its key.
    */
-  decryptStream(
-    encrypted: Uint8Array,
-    eventB64: string,
-    conversationKeys: ConversationKeyMap,
-    mediaHashKey: string,
-  ): Uint8Array;
-
-  /** Create an incremental stream encryptor for large payloads. */
-  streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
+  encryptFile(params: EncryptFileParams): Uint8Array;
 
   /**
-   * Create an incremental decryptor for an encrypted media file too large to
-   * hold in memory. Takes the arguments of `decryptStream` apart from the
+   * Create an incremental encryptor for a file too large to hold in memory.
+   * Takes the params of `encryptFile` apart from the file, which is fed to
+   * the encryptor.
+   */
+  fileEncryptor(params: FileEncryptorParams): FileEncryptor;
+
+  /**
+   * Decrypt an encrypted file, as downloaded.
+   *
+   * Throws, saying what to pass instead, when the key version is missing,
+   * the event is not an encrypted message with this file, or `encrypted` is
+   * not the file's complete encrypted bytes.
+   */
+  decryptFile(params: DecryptFileParams): Uint8Array;
+
+  /**
+   * Create an incremental decryptor for an encrypted file too large to hold
+   * in memory. Takes the params of `decryptFile` apart from the encrypted
    * bytes, which are fed to the decryptor.
    */
-  streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
+  fileDecryptor(params: FileDecryptorParams): FileDecryptor;
 
   /** Encrypt a UTF-8 string and return base64 ciphertext. Use for metadata fields like group names. */
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
@@ -1021,8 +1125,8 @@ declare class Chat implements ChatCrypto {
   lock(): void;
   decryptConversationKey(encryptedKeyB64: string): Uint8Array;
   extractConversationKeys(events: string[]): ConversationKeyResult;
-  decryptEvents(events: string[], signingKeys?: SigningKeyEntry[]): DecryptEventsResult;
-  decryptEvent(eventB64: string, conversationKeys?: ConversationKeyMap | null, signingKeys?: SigningKeyEntry[]): Event;
+  decryptEvents(params: DecryptEventsParams): DecryptEventsResult;
+  decryptEvent(params: DecryptEventParams): Event;
   sign(data: Uint8Array): Uint8Array;
   verify(publicKeyB64: string, signature: Uint8Array, data: Uint8Array): boolean;
   verifyKeyBinding(identityPublicKeyB64: string, signingPublicKeyB64: string, identityPublicKeySignatureB64: string): boolean;
@@ -1033,10 +1137,10 @@ declare class Chat implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
-  decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): Uint8Array;
-  streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
-  streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
+  encryptFile(params: EncryptFileParams): Uint8Array;
+  fileEncryptor(params: FileEncryptorParams): FileEncryptor;
+  decryptFile(params: DecryptFileParams): Uint8Array;
+  fileDecryptor(params: FileDecryptorParams): FileDecryptor;
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
@@ -1089,8 +1193,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   lock(): void;
   decryptConversationKey(encryptedKeyB64: string): Uint8Array;
   extractConversationKeys(events: string[]): ConversationKeyResult;
-  decryptEvents(events: string[], signingKeys?: SigningKeyEntry[]): DecryptEventsResult;
-  decryptEvent(eventB64: string, conversationKeys?: ConversationKeyMap | null, signingKeys?: SigningKeyEntry[]): Event;
+  decryptEvents(params: DecryptEventsParams): DecryptEventsResult;
+  decryptEvent(params: DecryptEventParams): Event;
   sign(data: Uint8Array): Uint8Array;
   verify(publicKeyB64: string, signature: Uint8Array, data: Uint8Array): boolean;
   verifyKeyBinding(identityPublicKeyB64: string, signingPublicKeyB64: string, identityPublicKeySignatureB64: string): boolean;
@@ -1101,10 +1205,10 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
   prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  encryptStream(plaintext: Uint8Array, conversationKey: Uint8Array): Uint8Array;
-  decryptStream(encrypted: Uint8Array, eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): Uint8Array;
-  streamEncryptor(conversationKey: Uint8Array): StreamEncryptor;
-  streamDecryptor(eventB64: string, conversationKeys: ConversationKeyMap, mediaHashKey: string): StreamDecryptor;
+  encryptFile(params: EncryptFileParams): Uint8Array;
+  fileEncryptor(params: FileEncryptorParams): FileEncryptor;
+  decryptFile(params: DecryptFileParams): Uint8Array;
+  fileDecryptor(params: FileDecryptorParams): FileDecryptor;
   encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
@@ -1144,8 +1248,8 @@ export declare function createChat(options: CreateChatOptions): Promise<ChatWith
  */
 export declare function guessesRemaining(err: unknown): number | null;
 
-/** Return the exact ciphertext size produced by stream encryption. */
-export declare function encryptedStreamSize(plaintextSize: number): number;
+/** Return the exact size of a file once encrypted: the size its upload declares before the file is encrypted. */
+export declare function encryptedFileSize(plaintextSize: number): number;
 
 /** Encode bytes to base64 string. */
 export declare function bytesToBase64(bytes: Uint8Array): string;

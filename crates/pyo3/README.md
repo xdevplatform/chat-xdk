@@ -41,7 +41,14 @@ pip install target/wheels/*.whl
 ## Quick Start
 
 ```python
-from chat_xdk import Chat
+from chat_xdk import (
+    Chat,
+    DecryptEventParams,
+    DecryptEventsParams,
+    EncryptMessageParams,
+    EncryptReactionParams,
+    EncryptReplyParams,
+)
 
 chat = Chat(config_json)
 chat.unlock("2580")
@@ -73,27 +80,32 @@ chat.set_signing_keys([
 
 # Initial load — batch decrypt with automatic key extraction. Signing keys
 # come from the store; the verified conversation keys populate the cache.
-result = chat.decrypt_events(raw_events)
+result = chat.decrypt_events(DecryptEventsParams(raw_events))
 
 for dm in result["messages"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
 
-# Individual events after the initial load: conversation keys resolve from
-# the cache and signing keys from the store (pass either explicitly to
-# override).
-event = chat.decrypt_event(new_event_b64)
+# Individual events after the initial load: the empty key map resolves from
+# the cache and the unset signing keys from the store (pass either
+# explicitly to override).
+event = chat.decrypt_event(DecryptEventParams(new_event_b64, {}))
 
 # Sending resolves the identity and conversation key from the session too.
-payload = chat.encrypt_message(event["conversation_id"], "hi!")
+payload = chat.encrypt_message(EncryptMessageParams(event["conversation_id"], "hi!"))
 # Reply / react by handing back the raw event being answered.
-reply = chat.encrypt_reply(event["conversation_id"], "pong", new_event_b64)
-reaction = chat.encrypt_add_reaction(new_event_b64, "👍")
+reply = chat.encrypt_reply(EncryptReplyParams(event["conversation_id"], "pong", new_event_b64))
+reaction = chat.encrypt_add_reaction(EncryptReactionParams(new_event_b64, "👍"))
 ```
+
+Every method with a params object takes a params class (`EncryptMessageParams`,
+`DecryptEventParams`, `EncryptFileParams`, …): required fields are
+positional, optional ones are keywords, and every field is a read/write
+attribute, so a params object can be built once and adjusted.
 
 ## API
 
-See the **Python** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types.
+See the **Python** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media).
 
 ## Security limitations
 

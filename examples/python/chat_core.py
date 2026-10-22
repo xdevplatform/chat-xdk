@@ -9,7 +9,7 @@ The four core feature touchpoints of the chat-xdk flow are all here:
 
 * key management        -> ``load_keys`` / ``generate_and_register``
 * conversation keys     -> ``prepare_conversation_key_change`` / ``decrypt_conversation_key``
-* message encryption    -> ``encrypt_reply``
+* message encryption    -> ``encrypt_reply``, then ``encrypt_media`` for its files
 * event decryption      -> ``decrypt_batch`` (decrypt_events) and
                            ``decrypt_one`` (decrypt_event)
 """
@@ -19,7 +19,20 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from chat_xdk import Chat, QuickReply
+from chat_xdk import (
+    Chat,
+    ConversationKeyChangeParams,
+    DecryptEventParams,
+    DecryptEventsParams,
+    EncryptMessageParams,
+    EncryptReactionParams,
+    EncryptReplyParams,
+    FileDecryptorParams,
+    FileEncryptorParams,
+    GroupCreateParams,
+    GroupMembersChangeParams,
+    QuickReply,
+)
 
 
 def _b64decode(data: str) -> bytes:
@@ -153,7 +166,7 @@ class ChatCore:
         The change is signed with the ``set_identity`` session identity.
         """
         return self.chat.prepare_conversation_key_change(
-            public_keys, conversation_id=conversation_id
+            ConversationKeyChangeParams(public_keys, conversation_id=conversation_id)
         )
 
     def decrypt_conversation_key(self, encrypted_key_b64: str) -> bytes:
@@ -174,7 +187,7 @@ class ChatCore:
         messages plus the conversation-key cache to reuse for single events.
         Omit ``signing_keys`` to verify with the ``set_signing_keys`` store.
         """
-        result = self.chat.decrypt_events(events_b64, signing_keys)
+        result = self.chat.decrypt_events(DecryptEventsParams(events_b64, signing_keys=signing_keys))
         messages = [
             {"event": _as_dict(m["event"]), "original_b64": m.get("original_b64")}
             for m in result.get("messages", [])
@@ -195,7 +208,11 @@ class ChatCore:
 
         Omit ``signing_keys`` to verify with the ``set_signing_keys`` store.
         """
-        return _as_dict(self.chat.decrypt_event(event_b64, conversation_keys, signing_keys))
+        return _as_dict(
+            self.chat.decrypt_event(
+                DecryptEventParams(event_b64, conversation_keys, signing_keys=signing_keys)
+            )
+        )
 
     # -- Message encryption -------------------------------------------------
 
@@ -222,39 +239,49 @@ class ChatCore:
         builds a *threaded* reply. Omit the conversation key pair to resolve
         it from the SDK's verified-key cache (``set_cache_keys``).
         ``entities`` are ``(start, end, type)`` byte ranges; ``attachments``
-        are attachment descriptors (e.g. a media reference); ``quick_reply``
-        offers selectable options or answers them; ``ttl_msec`` makes the message disappear after the given lifetime. Signed with the
-        ``set_identity`` session identity.
+        are attachment descriptors, each file naming the media hash key its
+        upload started with; ``quick_reply`` offers selectable options or
+        answers them; ``ttl_msec`` makes the message disappear after the
+        given lifetime. Signed with the ``set_identity`` session identity.
+
+        The result also carries ``event_b64``, the outgoing message as an
+        event: it is not sent, but ``encrypt_media`` takes it to encrypt the
+        message's files.
         """
         if reply_to_event is None and reply_to_sequence_id is None:
             payload = self.chat.encrypt_message(
-                conversation_id,
-                text,
-                conversation_key=conversation_key,
-                conversation_key_version=conversation_key_version,
-                entities=entities,
-                attachments=attachments,
-                quick_reply=quick_reply,
-                ttl_msec=ttl_msec,
+                EncryptMessageParams(
+                    conversation_id,
+                    text,
+                    conversation_key=conversation_key,
+                    conversation_key_version=conversation_key_version,
+                    entities=entities,
+                    attachments=attachments,
+                    quick_reply=quick_reply,
+                    ttl_msec=ttl_msec,
+                )
             )
         else:
             payload = self.chat.encrypt_reply(
-                conversation_id,
-                text,
-                reply_to_event,
-                reply_to_sequence_id=reply_to_sequence_id,
-                conversation_key=conversation_key,
-                conversation_key_version=conversation_key_version,
-                entities=entities,
-                attachments=attachments,
-                quick_reply=quick_reply,
-                ttl_msec=ttl_msec,
+                EncryptReplyParams(
+                    conversation_id,
+                    text,
+                    reply_to_event,
+                    reply_to_sequence_id=reply_to_sequence_id,
+                    conversation_key=conversation_key,
+                    conversation_key_version=conversation_key_version,
+                    entities=entities,
+                    attachments=attachments,
+                    quick_reply=quick_reply,
+                    ttl_msec=ttl_msec,
+                )
             )
         return {
             # The SDK generates the message id and returns it in the payload.
             "message_id": payload.message_id,
             "encoded_message_create_event": payload.encrypted_content,
             "encoded_message_event_signature": payload.encoded_event_signature,
+            "event_b64": payload.event_b64,
         }
 
     def encrypt_reaction(
@@ -273,12 +300,14 @@ class ChatCore:
         """
         method = self.chat.encrypt_add_reaction if add else self.chat.encrypt_remove_reaction
         payload = method(
-            None,
-            emoji,
-            conversation_id=conversation_id,
-            target_message_sequence_id=target_message_sequence_id,
-            conversation_key=conversation_key,
-            conversation_key_version=conversation_key_version,
+            EncryptReactionParams(
+                None,
+                emoji,
+                conversation_id=conversation_id,
+                target_message_sequence_id=target_message_sequence_id,
+                conversation_key=conversation_key,
+                conversation_key_version=conversation_key_version,
+            )
         )
         return {
             # The SDK generates the message id and returns it in the payload.
@@ -301,10 +330,7 @@ class ChatCore:
         Signed with the ``set_identity`` session identity.
         """
         return self.chat.prepare_group_create(
-            public_keys,
-            conversation_id,
-            member_ids,
-            admin_ids,
+            GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids)
         )
 
     def prepare_group_members_change(
@@ -320,26 +346,40 @@ class ChatCore:
         Signed with the ``set_identity`` session identity.
         """
         return self.chat.prepare_group_members_change(
-            public_keys,
-            conversation_id,
-            new_member_ids,
-            current_member_ids,
-            current_admin_ids,
-            [],
+            GroupMembersChangeParams(
+                public_keys,
+                conversation_id,
+                new_member_ids,
+                current_member_ids,
+                current_admin_ids,
+                [],
+            )
         )
 
-    # -- Media streaming -----------------------------------------------------
+    # -- Media files ----------------------------------------------------------
 
     MEDIA_CHUNK = 1024 * 1024
 
-    def encrypt_media(self, plaintext: bytes, conversation_key: bytes) -> bytes:
-        """Encrypt a media blob with the incremental stream API.
+    def encrypt_media(
+        self,
+        plaintext: bytes,
+        event_b64: str,
+        conversation_keys: dict[str, bytes],
+        media_hash_key: str,
+    ) -> bytes:
+        """Encrypt a media file of an outgoing message with the incremental API.
 
-        Feeding fixed-size chunks through ``push`` keeps memory bounded no
-        matter how large the file is; ``finish`` emits the final frame that
-        seals the stream (decryption fails without it).
+        ``event_b64`` is the ``event_b64`` that ``encrypt_reply`` returned for
+        the message, and ``media_hash_key`` the hash key its upload started
+        with, as listed in the message's attachments; the SDK encrypts the
+        file under that attachment's key. Feeding fixed-size chunks through
+        ``push`` keeps memory bounded no matter how large the file is;
+        ``finish`` emits the final frame that seals the file (decryption
+        fails without it).
         """
-        enc = self.chat.stream_encryptor(conversation_key)
+        enc = self.chat.file_encryptor(
+            FileEncryptorParams(event_b64, conversation_keys, media_hash_key)
+        )
         out = bytearray()
         for offset in range(0, len(plaintext), self.MEDIA_CHUNK):
             out += enc.push(plaintext[offset : offset + self.MEDIA_CHUNK])
@@ -353,16 +393,18 @@ class ChatCore:
         conversation_keys: dict[str, bytes],
         media_hash_key: str,
     ) -> bytes:
-        """Decrypt a downloaded media blob with the incremental stream API.
+        """Decrypt a downloaded media file with the incremental API.
 
         ``event_b64`` is the raw event of the message that carries the media and
         ``conversation_keys`` its conversation's key map, as passed to
         ``decrypt_one``; the SDK finds ``media_hash_key`` in the event and
-        derives that file's key. ``finish`` raises if the stream was truncated,
-        so plaintext from ``push`` must not be treated as complete until it
+        derives that file's key. ``finish`` raises if the file was truncated,
+        so bytes from ``push`` must not be treated as complete until it
         succeeds.
         """
-        dec = self.chat.stream_decryptor(event_b64, conversation_keys, media_hash_key)
+        dec = self.chat.file_decryptor(
+            FileDecryptorParams(event_b64, conversation_keys, media_hash_key)
+        )
         out = bytearray()
         for offset in range(0, len(ciphertext), self.MEDIA_CHUNK):
             out += dec.push(ciphertext[offset : offset + self.MEDIA_CHUNK])

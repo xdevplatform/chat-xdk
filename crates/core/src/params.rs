@@ -1,4 +1,4 @@
-//! Parameter structs for the high-arity SDK methods.
+//! Parameter structs for the SDK methods that encrypt, decrypt, and sign.
 //!
 //! Each struct pairs a [`new()`] constructor taking only the required fields
 //! with public fields for the optional ones, so call sites name every value
@@ -6,7 +6,7 @@
 //! existing callers:
 //!
 //! ```rust,ignore
-//! chat.set_identity("my-user-id", signing_key_version);
+//! chat.set_identity("1876543210", signing_key_version);
 //! let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 //! params.ttl_msec = Some(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
@@ -14,15 +14,25 @@
 //! let message_id = payload.message_id;
 //! ```
 //!
+//! A message with files is built before its files are encrypted: each file's
+//! attachment names the media hash key its upload started with, and each
+//! file is then encrypted with [`EncryptFileParams`] or
+//! [`FileEncryptorParams`] from the returned payload's `event_b64`.
+//!
 //! Identity fields (`sender_id`, `signing_key_version`) and key fields
 //! (`conversation_key`, `conversation_key_version`) are optional overrides:
 //! when unset they resolve from the session identity and the opt-in key
 //! cache. An unset override and an explicit value produce byte-identical
 //! signed output for the same logical inputs.
 
+use std::collections::HashMap;
+
 use zeroize::Zeroize;
 
-use crate::types::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput, QuickReply};
+use crate::crypto::keys::XChatConversationKey;
+use crate::types::{
+    AttachmentDescriptor, EntityDescriptor, PublicKeyInput, QuickReply, SigningKeyEntry,
+};
 
 /// Convert an override string into storage form: an empty string means
 /// "not set", so FFI layers that cannot express `Option` can pass `""`.
@@ -56,7 +66,9 @@ pub struct EncryptMessageParams {
     pub conversation_key_version: Option<String>,
     /// Optional rich-text entities (URLs, mentions, etc.) to embed.
     pub entities: Option<Vec<EntityDescriptor>>,
-    /// Optional attachments (posts, URLs, media, etc.) to include in the message.
+    /// Optional attachments: posts, links, and files (media, and link-card
+    /// images), each file named by the media hash key its upload started
+    /// with.
     pub attachments: Option<Vec<AttachmentDescriptor>>,
     /// Optional quick reply: a request offering selectable options, or a
     /// response selecting one.
@@ -192,7 +204,9 @@ pub struct EncryptReplyParams {
     pub reply_to_text: Option<String>,
     /// Optional rich-text entities (URLs, mentions, etc.) to embed in the outgoing message.
     pub entities: Option<Vec<EntityDescriptor>>,
-    /// Optional attachments (posts, URLs, media, etc.) to include in the outgoing message.
+    /// Optional attachments of the outgoing message: posts, links, and files
+    /// (media, and link-card images), each file named by the media hash key
+    /// its upload started with.
     pub attachments: Option<Vec<AttachmentDescriptor>>,
     /// Optional rich-text entities from the original message (for the reply
     /// preview); derived from `reply_to_event` when unset.
@@ -756,6 +770,236 @@ impl GroupCreateParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::decrypt_event`].
+///
+/// The conversation keys zeroize when the params are dropped and are
+/// redacted from `Debug` output.
+#[derive(Clone, Debug)]
+pub struct DecryptEventParams {
+    /// The base64 event, as delivered.
+    pub event_b64: String,
+    /// The conversation's key map (`key version → key`), from
+    /// `decrypt_events` or `extract_conversation_keys`. Events without
+    /// message contents need no keys, so the map may be empty for them.
+    pub conversation_keys: HashMap<String, XChatConversationKey>,
+    /// Signing keys to verify the event with; the keys stored via
+    /// `set_signing_keys` are used when unset or empty.
+    pub signing_keys: Option<Vec<SigningKeyEntry>>,
+}
+
+impl DecryptEventParams {
+    /// Create params with required fields; `signing_keys` defaults to `None`.
+    pub fn new(
+        event_b64: impl Into<String>,
+        conversation_keys: HashMap<String, XChatConversationKey>,
+    ) -> Self {
+        Self {
+            event_b64: event_b64.into(),
+            conversation_keys,
+            signing_keys: None,
+        }
+    }
+
+    /// Set the signing keys to verify the event with.
+    pub fn with_signing_keys(mut self, signing_keys: Vec<SigningKeyEntry>) -> Self {
+        self.signing_keys = Some(signing_keys);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::decrypt_events`].
+#[derive(Clone, Debug)]
+pub struct DecryptEventsParams {
+    /// The base64 events, as delivered. Their key changes supply the
+    /// conversation keys the messages among them are decrypted with.
+    pub events: Vec<String>,
+    /// Signing keys to verify the events with; the keys stored via
+    /// `set_signing_keys` are used when unset or empty.
+    pub signing_keys: Option<Vec<SigningKeyEntry>>,
+}
+
+impl DecryptEventsParams {
+    /// Create params with required fields; `signing_keys` defaults to `None`.
+    pub fn new(events: Vec<String>) -> Self {
+        Self {
+            events,
+            signing_keys: None,
+        }
+    }
+
+    /// Set the signing keys to verify the events with.
+    pub fn with_signing_keys(mut self, signing_keys: Vec<SigningKeyEntry>) -> Self {
+        self.signing_keys = Some(signing_keys);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::encrypt_file`].
+///
+/// The conversation keys zeroize when the params are dropped and are
+/// redacted from `Debug` output, as is the file.
+#[derive(Clone)]
+pub struct EncryptFileParams {
+    /// The file to encrypt.
+    pub file: Vec<u8>,
+    /// The `event_b64` of the payload that `encrypt_message` or
+    /// `encrypt_reply` returned for the message carrying the file.
+    pub event_b64: String,
+    /// The conversation's key map (`key version → key`); it must hold the
+    /// key the message was encrypted under.
+    pub conversation_keys: HashMap<String, XChatConversationKey>,
+    /// The media hash key the file's upload started with, as listed in the
+    /// message's attachments.
+    pub media_hash_key: String,
+}
+
+impl EncryptFileParams {
+    /// Create params; every field is required.
+    pub fn new(
+        file: Vec<u8>,
+        event_b64: impl Into<String>,
+        conversation_keys: HashMap<String, XChatConversationKey>,
+        media_hash_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            file,
+            event_b64: event_b64.into(),
+            conversation_keys,
+            media_hash_key: media_hash_key.into(),
+        }
+    }
+}
+
+impl std::fmt::Debug for EncryptFileParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptFileParams")
+            .field("file", &format_args!("[{} bytes]", self.file.len()))
+            .field("event_b64", &self.event_b64)
+            .field("conversation_keys", &self.conversation_keys)
+            .field("media_hash_key", &self.media_hash_key)
+            .finish()
+    }
+}
+
+/// Parameters for [`crate::ChatCore::decrypt_file`].
+///
+/// The conversation keys zeroize when the params are dropped and are
+/// redacted from `Debug` output.
+#[derive(Clone)]
+pub struct DecryptFileParams {
+    /// The encrypted file, as downloaded.
+    pub encrypted: Vec<u8>,
+    /// The base64 event of the message that carries the file, as passed to
+    /// `decrypt_event`.
+    pub event_b64: String,
+    /// The conversation's key map (`key version → key`), as passed to
+    /// `decrypt_event`.
+    pub conversation_keys: HashMap<String, XChatConversationKey>,
+    /// The file's media hash key from the decrypted message: a media
+    /// attachment, a link card's banner or favicon, or media quoted in its
+    /// reply preview.
+    pub media_hash_key: String,
+}
+
+impl DecryptFileParams {
+    /// Create params; every field is required.
+    pub fn new(
+        encrypted: Vec<u8>,
+        event_b64: impl Into<String>,
+        conversation_keys: HashMap<String, XChatConversationKey>,
+        media_hash_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            encrypted,
+            event_b64: event_b64.into(),
+            conversation_keys,
+            media_hash_key: media_hash_key.into(),
+        }
+    }
+}
+
+impl std::fmt::Debug for DecryptFileParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecryptFileParams")
+            .field(
+                "encrypted",
+                &format_args!("[{} bytes]", self.encrypted.len()),
+            )
+            .field("event_b64", &self.event_b64)
+            .field("conversation_keys", &self.conversation_keys)
+            .field("media_hash_key", &self.media_hash_key)
+            .finish()
+    }
+}
+
+/// Parameters for [`crate::ChatCore::file_encryptor`]: those of
+/// [`EncryptFileParams`] apart from the file, which is fed to the encryptor.
+///
+/// The conversation keys zeroize when the params are dropped and are
+/// redacted from `Debug` output.
+#[derive(Clone, Debug)]
+pub struct FileEncryptorParams {
+    /// The `event_b64` of the payload that `encrypt_message` or
+    /// `encrypt_reply` returned for the message carrying the file.
+    pub event_b64: String,
+    /// The conversation's key map (`key version → key`); it must hold the
+    /// key the message was encrypted under.
+    pub conversation_keys: HashMap<String, XChatConversationKey>,
+    /// The media hash key the file's upload started with, as listed in the
+    /// message's attachments.
+    pub media_hash_key: String,
+}
+
+impl FileEncryptorParams {
+    /// Create params; every field is required.
+    pub fn new(
+        event_b64: impl Into<String>,
+        conversation_keys: HashMap<String, XChatConversationKey>,
+        media_hash_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_b64: event_b64.into(),
+            conversation_keys,
+            media_hash_key: media_hash_key.into(),
+        }
+    }
+}
+
+/// Parameters for [`crate::ChatCore::file_decryptor`]: those of
+/// [`DecryptFileParams`] apart from the encrypted file, which is fed to the
+/// decryptor.
+///
+/// The conversation keys zeroize when the params are dropped and are
+/// redacted from `Debug` output.
+#[derive(Clone, Debug)]
+pub struct FileDecryptorParams {
+    /// The base64 event of the message that carries the file, as passed to
+    /// `decrypt_event`.
+    pub event_b64: String,
+    /// The conversation's key map (`key version → key`), as passed to
+    /// `decrypt_event`.
+    pub conversation_keys: HashMap<String, XChatConversationKey>,
+    /// The file's media hash key from the decrypted message: a media
+    /// attachment, a link card's banner or favicon, or media quoted in its
+    /// reply preview.
+    pub media_hash_key: String,
+}
+
+impl FileDecryptorParams {
+    /// Create params; every field is required.
+    pub fn new(
+        event_b64: impl Into<String>,
+        conversation_keys: HashMap<String, XChatConversationKey>,
+        media_hash_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_b64: event_b64.into(),
+            conversation_keys,
+            media_hash_key: media_hash_key.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,7 +1045,7 @@ mod tests {
             .to_bytes();
 
         let mut via_new = EncryptMessageParams::new("conv-1", "hi")
-            .with_identity("me", "2")
+            .with_identity("1000", "2")
             .with_conversation_key(ckey.clone(), "1");
         via_new.should_notify = Some(false);
         via_new.ttl_msec = Some(30_000);
@@ -809,7 +1053,7 @@ mod tests {
         let full = EncryptMessageParams {
             conversation_id: "conv-1".into(),
             text: "hi".into(),
-            sender_id: Some("me".into()),
+            sender_id: Some("1000".into()),
             signing_key_version: Some("2".into()),
             conversation_key: Some(ckey),
             conversation_key_version: Some("1".into()),
@@ -834,7 +1078,7 @@ mod tests {
             .to_bytes();
 
         let mut params = EncryptReplyParams::new("conv-1", "a reply", "")
-            .with_identity("me", "2")
+            .with_identity("1000", "2")
             .with_conversation_key(ckey, "1");
         params.reply_to_sequence_id = Some("seq-9".into());
         params.reply_to_sender_id = Some(42);
@@ -855,7 +1099,7 @@ mod tests {
             .to_bytes();
 
         let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("me", "2")
+            .with_identity("1000", "2")
             .with_conversation_key(ckey, "1");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-42".into());

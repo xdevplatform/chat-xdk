@@ -145,7 +145,7 @@ crates/core/src/
 │   ├── key_factory.rs            # Key generation, ECDH, signing, verification
 │   ├── hash.rs                   # SHA-256, HKDF-SHA256, HMAC-SHA256
 │   ├── message_keys.rs           # Per-message and per-attachment key derivation
-│   └── encryption.rs             # XSalsa20-Poly1305 message & streaming encryption
+│   └── encryption.rs             # XSalsa20-Poly1305 message & secretstream file encryption
 │
 ├── keys/                         # Layer 2: Key Lifecycle Management
 │   ├── mod.rs
@@ -260,7 +260,7 @@ Uses `p256` and `aes-gcm` crates from RustCrypto. All functions are pure — no 
 | `sha256(data)` | SHA-256 hash |
 | `hmac_sha256(message, key)` | HMAC-SHA256 |
 | `hkdf(secret, salt, len)` | HKDF-SHA256 key derivation |
-| `hkdf_with_info(secret, salt, info, len)` | HKDF-SHA256 with an `info` input (message and attachment keys) |
+| `hkdf_with_info(secret, salt, info, len)` | HKDF-SHA256 with an `info` input (message keys, attachment keys, and the id of a message with files) |
 | `kdf2_sha256(shared_secret, shared_info, len)` | X9.63 KDF (used in ECIES) |
 
 #### `crypto/message_keys.rs` — Message and Attachment Keys
@@ -271,8 +271,10 @@ Uses `p256` and `aes-gcm` crates from RustCrypto. All functions are pure — no 
 | `derive_message_key(ckey, sender_id, message_id)` | Message key derived from the conversation key |
 | `derive_attachment_key(message_key, attachment_id)` | Attachment key derived from the message key |
 | `resolve_attachment_id(stored_id, message_id, index)` | The id an attachment's key derives from |
+| `derive_media_message_id(ckey, ckey_version, sender_id, conversation_id, media_hash_keys)` | The id of an outgoing message with files, derived from what identifies the message |
 
-See [CRYPTO.md — Message Keys](CRYPTO.md#message-keys).
+See [CRYPTO.md — Message Keys](CRYPTO.md#message-keys) and
+[CRYPTO.md — Media Keys](CRYPTO.md#media-keys).
 
 Uses `sha2` and `hmac` crates.
 
@@ -284,18 +286,19 @@ Provides symmetric encryption for message payloads. Uses pure-Rust implementatio
 |----------|-------------|
 | `encrypt_message(key, plaintext)` | XSalsa20-Poly1305 single-shot encryption |
 | `decrypt_message(key, ciphertext)` | XSalsa20-Poly1305 decryption |
-| `encrypt_stream(key, reader, writer)` | `crypto_secretstream_xchacha20poly1305` streaming encryption |
-| `decrypt_stream(key, reader, writer)` | Streaming decryption |
-| `stream_encryptor(key)` → `StreamEncryptor` | Incremental encryption (`push`/`finish`) for chunk-at-a-time processing |
-| `stream_decryptor(key)` → `StreamDecryptor` | Incremental decryption (`push`/`finish`); `finish` rejects truncated streams |
+| `encrypt_file(key, reader, writer)` | `crypto_secretstream_xchacha20poly1305` file encryption, one chunk at a time |
+| `decrypt_file(key, reader, writer)` | File decryption; rejects truncated files |
+| `FileEncryptor::new(key)` | Incremental encryption (`push`/`finish`) for chunk-at-a-time processing |
+| `FileDecryptor::new(key)` | Incremental decryption (`push`/`finish`); `finish` rejects truncated files |
+| `encrypted_file_size(plaintext_size)` | Exact encrypted size of a file |
 
 **Wire formats**:
 - **Message**: `nonce (24 bytes) || tag (16 bytes) || ciphertext`
-- **Stream**: `header (24B) || chunk_0 || chunk_1 || ...` (1024-byte plaintext chunks, 17-byte overhead per chunk)
+- **File**: `header (24B) || chunk_0 || chunk_1 || ...` (1024-byte plaintext chunks, 17-byte overhead per chunk)
 
-The incremental `StreamEncryptor` / `StreamDecryptor` produce and consume this same wire format; output is identical regardless of how input is split across `push` calls.
+The incremental `FileEncryptor` / `FileDecryptor` produce and consume this same wire format; output is identical regardless of how input is split across `push` calls.
 
-Uses `xsalsa20poly1305` (messages) and `crypto_secretstream` (streams) crates.
+Uses `xsalsa20poly1305` (messages) and `crypto_secretstream` (files) crates.
 
 ---
 
@@ -412,10 +415,13 @@ Holds:
 - `keypair_manager: KeypairManager` — in-memory key state
 - `reject_unverified: bool` — signature verification policy (defaults to `true`)
 - `conversation_key_high_water: RwLock<HashMap<String, u64>>` — per-conversation monotonic high-water mark of verified key versions, backing the anti-downgrade guarantee on `latest_version`
+- `owner_user_id: RwLock<Option<String>>` — the session identity's user id, set by `set_identity`
 
-`decrypt_stream` / `stream_decryptor` use none of this state: `core/media.rs`
-finds the attachment a media hash key names in the given message event and
-derives its key from the given key map (see
+The file methods (`encrypt_file` / `file_encryptor` / `decrypt_file` /
+`file_decryptor`) use none of this state: `core/media.rs` finds the
+attachment a media hash key names in the given message event — the outgoing
+message's `event_b64` when encrypting, the delivered event when decrypting —
+and derives its key from the given key map (see
 [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
 
 #### `chat.rs` — `Chat` (Juicebox wrapper)
@@ -517,15 +523,26 @@ Developer                          SDK
     │                               │     extract_conversation_keys / decrypt_events)
     │                               │  2. Build rich-text entities (if provided)
     │                               │  3. Serialize text + entities as Thrift MessageEntryHolder
-    │                               │  4. Encrypt with XSalsa20-Poly1305
-    │                               │  5. Wrap in MessageCreateEvent
+    │                               │  4. Take the message id (derived from the files'
+    │                               │     media hash keys for a message with files, random
+    │                               │     otherwise); derive the message key from the
+    │                               │     conversation key, sender id, and message id;
+    │                               │     encrypt with XSalsa20-Poly1305
+    │                               │  5. Wrap in MessageCreateEvent with
+    │                               │     contents_encryption_version 1
     │                               │  6. Sign the comma-separated component payload
-    │                               │     (MessageCreateEvent,ids…,contents_b64), version "7"
-    │                               │  7. Build MessageEventSignature
+    │                               │     (MessageCreateEvent,ids…,contents_b64,1), version "10"
+    │                               │  7. Build MessageEventSignature and the event_b64
     │  SendPayload                  │
     │◀──────────────────────────────│
     │                               │
-    │  POST /2/chat/conversations/{id}/messages
+    │  (message with files) chat.encrypt_file(params) per file
+    │  with SendPayload.event_b64 and the file's media_hash_key
+    │──────────────────────────────▶│  Find the attachment in the event; derive the
+    │  encrypted file               │  message key and the attachment key; encrypt
+    │◀──────────────────────────────│
+    │                               │
+    │  finish each upload, then POST /2/chat/conversations/{id}/messages
     │  (developer calls X API with SendPayload fields)
     ▼                               ▼
 ```
@@ -545,7 +562,7 @@ Developer                          SDK
     │◀──────────────────────────────│
     │                               │
     │  Step 2: Decrypt each event (fast symmetric, repeat per message)
-    │  chat.decrypt_event(event_b64, &keys, &signing_keys)
+    │  chat.decrypt_event(params)   // event_b64, keys, signing_keys
     │──────────────────────────────▶│
     │                               │  1. Base64-decode event
     │                               │  2. Parse Thrift MessageEvent (TBinaryProtocol)
@@ -559,13 +576,13 @@ Developer                          SDK
     │◀──────────────────────────────│
     │                               │
     │  Step 3: Key change events (key map may be empty)
-    │  chat.decrypt_event(key_change_b64, &keys, &signing_keys)
+    │  chat.decrypt_event(params)   // the key change's event_b64, keys, signing_keys
     │──────────────────────────────▶│  Parse Thrift; verify the signature by
     │  Event::KeyChange             │  self-decrypting the conversation key
     │◀──────────────────────────────│
     │                               │
     │  Step 4: Unencrypted messages (conversation_key_version is None)
-    │  chat.decrypt_event(event_b64, &keys, &signing_keys)
+    │  chat.decrypt_event(params)   // event_b64, keys, signing_keys
     │──────────────────────────────▶│  1. Detect: conversation_key_version is None
     │                               │  2. No signature → rejected under reject_unverified
     │  Event::Message               │     (default); returned verified=false only when
@@ -574,8 +591,8 @@ Developer                          SDK
     ▼                               ▼
 ```
 
-> In practice prefer the batch `decrypt_events(events, signing_keys)`, which
-> performs Step 1 internally and verifies each event's signing-key binding.
+> In practice prefer the batch `decrypt_events`, which performs Step 1
+> internally and verifies each event's signing-key binding.
 
 ---
 
@@ -589,7 +606,7 @@ Developer                          SDK
 | Conversation Key | 32 random bytes (used with XSalsa20-Poly1305 / secretstream) | `rand` |
 | Public Key Encryption | ECIES (ECDH + X9.63 KDF + AES-128-GCM) | `p256`, `aes-gcm` |
 | Message Encryption | XSalsa20-Poly1305 | `xsalsa20poly1305` |
-| Stream Encryption | `crypto_secretstream_xchacha20poly1305` | `crypto_secretstream` |
+| File Encryption | `crypto_secretstream_xchacha20poly1305` | `crypto_secretstream` |
 | Key Derivation | HKDF-SHA256 | `hmac`, `sha2` |
 | Hashing | SHA-256 | `sha2` |
 | HMAC | HMAC-SHA256 | `hmac` |
@@ -605,7 +622,7 @@ Input:  plaintext bytes
 Output: nonce (24 bytes) || tag (16 bytes) || ciphertext
 ```
 
-### Stream Encryption (crypto_secretstream_xchacha20poly1305)
+### File Encryption (crypto_secretstream_xchacha20poly1305)
 ```
 Output: header (24B) || chunk_0 || chunk_1 || ...
 Each chunk: ≤1041B (1024B plaintext + 17B ABYTES)

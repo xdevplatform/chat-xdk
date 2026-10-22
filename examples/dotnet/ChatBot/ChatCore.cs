@@ -13,7 +13,7 @@ namespace ChatBot;
 /// <list type="bullet">
 ///   <item>key management     -> LoadKeys / SetIdentity / GenerateAndRegister</item>
 ///   <item>conversation keys  -> PrepareConversationKeyChange / DecryptConversationKey</item>
-///   <item>message encryption -> EncryptReply</item>
+///   <item>message encryption -> EncryptReply, then EncryptMedia for its files</item>
 ///   <item>event decryption   -> DecryptBatch (DecryptEvents) and DecryptOne (DecryptEvent)</item>
 /// </list>
 /// </summary>
@@ -66,11 +66,17 @@ public sealed class ChatCore : IDisposable
 
     /// <summary>Batch path — used on initial conversation load.</summary>
     public DecryptEventsResult DecryptBatch(IEnumerable<string> eventsB64, IEnumerable<SigningKeyEntry>? signingKeys = null)
-        => _chat.DecryptEvents(eventsB64, signingKeys);
+        => _chat.DecryptEvents(new DecryptEventsParams(eventsB64.ToList())
+        {
+            SigningKeys = signingKeys?.ToList(),
+        });
 
     /// <summary>Single-event path — used for each new event after the initial load.</summary>
     public JsonElement DecryptOne(string eventB64, Dictionary<string, byte[]> conversationKeys, IEnumerable<SigningKeyEntry>? signingKeys = null)
-        => _chat.DecryptEvent(eventB64, conversationKeys, signingKeys);
+        => _chat.DecryptEvent(new DecryptEventParams(eventB64, conversationKeys)
+        {
+            SigningKeys = signingKeys?.ToList(),
+        });
 
     // -- Message encryption -------------------------------------------------
 
@@ -81,9 +87,11 @@ public sealed class ChatCore : IDisposable
     /// <c>EncryptMessage</c>; with it, the SDK's <c>EncryptReply</c> builds a
     /// *threaded* reply whose preview is derived from that raw signed event.
     /// <paramref name="entities"/> are (start, end, type) byte ranges;
-    /// <paramref name="attachments"/> are attachment descriptors (e.g. a media
-    /// reference); <paramref name="quickReply"/> offers selectable options
-    /// or answers them; <paramref name="ttlMsec"/> makes the message
+    /// <paramref name="attachments"/> are attachment descriptors, each file
+    /// naming the media hash key its upload started with (encrypt the files
+    /// afterwards with <see cref="EncryptMedia"/> and the returned body's
+    /// <c>EventB64</c>); <paramref name="quickReply"/> offers selectable
+    /// options or answers them; <paramref name="ttlMsec"/> makes the message
     /// disappear after the given lifetime.
     /// </summary>
     public SendBody EncryptReply(
@@ -121,7 +129,7 @@ public sealed class ChatCore : IDisposable
                 TtlMsec = ttlMsec,
             });
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
+        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature, payload.EventB64);
     }
 
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
@@ -140,7 +148,7 @@ public sealed class ChatCore : IDisposable
         };
         var payload = add ? _chat.EncryptAddReaction(parameters) : _chat.EncryptRemoveReaction(parameters);
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature);
+        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature, payload.EventB64);
     }
 
     // -- Group management -----------------------------------------------------
@@ -168,20 +176,26 @@ public sealed class ChatCore : IDisposable
             currentAdminIds,
             Array.Empty<string>()));
 
-    // -- Media streaming -----------------------------------------------------
+    // -- Media files ----------------------------------------------------------
 
     private const int MediaChunk = 1024 * 1024;
 
     /// <summary>
-    /// Encrypt a media blob with the incremental stream API.
+    /// Encrypt a media file of an outgoing message with the incremental file API.
     ///
-    /// Feeding fixed-size chunks through <c>Push</c> keeps memory bounded no
-    /// matter how large the file is; <c>Finish</c> emits the final frame that
-    /// seals the stream (decryption fails without it).
+    /// <paramref name="eventB64"/> is the <c>EventB64</c> of the body
+    /// <see cref="EncryptReply"/> returned for the message, and
+    /// <paramref name="mediaHashKey"/> the hash key the file's upload started
+    /// with, as listed in the message's attachments; the SDK encrypts the file
+    /// under that attachment's key. Feeding fixed-size chunks through
+    /// <c>Push</c> keeps memory bounded no matter how large the file is;
+    /// <c>Finish</c> emits the final frame that seals the file (decryption fails
+    /// without it).
     /// </summary>
-    public byte[] EncryptMedia(byte[] plaintext, byte[] conversationKey)
+    public byte[] EncryptMedia(
+        byte[] plaintext, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)
     {
-        using var enc = _chat.StreamEncryptor(conversationKey);
+        using var enc = _chat.FileEncryptor(new FileEncryptorParams(eventB64, conversationKeys, mediaHashKey));
         using var output = new MemoryStream();
         for (var offset = 0; offset < plaintext.Length; offset += MediaChunk)
         {
@@ -193,19 +207,19 @@ public sealed class ChatCore : IDisposable
     }
 
     /// <summary>
-    /// Decrypt a downloaded media blob with the incremental stream API.
+    /// Decrypt a downloaded media file with the incremental file API.
     ///
     /// <paramref name="eventB64"/> is the raw event of the message that carries the
     /// media and <paramref name="conversationKeys"/> its conversation's key map, as
     /// passed to <see cref="DecryptOne"/>; the SDK finds <paramref name="mediaHashKey"/>
-    /// in the event and derives that file's key. <c>Finish</c> throws if the stream
+    /// in the event and derives that file's key. <c>Finish</c> throws if the file
     /// was truncated, so plaintext from <c>Push</c> must not be treated as complete
     /// until it succeeds.
     /// </summary>
     public byte[] DecryptMedia(
         byte[] ciphertext, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)
     {
-        using var dec = _chat.StreamDecryptor(eventB64, conversationKeys, mediaHashKey);
+        using var dec = _chat.FileDecryptor(new FileDecryptorParams(eventB64, conversationKeys, mediaHashKey));
         using var output = new MemoryStream();
         for (var offset = 0; offset < ciphertext.Length; offset += MediaChunk)
         {
@@ -225,8 +239,13 @@ public sealed class ChatCore : IDisposable
     public void Dispose() => _chat.Dispose();
 }
 
-/// <summary>Fields the X API expects for an encrypted message send.</summary>
-public sealed record SendBody(string MessageId, string EncodedMessageCreateEvent, string EncodedMessageEventSignature);
+/// <summary>
+/// Fields the X API expects for an encrypted message send, plus the message's
+/// <c>EventB64</c>, which stays local: the message as recipients receive it, to
+/// encrypt the message's files from with <see cref="ChatCore.EncryptMedia"/>.
+/// </summary>
+public sealed record SendBody(
+    string MessageId, string EncodedMessageCreateEvent, string EncodedMessageEventSignature, string EventB64);
 
 /// <summary>Pull the plain text out of a decrypted Message event, or null.</summary>
 public static class EventHelpers

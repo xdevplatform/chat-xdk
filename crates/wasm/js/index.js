@@ -479,12 +479,8 @@ export class ChatWithJuicebox {
   lock() { return this.#inner.lock(); }
   decryptConversationKey(b64) { return this.#inner.decryptConversationKey(b64); }
   extractConversationKeys(events) { return this.#inner.extractConversationKeys(events); }
-  decryptEvent(eventB64, conversationKeys, signingKeys) {
-    return this.#inner.decryptEvent(eventB64, conversationKeys, signingKeys);
-  }
-  decryptEvents(events, signingKeys) {
-    return this.#inner.decryptEvents(events, signingKeys);
-  }
+  decryptEvent(params) { return this.#inner.decryptEvent(params); }
+  decryptEvents(params) { return this.#inner.decryptEvents(params); }
   sign(data) { return this.#inner.sign(data); }
   verify(publicKeyB64, signature, data) { return this.#inner.verify(publicKeyB64, signature, data); }
   verifyKeyBinding(identityPublicKeyB64, signingPublicKeyB64, identityPublicKeySignatureB64) {
@@ -497,14 +493,10 @@ export class ChatWithJuicebox {
   encryptRemoveReaction(params) { return this.#inner.encryptRemoveReaction(params); }
   encryptEdit(params) { return this.#inner.encryptEdit(params); }
   prepareMessageDelete(params) { return this.#inner.prepareMessageDelete(params); }
-  encryptStream(plaintext, key) { return this.#inner.encryptStream(plaintext, key); }
-  decryptStream(encrypted, eventB64, conversationKeys, mediaHashKey) {
-    return this.#inner.decryptStream(encrypted, eventB64, conversationKeys, mediaHashKey);
-  }
-  streamEncryptor(key) { return this.#inner.streamEncryptor(key); }
-  streamDecryptor(eventB64, conversationKeys, mediaHashKey) {
-    return this.#inner.streamDecryptor(eventB64, conversationKeys, mediaHashKey);
-  }
+  encryptFile(params) { return this.#inner.encryptFile(params); }
+  fileEncryptor(params) { return this.#inner.fileEncryptor(params); }
+  decryptFile(params) { return this.#inner.decryptFile(params); }
+  fileDecryptor(params) { return this.#inner.fileDecryptor(params); }
   encrypt(plaintext, key) { return this.#inner.encrypt(plaintext, key); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
   prepareConversationKeyChange(params) { return this.#inner.prepareConversationKeyChange(params); }
@@ -644,7 +636,7 @@ export async function createChat(options) {
 
 // Re-export utility functions.
 export {
-  encryptedStreamSize,
+  encryptedFileSize,
   bytesToBase64,
   base64ToBytes,
   bytesToHex,

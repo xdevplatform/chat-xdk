@@ -5,6 +5,9 @@ use chat_xdk_core::crypto::{
     keys::{KeypairPurpose, XChatConversationKey},
 };
 use chat_xdk_core::keys::conversation_keys::{decrypt_conversation_key, encrypt_conversation_key};
+use chat_xdk_core::{
+    DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams,
+};
 
 #[derive(serde::Deserialize)]
 struct Vectors {
@@ -180,12 +183,13 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
 
     // Batch path: [KeyChange, message, garbage] never throws; the garbage
     // event is collected as an indexed error.
-    let events: Vec<&str> = vec![
-        &v.event_key_change_b64,
-        &v.event_message_b64,
-        &v.event_garbage_b64,
+    let events = vec![
+        v.event_key_change_b64.clone(),
+        v.event_message_b64.clone(),
+        v.event_garbage_b64.clone(),
     ];
-    let result = core.decrypt_events(&events, &signing_keys);
+    let result = core
+        .decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys.to_vec()));
 
     assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
     assert!(
@@ -234,7 +238,10 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     // Single-event path with pre-cached keys verifies the same message …
     let cached = result.conversation_keys.keys.clone();
     let event = core
-        .decrypt_event(&v.event_message_b64, &cached, &signing_keys)
+        .decrypt_event(
+            DecryptEventParams::new(v.event_message_b64.clone(), cached)
+                .with_signing_keys(signing_keys.to_vec()),
+        )
         .unwrap();
     match event {
         chat_xdk_core::Event::Message(msg) => {
@@ -246,7 +253,10 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
 
     // … and throws on the garbage event.
     assert!(core
-        .decrypt_event(&v.event_garbage_b64, &Default::default(), &signing_keys)
+        .decrypt_event(
+            DecryptEventParams::new(v.event_garbage_b64.clone(), Default::default())
+                .with_signing_keys(signing_keys.to_vec()),
+        )
         .is_err());
 }
 
@@ -258,7 +268,10 @@ fn vectors_failure_event_decodes_type_and_rate_limit_tier() {
     // Failure events are unsigned by protocol, so they decode with no
     // conversation or signing keys even under the default reject policy.
     let event = core
-        .decrypt_event(&v.event_failure_b64, &Default::default(), &[])
+        .decrypt_event(DecryptEventParams::new(
+            v.event_failure_b64.clone(),
+            Default::default(),
+        ))
         .unwrap();
     match event {
         chat_xdk_core::Event::Failure(f) => {
@@ -294,12 +307,13 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
         identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
     }];
 
-    let events: Vec<&str> = vec![
-        &v.event_key_change_b64,
-        &v.event_reply_valid_b64,
-        &v.event_reply_forged_b64,
+    let events = vec![
+        v.event_key_change_b64.clone(),
+        v.event_reply_valid_b64.clone(),
+        v.event_reply_forged_b64.clone(),
     ];
-    let result = core.decrypt_events(&events, &signing_keys);
+    let result = core
+        .decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys.to_vec()));
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 
     let messages: Vec<_> = result
@@ -380,8 +394,17 @@ fn open_media(
 ) -> Result<Vec<u8>, chat_xdk_core::error::SdkError> {
     let core = chat_xdk_core::ChatCore::new();
     let encrypted = B64.decode(encrypted_b64).unwrap();
-    let whole = core.decrypt_stream(&encrypted, event_b64, keys, media_hash_key)?;
-    let mut decryptor = core.stream_decryptor(event_b64, keys, media_hash_key)?;
+    let whole = core.decrypt_file(DecryptFileParams::new(
+        encrypted.clone(),
+        event_b64,
+        keys.clone(),
+        media_hash_key,
+    ))?;
+    let mut decryptor = core.file_decryptor(FileDecryptorParams::new(
+        event_b64,
+        keys.clone(),
+        media_hash_key,
+    ))?;
     let mut incremental = Vec::new();
     for chunk in encrypted.chunks(700) {
         incremental.extend(decryptor.push(chunk)?);
@@ -398,7 +421,12 @@ fn media_error(
     encrypted: &[u8],
 ) -> String {
     chat_xdk_core::ChatCore::new()
-        .decrypt_stream(encrypted, event_b64, keys, media_hash_key)
+        .decrypt_file(DecryptFileParams::new(
+            encrypted.to_vec(),
+            event_b64,
+            keys.clone(),
+            media_hash_key,
+        ))
         .unwrap_err()
         .to_string()
 }
@@ -409,9 +437,8 @@ fn vectors_message_key_event_decrypts_with_the_conversation_key() {
     let message = expect_message(
         chat_xdk_core::ChatCore::new()
             .decrypt_event(
-                &v.event_message_key_b64,
-                &message_key_map(&v),
-                &[signing_key_for(&v, &v.message_key_sender_id)],
+                DecryptEventParams::new(v.event_message_key_b64.clone(), message_key_map(&v))
+                    .with_signing_keys(vec![signing_key_for(&v, &v.message_key_sender_id)]),
             )
             .unwrap(),
     );
@@ -604,11 +631,11 @@ fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
         signing_key_for(&v, &v.message_key_sender_id),
     ];
     let result = core.decrypt_events(
-        &[
-            &v.event_key_change_message_key_b64,
-            &v.event_message_key_b64,
-        ],
-        &signing_keys,
+        DecryptEventsParams::new(vec![
+            v.event_key_change_message_key_b64.clone(),
+            v.event_message_key_b64.clone(),
+        ])
+        .with_signing_keys(signing_keys.to_vec()),
     );
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     let ckey = result
@@ -646,12 +673,14 @@ fn vectors_short_sender_message_key_event_verifies_at_v11() {
     let message = expect_message(
         chat_xdk_core::ChatCore::new()
             .decrypt_event(
-                &v.event_message_key_short_b64,
-                &key_map(
-                    &v.message_key_short_conversation_key_version,
-                    &v.message_key_short_conversation_key_hex,
-                ),
-                &[signing_key_for(&v, &v.message_key_short_sender_id)],
+                DecryptEventParams::new(
+                    v.event_message_key_short_b64.clone(),
+                    key_map(
+                        &v.message_key_short_conversation_key_version,
+                        &v.message_key_short_conversation_key_hex,
+                    ),
+                )
+                .with_signing_keys(vec![signing_key_for(&v, &v.message_key_short_sender_id)]),
             )
             .unwrap(),
     );
@@ -669,12 +698,11 @@ fn vectors_reply_carrying_a_message_key_validates_and_opens_the_quoted_media() {
     let keys = fixture_key_map(&v);
     let message = expect_message(
         core.decrypt_event(
-            &v.event_reply_message_key_b64,
-            &keys,
-            &[
-                signing_key_for(&v, &v.event_sender_id),
-                signing_key_for(&v, &v.message_key_sender_id),
-            ],
+            DecryptEventParams::new(v.event_reply_message_key_b64.clone(), keys.clone())
+                .with_signing_keys(vec![
+                    signing_key_for(&v, &v.event_sender_id),
+                    signing_key_for(&v, &v.message_key_sender_id),
+                ]),
         )
         .unwrap(),
     );
