@@ -84,7 +84,6 @@ public final class Register {
 
         try (Chat chat = new Chat()) {
             JsonNode body;
-            String version;
 
             // Resume an interrupted run with the SAME identity; only generate a
             // fresh one when there is no saved blob. Persisting the blob and the
@@ -94,11 +93,9 @@ public final class Register {
             if (resuming) {
                 chat.importKeys(Base64.getDecoder().decode(Files.readString(BLOB_PATH).trim()));
                 body = marker.get("body");
-                version = marker.path("version").asText("1");
                 System.out.println("Resuming the saved identity (" + BLOB_PATH + ").");
             } else {
                 PublicKeyRegistrationPayload payload = chat.generateKeypairs();
-                version = payload.version == null ? "1" : payload.version;
                 // Only public material goes into the body, so it is safe to
                 // persist and re-send on a later run.
                 ObjectNode pk = MAPPER.createObjectNode();
@@ -109,8 +106,6 @@ public final class Register {
                 pk.put("registration_method", payload.publicKey.registrationMethod);
                 ObjectNode b = MAPPER.createObjectNode();
                 b.set("public_key", pk);
-                b.put("version", version);
-                b.put("generate_version", payload.generateVersion);
                 body = b;
 
                 byte[] exported = chat.exportKeys();
@@ -122,7 +117,6 @@ public final class Register {
                 ObjectNode m = MAPPER.createObjectNode();
                 m.put("registered", false);
                 m.put("user_id", userId);
-                m.put("version", version);
                 m.set("body", body);
                 writeMarker(m);
                 System.out.println("Generated a new identity; private keys saved to " + BLOB_PATH + ".");
@@ -140,22 +134,19 @@ public final class Register {
                     break;
                 }
             }
+            String version;
             if (already != null) {
-                version = already.path("public_key_version").asText(version);
-                System.out.println("Public key already registered on the account (version "
-                        + version + "); skipping POST.");
+                version = already.path("public_key_version").asText("");
+                System.out.println("Public key already registered on the account; skipping POST.");
             } else {
-                System.out.println("Registering public key version " + version + " …");
+                System.out.println("Registering the public key …");
                 try {
                     JsonNode resp = api.addUserPublicKey(userId, body);
                     JsonNode data = resp.path("data");
                     if (data.isArray()) {
                         data = data.isEmpty() ? MAPPER.createObjectNode() : data.get(0);
                     }
-                    String v = data.path("public_key_version").asText("");
-                    if (!v.isEmpty()) {
-                        version = v;
-                    }
+                    version = data.path("public_key_version").asText("");
                 } catch (XChatClient.RateLimited limited) {
                     String when = limited.resetEpoch != null
                             ? Instant.ofEpochSecond(limited.resetEpoch).toString()
@@ -165,6 +156,13 @@ public final class Register {
                     System.exit(1);
                     return;
                 }
+            }
+
+            if (version.isEmpty()) {
+                System.err.println("The X API did not return a public_key_version for the key. Re-run to "
+                        + "look it up on the account; the saved identity resumes.");
+                System.exit(1);
+                return;
             }
 
             chat.setIdentity(userId, version);

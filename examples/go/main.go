@@ -45,9 +45,6 @@ func main() {
 	conversationID := os.Getenv("CHAT_CONVERSATION_ID")
 	privateKeysB64 := os.Getenv("CHAT_PRIVATE_KEYS_B64")
 	signingKeyVersion := os.Getenv("CHAT_SIGNING_KEY_VERSION")
-	if signingKeyVersion == "" {
-		signingKeyVersion = "1"
-	}
 
 	core := NewChatCore()
 	defer core.Close()
@@ -64,10 +61,16 @@ func main() {
 		fmt.Println(string(reg))
 		fmt.Println("\n2) Save the private key in your .env so the bot reuses the identity:")
 		fmt.Printf("CHAT_PRIVATE_KEYS_B64=%s\n", priv)
+		fmt.Println("\n3) Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API returns.")
 		fmt.Println("\nThen re-run.")
 		return
 	}
 
+	if signingKeyVersion == "" {
+		fmt.Println("Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API " +
+			"returned when the bot's public key was registered (go run ./register prints it).")
+		os.Exit(1)
+	}
 	if err := core.LoadKeys(privateKeysB64, signingKeyVersion); err != nil {
 		log.Fatalf("load_keys: %v", err)
 	}

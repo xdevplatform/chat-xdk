@@ -26,7 +26,7 @@ const state = {
   canonicalConversationId: "",
   seen: new Set(),
   paginationToken: undefined,
-  signingKeyVersion: "1",
+  signingKeyVersion: "",
   // Signing keys fetched per sender; setSigningKeys replaces the SDK's
   // store, so every known entry is passed on each refresh.
   signingKeys: new Map(), // userId -> entries
@@ -53,13 +53,17 @@ $("btn-generate").addEventListener("click", () => {
   const priv = bytesToBase64(chat.exportKeys());
   $("privkeys").value = priv;
   $("key-status").textContent =
-    "Generated. Register the public key with the X API, then save the blob.";
+    "Generated. Register the public key with the X API, then save the blob and the " +
+    "public_key_version it returns.";
   log("Registration payload:\n" + JSON.stringify(payload, null, 2));
 });
 
 $("btn-load").addEventListener("click", () => {
   const bytes = base64ToBytes($("privkeys").value.trim());
   if (!bytes) return ($("key-status").textContent = "Invalid base64.");
+  const version = $("keyversion").value.trim();
+  if (!version) return ($("key-status").textContent = "Enter the key's public_key_version.");
+  state.signingKeyVersion = version;
   chat.importKeys(bytes, state.signingKeyVersion);
   // Opt in to the SDK's conversation-key cache: decryptEvents feeds it and
   // encryptMessage resolves the key from it, so the app keeps no key state.

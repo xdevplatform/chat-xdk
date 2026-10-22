@@ -92,6 +92,8 @@ public key, so KeyChange participant entries targeting other key versions are
 skipped. Set it in either of two equivalent ways: pass the optional `version`
 to `import_keys` (Python/.NET/JVM) or call `import_keys_with_version`
 (Rust/Go); or call `set_identity`, which sets it together with the user id.
+After registering the keys from `generate_keypairs`, call `set_identity` with
+the `public_key_version` the registration returns.
 
 `set_identity(user_id, signing_key_version)` stores the **session identity**.
 Every method with optional `sender_id` / `signing_key_version` fields — the
@@ -1677,7 +1679,8 @@ interface PublicKeys {
 
 ### PublicKeyRegistrationPayload
 
-Returned by `generate_keypairs()`. POST this to the X API.
+Returned by `generate_keypairs()`. POST this to the X API, then call
+`set_identity` with the `public_key_version` the response returns.
 
 ```typescript
 // JS/WASM — camelCase. Non-JS bindings (Python/Go/.NET/JVM) use the
@@ -1691,8 +1694,6 @@ interface PublicKeyRegistrationPayload {
     signingPublicKey: string;             // Base64 SPKI-encoded signing key
     signingPublicKeySignature?: string;
   };
-  version?: string;         // Timestamp-based version
-  generateVersion: boolean; // true
 }
 ```
 

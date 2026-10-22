@@ -351,10 +351,6 @@ pub struct PublicKeys {
 pub struct PublicKeyRegistrationPayload {
     #[pyo3(get)]
     pub public_key: PublicKeyRegistration,
-    #[pyo3(get)]
-    pub version: Option<String>,
-    #[pyo3(get)]
-    pub generate_version: bool,
 }
 
 /// Public key registration fields expected by the X API.
@@ -1464,7 +1460,9 @@ impl Chat {
     /// Set the session identity: your user id and registered signing-key
     /// version, used as the defaults wherever a params ``sender_id`` /
     /// ``signing_key_version`` is ``None``. A resolved default and an
-    /// explicitly passed value produce identical signed output.
+    /// explicitly passed value produce identical signed output. The
+    /// signing-key version is the ``public_key_version`` returned when your
+    /// keys were registered.
     fn set_identity(&self, user_id: &str, signing_key_version: &str) {
         self.inner.set_identity(user_id, signing_key_version);
     }
@@ -1575,6 +1573,10 @@ impl Chat {
 
     /// Generate new keypairs and return the registration payload.
     ///
+    /// No signing-key version is set: after registering the keys, call
+    /// ``set_identity`` with the ``public_key_version`` the registration
+    /// returns.
+    ///
     /// Returns:
     ///     PublicKeyRegistrationPayload for the X API.
     fn generate_keypairs(&self) -> PyResult<PublicKeyRegistrationPayload> {
@@ -1588,8 +1590,6 @@ impl Chat {
                 signing_public_key: payload.public_key.signing_public_key,
                 signing_public_key_signature: payload.public_key.signing_public_key_signature,
             },
-            version: payload.version,
-            generate_version: payload.generate_version,
         })
     }
 
@@ -2158,9 +2158,10 @@ impl Chat {
     ///
     /// Args:
     ///     keys: Raw key bytes from ``export_keys()``.
-    ///     version: Optional public key version the keys were registered
-    ///         under; when given, participant-key filtering by version is
-    ///         enabled in the same call.
+    ///     version: Optional ``public_key_version`` returned when the keys
+    ///         were registered; when given, it becomes the signing-key
+    ///         version and enables participant-key filtering by version in
+    ///         the same call. Without it, no signing-key version is set.
     #[pyo3(signature = (keys, version=None))]
     fn import_keys(&self, keys: &[u8], version: Option<&str>) -> PyResult<()> {
         match version {

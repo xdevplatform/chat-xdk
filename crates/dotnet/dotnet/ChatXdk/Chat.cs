@@ -212,7 +212,9 @@ namespace ChatXdk
         /// Set the session identity: the owner's user id and signing-key version, used
         /// as the defaults wherever a params class' <c>SenderId</c> / <c>SigningKeyVersion</c>
         /// is left null. A resolved default and an explicitly passed value produce
-        /// byte-identical signed output for the same logical inputs.
+        /// byte-identical signed output for the same logical inputs. The signing-key
+        /// version is the <c>public_key_version</c> returned when the keys were
+        /// registered.
         /// </summary>
         public void SetIdentity(string userId, string signingKeyVersion)
         {
@@ -342,7 +344,10 @@ namespace ChatXdk
 
         /// <summary>
         /// Generate new identity + signing keypairs and return the registration payload.
-        /// POST the payload to <c>POST /2/chat/keys</c> before calling <see cref="Setup"/>.
+        /// POST the payload to <c>POST /2/users/:id/public_keys</c> before calling
+        /// <see cref="Setup"/>. No signing-key version is set: after registering the keys,
+        /// call <see cref="SetIdentity"/> with the <c>public_key_version</c> the
+        /// registration returns.
         /// </summary>
         public PublicKeyRegistrationPayload GenerateKeypairs()
         {
@@ -394,9 +399,10 @@ namespace ChatXdk
         /// <summary>
         /// Import private keys from a byte array produced by <see cref="ExportKeys"/>.
         /// Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-        /// When <paramref name="version"/> is given, the public key version the keys
-        /// were registered under is recorded as well, so participant-key filtering
-        /// and the session signing-key version are set in one call.
+        /// When <paramref name="version"/> is given (the <c>public_key_version</c>
+        /// returned when the keys were registered), it is recorded as well, so
+        /// participant-key filtering and the session signing-key version are set in
+        /// one call. Without it, no signing-key version is set.
         /// </summary>
         public void ImportKeys(byte[] keys, string? version = null)
         {

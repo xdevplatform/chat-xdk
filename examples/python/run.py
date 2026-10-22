@@ -39,7 +39,7 @@ def main() -> None:
     access_token = os.environ.get("X_ACCESS_TOKEN")
     conversation_id = os.environ.get("CHAT_CONVERSATION_ID")
     private_keys_b64 = os.environ.get("CHAT_PRIVATE_KEYS_B64")
-    signing_key_version = os.environ.get("CHAT_SIGNING_KEY_VERSION", "1")
+    signing_key_version = os.environ.get("CHAT_SIGNING_KEY_VERSION")
     pin = os.environ.get("CHAT_PIN")
 
     core = ChatCore()
@@ -51,6 +51,12 @@ def main() -> None:
         juicebox_config, version = api.get_juicebox_config(bot_id)
         core.unlock(juicebox_config, pin, version)
     elif private_keys_b64:
+        if not signing_key_version:
+            print(
+                "Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API "
+                "returned when the bot's public key was registered (register.py prints it)."
+            )
+            sys.exit(1)
         core.load_keys(private_keys_b64, signing_key_version)
     else:
         # First run: generate keys, print the registration payload to POST to
@@ -61,6 +67,9 @@ def main() -> None:
         print(json.dumps(info["registration"], indent=2))
         print("\n2) Save the private key in your .env so the bot reuses the identity:")
         print(f"CHAT_PRIVATE_KEYS_B64={info['private_keys_b64']}")
+        print(
+            "\n3) Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API returns."
+        )
         print("\nThen re-run.")
         sys.exit(0)
 

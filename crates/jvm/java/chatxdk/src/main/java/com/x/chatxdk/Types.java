@@ -66,14 +66,6 @@ public final class Types {
         /** The registration fields to upload to the X API. */
         @JsonProperty("public_key")
         public PublicKeyRegistration publicKey = new PublicKeyRegistration();
-
-        /** Optional explicit key version. */
-        @JsonProperty("version")
-        public String version;
-
-        /** Whether the X API should assign a fresh key version. */
-        @JsonProperty("generate_version")
-        public boolean generateVersion;
     }
 
     /** Signature metadata for a sent message. */

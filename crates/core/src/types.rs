@@ -1214,14 +1214,6 @@ pub struct PublicKeyRegistrationPayload {
     /// Public key registration object.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub public_key: PublicKeyRegistration,
-
-    /// Version to register (optional if generate_version is true).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-
-    /// When true, server generates a new version.
-    #[serde(default)]
-    pub generate_version: bool,
 }
 
 /// Public key registration fields expected by the X API.
@@ -1590,12 +1582,11 @@ mod tests {
                 signing_public_key: "spk".to_string(),
                 signing_public_key_signature: None,
             },
-            version: Some("12345".to_string()),
-            generate_version: true,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(!json.contains("public_key_fingerprint")); // skip_serializing_if
-        assert!(json.contains("\"generate_version\":true"));
+        let decoded: PublicKeyRegistrationPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.public_key.public_key, "pk");
     }
 
     #[test]

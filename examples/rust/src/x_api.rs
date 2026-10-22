@@ -126,9 +126,9 @@ mod http_impl {
         /// Register a public key: POST /2/users/{id}/public_keys.
         ///
         /// `body` is the registration object from `generate_keypairs` in its
-        /// snake_case wire form (`public_key` object, `version`,
-        /// `generate_version`). Returns [`RegisterError::RateLimited`] on 429
-        /// so the caller can stop instead of burning the strict daily budget.
+        /// snake_case wire form (the `public_key` object). Returns
+        /// [`RegisterError::RateLimited`] on 429 so the caller can stop instead
+        /// of burning the strict daily budget.
         pub fn add_user_public_key(
             &self,
             user_id: &str,

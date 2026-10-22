@@ -202,9 +202,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(JSON.stringify(info.registration, null, 2));
     console.log("\n2) Save the private key in your .env so the bot reuses the identity:");
     console.log(`CHAT_PRIVATE_KEYS_B64=${info.privateKeysB64}`);
+    console.log(
+      "\n3) Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API returns.",
+    );
     process.exit(0);
   }
-  core.loadKeys(privateKeys, process.env.CHAT_SIGNING_KEY_VERSION ?? "1");
+  const signingKeyVersion = process.env.CHAT_SIGNING_KEY_VERSION;
+  if (!signingKeyVersion) {
+    console.log(
+      "Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API " +
+        "returned when the bot's public key was registered.",
+    );
+    process.exit(1);
+  }
+  core.loadKeys(privateKeys, signingKeyVersion);
 
   const accessToken = process.env.X_ACCESS_TOKEN;
   const conversationId = process.env.CHAT_CONVERSATION_ID;

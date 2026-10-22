@@ -37,8 +37,15 @@ fn main() {
 
     match env_or(&env, "CHAT_PRIVATE_KEYS_B64") {
         Some(blob) if !blob.is_empty() => {
-            let version =
-                env_or(&env, "CHAT_SIGNING_KEY_VERSION").unwrap_or_else(|| "1".to_string());
+            let version = env_or(&env, "CHAT_SIGNING_KEY_VERSION").unwrap_or_default();
+            if version.is_empty() {
+                eprintln!(
+                    "Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version the X API \
+                     returned when the bot's public key was registered (cargo run --bin \
+                     register prints it)."
+                );
+                std::process::exit(1);
+            }
             if let Err(e) = core.load_keys(&blob, &version) {
                 eprintln!("load_keys failed: {e}");
                 std::process::exit(1);
@@ -58,6 +65,10 @@ fn main() {
                         "\n2) Save the private key in your .env so the bot reuses the identity:"
                     );
                     println!("CHAT_PRIVATE_KEYS_B64={private_blob}");
+                    println!(
+                        "\n3) Set CHAT_SIGNING_KEY_VERSION in .env to the public_key_version \
+                         the X API returns."
+                    );
                     println!("\nThen re-run.");
                 }
                 Err(e) => {
@@ -95,7 +106,7 @@ fn run(core: ChatCore, env: &HashMap<String, String>) -> Result<(), String> {
         _ => api.get_my_user_id()?,
     };
 
-    let mut bot = Bot::new(core, api, bot_user_id);
+    let mut bot = Bot::new(core, api, bot_user_id).map_err(|e| e.to_string())?;
     bot.run(&conversation_id, Duration::from_secs(3))
 }
 

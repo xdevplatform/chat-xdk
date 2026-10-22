@@ -54,13 +54,15 @@ npm run build:wasm     # build a browser (web-target) WASM package
 npm start              # serve on http://localhost:8787
 ```
 
-Paste a private key blob (or generate one in the page — see the note below),
-enter a conversation ID, and chat.
+Paste a private key blob and its key version (the `public_key_version` the X
+API returned when the key was registered), or generate one in the page — see
+the note below. Then enter a conversation ID and chat.
 
 ## Run the headless bot
 
 ```bash
-cp .env.example .env   # set X_ACCESS_TOKEN, CHAT_CONVERSATION_ID, CHAT_PRIVATE_KEYS_B64
+cp .env.example .env   # set X_ACCESS_TOKEN, CHAT_CONVERSATION_ID, CHAT_PRIVATE_KEYS_B64,
+                       # and CHAT_SIGNING_KEY_VERSION (the key's public_key_version)
 npm run bot
 ```
 
@@ -93,11 +95,11 @@ identity). `state/` is gitignored — never commit key material.
 
 ## Key generation in the browser
 
-The `wasm32-unknown-unknown` target has no system clock, so the binding reads the
-key version from JavaScript's `Date.now()`. Key generation (`generateKeypairs`),
-conversation-key creation (`prepareConversationKeyChange`), encryption, and both
-decrypt paths therefore all run directly in the browser — the sample is fully
-self-contained and never needs another language to mint keys.
+The `wasm32-unknown-unknown` target has no system clock, so the binding reads
+conversation key versions from JavaScript's `Date.now()`. Key generation
+(`generateKeypairs`), conversation-key creation (`prepareConversationKeyChange`),
+encryption, and both decrypt paths therefore all run directly in the browser —
+the sample is fully self-contained and never needs another language to mint keys.
 
 ## License
 
