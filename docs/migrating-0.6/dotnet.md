@@ -24,6 +24,8 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -35,7 +37,9 @@ and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
 loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
 `DecryptEvents` returns, `bundle` for a `ConversationKeyBundle`, `payload`
-for a `SendPayload` and `prepared` for a `PreparedConversationChange`.
+for a `SendPayload`, `prepared` for a `PreparedConversationChange`, and
+`keyChange` and `message` for a decrypted key change and message, as
+`JsonElement`s.
 `api.Post(path, body)` stands for your HTTP client: it POSTs `body`,
 serialized with `System.Text.Json`'s default options, to
 `https://api.x.com` + `path` with your user access token and returns the
@@ -373,12 +377,15 @@ var actionSignatures = prepared.ActionSignatures;
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests that
-take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
-`/{id}/members`): `ConversationParticipantKeys`, whose entries
-(`UserId`, `EncryptedConversationKey`, `PublicKeyVersion`) serialize as
-`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
-through as returned:
+A prepared change's participant keys carry the names of the requests the
+change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `ConversationParticipantKeys`, a list of
+`ConversationParticipantKey` whose properties (`UserId`,
+`EncryptedConversationKey`, `PublicKeyVersion`) serialize as `user_id`,
+`encrypted_conversation_key` and `public_key_version`, the names a received
+key change uses too
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
+and pass them through as returned:
 
 ```csharp
 // 0.5.x
@@ -393,6 +400,39 @@ var conversationParticipantKeys = prepared.ParticipantKeys
 
 // 0.6.0
 var conversationParticipantKeys = prepared.ConversationParticipantKeys;
+```
+
+## Received participant keys take the same names
+
+A decrypted key change carries its participant keys under the names Thrift's
+`ConversationKeyChangeEvent` gives them, the same names a prepared change
+uses: `conversation_participant_keys`, each entry with `user_id`,
+`encrypted_conversation_key` and `public_key_version`, which deserializes
+into `ConversationParticipantKey`. Read them under those names:
+
+```csharp
+// 0.5.x
+var encrypted = keyChange.GetProperty("participant_keys")[0].GetProperty("encrypted_key").GetString();
+
+// 0.6.0
+var encrypted = keyChange.GetProperty("conversation_participant_keys")[0]
+    .GetProperty("encrypted_conversation_key").GetString();
+```
+
+## Decrypted events name the conversation key version as the X API does
+
+A decrypted message or key change carries its conversation key version as
+`conversation_key_version`, the name the X API's events and the Thrift
+events give it, and the name the encrypt params serialize to:
+
+```csharp
+// 0.5.x
+var messageVersion = message.GetProperty("key_version").GetString();
+var keyChangeVersion = keyChange.GetProperty("key_version").GetString();
+
+// 0.6.0
+var messageVersion = message.GetProperty("conversation_key_version").GetString();
+var keyChangeVersion = keyChange.GetProperty("conversation_key_version").GetString();
 ```
 
 ## Deletes return a `PreparedAction`

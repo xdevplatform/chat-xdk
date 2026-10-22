@@ -25,6 +25,8 @@ change.
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -35,8 +37,9 @@ Each snippet shows the lines that change, first as 0.5.x code writes them
 and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
 loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
-`decrypt_events` returns, `payload` for a `SendPayload` and `prepared` for
-the dict a prepare method returns. `api.post(path, body)` stands for your
+`decrypt_events` returns, `payload` for a `SendPayload`, `prepared` for
+the dict a prepare method returns, and `key_change` and `message` for a
+decrypted key change and message. `api.post(path, body)` stands for your
 HTTP client: it POSTs `body` as JSON to `https://api.x.com` + `path` with
 your user access token and returns the parsed JSON response.
 `photo_attachment(media_hash_key)` stands for your code that builds a
@@ -399,11 +402,13 @@ action_signatures = prepared["action_signatures"]
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests that
-take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+A prepared change's participant keys carry the names of the requests the
+change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
 `/{id}/members`): `conversation_participant_keys`, each entry with
-`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
-through as returned:
+`user_id`, `encrypted_conversation_key` and `public_key_version`, the names
+a received key change uses too
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
+and pass them through as returned:
 
 ```python
 # 0.5.x
@@ -418,6 +423,38 @@ conversation_participant_keys = [
 
 # 0.6.0
 conversation_participant_keys = prepared["conversation_participant_keys"]
+```
+
+## Received participant keys take the same names
+
+A decrypted key change carries its participant keys under the names Thrift's
+`ConversationKeyChangeEvent` gives them, the same names a prepared change
+uses: `conversation_participant_keys`, each entry with `user_id`,
+`encrypted_conversation_key` and `public_key_version`. Read them under those
+names:
+
+```python
+# 0.5.x
+encrypted = key_change["participant_keys"][0]["encrypted_key"]
+
+# 0.6.0
+encrypted = key_change["conversation_participant_keys"][0]["encrypted_conversation_key"]
+```
+
+## Decrypted events name the conversation key version as the X API does
+
+Decrypted messages and key changes carry their conversation key version as
+`conversation_key_version`, the name the X API's events and the Thrift
+events give it, and the name the encrypt methods take:
+
+```python
+# 0.5.x
+message_version = message["key_version"]
+key_change_version = key_change["key_version"]
+
+# 0.6.0
+message_version = message["conversation_key_version"]
+key_change_version = key_change["conversation_key_version"]
 ```
 
 ## Deletes return a `PreparedAction`

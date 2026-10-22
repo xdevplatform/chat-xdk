@@ -24,6 +24,8 @@ change.
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -37,7 +39,8 @@ other names stand for your own values: ids, versions, keys and events as the
 X API returns them, `keys` for the conversation key map `decrypt_events`
 returns, `payload` for a `SendPayload`, `prepared` for a
 `PreparedConversationChange`, `key_change` for a
-`ConversationKeyChangeParams` and `err` for an `SdkError`.
+`ConversationKeyChangeParams`, `received_key_change` and `message` for a
+decrypted `KeyChangeEvent` and `Message`, and `err` for an `SdkError`.
 `api.post(path, &body)` stands for your HTTP client: it POSTs `body`, a
 `serde_json::Value`, to `https://api.x.com` + `path` with your user access
 token and returns the parsed JSON response as a `serde_json::Value`.
@@ -401,11 +404,13 @@ let action_signatures = serde_json::to_value(&prepared.action_signatures)?;
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests that
-take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
-`/{id}/members`): `conversation_participant_keys`, each entry with
-`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
-through as returned:
+A prepared change's participant keys carry the names of the requests the
+change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `conversation_participant_keys`, each entry a
+`ConversationParticipantKey` with `user_id`, `encrypted_conversation_key`
+and `public_key_version`, the type a received key change uses too
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
+and pass them through as returned:
 
 ```rust
 // 0.5.x
@@ -423,6 +428,40 @@ let conversation_participant_keys: Vec<serde_json::Value> = prepared
 
 // 0.6.0
 let conversation_participant_keys = &prepared.conversation_participant_keys;
+```
+
+## Received participant keys take the same names
+
+A decrypted `KeyChangeEvent` carries its participant keys under the names
+Thrift's `ConversationKeyChangeEvent` gives them, the same names a prepared
+change uses: `conversation_participant_keys`, each entry with `user_id`,
+`encrypted_conversation_key` and `public_key_version`. Received and prepared
+keys are one type, `ConversationParticipantKey`:
+
+```rust
+// 0.5.x
+let key: &ParticipantKey = &received_key_change.participant_keys[0];
+let encrypted = &key.encrypted_key;
+
+// 0.6.0
+let key: &ConversationParticipantKey = &received_key_change.conversation_participant_keys[0];
+let encrypted = &key.encrypted_conversation_key;
+```
+
+## Decrypted events name the conversation key version as the X API does
+
+`Message` and `KeyChangeEvent` carry their conversation key version as
+`conversation_key_version`, the name the X API's events and the Thrift
+events give it, and the name the encrypt params take:
+
+```rust
+// 0.5.x
+let message_version = message.key_version.as_deref();
+let key_change_version = received_key_change.key_version.as_str();
+
+// 0.6.0
+let message_version = message.conversation_key_version.as_deref();
+let key_change_version = received_key_change.conversation_key_version.as_str();
 ```
 
 ## Deletes return a `PreparedAction`
