@@ -77,10 +77,9 @@ Chats read the X API's feature switches with one anonymous request,
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. The request runs on daemon threads,
 and one still under way at exit is cut short, so it never keeps the process
-alive. Close each chat when you're done with it,
-or let it be garbage-collected: the requests stop once no chat in the
-process uses them. A closed chat stays usable and keeps the format it sends
-in:
+alive. Close each chat when you're done with it, or let it be
+garbage-collected: the requests stop once no chat in the process uses them.
+A closed chat stays usable and keeps the format it sends in:
 
 ```python
 # 0.6.0
