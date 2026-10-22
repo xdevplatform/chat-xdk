@@ -137,7 +137,12 @@ public sealed class ChatCore : IDisposable
                 TtlMsec = ttlMsec,
             });
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncodedMessageCreateEvent, payload.EncodedMessageEventSignature, payload.EventB64);
+        return new SendBody(
+            payload.MessageId,
+            payload.EncodedMessageCreateEvent,
+            payload.EncodedMessageEventSignature,
+            payload.XdkVersion,
+            payload.EventB64);
     }
 
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
@@ -156,7 +161,12 @@ public sealed class ChatCore : IDisposable
         };
         var payload = add ? _chat.EncryptAddReaction(parameters) : _chat.EncryptRemoveReaction(parameters);
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncodedMessageCreateEvent, payload.EncodedMessageEventSignature, payload.EventB64);
+        return new SendBody(
+            payload.MessageId,
+            payload.EncodedMessageCreateEvent,
+            payload.EncodedMessageEventSignature,
+            payload.XdkVersion,
+            payload.EventB64);
     }
 
     // -- Group management -----------------------------------------------------
@@ -258,7 +268,11 @@ public sealed class ChatCore : IDisposable
 /// encrypt the message's files from with <see cref="ChatCore.EncryptMedia"/>.
 /// </summary>
 public sealed record SendBody(
-    string MessageId, string EncodedMessageCreateEvent, string EncodedMessageEventSignature, string EventB64);
+    string MessageId,
+    string EncodedMessageCreateEvent,
+    string EncodedMessageEventSignature,
+    string XdkVersion,
+    string EventB64);
 
 /// <summary>Pull the plain text out of a decrypted Message event, or null.</summary>
 public static class EventHelpers

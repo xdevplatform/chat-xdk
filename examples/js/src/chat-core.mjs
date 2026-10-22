@@ -203,6 +203,7 @@ export class ChatCore {
       message_id: payload.messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
       event_b64: payload.eventB64,
     };
   }
@@ -222,6 +223,7 @@ export class ChatCore {
       message_id: payload.messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
     };
   }
 
@@ -243,6 +245,7 @@ export class ChatCore {
       message_id: payload.messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
     };
   }
 

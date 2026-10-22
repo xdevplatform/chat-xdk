@@ -214,7 +214,12 @@ class TestPreparedChanges(unittest.TestCase):
         )
         self.assertEqual(
             sorted(body),
-            ["encoded_message_create_event", "encoded_message_event_signature", "message_id"],
+            [
+                "encoded_message_create_event",
+                "encoded_message_event_signature",
+                "message_id",
+                "xdk_version",
+            ],
         )
 
     def test_threaded_reply_with_entities_and_ttl(self):
