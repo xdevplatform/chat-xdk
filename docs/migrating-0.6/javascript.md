@@ -2,9 +2,10 @@
 
 This page lists every change that code written for `@xdevplatform/chat-xdk`
 0.5.x (0.5.0, 0.5.1 or 0.5.2) runs into in 0.6.0, each with the lines to
-change. It covers Node and browsers alike. The other bindings have their own
-pages, listed in the [index](README.md). [API.md](../API.md) documents every
-call, and the [CHANGELOG](../../CHANGELOG.md) lists every change.
+change. It covers Node and browsers alike. The [index](README.md) explains
+why each change was made and lists the other bindings' pages.
+[API.md](../API.md) documents every call, and the
+[CHANGELOG](../../CHANGELOG.md) lists every change.
 
 ## Checklist
 
@@ -17,7 +18,6 @@ call, and the [CHANGELOG](../../CHANGELOG.md) lists every change.
 - [ ] [Pass a params object to `decryptEvents`](#decryptevents-takes-a-params-object)
 - [ ] [Pass a params object to `decryptEvent`](#decryptevent-takes-a-params-object)
 - [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
-- [ ] [Don't send `xdkVersion` yet](#xdkversion-dont-send-it-yet)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
@@ -25,7 +25,7 @@ call, and the [CHANGELOG](../../CHANGELOG.md) lists every change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
-- [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
+- [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
 
@@ -35,19 +35,22 @@ and then as 0.6.0 code writes them. `chat` is the `ChatWithJuicebox` that
 values: ids, versions, keys and events as the X API returns them, `keys` for
 the conversation key map `decryptEvents` returns, `payload` for a
 `SendPayload` and `prepared` for a `PreparedConversationChange`.
-`startUpload`, `upload`, `finishUpload`, `photoAttachment`, `publicKeyJson`
-and `registerPublicKey` stand for your own upload and request code.
-Functions such as `encryptedFileSize` import from `@xdevplatform/chat-xdk`.
+`api.post(path, body)` stands for your HTTP client: it POSTs `body` as JSON
+to `https://api.x.com` + `path` with your user access token, writing every
+key in snake_case as the X API takes them (the package returns camelCase),
+and resolves to the parsed JSON response. `photoAttachment(mediaHashKey)`
+stands for your code that builds a photo's attachment descriptor. Functions
+such as `encryptedFileSize` and `bytesToBase64` import from
+`@xdevplatform/chat-xdk`.
 
 ## Upgrade readers before v1 sends start
 
 0.6.0 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
-it at signature version 10. A chat sends v1 only once the X API turns on its
-`v1_send` feature switch (see
-[The feature-switch request](#the-feature-switch-request)); until then every
-send is v0.
+it at signature version 10. A chat sends v1 while the X API's `v1_send`
+feature switch is on for it, and v0 otherwise (see
+[The feature-switch request](#the-feature-switch-request)).
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations to 0.6.0 before your senders can
@@ -71,8 +74,6 @@ Each chat reads the X API's feature switches with one anonymous request,
 - the 5-minute re-checks can only turn a switch off: a chat picks up a switch
   turning on only when it is created again.
 
-Every send is v0 until the X API turns `v1_send` on.
-
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. In a browser the request is a
 cross-origin `GET`, and a failed one keeps sends v0 too. Free each chat when
@@ -89,9 +90,9 @@ chat.free();
 ## Register keys with the public key only
 
 `generateKeypairs()` returns a payload that holds only `publicKey`. Send it
-as the only field of the `POST /2/users/:id/public_keys` body, `public_key`.
-0.6.0 doesn't pick a signing-key version for new keys: after you register,
-call `setIdentity` with the `public_key_version` the X API returns (see the
+as the only field of the `POST /2/users/{id}/public_keys` body,
+`public_key`. 0.6.0 doesn't pick a signing-key version for new keys: call
+`setIdentity` with the `public_key_version` the request returns (see the
 next section). A signed call made without a version throws `Invalid state:
 signing_key_version is not set: pass it explicitly or call set_identity()
 first`.
@@ -99,19 +100,17 @@ first`.
 ```js
 // 0.5.x
 const registration = chat.generateKeypairs();
-const publicKeyVersion = await registerPublicKey(userId, {
-  public_key: publicKeyJson(registration.publicKey),
+const response = await api.post(`/2/users/${userId}/public_keys`, {
+  public_key: registration.publicKey,
   version: registration.version,
   generate_version: registration.generateVersion,
 });
-chat.setIdentity(userId, publicKeyVersion);
+chat.setIdentity(userId, response.data.public_key_version);
 
 // 0.6.0
 const registration = chat.generateKeypairs();
-const publicKeyVersion = await registerPublicKey(userId, {
-  public_key: publicKeyJson(registration.publicKey),
-});
-chat.setIdentity({ userId, signingKeyVersion: publicKeyVersion });
+const response = await api.post(`/2/users/${userId}/public_keys`, { public_key: registration.publicKey });
+chat.setIdentity({ userId, signingKeyVersion: response.data.public_key_version });
 ```
 
 ## `setIdentity` takes a params object
@@ -193,8 +192,9 @@ const event = chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys 
 
 ## `SendPayload` fields take the send request's names
 
-The two encoded fields carry the names of the send request's fields,
-camelCased, so the request takes them as they are:
+The two encoded fields carry the names of the fields of the send request,
+`POST /2/chat/conversations/{id}/messages`, camelCased, so the request takes
+them as they are:
 
 ```js
 // 0.5.x
@@ -218,40 +218,55 @@ recipients receive it. It isn't part of the send request: keep it to
 encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
-## `xdkVersion`: don't send it yet
-
-`payload.xdkVersion` is the version of the SDK that built the payload.
-Don't add it to the send request yet: the request takes it as an optional
-`xdk_version` field only once the X API documents that field.
-
 ## Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
 message first:
 
-1. Start each file's upload, declaring `encryptedFileSize` of the file's
-   size, and keep its media hash key.
+1. Start each file's upload with `POST /2/chat/media/upload/initialize`,
+   declaring `encryptedFileSize` of the file's size as `total_bytes`, and
+   keep the `session_id` and `media_hash_key` it returns.
 2. Encrypt the message with attachments that name those media hash keys.
 3. Encrypt each file with `encryptFile`, passing the payload's `eventB64`
    and the file's media hash key.
-4. Finish the uploads, then send the message.
+4. Upload each encrypted file with `POST
+   /2/chat/media/upload/{session_id}/append` and finish it with `POST
+   /2/chat/media/upload/{session_id}/finalize`, then send the message.
 
 ```js
 // 0.5.x
 const encrypted = chat.encryptStream(photo, conversationKey);
-const mediaHashKey = await upload(encrypted);
+const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
+  conversation_id: conversationId, total_bytes: encrypted.length,
+});
 const payload = chat.encryptMessage({
-  conversationId, text: "a photo", attachments: [photoAttachment(mediaHashKey)],
+  conversationId, text: "a photo", attachments: [photoAttachment(upload.media_hash_key)],
 });
 
 // 0.6.0
-const mediaHashKey = await startUpload(encryptedFileSize(photo.length));
+const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
+  conversation_id: conversationId, total_bytes: encryptedFileSize(photo.length),
+});
+const mediaHashKey = upload.media_hash_key;
 const payload = chat.encryptMessage({
   conversationId, text: "a photo", attachments: [photoAttachment(mediaHashKey)],
 });
 const encrypted = chat.encryptFile({ file: photo, eventB64: payload.eventB64, mediaHashKey });
-await finishUpload(mediaHashKey, encrypted);
+await api.post(`/2/chat/media/upload/${upload.session_id}/append`, {
+  conversation_id: conversationId, media_hash_key: mediaHashKey,
+  segment_index: 0, media: bytesToBase64(encrypted),
+});
+await api.post(`/2/chat/media/upload/${upload.session_id}/finalize`, {
+  conversation_id: conversationId, media_hash_key: mediaHashKey, num_parts: "1",
+});
 ```
+
+The `append` and `finalize` requests don't change, but they come after
+`encryptFile`, which produces the bytes they upload. The upload requests
+take `conversation_id` in its colon form, as the SDK does. The snippet
+uploads the file in one segment; a larger file goes up in several `append`
+requests, `segment_index` 0, 1 and so on (the examples send 3 MB segments),
+with their count as `num_parts`.
 
 Like `encryptMessage`, `encryptFile` takes `conversationKey` and
 `conversationKeyVersion` (pass both, or neither to resolve them from the
@@ -382,19 +397,22 @@ let session: ChatWithJuicebox;
 let encryptor: FileEncryptor;
 ```
 
-## Signed read receipts (new, pending)
+## Signed read receipts
 
 `prepareMarkConversationRead` signs a read receipt for the newest event you
 read. It takes `{ conversationId, seenUntilSequenceId }` (that event's
 sequence id) and an optional `seenAtMsec` that defaults to now, and returns
-a `PreparedAction`. A recipient's `decryptEvent` returns a signed receipt as
+a `PreparedAction`, one entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+its `actionSignatures` as the `action_signatures` of the mark-read request,
+`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
+in its hyphen form. A recipient's `decryptEvent` returns a signed receipt as
 a verified `ReadReceipt` event.
-
-**Pending:** the X API's mark-read route doesn't take `action_signatures`
-yet, so the shape of that request may change when it does.
 
 ```js
 // 0.6.0
 const receipt = chat.prepareMarkConversationRead({ conversationId, seenUntilSequenceId });
-const actionSignatures = receipt.actionSignatures;
+await api.post(`/2/chat/conversations/${conversationId.replaceAll(":", "-")}/read`, {
+  action_signatures: receipt.actionSignatures,
+});
 ```

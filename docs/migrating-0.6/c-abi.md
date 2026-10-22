@@ -5,8 +5,8 @@ runs into in 0.6.0, coming from 0.5.x (0.5.0, 0.5.1 or 0.5.2). The ABI is
 declared in
 [`go/chatxdk/include/chat_xdk.h`](../../go/chatxdk/include/chat_xdk.h), and
 the native libraries in the .NET and JVM packages export the same functions.
-The language bindings have their own pages, listed in the
-[index](README.md).
+The [index](README.md) explains why each change was made and lists the
+language bindings' pages.
 
 Every entry point whose arguments changed takes a new name, so a stale
 header or library fails to link instead of misreading its arguments.
@@ -20,13 +20,12 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Pass user ids and key versions as strings of digits](#user-ids-and-key-versions-are-strings-of-digits)
 - [ ] [Decrypt with `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params`](#decrypt-with-params-documents)
 - [ ] [Read the send payload under the send request's field names](#the-send-payload-takes-the-send-requests-field-names)
-- [ ] [Don't send `xdk_version` yet](#xdk_version-dont-send-it-yet)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use the file encryptor and decryptor for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
+- [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
 
@@ -51,7 +50,7 @@ format 0.5.x sends. v1 encrypts each message under its own key, derived from
 the conversation key, the sender and the message id, and signs it at
 signature version 10. The C ABI doesn't fetch the X API's feature switches,
 so direct callers always send v0. The Python, JavaScript, Go, JVM and .NET
-bindings send v1 once the X API turns on its `v1_send` feature switch.
+bindings send v1 while the X API's `v1_send` feature switch is on.
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations to 0.6.0 before any sender can send
@@ -63,10 +62,10 @@ v1.
 ## Register keys with the public key only
 
 `chat_xdk_generate_keypairs` returns a document that holds only
-`public_key`. POST it to `POST /2/users/:id/public_keys` as returned. 0.6.0
-doesn't pick a signing-key version for new keys: after you register, set the
-identity with the `public_key_version` the X API returns (see the next
-section). A signed call made without a version fails with `Invalid state:
+`public_key`. Send it as returned as the body of
+`POST /2/users/{id}/public_keys`. 0.6.0 doesn't pick a signing-key version
+for new keys: set the identity with the `public_key_version` the request
+returns (see the next section). A signed call made without a version fails with `Invalid state:
 signing_key_version is not set: pass it explicitly or call set_identity()
 first`.
 
@@ -136,25 +135,31 @@ char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
 
 The encrypt calls keep their names, and the send payload they return names
 its two encoded fields `encoded_message_create_event` and
-`encoded_message_event_signature`, the send request's field names, so the
-request takes them as they are. It also carries `event_b64`, the message as
+`encoded_message_event_signature`, the field names of the send request,
+`POST /2/chat/conversations/{id}/messages`, so the request takes them as
+they are. It also carries `event_b64`, the message as
 recipients receive it: keep it to encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
-
-## `xdk_version`: don't send it yet
-
-The send payload's `xdk_version` is the version of the SDK that built it.
-Don't add it to the send request yet: the request takes it as an optional
-field only once the X API documents that field.
 
 ## Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
-message first: start each file's upload, declaring
-`chat_xdk_encrypted_file_size` of the file's size, encrypt the message with
-attachments that name the media hash keys, then encrypt each file with
-`chat_xdk_encrypt_file`, passing the payload's `event_b64` and the file's
-media hash key. Like the message, the file takes `conversation_key` and
+message first:
+
+1. Start each file's upload with `POST /2/chat/media/upload/initialize`,
+   declaring `chat_xdk_encrypted_file_size` of the file's size as
+   `total_bytes`, and keep the `session_id` and `media_hash_key` it returns.
+2. Encrypt the message with attachments that name those media hash keys.
+3. Encrypt each file with `chat_xdk_encrypt_file`, passing the payload's
+   `event_b64` and the file's media hash key.
+4. Upload each encrypted file with `POST
+   /2/chat/media/upload/{session_id}/append` (`conversation_id`,
+   `media_hash_key`, `segment_index` and the base64 bytes as `media`) and
+   finish it with `POST /2/chat/media/upload/{session_id}/finalize`
+   (`conversation_id`, `media_hash_key` and the segment count as
+   `num_parts`), then send the message.
+
+Like the message, the file takes `conversation_key` and
 `conversation_key_version` (both, or neither to resolve them from the key
 cache), and they must be the ones the message was encrypted under.
 
@@ -260,17 +265,16 @@ only)` or `too many attachments: at most 10 per message`, without an
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Signed read receipts (new, pending)
+## Signed read receipts
 
 `chat_xdk_prepare_mark_conversation_read` signs a read receipt for the
 newest event you read. It takes a document with `conversation_id`,
 `seen_until_sequence_id` (that event's sequence id) and an optional
 `seen_at_msec` that defaults to now, and returns `action_signatures` as a
-delete does. A recipient's `chat_xdk_decrypt_event_params` returns a signed
-receipt as a verified `ReadReceipt` event.
-
-**Pending:** the X API's mark-read route doesn't take `action_signatures`
-yet, so the shape of that request may change when it does.
+delete does. Send them as the `action_signatures` of the mark-read request,
+`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
+in its hyphen form. A recipient's `chat_xdk_decrypt_event_params` returns a
+signed receipt as a verified `ReadReceipt` event.
 
 ```c
 // 0.6.0
