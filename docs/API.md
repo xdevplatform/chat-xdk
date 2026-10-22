@@ -1903,9 +1903,7 @@ Returned by `encrypt_message()` and all `encrypt_*()` methods. The fields the
 send request takes carry its names: send `message_id`,
 `encoded_message_create_event` and `encoded_message_event_signature` as they
 are (JS returns them camelCased, as `messageId`,
-`encodedMessageCreateEvent` and `encodedMessageEventSignature`). A payload
-stored by 0.5.x, which named the last two `encrypted_content` and
-`encoded_event_signature`, still deserializes in Rust, Go, .NET and the JVM.
+`encodedMessageCreateEvent` and `encodedMessageEventSignature`).
 
 The SDK generates the `message_id` (a UUID) and embeds it in the signed
 event: derived from its files for a v1 message with files (see

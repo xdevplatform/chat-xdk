@@ -1434,8 +1434,7 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 }
 
 // TestSendPayloadTakesTheRequestFieldNames checks that a payload marshals
-// under the send request's field names, and that one stored by 0.5.x, under
-// encrypted_content and encoded_event_signature, still unmarshals.
+// under the send request's field names and unmarshals unchanged.
 func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 	v := loadVectors(t)
 	chat := mediaSender(t, v)
@@ -1461,30 +1460,12 @@ func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 		fields["encoded_message_event_signature"] != payload.EncodedMessageEventSignature {
 		t.Errorf("payload JSON lacks the request field names: %s", data)
 	}
-	for _, old := range []string{"encrypted_content", "encoded_event_signature"} {
-		if _, present := fields[old]; present {
-			t.Errorf("payload JSON carries %s: %s", old, data)
-		}
-	}
 	var roundTrip SendPayload
 	if err := json.Unmarshal(data, &roundTrip); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !reflect.DeepEqual(roundTrip, *payload) {
 		t.Errorf("round trip changed the payload: %+v", roundTrip)
-	}
-
-	stored := `{"message_id":"mid","encrypted_content":"enc","signature":"sig",
-		"encoded_event_signature":"esig",
-		"signature_info":{"public_key_version":"1","signature_version":"7"},
-		"conversation_key_version":"1","should_notify":false}`
-	var old SendPayload
-	if err := json.Unmarshal([]byte(stored), &old); err != nil {
-		t.Fatalf("unmarshal a stored payload: %v", err)
-	}
-	if old.MessageID != "mid" || old.EncodedMessageCreateEvent != "enc" || old.Signature != "sig" ||
-		old.EncodedMessageEventSignature != "esig" || old.SignatureInfo.SignatureVersion != "7" {
-		t.Errorf("stored payload read as %+v", old)
 	}
 }
 

@@ -1051,15 +1051,11 @@ pub struct SendPayload {
     /// The outgoing message as a base64 event: what recipients receive,
     /// without the fields the server assigns. Pass it to `encrypt_file` or
     /// `file_encryptor` to encrypt the message's files, or to
-    /// `decrypt_event` to read the message back. Empty in a payload stored
-    /// by 0.5.x.
-    #[serde(default)]
+    /// `decrypt_event` to read the message back.
     pub event_b64: String,
 
     /// Base64-encoded Thrift `MessageCreateEvent` carrying the encrypted
-    /// contents: the send request's `encoded_message_create_event`. A payload
-    /// stored by 0.5.x carries it as `encrypted_content`, which also reads.
-    #[serde(alias = "encrypted_content")]
+    /// contents: the send request's `encoded_message_create_event`.
     pub encoded_message_create_event: String,
 
     /// Base64-encoded signature.
@@ -1067,9 +1063,7 @@ pub struct SendPayload {
 
     /// Base64-encoded Thrift `MessageEventSignature`: the send request's
     /// `encoded_message_event_signature`, which takes this value rather than
-    /// the raw signature bytes. A payload stored by 0.5.x carries it as
-    /// `encoded_event_signature`, which also reads.
-    #[serde(alias = "encoded_event_signature")]
+    /// the raw signature bytes.
     pub encoded_message_event_signature: String,
 
     /// Signature metadata.
@@ -1084,7 +1078,6 @@ pub struct SendPayload {
     pub should_notify: bool,
 
     /// Version of the Chat XDK that built this payload.
-    #[serde(default)]
     pub xdk_version: String,
 }
 
@@ -1595,33 +1588,11 @@ mod tests {
         // Serialized under the send request's field names.
         assert!(json.contains("\"encoded_message_create_event\":\"enc\""));
         assert!(json.contains("\"encoded_message_event_signature\":\"esig\""));
-        assert!(!json.contains("encrypted_content"));
         let decoded: SendPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.event_b64, "ev");
         assert_eq!(decoded.encoded_message_create_event, "enc");
         assert_eq!(decoded.signature_info.signature_version, "4");
         assert_eq!(decoded.xdk_version, "0.6.0");
-
-        let without: SendPayload =
-            serde_json::from_str(&json.replace(",\"xdk_version\":\"0.6.0\"", "")).unwrap();
-        assert_eq!(without.xdk_version, "");
-    }
-
-    #[test]
-    fn test_send_payload_stored_by_0_5_still_reads() {
-        // A SendPayload as 0.5.x serialized it, before event_b64 and
-        // xdk_version existed.
-        let stored = r#"{"message_id":"mid","encrypted_content":"enc","signature":"sig",
-            "encoded_event_signature":"esig",
-            "signature_info":{"public_key_version":"v1","signature_version":"7"},
-            "conversation_key_version":"v1","should_notify":false}"#;
-        let payload: SendPayload = serde_json::from_str(stored).unwrap();
-        assert_eq!(payload.message_id, "mid");
-        assert_eq!(payload.encoded_message_create_event, "enc");
-        assert_eq!(payload.encoded_message_event_signature, "esig");
-        assert_eq!(payload.event_b64, "");
-        assert_eq!(payload.xdk_version, "");
-        assert!(!payload.should_notify);
     }
 
     #[test]

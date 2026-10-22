@@ -542,19 +542,9 @@ class ChatTest {
             JsonNode json = ChatJson.MAPPER.valueToTree(payload);
             assertEquals(payload.encodedMessageCreateEvent, json.get("encoded_message_create_event").asText());
             assertEquals(payload.encodedMessageEventSignature, json.get("encoded_message_event_signature").asText());
-            assertFalse(json.has("encrypted_content"), json.toString());
-            assertFalse(json.has("encoded_event_signature"), json.toString());
-
-            // A payload stored by 0.5.x, under the field names it used then.
-            String stored = "{\"message_id\":\"mid\",\"encrypted_content\":\"enc\",\"signature\":\"sig\","
-                    + "\"encoded_event_signature\":\"esig\","
-                    + "\"signature_info\":{\"public_key_version\":\"1\",\"signature_version\":\"7\"},"
-                    + "\"conversation_key_version\":\"1\",\"should_notify\":false}";
-            SendPayload old = ChatJson.MAPPER.readValue(stored, SendPayload.class);
-            assertEquals("mid", old.messageId);
-            assertEquals("enc", old.encodedMessageCreateEvent);
-            assertEquals("esig", old.encodedMessageEventSignature);
-            assertEquals("7", old.signatureInfo.signatureVersion);
+            SendPayload roundTrip = ChatJson.MAPPER.treeToValue(json, SendPayload.class);
+            assertEquals(payload.encodedMessageCreateEvent, roundTrip.encodedMessageCreateEvent);
+            assertEquals(payload.encodedMessageEventSignature, roundTrip.encodedMessageEventSignature);
         }
     }
 

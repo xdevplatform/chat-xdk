@@ -413,8 +413,6 @@ async function main() {
   // The payload's fields take the send request's names.
   assert.ok(payload.encodedMessageCreateEvent.length > 0);
   assert.ok(payload.encodedMessageEventSignature.length > 0);
-  assert.equal(payload.encryptedContent, undefined);
-  assert.equal(payload.encodedEventSignature, undefined);
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
   assert.equal(payload.signatureInfo.signatureVersion, "7");

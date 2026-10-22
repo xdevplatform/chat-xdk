@@ -107,25 +107,6 @@ namespace ChatXdk
         [JsonPropertyName("encoded_message_event_signature")]
         public string EncodedMessageEventSignature { get; init; } = "";
 
-        // A payload stored by 0.5.x carries the two fields above under these names.
-        [JsonInclude]
-        [JsonPropertyName("encrypted_content")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private string? StoredEncryptedContent
-        {
-            get => null;
-            init => EncodedMessageCreateEvent = value ?? EncodedMessageCreateEvent;
-        }
-
-        [JsonInclude]
-        [JsonPropertyName("encoded_event_signature")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        private string? StoredEncodedEventSignature
-        {
-            get => null;
-            init => EncodedMessageEventSignature = value ?? EncodedMessageEventSignature;
-        }
-
         /// <summary>Signing key and signature version metadata for this payload.</summary>
         [JsonPropertyName("signature_info")]
         public SignatureInfo SignatureInfo { get; init; } = new();

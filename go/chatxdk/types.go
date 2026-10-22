@@ -53,29 +53,6 @@ type SendPayload struct {
 	XdkVersion string `json:"xdk_version"`
 }
 
-// UnmarshalJSON also reads a payload stored by 0.5.x, which carries
-// EncodedMessageCreateEvent as encrypted_content and
-// EncodedMessageEventSignature as encoded_event_signature.
-func (p *SendPayload) UnmarshalJSON(data []byte) error {
-	type plain SendPayload
-	var stored struct {
-		plain
-		EncryptedContent      *string `json:"encrypted_content"`
-		EncodedEventSignature *string `json:"encoded_event_signature"`
-	}
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return err
-	}
-	*p = SendPayload(stored.plain)
-	if stored.EncryptedContent != nil && p.EncodedMessageCreateEvent == "" {
-		p.EncodedMessageCreateEvent = *stored.EncryptedContent
-	}
-	if stored.EncodedEventSignature != nil && p.EncodedMessageEventSignature == "" {
-		p.EncodedMessageEventSignature = *stored.EncodedEventSignature
-	}
-	return nil
-}
-
 // SignatureInfo contains metadata about the signing key used.
 type SignatureInfo struct {
 	PublicKeyVersion string `json:"public_key_version"`
