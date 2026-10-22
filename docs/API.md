@@ -285,8 +285,8 @@ interface PreparedConversationChange {
   conversationId: string;           // derived (one-to-one) or the id you passed
   conversationKey: Uint8Array;      // raw 32-byte key — store locally
   conversationKeyVersion: string;   // timestamp-based version
-  participantKeys: EncryptedKeyForRecipient[];  // ready to POST
-  actionSignatures: ActionSignature[];          // ready to POST
+  conversationParticipantKeys: EncryptedKeyForRecipient[];  // ready to POST
+  actionSignatures: ActionSignature[];                      // ready to POST
 }
 ```
 
@@ -296,7 +296,7 @@ interface PreparedConversationChange {
     "conversation_id": "17380288:1491585161162473473",
     "conversation_key": b"...",              # raw 32 bytes
     "conversation_key_version": "171000...", # timestamp string
-    "participant_keys": [ {"user_id": "111", "encrypted_key": "...", "public_key_version": "1"} ],
+    "conversation_participant_keys": [ {"user_id": "111", "encrypted_conversation_key": "...", "public_key_version": "1"} ],
     "action_signatures": [ {"message_id": "...", "message_event_signature": {"signature": "...", ...}, ...} ],
 }
 ```
@@ -316,7 +316,7 @@ const result = chat.prepareConversationKeyChange({ publicKeys });
 await fetch(`/api/conversations/${result.conversationId}/keys`, {
   body: JSON.stringify({
     conversationKeyVersion: result.conversationKeyVersion,
-    conversationParticipantKeys: result.participantKeys,
+    conversationParticipantKeys: result.conversationParticipantKeys,
     actionSignatures: result.actionSignatures,
   })
 });

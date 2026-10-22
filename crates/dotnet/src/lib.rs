@@ -1142,8 +1142,8 @@ fn json_prepared_change(
         serde_json::Value::String(res.conversation_key_version.clone()),
     );
     out.insert(
-        "participant_keys".into(),
-        serde_json::to_value(&res.participant_keys)?,
+        "conversation_participant_keys".into(),
+        serde_json::to_value(&res.conversation_participant_keys)?,
     );
     out.insert(
         "action_signatures".into(),

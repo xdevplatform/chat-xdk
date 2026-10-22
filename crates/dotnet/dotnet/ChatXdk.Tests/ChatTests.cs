@@ -860,12 +860,19 @@ namespace ChatXdk.Tests
                 ConversationId = "conv-1",
             });
 
-            Assert.Single(prepared.ParticipantKeys);
+            Assert.Single(prepared.ConversationParticipantKeys);
             Assert.Single(prepared.ActionSignatures);
             // Absent: the payload embeds the plaintext conversation key and is withheld.
             Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
 
-            var decrypted = chat.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey);
+            // The participant keys serialize under the request's field names.
+            var json = JsonSerializer.SerializeToElement(prepared);
+            var entry = Assert.Single(json.GetProperty("conversation_participant_keys").EnumerateArray());
+            Assert.Equal(
+                prepared.ConversationParticipantKeys[0].EncryptedConversationKey,
+                entry.GetProperty("encrypted_conversation_key").GetString());
+
+            var decrypted = chat.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
             Assert.Equal(prepared.ConversationKey, decrypted);
         }
 
@@ -1210,10 +1217,10 @@ namespace ChatXdk.Tests
             });
 
             Assert.Equal("17380288:1491585161162473473", prepared.ConversationId);
-            Assert.Equal(2, prepared.ParticipantKeys.Count);
-            foreach (var pk in prepared.ParticipantKeys)
+            Assert.Equal(2, prepared.ConversationParticipantKeys.Count);
+            foreach (var pk in prepared.ConversationParticipantKeys)
             {
-                var decrypted = chat.DecryptConversationKey(pk.EncryptedKey);
+                var decrypted = chat.DecryptConversationKey(pk.EncryptedConversationKey);
                 Assert.Equal(prepared.ConversationKey, decrypted);
             }
         }
@@ -1981,8 +1988,8 @@ namespace ChatXdk.Tests
             Assert.Equal("conv-1", prepared.ConversationId);
             Assert.NotNull(prepared.ConversationKey);
             Assert.Equal(32, prepared.ConversationKey!.Length);
-            Assert.Single(prepared.ParticipantKeys);
-            Assert.NotEmpty(prepared.ParticipantKeys[0].EncryptedKey);
+            Assert.Single(prepared.ConversationParticipantKeys);
+            Assert.NotEmpty(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
             Assert.Single(prepared.ActionSignatures);
         }
 

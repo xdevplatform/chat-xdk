@@ -61,9 +61,9 @@ type SignatureInfo struct {
 
 // EncryptedKeyForRecipient is one participant's encrypted conversation key.
 type EncryptedKeyForRecipient struct {
-	UserID           string `json:"user_id"`
-	EncryptedKey     string `json:"encrypted_key"`
-	PublicKeyVersion string `json:"public_key_version"`
+	UserID                   string `json:"user_id"`
+	EncryptedConversationKey string `json:"encrypted_conversation_key"`
+	PublicKeyVersion         string `json:"public_key_version"`
 }
 
 // SigningKeyEntry is used for signature verification in DecryptEvent and DecryptEvents.
@@ -120,10 +120,10 @@ type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey        []byte                     `json:"conversation_key"`
-	ConversationKeyVersion string                     `json:"conversation_key_version"`
-	ParticipantKeys        []EncryptedKeyForRecipient `json:"participant_keys"`
-	ActionSignatures       []ActionSignature          `json:"action_signatures"`
+	ConversationKey             []byte                     `json:"conversation_key"`
+	ConversationKeyVersion      string                     `json:"conversation_key_version"`
+	ConversationParticipantKeys []EncryptedKeyForRecipient `json:"conversation_participant_keys"`
+	ActionSignatures            []ActionSignature          `json:"action_signatures"`
 }
 
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.

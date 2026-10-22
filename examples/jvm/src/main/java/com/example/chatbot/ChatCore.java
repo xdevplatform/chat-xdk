@@ -2,7 +2,6 @@ package com.example.chatbot;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.Chat;
 import com.x.chatxdk.FileDecryptor;
@@ -328,19 +327,13 @@ public final class ChatCore implements AutoCloseable {
      * Map a prepared conversation change into the X API request shape.
      *
      * <p>Works for 1:1 key changes (one signature) and group create / member add
-     * (two signatures). The action signatures already have the request's shape;
-     * the participant keys take the request's field names.
+     * (two signatures). The participant keys and action signatures already have the
+     * request's shape.
      */
     public static ObjectNode prepToRequest(PreparedConversationChange prep) {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("conversation_key_version", prep.conversationKeyVersion);
-        ArrayNode participantKeys = body.putArray("conversation_participant_keys");
-        for (EncryptedKeyForRecipient pk : prep.participantKeys) {
-            ObjectNode entry = participantKeys.addObject();
-            entry.put("user_id", pk.userId);
-            entry.put("encrypted_conversation_key", pk.encryptedKey);
-            entry.put("public_key_version", pk.publicKeyVersion);
-        }
+        body.set("conversation_participant_keys", MAPPER.valueToTree(prep.conversationParticipantKeys));
         body.set("action_signatures", MAPPER.valueToTree(prep.actionSignatures));
         return body;
     }

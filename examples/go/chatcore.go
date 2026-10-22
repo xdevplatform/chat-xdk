@@ -387,20 +387,12 @@ func MessageText(event *chatxdk.Event) string {
 // PrepToRequest maps a prepared conversation change into the X API request shape.
 //
 // Works for 1:1 key changes (one signature) and group create / member add
-// (two signatures). The action signatures already have the request's shape;
-// the participant keys take the request's field names.
+// (two signatures). The participant keys and action signatures already have
+// the request's shape.
 func PrepToRequest(prep *chatxdk.PreparedConversationChange) map[string]any {
-	participantKeys := make([]map[string]any, 0, len(prep.ParticipantKeys))
-	for _, pk := range prep.ParticipantKeys {
-		participantKeys = append(participantKeys, map[string]any{
-			"user_id":                    pk.UserID,
-			"encrypted_conversation_key": pk.EncryptedKey,
-			"public_key_version":         pk.PublicKeyVersion,
-		})
-	}
 	return map[string]any{
 		"conversation_key_version":      prep.ConversationKeyVersion,
-		"conversation_participant_keys": participantKeys,
+		"conversation_participant_keys": prep.ConversationParticipantKeys,
 		"action_signatures":             prep.ActionSignatures,
 	}
 }

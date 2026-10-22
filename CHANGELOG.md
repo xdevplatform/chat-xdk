@@ -402,6 +402,14 @@ prepared = chat.prepare_conversation_key_change(
   (`encodedMessageCreateEvent` / `encodedMessageEventSignature` in JS and
   the JVM, `EncodedMessageCreateEvent` / `EncodedMessageEventSignature` in
   Go and .NET), so the request takes them as they are.
+- `PreparedConversationChange`'s `participant_keys` is
+  `conversation_participant_keys`, and each entry's `encrypted_key` is
+  `encrypted_conversation_key`, the field names of the requests that take
+  them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+  `/{id}/members`), in every binding (`conversationParticipantKeys` /
+  `encryptedConversationKey` in JS and the JVM,
+  `ConversationParticipantKeys` / `EncryptedConversationKey` in Go and
+  .NET), so the requests take them as they are.
 - Rust: every encrypt and prepare method takes its params by reference:
   `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
   edit, delete and mark-read methods, and also `encrypt_file`,

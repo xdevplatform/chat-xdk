@@ -283,14 +283,17 @@ fn prepared_change_to_pydict(
     outer.set_item("conversation_key_version", &result.conversation_key_version)?;
 
     let participant_keys = pyo3::types::PyList::empty(py);
-    for item in &result.participant_keys {
+    for item in &result.conversation_participant_keys {
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("user_id", &item.user_id)?;
-        dict.set_item("encrypted_key", &item.encrypted_key)?;
+        dict.set_item(
+            "encrypted_conversation_key",
+            &item.encrypted_conversation_key,
+        )?;
         dict.set_item("public_key_version", &item.public_key_version)?;
         participant_keys.append(dict)?;
     }
-    outer.set_item("participant_keys", participant_keys)?;
+    outer.set_item("conversation_participant_keys", participant_keys)?;
 
     outer.set_item(
         "action_signatures",
@@ -2163,7 +2166,7 @@ impl Chat {
     ///
     /// Returns:
     ///     A dict with ``conversation_id``, ``conversation_key`` (bytes),
-    ///     ``conversation_key_version``, ``participant_keys``, ``action_signatures``.
+    ///     ``conversation_key_version``, ``conversation_participant_keys``, ``action_signatures``.
     fn prepare_conversation_key_change(
         &self,
         py: Python<'_>,

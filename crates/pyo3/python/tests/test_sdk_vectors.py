@@ -125,7 +125,7 @@ class TestPythonSdkVectors(unittest.TestCase):
                 public_keys, conversation_id="conv-1", sender_id="910002", signing_key_version="1"
             )
         )
-        encrypted_key_b64 = result["participant_keys"][0]["encrypted_key"]
+        encrypted_key_b64 = result["conversation_participant_keys"][0]["encrypted_conversation_key"]
 
         decrypted_ckey = chat.decrypt_conversation_key(encrypted_key_b64)
         self.assertEqual(decrypted_ckey, result["conversation_key"])

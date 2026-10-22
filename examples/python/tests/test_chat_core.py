@@ -94,7 +94,7 @@ class TestChatCore(unittest.TestCase):
         prepared = core.prepare_conversation_key_change(public_keys, "conv-1")
         conv_key = prepared["conversation_key"]
         self.assertEqual(len(conv_key), 32)
-        encrypted = prepared["participant_keys"][0]["encrypted_key"]
+        encrypted = prepared["conversation_participant_keys"][0]["encrypted_conversation_key"]
         self.assertEqual(core.decrypt_conversation_key(encrypted), conv_key)
 
     def test_encrypt_reply_produces_sendable_payload(self):

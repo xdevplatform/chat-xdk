@@ -252,8 +252,8 @@ namespace ChatXdk
         public string ConversationKeyVersion { get; init; } = "";
 
         /// <summary>The conversation key encrypted once per participant.</summary>
-        [JsonPropertyName("participant_keys")]
-        public List<EncryptedKeyForRecipient> ParticipantKeys { get; init; } = new();
+        [JsonPropertyName("conversation_participant_keys")]
+        public List<EncryptedKeyForRecipient> ConversationParticipantKeys { get; init; } = new();
 
         /// <summary>Action signatures authenticating the change, ready to POST.</summary>
         [JsonPropertyName("action_signatures")]
@@ -312,8 +312,8 @@ namespace ChatXdk
         [JsonPropertyName("user_id")]
         public string UserId { get; init; } = "";
 
-        [JsonPropertyName("encrypted_key")]
-        public string EncryptedKey { get; init; } = "";
+        [JsonPropertyName("encrypted_conversation_key")]
+        public string EncryptedConversationKey { get; init; } = "";
 
         [JsonPropertyName("public_key_version")]
         public string PublicKeyVersion { get; init; } = "";

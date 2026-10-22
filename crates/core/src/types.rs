@@ -1372,9 +1372,10 @@ pub struct PreparedConversationChange {
     /// Timestamp-based version string for this conversation key.
     pub conversation_key_version: String,
 
-    /// Encrypted keys for each participant, ready to POST to the API.
+    /// Encrypted keys for each participant: the request's
+    /// `conversation_participant_keys`, ready to POST to the API.
     #[cfg_attr(feature = "js", js_camel(wrap))]
-    pub participant_keys: Vec<EncryptedKeyForRecipient>,
+    pub conversation_participant_keys: Vec<EncryptedKeyForRecipient>,
 
     /// Action signatures authenticating the change, ready to POST to the API.
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1415,7 +1416,7 @@ pub struct EncryptedKeyForRecipient {
     pub user_id: String,
 
     /// Base64-encoded encrypted conversation key.
-    pub encrypted_key: String,
+    pub encrypted_conversation_key: String,
 
     /// Version of recipient's public key used.
     pub public_key_version: String,
@@ -1752,6 +1753,49 @@ mod tests {
         assert!(
             !snake.contains('_'),
             "JS output must be camelCase, got: {snake}"
+        );
+    }
+
+    fn prepared_change() -> PreparedConversationChange {
+        PreparedConversationChange {
+            conversation_id: "1:2".to_string(),
+            conversation_key: None,
+            conversation_key_version: "5".to_string(),
+            conversation_participant_keys: vec![EncryptedKeyForRecipient {
+                user_id: "2".to_string(),
+                encrypted_conversation_key: "ekey".to_string(),
+                public_key_version: "1".to_string(),
+            }],
+            action_signatures: vec![],
+        }
+    }
+
+    #[test]
+    fn test_prepared_change_takes_the_request_field_names() {
+        let json = serde_json::to_value(prepared_change()).unwrap();
+        assert_eq!(
+            json["conversation_participant_keys"],
+            serde_json::json!([{
+                "user_id": "2",
+                "encrypted_conversation_key": "ekey",
+                "public_key_version": "1",
+            }])
+        );
+        assert_eq!(json["conversation_key_version"], "5");
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_prepared_change_is_camel_case() {
+        let json =
+            serde_json::to_value(JsPreparedConversationChange::from(prepared_change())).unwrap();
+        assert_eq!(
+            json["conversationParticipantKeys"],
+            serde_json::json!([{
+                "userId": "2",
+                "encryptedConversationKey": "ekey",
+                "publicKeyVersion": "1",
+            }])
         );
     }
 }

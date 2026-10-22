@@ -409,23 +409,12 @@ pub fn message_text(event: &Event) -> Option<&str> {
 /// Map a prepared conversation change into the X API request shape.
 ///
 /// Works for 1:1 key changes (one signature) and group create / member add
-/// (two signatures). The action signatures already have the request's shape;
-/// the participant keys take the request's field names.
+/// (two signatures). The participant keys and action signatures already have
+/// the request's shape.
 pub fn prep_to_request(prep: &PreparedConversationChange) -> Value {
-    let participant_keys: Vec<Value> = prep
-        .participant_keys
-        .iter()
-        .map(|pk| {
-            json!({
-                "user_id": pk.user_id,
-                "encrypted_conversation_key": pk.encrypted_key,
-                "public_key_version": pk.public_key_version,
-            })
-        })
-        .collect();
     json!({
         "conversation_key_version": prep.conversation_key_version,
-        "conversation_participant_keys": participant_keys,
+        "conversation_participant_keys": prep.conversation_participant_keys,
         "action_signatures": prep.action_signatures,
     })
 }
