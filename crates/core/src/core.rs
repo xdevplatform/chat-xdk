@@ -2202,10 +2202,10 @@ impl ChatCore {
     /// A read receipt is a plaintext `MarkConversationReadEvent`, not an
     /// encrypted message: the result's one `action_signatures` entry carries
     /// the encoded event detail and its signature, nested as the
-    /// conversation-change requests nest theirs. The X API's mark-read route
-    /// does not take `action_signatures` yet, so that request shape is not
-    /// final. The SDK generates the action's message id; read it back from
-    /// the entry. An unset `seen_at_msec` reads the system clock.
+    /// conversation-change requests nest theirs, for the mark-read request
+    /// (`POST /2/chat/conversations/{id}/read`). The SDK generates the
+    /// action's message id; read it back from the entry. An unset
+    /// `seen_at_msec` reads the system clock.
     pub fn prepare_mark_conversation_read(
         &self,
         params: &MarkConversationReadParams,
@@ -3929,7 +3929,7 @@ fn collect_attachments(
                 }));
             }
             ThriftMessageAttachment::Jetfuel(_) => {
-                // This attachment variant is not yet supported; skip.
+                // The SDK doesn't support this attachment variant; skip it.
             }
             ThriftMessageAttachment::PaymentReceipt(_) | ThriftMessageAttachment::BotMessage(_) => {
             }

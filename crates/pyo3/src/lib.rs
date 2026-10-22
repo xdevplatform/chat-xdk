@@ -458,9 +458,7 @@ pub struct SendPayload {
     /// Whether to send push notification.
     #[pyo3(get)]
     pub should_notify: bool,
-    /// Version of the Chat XDK that built this payload. Do not send it yet:
-    /// the send request takes it as an optional ``xdk_version`` field only
-    /// once the X API documents that field.
+    /// Version of the Chat XDK that built this payload.
     #[pyo3(get)]
     pub xdk_version: String,
 }
@@ -2261,8 +2259,8 @@ impl Chat {
     /// A read receipt is a signed plaintext event, not an encrypted message,
     /// so no conversation key is involved: the result holds the request's
     /// ``action_signatures``, one entry, nested as the conversation-change
-    /// requests nest theirs. The X API's mark-read route does not take
-    /// ``action_signatures`` yet, so that request shape is not final. The
+    /// requests nest theirs. The mark-read request
+    /// (``POST /2/chat/conversations/{id}/read``) takes them as they are. The
     /// SDK generates the action's message id; read it back from the entry.
     ///
     /// Args:

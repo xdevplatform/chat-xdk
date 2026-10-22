@@ -656,10 +656,9 @@ impl Chat {
     /// optional `seenAtMsec` (when it was read, in milliseconds since the
     /// Unix epoch; the current time when omitted) and `senderId` /
     /// `signingKeyVersion` (resolved from the session identity when omitted).
-    /// Returns the request's `actionSignatures`, shaped as
-    /// `prepareMessageDelete` returns them; the X API's mark-read route does
-    /// not take them yet, so that request shape is not final. The SDK
-    /// generates the action's message id (`messageId` on the entry).
+    /// Returns the mark-read request's `actionSignatures`, shaped as
+    /// `prepareMessageDelete` returns them. The SDK generates the action's
+    /// message id (`messageId` on the entry).
     #[wasm_bindgen(js_name = prepareMarkConversationRead)]
     pub fn prepare_mark_conversation_read(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsMarkConversationReadParams =

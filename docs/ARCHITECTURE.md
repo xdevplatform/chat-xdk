@@ -196,7 +196,7 @@ crates/
 
 The X API serves boolean feature switches at `GET /2/chat/features`, for
 example `{"features":{"v1_send":false}}`. `v1_send` picks the send format: v0,
-the format 0.5.x sends, until it is on, and v1 (per-message keys) while it is.
+the format 0.5.x sends, while it is off, and v1 (per-message keys) while it is on.
 The core holds each chat's switches and picks each send's format from them.
 Only the language bindings make the request, each with its own HTTP stack:
 

@@ -95,9 +95,9 @@ impl ChatCore {
         Ok(())
     }
 
-    /// Like [`ChatCore::load_keys`], for keys whose registered version is not
-    /// known yet; [`ChatCore::set_registered_version`] records it once the X
-    /// API reports it.
+    /// Like [`ChatCore::load_keys`], without the registered version;
+    /// [`ChatCore::set_registered_version`] records the `public_key_version`
+    /// the registration returns.
     pub fn load_keys_without_version(&mut self, private_keys_b64: &str) -> Result<(), SdkError> {
         let bytes = B64
             .decode(private_keys_b64)
