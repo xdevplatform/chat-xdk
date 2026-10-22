@@ -148,23 +148,30 @@ impl<A: ChatApi> Bot<A> {
             };
 
             if let Event::KeyChange(kc) = &event {
-                for pk in &kc.participant_keys {
-                    if pk.encrypted_key.is_empty() {
+                for pk in &kc.conversation_participant_keys {
+                    if pk.encrypted_conversation_key.is_empty() {
                         continue;
                     }
-                    if let Ok(key) = self.core.decrypt_conversation_key(&pk.encrypted_key) {
-                        st.conversation_keys.insert(kc.key_version.clone(), key);
+                    if let Ok(key) = self
+                        .core
+                        .decrypt_conversation_key(&pk.encrypted_conversation_key)
+                    {
+                        st.conversation_keys
+                            .insert(kc.conversation_key_version.clone(), key);
                         // The sending key only moves forward: a replayed older
                         // key change stays usable for decryption but must not
                         // roll the version we encrypt with backwards.
-                        let newer = match (&st.latest_key_version, kc.key_version.parse::<u64>()) {
+                        let newer = match (
+                            &st.latest_key_version,
+                            kc.conversation_key_version.parse::<u64>(),
+                        ) {
                             (Some(cur), Ok(new)) => {
                                 cur.parse::<u64>().map_or(true, |cur| new > cur)
                             }
                             _ => true,
                         };
                         if newer {
-                            st.latest_key_version = Some(kc.key_version.clone());
+                            st.latest_key_version = Some(kc.conversation_key_version.clone());
                         }
                         break;
                     }
@@ -200,7 +207,7 @@ impl<A: ChatApi> Bot<A> {
         };
 
         let key_version = msg
-            .key_version
+            .conversation_key_version
             .clone()
             .or_else(|| st.latest_key_version.clone());
         let Some(key_version) = key_version else {

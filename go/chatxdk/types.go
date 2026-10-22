@@ -59,8 +59,11 @@ type SignatureInfo struct {
 	SignatureVersion string `json:"signature_version"`
 }
 
-// EncryptedKeyForRecipient is one participant's encrypted conversation key.
-type EncryptedKeyForRecipient struct {
+// ConversationParticipantKey is one participant's copy of a conversation key,
+// encrypted to their identity key: an entry of the X API's
+// conversation_participant_keys. A prepared change carries these for its
+// request, and a received key change carries them as delivered.
+type ConversationParticipantKey struct {
 	UserID                   string `json:"user_id"`
 	EncryptedConversationKey string `json:"encrypted_conversation_key"`
 	PublicKeyVersion         string `json:"public_key_version"`
@@ -120,10 +123,10 @@ type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey             []byte                     `json:"conversation_key"`
-	ConversationKeyVersion      string                     `json:"conversation_key_version"`
-	ConversationParticipantKeys []EncryptedKeyForRecipient `json:"conversation_participant_keys"`
-	ActionSignatures            []ActionSignature          `json:"action_signatures"`
+	ConversationKey             []byte                       `json:"conversation_key"`
+	ConversationKeyVersion      string                       `json:"conversation_key_version"`
+	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
+	ActionSignatures            []ActionSignature            `json:"action_signatures"`
 }
 
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.
@@ -629,13 +632,13 @@ func (e *Event) Raw() json.RawMessage {
 // Message is a decrypted chat message.
 type Message struct {
 	EventMeta
-	Content      MessageContent       `json:"content"`
-	KeyVersion   *string              `json:"key_version,omitempty"`
-	Verified     bool                 `json:"verified"`
-	ShouldNotify *bool                `json:"should_notify,omitempty"`
-	TTLMsec      *int64               `json:"ttl_msec,omitempty"`
-	Attachments  []json.RawMessage    `json:"attachments,omitempty"`
-	MediaHashes  []MediaHashReference `json:"media_hashes,omitempty"`
+	Content                MessageContent       `json:"content"`
+	ConversationKeyVersion *string              `json:"conversation_key_version,omitempty"`
+	Verified               bool                 `json:"verified"`
+	ShouldNotify           *bool                `json:"should_notify,omitempty"`
+	TTLMsec                *int64               `json:"ttl_msec,omitempty"`
+	Attachments            []json.RawMessage    `json:"attachments,omitempty"`
+	MediaHashes            []MediaHashReference `json:"media_hashes,omitempty"`
 	// ReplyPreviewValidation is the outcome of validating the reply preview
 	// against the raw signed original event embedded in it: "Valid" when the
 	// raw event verified and the preview matches the original, "Invalid" when
@@ -717,26 +720,19 @@ type MediaHashReference struct {
 // KeyChangeEvent indicates a conversation key rotation.
 type KeyChangeEvent struct {
 	EventMeta
-	KeyVersion      string           `json:"key_version"`
-	ParticipantKeys []ParticipantKey `json:"participant_keys"`
-	Verified        bool             `json:"verified"`
+	ConversationKeyVersion      string                       `json:"conversation_key_version"`
+	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
+	Verified                    bool                         `json:"verified"`
 }
 
 // FindKeyForUser returns the encrypted key for a specific user.
-func (kc *KeyChangeEvent) FindKeyForUser(userID string) *ParticipantKey {
-	for i := range kc.ParticipantKeys {
-		if kc.ParticipantKeys[i].UserID == userID {
-			return &kc.ParticipantKeys[i]
+func (kc *KeyChangeEvent) FindKeyForUser(userID string) *ConversationParticipantKey {
+	for i := range kc.ConversationParticipantKeys {
+		if kc.ConversationParticipantKeys[i].UserID == userID {
+			return &kc.ConversationParticipantKeys[i]
 		}
 	}
 	return nil
-}
-
-// ParticipantKey is an encrypted conversation key for a participant.
-type ParticipantKey struct {
-	UserID           string `json:"user_id"`
-	EncryptedKey     string `json:"encrypted_key"`
-	PublicKeyVersion string `json:"public_key_version"`
 }
 
 // GroupChangeEvent indicates a group membership or settings change.

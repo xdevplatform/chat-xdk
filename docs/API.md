@@ -285,7 +285,7 @@ interface PreparedConversationChange {
   conversationId: string;           // derived (one-to-one) or the id you passed
   conversationKey: Uint8Array;      // raw 32-byte key — store locally
   conversationKeyVersion: string;   // timestamp-based version
-  conversationParticipantKeys: EncryptedKeyForRecipient[];  // ready to POST
+  conversationParticipantKeys: ConversationParticipantKey[];  // ready to POST
   actionSignatures: ActionSignature[];                      // ready to POST
 }
 ```
@@ -726,7 +726,7 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 { "1": b"\x01\x02...", "2": b"\x03\x04..." }
 ```
 
-**Unencrypted events**: Events without a `conversationKeyVersion` carry no verifiable signature, so under the default reject-unverified policy they are **rejected** (`decryptEvent` throws; `decryptEvents` records them in `errors`). After `setRejectUnverified(false)` they are returned with `keyVersion: null` and `verified: false`.
+**Unencrypted events**: Events without a `conversationKeyVersion` carry no verifiable signature, so under the default reject-unverified policy they are **rejected** (`decryptEvent` throws; `decryptEvents` records them in `errors`). After `setRejectUnverified(false)` they are returned with `conversationKeyVersion: null` and `verified: false`.
 
 ### Message Encryption
 
@@ -1874,7 +1874,7 @@ interface MessageEvent {
   conversationId?: string;
   createdAtMsec?: number;
   content: MessageContent;
-  keyVersion?: string;          // null for unencrypted messages
+  conversationKeyVersion?: string; // null for unencrypted messages
   verified: boolean;            // always false for unencrypted messages
   shouldNotify?: boolean;
   ttlMsec?: number;
@@ -1888,7 +1888,7 @@ interface MessageEvent {
 ```python
 # Python
 event["content"]       # dict
-event["key_version"]   # str or None
+event["conversation_key_version"]   # str or None
 event["verified"]      # bool
 event["attachments"]   # list[dict]
 event["media_hashes"]  # list[dict]
@@ -1907,7 +1907,7 @@ absent-on-a-preview) as an untrusted preview — render the claim only from the
 validated original. The validation contract is specified in
 [CRYPTO.md — Reply preview validation](CRYPTO.md#reply-preview-validation).
 
-**Unencrypted messages**: When `keyVersion` is `null`, the message was delivered without encryption. Because there is no signature to verify, the default reject-unverified policy **rejects** these messages (`decryptEvent` throws; `decryptEvents` records them in `errors`); they are returned only after `setRejectUnverified(false)`, with `verified: false`. When returned, the `content` is parsed identically to encrypted messages.
+**Unencrypted messages**: When `conversationKeyVersion` is `null`, the message was delivered without encryption. Because there is no signature to verify, the default reject-unverified policy **rejects** these messages (`decryptEvent` throws; `decryptEvents` records them in `errors`); they are returned only after `setRejectUnverified(false)`, with `verified: false`. When returned, the `content` is parsed identically to encrypted messages.
 
 ### MessageContent
 
@@ -2193,14 +2193,15 @@ Payload when `type` is `"keyChange"` (JS) / `"KeyChange"` (Python).
 interface KeyChangeEvent {
   type: 'keyChange';
   // Flattened meta fields...
-  keyVersion: string;
+  conversationKeyVersion: string;
   verified: boolean;
-  participantKeys: ParticipantKey[];
+  conversationParticipantKeys: ConversationParticipantKey[];
 }
 
-interface ParticipantKey {
+// The same type a prepared change carries in conversationParticipantKeys.
+interface ConversationParticipantKey {
   userId: string;
-  encryptedKey: string;
+  encryptedConversationKey: string;
   publicKeyVersion: string;
 }
 ```

@@ -96,7 +96,9 @@ fn conversation_key_prepare_and_decrypt_roundtrip() {
         .encoded()
         .to_vec();
     let decrypted = core
-        .decrypt_conversation_key(&prepared.conversation_participant_keys[0].encrypted_conversation_key)
+        .decrypt_conversation_key(
+            &prepared.conversation_participant_keys[0].encrypted_conversation_key,
+        )
         .expect("decrypt_conversation_key");
     assert_eq!(decrypted.encoded(), expected.as_slice());
 }
