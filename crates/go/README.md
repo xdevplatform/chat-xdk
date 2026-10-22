@@ -97,6 +97,8 @@ func main() {
 
 See the **Go** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media). Method names use **PascalCase**; raw-byte parameters cross the FFI boundary as **base64 strings**.
 
+Moving code from 0.5.x? [docs/migrating-0.6/go.md](../../docs/migrating-0.6/go.md) lists every change with the lines to change.
+
 ## Network access
 
 Each chat makes one kind of request itself: an anonymous

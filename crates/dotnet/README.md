@@ -78,6 +78,8 @@ Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatX
 
 See the **.NET** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media).
 
+Moving code from 0.5.x? [docs/migrating-0.6/dotnet.md](../../docs/migrating-0.6/dotnet.md) lists every change with the lines to change.
+
 ## Network access
 
 Each chat makes one kind of request itself: an anonymous
