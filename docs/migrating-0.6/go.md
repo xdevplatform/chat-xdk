@@ -25,6 +25,8 @@ change.
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] [Read `ConversationKeyVersion` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -35,8 +37,9 @@ Each snippet shows the lines that change, first as 0.5.x code writes them
 and then as 0.6.0 code writes them. `chat` is a `*chatxdk.Chat` with your
 keys loaded, and the other names stand for your own values: ids, versions,
 keys and events as the X API returns them, `keys` for the conversation key
-map `DecryptEvents` returns, `payload` for a `*SendPayload` and `prepared`
-for a `*PreparedConversationChange`. `must(err)` stands for your error
+map `DecryptEvents` returns, `payload` for a `*SendPayload`, `prepared`
+for a `*PreparedConversationChange`, and `keyChange` and `message` for a
+decrypted `*KeyChangeEvent` and `*Message`. `must(err)` stands for your error
 handling. `api.Post(path, body)` stands for your HTTP client: it POSTs
 `body` as JSON to `https://api.x.com` + `path` with your user access token
 and returns the parsed JSON response as a `map[string]any`.
@@ -407,12 +410,15 @@ actionSignatures := prepared.ActionSignatures
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests that
-take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
-`/{id}/members`): `ConversationParticipantKeys`, whose entries
-(`UserID`, `EncryptedConversationKey`, `PublicKeyVersion`) marshal as
-`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
-through as returned:
+A prepared change's participant keys carry the names of the requests the
+change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `ConversationParticipantKeys`, a slice of
+`ConversationParticipantKey` whose fields (`UserID`,
+`EncryptedConversationKey`, `PublicKeyVersion`) marshal as `user_id`,
+`encrypted_conversation_key` and `public_key_version`, the type a received
+key change uses too
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
+and pass them through as returned:
 
 ```go
 // 0.5.x
@@ -427,6 +433,42 @@ for _, key := range prepared.ParticipantKeys {
 
 // 0.6.0
 conversationParticipantKeys := prepared.ConversationParticipantKeys
+```
+
+## Received participant keys take the same names
+
+A decrypted `KeyChangeEvent` carries its participant keys under the names
+Thrift's `ConversationKeyChangeEvent` gives them, the same names a prepared
+change uses: `ConversationParticipantKeys`, each with `UserID`,
+`EncryptedConversationKey` and `PublicKeyVersion` (`user_id`,
+`encrypted_conversation_key` and `public_key_version` in JSON). Received and
+prepared keys are one type, `ConversationParticipantKey`:
+
+```go
+// 0.5.x
+var key chatxdk.ParticipantKey = keyChange.ParticipantKeys[0]
+encrypted := key.EncryptedKey
+
+// 0.6.0
+var key chatxdk.ConversationParticipantKey = keyChange.ConversationParticipantKeys[0]
+encrypted := key.EncryptedConversationKey
+```
+
+## Decrypted events name the conversation key version as the X API does
+
+`Message` and `KeyChangeEvent` carry their conversation key version as
+`ConversationKeyVersion` (`conversation_key_version` in JSON), the name the
+X API's events and the Thrift events give it, and the name the encrypt
+params take:
+
+```go
+// 0.5.x
+messageVersion := *message.KeyVersion
+keyChangeVersion := keyChange.KeyVersion
+
+// 0.6.0
+messageVersion := *message.ConversationKeyVersion
+keyChangeVersion := keyChange.ConversationKeyVersion
 ```
 
 ## Deletes return a `PreparedAction`

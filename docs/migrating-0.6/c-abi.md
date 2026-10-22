@@ -25,6 +25,8 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Use the file encryptor and decryptor for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] [Read `conversation_key_version` in decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
@@ -260,10 +262,12 @@ conversation-key changes.
 
 `chat_xdk_prepare_conversation_key_change`, `chat_xdk_prepare_group_create`
 and `chat_xdk_prepare_group_members_change` name the participant keys as the
-requests that take them do (`POST /2/chat/conversations/{id}/keys`, `/group`
-and `/{id}/members`): `conversation_participant_keys`, each entry with
-`user_id`, `encrypted_conversation_key` and `public_key_version`. Send them
-as returned:
+requests the change goes into do (`POST /2/chat/conversations/{id}/keys`,
+`/group` and `/{id}/members`): `conversation_participant_keys`, each entry
+with `user_id`, `encrypted_conversation_key` and `public_key_version`, the
+names a decrypted key change uses too
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Send them as
+returned, without renaming:
 
 ```c
 // 0.5.x
@@ -275,6 +279,42 @@ char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_
 // {...,"conversation_participant_keys":[{"user_id":"...",
 //   "encrypted_conversation_key":"...","public_key_version":"..."}],...}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
+```
+
+## Received participant keys take the same names
+
+`chat_xdk_decrypt_event_params` and `chat_xdk_decrypt_events_params` return
+a key change's participant keys under the names Thrift's
+`ConversationKeyChangeEvent` gives them, the same names a prepared change
+uses: `conversation_participant_keys`, each entry with `user_id`,
+`encrypted_conversation_key` and `public_key_version`:
+
+```c
+// 0.5.x
+// {"type":"KeyChange",...,"participant_keys":[{"user_id":"...",
+//   "encrypted_key":"...","public_key_version":"..."}]}
+char *key_change = take(chat_xdk_decrypt_event(chat, key_change_b64, conversation_keys_json, signing_keys_json));
+
+// 0.6.0
+// {"type":"KeyChange",...,"conversation_participant_keys":[{"user_id":"...",
+//   "encrypted_conversation_key":"...","public_key_version":"..."}]}
+char *key_change = take(chat_xdk_decrypt_event_params(chat, decrypt_key_change_json));
+```
+
+## Decrypted events name the conversation key version as the X API does
+
+The decrypt calls return a message's or key change's conversation key
+version as `conversation_key_version`, the name the X API's events and the
+Thrift events give it, and the name the encrypt params take:
+
+```c
+// 0.5.x
+// {"type":"Message",...,"key_version":"...",...}
+char *message = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_json, signing_keys_json));
+
+// 0.6.0
+// {"type":"Message",...,"conversation_key_version":"...",...}
+char *message = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
 ```
 
 ## Invalid input errors

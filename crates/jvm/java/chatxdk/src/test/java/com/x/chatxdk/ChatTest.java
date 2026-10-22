@@ -861,7 +861,7 @@ class ChatTest {
             PreparedConversationChange prepared = chat.prepareConversationKeyChange(params);
             assertEquals("17380288:1491585161162473473", prepared.conversationId);
             assertEquals(2, prepared.conversationParticipantKeys.size());
-            for (EncryptedKeyForRecipient pk : prepared.conversationParticipantKeys) {
+            for (ConversationParticipantKey pk : prepared.conversationParticipantKeys) {
                 assertArrayEquals(
                         prepared.conversationKey,
                         chat.decryptConversationKey(pk.encryptedConversationKey));
@@ -967,12 +967,21 @@ class ChatTest {
             }
             assertEquals(1, keyChanges.size());
             assertTrue(keyChanges.get(0).path("verified").asBoolean());
-            assertEquals(ckVersion, keyChanges.get(0).path("key_version").asText());
+            assertEquals(ckVersion, keyChanges.get(0).path("conversation_key_version").asText());
+            // The received participant keys read into the type a prepared change carries.
+            JsonNode received = keyChanges.get(0).path("conversation_participant_keys");
+            assertTrue(received.isArray() && received.size() > 0, received.toString());
+            for (JsonNode node : received) {
+                ConversationParticipantKey key = ChatJson.MAPPER.treeToValue(node, ConversationParticipantKey.class);
+                assertFalse(key.userId.isEmpty() || key.encryptedConversationKey.isEmpty()
+                        || key.publicKeyVersion.isEmpty(), node.toString());
+            }
 
             assertEquals(1, messages.size());
             assertEquals(v.get("event_message_text").asText(),
                     messages.get(0).path("content").path("text").asText());
             assertTrue(messages.get(0).path("verified").asBoolean());
+            assertEquals(ckVersion, messages.get(0).path("conversation_key_version").asText());
 
             // Single-event path with pre-cached keys verifies the same message …
             DecryptEventParams cached =

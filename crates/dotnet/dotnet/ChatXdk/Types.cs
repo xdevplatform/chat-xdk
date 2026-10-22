@@ -253,7 +253,7 @@ namespace ChatXdk
 
         /// <summary>The conversation key encrypted once per participant.</summary>
         [JsonPropertyName("conversation_participant_keys")]
-        public List<EncryptedKeyForRecipient> ConversationParticipantKeys { get; init; } = new();
+        public List<ConversationParticipantKey> ConversationParticipantKeys { get; init; } = new();
 
         /// <summary>Action signatures authenticating the change, ready to POST.</summary>
         [JsonPropertyName("action_signatures")]
@@ -306,8 +306,12 @@ namespace ChatXdk
         public Dictionary<string, string> Errors { get; init; } = new();
     }
 
-    /// <summary>An encrypted conversation key for one recipient.</summary>
-    public sealed class EncryptedKeyForRecipient
+    /// <summary>
+    /// One participant's copy of a conversation key, encrypted to their identity key: an entry
+    /// of the X API's <c>conversation_participant_keys</c>. A prepared change carries these for
+    /// its request, and a received key change carries them in its decrypted JSON.
+    /// </summary>
+    public sealed class ConversationParticipantKey
     {
         [JsonPropertyName("user_id")]
         public string UserId { get; init; } = "";

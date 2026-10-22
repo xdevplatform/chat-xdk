@@ -558,7 +558,7 @@ impl ChatCore {
         &self,
         ckey: &XChatConversationKey,
         recipients: &[RecipientInput],
-    ) -> Result<Vec<EncryptedKeyForRecipient>, SdkError> {
+    ) -> Result<Vec<ConversationParticipantKey>, SdkError> {
         let recipients_parsed: Vec<(String, crate::crypto::keys::XChatPublicKey, String)> =
             recipients
                 .iter()
@@ -580,7 +580,7 @@ impl ChatCore {
 
         Ok(encrypted
             .into_iter()
-            .map(|e| EncryptedKeyForRecipient {
+            .map(|e| ConversationParticipantKey {
                 user_id: e.user_id,
                 encrypted_conversation_key: base64_encode(&e.encrypted_key),
                 public_key_version: e.public_key_version,
@@ -595,7 +595,7 @@ impl ChatCore {
     fn build_participant_keys(
         &self,
         public_keys: &[PublicKeyInput],
-    ) -> Result<(XChatConversationKey, Vec<EncryptedKeyForRecipient>), SdkError> {
+    ) -> Result<(XChatConversationKey, Vec<ConversationParticipantKey>), SdkError> {
         if public_keys.is_empty() {
             return Err(SdkError::Parse("public_keys must not be empty".to_string()));
         }
@@ -781,7 +781,7 @@ impl ChatCore {
     /// version and the per-participant encrypted keys.
     fn encode_ckey_change_detail(
         conversation_key_version: &str,
-        participant_keys: &[EncryptedKeyForRecipient],
+        participant_keys: &[ConversationParticipantKey],
     ) -> Result<String, SdkError> {
         let participant_keys = participant_keys
             .iter()
@@ -1621,15 +1621,17 @@ impl ChatCore {
 
         let event = match detail {
             MessageEventDetail::ConversationKeyChangeEvent(key_change) => {
-                let participant_keys: Vec<ParticipantKey> = key_change
+                let participant_keys: Vec<ConversationParticipantKey> = key_change
                     .conversation_participant_keys
                     .as_ref()
                     .map(|keys| {
                         keys.iter()
                             .filter_map(|pk| {
-                                Some(ParticipantKey {
+                                Some(ConversationParticipantKey {
                                     user_id: pk.user_id.clone()?,
-                                    encrypted_key: pk.encrypted_conversation_key.clone()?,
+                                    encrypted_conversation_key: pk
+                                        .encrypted_conversation_key
+                                        .clone()?,
                                     public_key_version: pk
                                         .public_key_version
                                         .clone()
@@ -1663,12 +1665,12 @@ impl ChatCore {
                 self.reject_if_unverified(&sig_result, "KeyChange")?;
                 Event::KeyChange(KeyChangeEvent {
                     meta,
-                    key_version: key_change
+                    conversation_key_version: key_change
                         .conversation_key_version
                         .clone()
                         .unwrap_or_default(),
                     verified,
-                    participant_keys,
+                    conversation_participant_keys: participant_keys,
                 })
             }
             MessageEventDetail::MessageTypingEvent(_) => Event::Typing(TypingEvent { meta }),
@@ -1836,7 +1838,7 @@ impl ChatCore {
                 Event::Message(Box::new(Message {
                     meta,
                     content: parsed_content.content,
-                    key_version: mce.conversation_key_version.clone(),
+                    conversation_key_version: mce.conversation_key_version.clone(),
                     verified,
                     should_notify: mce.should_notify,
                     ttl_msec: mce.ttl_msec,
@@ -5210,7 +5212,10 @@ mod tests {
         match event {
             Event::Message(msg) => {
                 assert_eq!(msg.text(), Some("Hello unencrypted!"));
-                assert!(msg.key_version.is_none(), "key_version should be None");
+                assert!(
+                    msg.conversation_key_version.is_none(),
+                    "conversation_key_version should be None"
+                );
                 assert!(!msg.verified, "verified should be false");
                 assert_eq!(msg.should_notify, Some(true));
                 assert_eq!(msg.meta.sender_id.as_deref(), Some("910003"));
@@ -5240,7 +5245,7 @@ mod tests {
         match event {
             Event::Message(msg) => {
                 assert_eq!(msg.text(), Some("Plaintext with key present"));
-                assert!(msg.key_version.is_none());
+                assert!(msg.conversation_key_version.is_none());
                 assert!(!msg.verified);
             }
             other => panic!("Expected Event::Message, got {:?}", other),
@@ -5391,7 +5396,7 @@ mod tests {
         match event {
             Event::Message(msg) => {
                 assert_eq!(msg.text(), Some("Encrypted roundtrip"));
-                assert_eq!(msg.key_version.as_deref(), Some("42"));
+                assert_eq!(msg.conversation_key_version.as_deref(), Some("42"));
                 // No trusted signing key provided → verified is false
                 assert!(!msg.verified);
             }
@@ -6668,11 +6673,14 @@ mod tests {
             .unwrap();
         match event {
             Event::KeyChange(kc) => {
-                assert_eq!(kc.key_version, "v42");
-                assert_eq!(kc.participant_keys.len(), 2);
-                assert_eq!(kc.participant_keys[0].user_id, "910004");
-                assert_eq!(kc.participant_keys[0].encrypted_key, "encrypted-key-1");
-                assert_eq!(kc.participant_keys[1].user_id, "910007");
+                assert_eq!(kc.conversation_key_version, "v42");
+                assert_eq!(kc.conversation_participant_keys.len(), 2);
+                assert_eq!(kc.conversation_participant_keys[0].user_id, "910004");
+                assert_eq!(
+                    kc.conversation_participant_keys[0].encrypted_conversation_key,
+                    "encrypted-key-1"
+                );
+                assert_eq!(kc.conversation_participant_keys[1].user_id, "910007");
                 assert!(!kc.verified);
             }
             other => panic!("Expected Event::KeyChange, got {:?}", other),
@@ -6764,7 +6772,7 @@ mod tests {
         match decrypted {
             Event::KeyChange(kc) => {
                 assert!(kc.verified, "CKCE signature must verify via self-decrypt");
-                assert_eq!(kc.key_version, ckey_version);
+                assert_eq!(kc.conversation_key_version, ckey_version);
             }
             other => panic!("Expected Event::KeyChange, got {:?}", other),
         }

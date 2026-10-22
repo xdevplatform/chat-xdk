@@ -171,9 +171,12 @@ export interface ImageDimensions {
 }
 
 /**
- * Encrypted conversation key for a single participant.
+ * One participant's copy of a conversation key, encrypted to their identity
+ * key: an entry of the X API's `conversation_participant_keys`. A prepared
+ * change carries these for its request, and a received keyChange event
+ * carries them as delivered.
  */
-export interface EncryptedKeyForRecipient {
+export interface ConversationParticipantKey {
   userId: string;
   encryptedConversationKey: string;
   publicKeyVersion: string;
@@ -212,7 +215,7 @@ export interface PreparedConversationChange {
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;
   /** Encrypted keys for each participant: the request's `conversation_participant_keys`, ready to POST to the API. */
-  conversationParticipantKeys: EncryptedKeyForRecipient[];
+  conversationParticipantKeys: ConversationParticipantKey[];
   /** Action signatures authenticating the change, ready to POST to the API. */
   actionSignatures: ActionSignature[];
 }
@@ -772,9 +775,9 @@ export interface Event {
    * under — decrypt them with the matching key from the conversationKeys
    * map. On keyChange events: the new key version introduced by the change.
    */
-  keyVersion?: string;
+  conversationKeyVersion?: string;
   /** For keyChange events: encrypted conversation keys, one per participant. */
-  participantKeys?: ParticipantKey[];
+  conversationParticipantKeys?: ConversationParticipantKey[];
   /** For failure events: why the message failed to deliver. */
   failure?: FailureType;
   /** For rate-limit upsell failures: the account tier whose limit was reached. */
@@ -820,12 +823,6 @@ export interface MessageContent {
   typeId?: number;
   /** Index signature for additional content-specific fields. */
   [key: string]: any;
-}
-
-export interface ParticipantKey {
-  userId: string;
-  encryptedKey: string;
-  publicKeyVersion: string;
 }
 
 export interface MediaHashReference {

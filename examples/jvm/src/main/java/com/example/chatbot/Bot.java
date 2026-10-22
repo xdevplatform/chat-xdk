@@ -138,9 +138,9 @@ public final class Bot {
             JsonNode event = core.decryptOne(eventB64, st.conversationKeys, signingKeys);
 
             if ("KeyChange".equals(event.path("type").asText())) {
-                String keyVersion = event.path("key_version").asText();
-                for (JsonNode pk : event.path("participant_keys")) {
-                    String enc = pk.path("encrypted_key").asText("");
+                String keyVersion = event.path("conversation_key_version").asText();
+                for (JsonNode pk : event.path("conversation_participant_keys")) {
+                    String enc = pk.path("encrypted_conversation_key").asText("");
                     if (enc.isEmpty()) continue;
                     try {
                         st.conversationKeys.put(keyVersion, core.decryptConversationKey(enc));
@@ -169,7 +169,7 @@ public final class Bot {
         String text = ChatCore.messageText(event);
         if (text == null || text.isEmpty()) return;
 
-        String keyVersion = event.path("key_version").asText(st.latestKeyVersion);
+        String keyVersion = event.path("conversation_key_version").asText(st.latestKeyVersion);
         byte[] convKey = keyVersion == null ? null : st.conversationKeys.get(keyVersion);
         if (convKey == null || keyVersion == null) {
             System.err.println("no_conversation_key conv=" + conversationId);
