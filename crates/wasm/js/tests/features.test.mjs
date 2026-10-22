@@ -353,7 +353,7 @@ async function chatsAskingAtOnceShareARequest(v, server) {
  * work is done, rather than when the request ends. Runtimes without
  * `process.getBuiltinModule` fall back to fetch(), which holds the process.
  */
-async function aPendingFetchNeverKeepsNodeRunning(server) {
+async function aFetchInFlightNeverKeepsNodeRunning(server) {
   if (typeof process.getBuiltinModule !== "function") return;
   server.delayMs = 60_000;
   const url = (path) => JSON.stringify(new URL(path, import.meta.url).href);
@@ -419,7 +419,7 @@ async function main() {
     (server) => freeStopsTheFetches(server),
     (server) => theFetchesEndWithACollectedChat(server),
     (server) => aMalformedBodyIsRejectedAndChangesNothing(server),
-    (server) => aPendingFetchNeverKeepsNodeRunning(server),
+    (server) => aFetchInFlightNeverKeepsNodeRunning(server),
     (server) => chatsAskingAtOnceShareARequest(v, server),
   ];
   for (const test of tests) {
