@@ -1078,9 +1078,7 @@ pub struct SendPayload {
     #[serde(default = "default_true")]
     pub should_notify: bool,
 
-    /// Version of the Chat XDK that built this payload. Do not send it yet:
-    /// the send request takes it as an optional `xdk_version` field only once
-    /// the X API documents that field.
+    /// Version of the Chat XDK that built this payload.
     #[serde(default)]
     pub xdk_version: String,
 }

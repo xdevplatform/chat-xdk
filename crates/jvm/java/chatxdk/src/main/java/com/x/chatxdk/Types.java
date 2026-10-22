@@ -128,9 +128,7 @@ public final class Types {
         public boolean shouldNotify;
 
         /**
-         * Version of the Chat XDK that built this payload. Do not send it yet: the send request
-         * takes it as an optional {@code xdk_version} field only once the X API documents that
-         * field.
+         * Version of the Chat XDK that built this payload.
          */
         @JsonProperty("xdk_version")
         public String xdkVersion = "";

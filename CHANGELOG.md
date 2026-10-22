@@ -425,9 +425,7 @@ prepared = chat.prepare_conversation_key_change(
   repeats every 5 minutes, and is shared by chats that ask at once; if it
   fails or is blocked, sends stay v0. See "Network access" in the README.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
-  (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Do not send it yet: the
-  send request takes it as an optional `xdk_version` field only once the X
-  API documents that field.
+  (`xdkVersion` in JS, `XdkVersion` in Go and .NET).
 - Messages encrypted under per-message keys (`contents_encryption_version`
   1 or more) decrypt, as do their reply previews, edits and files. A reply
   to such a message carries the original's key, and a v1 edit names the
