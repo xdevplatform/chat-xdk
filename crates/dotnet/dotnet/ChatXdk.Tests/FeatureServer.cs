@@ -64,13 +64,18 @@ namespace ChatXdk.Tests
         private string _body;
         private int _delayMs;
 
+        // Each server gets an endpoint of its own: the core reuses an answer
+        // per endpoint and bucket for 5 minutes, and a server can get the port
+        // of one that came before it.
+        private static int s_lastId;
+
         public string Endpoint { get; }
 
         public FeatureServer(string body = "{\"features\":{\"v1_send\":true}}")
         {
             _body = body;
             _listener.Start();
-            Endpoint = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/2/chat/features";
+            Endpoint = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/{Interlocked.Increment(ref s_lastId)}/2/chat/features";
             _ = Task.Run(AcceptAsync);
         }
 

@@ -2,6 +2,7 @@
 point chats at it."""
 
 import http.server
+import itertools
 import threading
 import time
 import urllib.parse
@@ -25,6 +26,12 @@ def wait_for(predicate, timeout=10.0):
             return True
         time.sleep(0.02)
     return predicate()
+
+
+# Each server gets an endpoint of its own: the core reuses an answer per
+# endpoint and bucket for 5 minutes, and a server can get the port of one that
+# came before it.
+_server_ids = itertools.count(1)
 
 
 class FeatureServer:
@@ -60,7 +67,7 @@ class FeatureServer:
 
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.httpd.daemon_threads = True
-        self.url = "http://127.0.0.1:%d/2/chat/features" % self.httpd.server_address[1]
+        self.url = "http://127.0.0.1:%d/%d/2/chat/features" % (self.httpd.server_address[1], next(_server_ids))
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def close(self):

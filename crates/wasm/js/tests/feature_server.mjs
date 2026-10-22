@@ -26,6 +26,11 @@ export async function waitFor(what, predicate, timeoutMs = 10_000) {
   if (!predicate()) throw new Error(`timed out waiting for ${what}`);
 }
 
+// Each server gets an endpoint of its own: the core reuses an answer per
+// endpoint and bucket for 5 minutes, and a server can get the port of one that
+// came before it.
+let lastServerId = 0;
+
 /** A local GET /2/chat/features that records each request's bucket. */
 export async function featureServer(body = '{"features":{"v1_send":true}}') {
   const state = { status: 200, body, delayMs: 0, buckets: [] };
@@ -46,7 +51,7 @@ export async function featureServer(body = '{"features":{"v1_send":true}}') {
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  state.endpoint = `http://127.0.0.1:${server.address().port}/2/chat/features`;
+  state.endpoint = `http://127.0.0.1:${server.address().port}/${++lastServerId}/2/chat/features`;
   state.unref = () => server.unref();
   state.close = () =>
     new Promise((resolve) => {

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -77,6 +78,7 @@ func enableV1Send(t *testing.T, chat *Chat) {
 // bucket.
 type featureServer struct {
 	*httptest.Server
+	id      int64
 	mu      sync.Mutex
 	status  int
 	body    string
@@ -86,7 +88,7 @@ type featureServer struct {
 
 func newFeatureServer(t *testing.T) *featureServer {
 	t.Helper()
-	s := &featureServer{status: http.StatusOK, body: `{"features":{"v1_send":true}}`}
+	s := &featureServer{id: featureServerIDs.Add(1), status: http.StatusOK, body: `{"features":{"v1_send":true}}`}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The answer is fixed when the request is recorded, so a test that
 		// sees the request can change the next answer.
@@ -109,8 +111,13 @@ func newFeatureServer(t *testing.T) *featureServer {
 	return s
 }
 
+// featureServerIDs give each server an endpoint of its own: the core reuses an
+// answer per endpoint and bucket for 5 minutes, and a server can get the port
+// of one that came before it.
+var featureServerIDs atomic.Int64
+
 func (s *featureServer) endpoint() string {
-	return s.URL + "/2/chat/features"
+	return s.URL + "/" + strconv.FormatInt(s.id, 10) + "/2/chat/features"
 }
 
 func (s *featureServer) set(status int, body string) {

@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** A local GET /2/chat/features that records each request's bucket. */
 final class FeatureServer implements AutoCloseable {
@@ -23,6 +24,12 @@ final class FeatureServer implements AutoCloseable {
     static final String OFFLINE = "http://127.0.0.1:9/2/chat/features";
 
     private static FeatureServer v1Server;
+
+    /**
+     * Each server gets an endpoint of its own: the core reuses an answer per endpoint and bucket
+     * for 5 minutes, and a server can get the port of one that came before it.
+     */
+    private static final AtomicInteger IDS = new AtomicInteger();
 
     private final HttpServer server;
     private final List<String> buckets = new ArrayList<>();
@@ -81,7 +88,8 @@ final class FeatureServer implements AutoCloseable {
             return t;
         }));
         server.start();
-        endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + "/2/chat/features";
+        endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + "/" + IDS.incrementAndGet()
+                + "/2/chat/features";
     }
 
     synchronized void set(int status, String body, long delayMs) {
