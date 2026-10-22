@@ -270,11 +270,16 @@ async function main() {
   const keyChanges = batch.messages.filter((m) => m.event.type === "keyChange");
   assert.equal(keyChanges.length, 1);
   assert.equal(keyChanges[0].event.verified, true);
-  assert.equal(keyChanges[0].event.keyVersion, v.event_conversation_key_version);
+  assert.equal(keyChanges[0].event.conversationKeyVersion, v.event_conversation_key_version);
+  assert.ok(keyChanges[0].event.conversationParticipantKeys.length > 0);
+  for (const key of keyChanges[0].event.conversationParticipantKeys) {
+    assert.deepEqual(Object.keys(key).sort(), ["encryptedConversationKey", "publicKeyVersion", "userId"]);
+  }
   const messages = batch.messages.filter((m) => m.event.type === "message");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].event.content.text, v.event_message_text);
   assert.equal(messages[0].event.verified, true);
+  assert.equal(messages[0].event.conversationKeyVersion, v.event_conversation_key_version);
 
   // Single-event path with pre-cached keys verifies the same message …
   const conversationKeys = batch.conversationKeys.keys;

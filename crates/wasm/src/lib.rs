@@ -820,7 +820,7 @@ impl Chat {
     /// participants; pass the existing id for a group key rotation.
     ///
     /// Returns `{ conversationId, conversationKey, conversationKeyVersion,
-    /// participantKeys, actionSignatures }`.
+    /// conversationParticipantKeys, actionSignatures }`.
     #[wasm_bindgen(js_name = prepareConversationKeyChange)]
     pub fn prepare_conversation_key_change(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsConversationKeyChangeParams =

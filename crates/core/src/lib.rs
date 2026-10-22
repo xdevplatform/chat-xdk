@@ -190,9 +190,9 @@ pub mod js {
         JsAttachmentInfo,
         JsConversationDeletedEvent,
         JsConversationKeyResult,
+        JsConversationParticipantKey,
         JsDecryptEventsResult,
         JsDecryptedMessage,
-        JsEncryptedKeyForRecipient,
         // Event hierarchy
         JsEvent,
         // Supporting types
@@ -211,7 +211,6 @@ pub mod js {
         JsMessageContent,
         JsMessageDeletedEvent,
         JsMoneyAttachmentInfo,
-        JsParticipantKey,
         JsPostAttachmentInfo,
         JsPreparedAction,
         JsPreparedConversationChange,

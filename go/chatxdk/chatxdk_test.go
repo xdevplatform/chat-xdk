@@ -1896,11 +1896,18 @@ func TestDecryptEventsFixtureVectors(t *testing.T) {
 	if !keyChanges[0].Verified {
 		t.Error("expected the fixture KeyChange to verify")
 	}
-	if keyChanges[0].KeyVersion != v.EventConversationKeyVersion {
-		t.Errorf("unexpected KeyChange key_version: %q", keyChanges[0].KeyVersion)
+	if keyChanges[0].ConversationKeyVersion != v.EventConversationKeyVersion {
+		t.Errorf("unexpected KeyChange conversation_key_version: %q", keyChanges[0].ConversationKeyVersion)
+	}
+	if keys := keyChanges[0].ConversationParticipantKeys; len(keys) == 0 ||
+		keys[0].UserID == "" || keys[0].EncryptedConversationKey == "" || keys[0].PublicKeyVersion == "" {
+		t.Errorf("KeyChange conversation_participant_keys not read: %+v", keys)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if version := messages[0].ConversationKeyVersion; version == nil || *version != v.EventConversationKeyVersion {
+		t.Errorf("unexpected message conversation_key_version: %v", version)
 	}
 	if messages[0].Text() != v.EventMessageText {
 		t.Errorf("message text mismatch:\ngot  %q\nwant %q", messages[0].Text(), v.EventMessageText)
@@ -2651,12 +2658,12 @@ func TestEventUnmarshalAndTypeAccessors(t *testing.T) {
 func TestEventAsKeyChange(t *testing.T) {
 	kcJSON := `{
 		"type": "KeyChange",
-		"key_version": "2",
+		"conversation_key_version": "2",
 		"sender_id": "910004",
 		"verified": true,
-		"participant_keys": [
-			{"user_id": "910004", "encrypted_key": "abc123", "public_key_version": "1"},
-			{"user_id": "910007", "encrypted_key": "def456", "public_key_version": "1"}
+		"conversation_participant_keys": [
+			{"user_id": "910004", "encrypted_conversation_key": "abc123", "public_key_version": "1"},
+			{"user_id": "910007", "encrypted_conversation_key": "def456", "public_key_version": "1"}
 		]
 	}`
 	var event Event
@@ -2671,14 +2678,17 @@ func TestEventAsKeyChange(t *testing.T) {
 	if kc == nil {
 		t.Fatal("AsKeyChange() returned nil")
 	}
-	if kc.KeyVersion != "2" {
-		t.Errorf("expected key_version '2', got %q", kc.KeyVersion)
+	if kc.ConversationKeyVersion != "2" {
+		t.Errorf("expected conversation_key_version '2', got %q", kc.ConversationKeyVersion)
 	}
 	if !kc.Verified {
 		t.Error("expected verified == true on the typed KeyChangeEvent")
 	}
-	if len(kc.ParticipantKeys) != 2 {
-		t.Fatalf("expected 2 participant keys, got %d", len(kc.ParticipantKeys))
+	if len(kc.ConversationParticipantKeys) != 2 {
+		t.Fatalf("expected 2 participant keys, got %d", len(kc.ConversationParticipantKeys))
+	}
+	if kc.ConversationParticipantKeys[1].EncryptedConversationKey != "def456" {
+		t.Errorf("expected encrypted_conversation_key 'def456', got %q", kc.ConversationParticipantKeys[1].EncryptedConversationKey)
 	}
 
 	// AsMessage should return nil for a KeyChange event
@@ -2844,11 +2854,11 @@ func TestMessageContentReactionRemoved(t *testing.T) {
 
 func TestFindKeyForUser(t *testing.T) {
 	kc := &KeyChangeEvent{
-		KeyVersion: "3",
-		ParticipantKeys: []ParticipantKey{
-			{UserID: "user-a", EncryptedKey: "key-a", PublicKeyVersion: "1"},
-			{UserID: "user-b", EncryptedKey: "key-b", PublicKeyVersion: "2"},
-			{UserID: "user-c", EncryptedKey: "key-c", PublicKeyVersion: "1"},
+		ConversationKeyVersion: "3",
+		ConversationParticipantKeys: []ConversationParticipantKey{
+			{UserID: "user-a", EncryptedConversationKey: "key-a", PublicKeyVersion: "1"},
+			{UserID: "user-b", EncryptedConversationKey: "key-b", PublicKeyVersion: "2"},
+			{UserID: "user-c", EncryptedConversationKey: "key-c", PublicKeyVersion: "1"},
 		},
 	}
 
@@ -2857,8 +2867,8 @@ func TestFindKeyForUser(t *testing.T) {
 	if pk == nil {
 		t.Fatal("FindKeyForUser('user-b') returned nil")
 	}
-	if pk.EncryptedKey != "key-b" {
-		t.Errorf("expected encrypted_key 'key-b', got %q", pk.EncryptedKey)
+	if pk.EncryptedConversationKey != "key-b" {
+		t.Errorf("expected encrypted_conversation_key 'key-b', got %q", pk.EncryptedConversationKey)
 	}
 	if pk.PublicKeyVersion != "2" {
 		t.Errorf("expected public_key_version '2', got %q", pk.PublicKeyVersion)

@@ -189,12 +189,17 @@ class TestPythonSdkVectors(unittest.TestCase):
         key_changes = [m["event"] for m in result["messages"] if m["event"]["type"] == "KeyChange"]
         self.assertEqual(len(key_changes), 1)
         self.assertTrue(key_changes[0]["verified"])
-        self.assertEqual(key_changes[0]["key_version"], ck_version)
+        self.assertEqual(key_changes[0]["conversation_key_version"], ck_version)
+        participant_keys = key_changes[0]["conversation_participant_keys"]
+        self.assertTrue(participant_keys)
+        for key in participant_keys:
+            self.assertEqual(set(key), {"user_id", "encrypted_conversation_key", "public_key_version"})
 
         messages = [m["event"] for m in result["messages"] if m["event"]["type"] == "Message"]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["content"]["text"], v["event_message_text"])
         self.assertTrue(messages[0]["verified"])
+        self.assertEqual(messages[0]["conversation_key_version"], ck_version)
 
         # Single-event path with pre-cached keys verifies the same message ...
         cached = {ck_version: bytes(result["conversation_keys"]["keys"][ck_version])}

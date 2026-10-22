@@ -23,6 +23,8 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] [Read `conversationKeyVersion` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
@@ -35,7 +37,8 @@ and then as 0.6.0 code writes them. `chat` is the `ChatWithJuicebox` that
 `createChat` returns, unlocked, and the other names stand for your own
 values: ids, versions, keys and events as the X API returns them, `keys` for
 the conversation key map `decryptEvents` returns, `payload` for a
-`SendPayload` and `prepared` for a `PreparedConversationChange`.
+`SendPayload`, `prepared` for a `PreparedConversationChange`, and
+`keyChange` and `message` for a decrypted keyChange and message event.
 `api.post(path, body)` stands for your HTTP client: it POSTs `body` as JSON
 to `https://api.x.com` + `path` with your user access token, writing every
 key in snake_case as the X API takes them (the package returns camelCase),
@@ -345,13 +348,15 @@ const actionSignatures = prepared.actionSignatures;
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests that
-take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+A prepared change's participant keys carry the names of the requests the
+change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
 `/{id}/members`), camelCased as everything the package returns is:
-`conversationParticipantKeys`, each entry with `userId`,
-`encryptedConversationKey` and `publicKeyVersion`. Use them as returned, and
-write their keys in snake_case when you build the request body, as you do
-for the other fields:
+`conversationParticipantKeys`, each entry a `ConversationParticipantKey`
+with `userId`, `encryptedConversationKey` and `publicKeyVersion`, the names a
+received keyChange event uses too
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
+and use them as returned, writing their keys in snake_case when you build
+the request body, as you do for the other fields:
 
 ```js
 // 0.5.x
@@ -363,6 +368,55 @@ const conversationParticipantKeys = prepared.participantKeys.map((key) => ({
 
 // 0.6.0
 const conversationParticipantKeys = prepared.conversationParticipantKeys;
+```
+
+## Received participant keys take the same names
+
+A decrypted keyChange event carries its participant keys under the names
+Thrift's `ConversationKeyChangeEvent` gives them, camelCased, the same names
+a prepared change uses: `conversationParticipantKeys`, each entry with
+`userId`, `encryptedConversationKey` and `publicKeyVersion`. Read them under
+those names:
+
+```js
+// 0.5.x
+const [mine] = keyChange.participantKeys ?? [];
+const encrypted = mine.encryptedKey;
+
+// 0.6.0
+const [mine] = keyChange.conversationParticipantKeys ?? [];
+const encrypted = mine.encryptedConversationKey;
+```
+
+In TypeScript, received and prepared keys are one type,
+`ConversationParticipantKey`:
+
+```ts
+// 0.5.x
+import type { EncryptedKeyForRecipient, ParticipantKey } from "@xdevplatform/chat-xdk";
+const sent: EncryptedKeyForRecipient[] = prepared.participantKeys;
+const received: ParticipantKey[] = keyChange.participantKeys ?? [];
+
+// 0.6.0
+import type { ConversationParticipantKey } from "@xdevplatform/chat-xdk";
+const sent: ConversationParticipantKey[] = prepared.conversationParticipantKeys;
+const received: ConversationParticipantKey[] = keyChange.conversationParticipantKeys ?? [];
+```
+
+## Decrypted events name the conversation key version as the X API does
+
+Decrypted message and keyChange events carry their conversation key version
+as `conversationKeyVersion`, the X API's `conversation_key_version`
+camelCased, and the name the encrypt methods take:
+
+```js
+// 0.5.x
+const messageVersion = message.keyVersion;
+const keyChangeVersion = keyChange.keyVersion;
+
+// 0.6.0
+const messageVersion = message.conversationKeyVersion;
+const keyChangeVersion = keyChange.conversationKeyVersion;
 ```
 
 ## Deletes return a `PreparedAction`

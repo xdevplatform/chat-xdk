@@ -161,13 +161,17 @@ version of the SDK that built it:
 [.NET](dotnet.md#sendpayload-fields-take-the-send-requests-names),
 [C ABI](c-abi.md#the-send-payload-takes-the-send-requests-field-names).
 
-## Participant keys take the key requests' names
+## Participant keys take the X API's names, sent and received
 
-A prepared change's participant keys are `conversation_participant_keys`,
-each entry with `encrypted_conversation_key`, the names of the requests that
-take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
-`/{id}/members`), so apps send the keys as returned, as they send the action
-signatures:
+The SDK names participant keys as the X API and the Thrift events do, in
+both directions. A prepared change's keys are
+`conversation_participant_keys`, each entry with
+`encrypted_conversation_key`, the names of the requests the change goes into
+(`POST /2/chat/conversations/{id}/keys`, `/group` and `/{id}/members`), so
+apps pass them through unchanged, as they pass the action signatures,
+instead of renaming them. A decrypted key change carries its keys under the
+same names, the ones Thrift's `ConversationKeyChangeEvent` uses, and one
+type, `ConversationParticipantKey`, holds them in both directions. Sent keys:
 [Rust](rust.md#participant-keys-take-the-key-requests-names),
 [Python](python.md#participant-keys-take-the-key-requests-names),
 [JavaScript](javascript.md#participant-keys-take-the-key-requests-names),
@@ -175,6 +179,28 @@ signatures:
 [JVM](jvm.md#participant-keys-take-the-key-requests-names),
 [.NET](dotnet.md#participant-keys-take-the-key-requests-names),
 [C ABI](c-abi.md#participant-keys-take-the-key-requests-names).
+Received keys:
+[Rust](rust.md#received-participant-keys-take-the-same-names),
+[Python](python.md#received-participant-keys-take-the-same-names),
+[JavaScript](javascript.md#received-participant-keys-take-the-same-names),
+[Go](go.md#received-participant-keys-take-the-same-names),
+[JVM](jvm.md#received-participant-keys-take-the-same-names),
+[.NET](dotnet.md#received-participant-keys-take-the-same-names),
+[C ABI](c-abi.md#received-participant-keys-take-the-same-names).
+
+## Decrypted events name the conversation key version as the X API does
+
+Decrypted messages and key changes carry their conversation key version as
+`conversation_key_version`: the name the X API's events and the Thrift
+events give it, and the name the encrypt calls take. One name follows a key
+version from the events an app reads to the calls it makes:
+[Rust](rust.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
+[Python](python.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
+[JavaScript](javascript.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
+[Go](go.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
+[JVM](jvm.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
+[.NET](dotnet.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
+[C ABI](c-abi.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does).
 
 ## Signatures verify at versions 8 through 11
 

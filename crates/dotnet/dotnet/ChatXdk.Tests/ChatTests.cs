@@ -1346,7 +1346,17 @@ namespace ChatXdk.Tests
             Assert.Single(keyChanges);
             Assert.True(keyChanges[0].GetProperty("verified").GetBoolean());
             Assert.Equal(v.EventConversationKeyVersion,
-                keyChanges[0].GetProperty("key_version").GetString());
+                keyChanges[0].GetProperty("conversation_key_version").GetString());
+            // The received participant keys read into the type a prepared change carries.
+            var participantKeys = keyChanges[0].GetProperty("conversation_participant_keys")
+                .Deserialize<List<ConversationParticipantKey>>()!;
+            Assert.NotEmpty(participantKeys);
+            foreach (var key in participantKeys)
+            {
+                Assert.False(string.IsNullOrEmpty(key.UserId));
+                Assert.False(string.IsNullOrEmpty(key.EncryptedConversationKey));
+                Assert.False(string.IsNullOrEmpty(key.PublicKeyVersion));
+            }
 
             var messages = result.Messages
                 .Where(m => m.Event.GetProperty("type").GetString() == "Message")
@@ -1356,6 +1366,8 @@ namespace ChatXdk.Tests
             Assert.Equal(v.EventMessageText,
                 messages[0].GetProperty("content").GetProperty("text").GetString());
             Assert.True(messages[0].GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventConversationKeyVersion,
+                messages[0].GetProperty("conversation_key_version").GetString());
 
             // Single-event path with pre-cached keys verifies the same message …
             var single = chat.DecryptEvent(
