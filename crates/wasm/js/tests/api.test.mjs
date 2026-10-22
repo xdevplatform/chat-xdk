@@ -12,6 +12,19 @@ import init, {
   encryptedFileSize,
 } from "../../pkg/chat_xdk_wasm.js";
 
+/** File encrypt params from params that carry a one-key `conversationKeys` map. */
+const withKey = ({ conversationKeys, ...rest }) => {
+  const [[conversationKeyVersion, conversationKey]] = Object.entries(conversationKeys);
+  return { ...rest, conversationKey, conversationKeyVersion };
+};
+
+/** The one `actionSignatures` entry of a prepared delete or read receipt. */
+const onlyAction = (prepared) => {
+  assert.deepEqual(Object.keys(prepared), ["actionSignatures"]);
+  assert.equal(prepared.actionSignatures.length, 1);
+  return prepared.actionSignatures[0];
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -101,16 +114,22 @@ async function main() {
       deleteForAll: false,
     };
     assert.throws(() => fresh.prepareMessageDelete(deleteParams), /signing_key_version is not set/);
-    fresh.setIdentity("1234", "1700000000123");
-    assert.equal(fresh.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000123");
+    fresh.setIdentity({ userId: "1234", signingKeyVersion: "1700000000123" });
+    assert.equal(
+      onlyAction(fresh.prepareMessageDelete(deleteParams)).messageEventSignature.publicKeyVersion,
+      "1700000000123",
+    );
 
     // Restored keys carry the version passed to importKeys, and none
     // without it.
     const keys = new Uint8Array(fresh.exportKeys());
     const restored = new Chat();
-    restored.importKeys(keys, "1700000000456");
-    assert.equal(restored.prepareMessageDelete(deleteParams).publicKeyVersion, "1700000000456");
-    restored.importKeys(keys);
+    restored.importKeys({ keys: keys, signingKeyVersion: "1700000000456" });
+    assert.equal(
+      onlyAction(restored.prepareMessageDelete(deleteParams)).messageEventSignature.publicKeyVersion,
+      "1700000000456",
+    );
+    restored.importKeys({ keys: keys });
     assert.throws(
       () => restored.prepareMessageDelete(deleteParams),
       /signing_key_version is not set/,
@@ -121,7 +140,7 @@ async function main() {
 
   // Set up a Chat with the fixture keys (raw crypto, no Juicebox)
   const chat = new Chat();
-  chat.importKeys(b64ToBytes(v.private_keys_concat_b64));
+  chat.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
   assert.equal(chat.isUnlocked(), true);
 
   // 1c. exportKeys returns the exact private bytes that were imported.
@@ -192,25 +211,34 @@ async function main() {
 
   // 2. Conversation-key change: generate + encrypt + sign, then ECIES roundtrip
   const prep = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.ok(prep.conversationKey instanceof Uint8Array);
   assert.equal(prep.conversationKey.length, 32);
   assert.equal(prep.conversationId, "conv-1");
-  assert.equal(prep.participantKeys.length, 1);
+  assert.equal(prep.conversationParticipantKeys.length, 1);
+  // The entries take the request's field names.
+  assert.deepEqual(Object.keys(prep.conversationParticipantKeys[0]).sort(), [
+    "encryptedConversationKey",
+    "publicKeyVersion",
+    "userId",
+  ]);
   assert.equal(prep.actionSignatures.length, 1);
   // Omitted: the payload embeds the plaintext conversation key and is withheld.
   assert.equal(prep.actionSignatures[0].signaturePayload, undefined);
-  const decryptedKey = chat.decryptConversationKey(prep.participantKeys[0].encryptedKey);
+  // Nested as the request's actionSignatures carry it.
+  assert.equal(prep.actionSignatures[0].messageEventSignature.publicKeyVersion, "1");
+  assert.equal(prep.actionSignatures[0].messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
+  const decryptedKey = chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey);
   assert.deepEqual(decryptedKey, prep.conversationKey);
   // two prepared changes generate different keys (randomized)
   const prep2 = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.notDeepEqual(prep.conversationKey, prep2.conversationKey);
@@ -218,12 +246,12 @@ async function main() {
   // 2b. Group create: emits two action signatures (CKCE + GroupCreate) with
   // populated encoded event details.
   const groupPrep = chat.prepareGroupCreate({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    memberIds: ["me", "friend"],
-    adminIds: ["me"],
+    memberIds: ["910002", "910005"],
+    adminIds: ["910002"],
     title: "My Group",
   });
   assert.equal(groupPrep.conversationId, "g-1");
@@ -238,12 +266,12 @@ async function main() {
   // sentinel, exactly like omitting the field.
   for (const title of ["", undefined]) {
     const p = chat.prepareGroupCreate({
-      senderId: "me",
+      senderId: "910002",
       signingKeyVersion: "1",
-      publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+      publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
       conversationId: "g-1",
-      memberIds: ["me", "friend"],
-      adminIds: ["me"],
+      memberIds: ["910002", "910005"],
+      adminIds: ["910002"],
       title,
       avatarUrl: title,
     });
@@ -267,8 +295,8 @@ async function main() {
   // the returned eventB64 and the media hash key its attachment names, and
   // decrypts through the sent message's event.
   const sender = new Chat();
-  sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-  sender.setIdentity("111", "1");
+  sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+  sender.setIdentity({ userId: "111", signingKeyVersion: "1" });
   const mediaHashKey = "photo";
   const mediaKeys = { "1": convKey };
   const photoAttachment = (hash) => ({
@@ -294,8 +322,8 @@ async function main() {
 
   const plaintext = b64ToBytes(v.plaintext_b64);
   // A session with no identity encrypts the file.
-  const fileCt1 = new Chat().encryptFile({ ...fileParams, file: plaintext });
-  const fileCt2 = sender.encryptFile({ ...fileParams, file: plaintext });
+  const fileCt1 = new Chat().encryptFile(withKey({ ...fileParams, file: plaintext }));
+  const fileCt2 = sender.encryptFile(withKey({ ...fileParams, file: plaintext }));
   assert.notDeepEqual(fileCt1, fileCt2); // randomized nonces
   assert.equal(fileCt1.length, encryptedFileSize(plaintext.length));
   assert.deepEqual(chat.decryptFile({ ...fileParams, encrypted: fileCt1 }), plaintext);
@@ -319,19 +347,23 @@ async function main() {
 
   // File errors say what to pass instead.
   assert.throws(
-    () => sender.encryptFile({ ...fileParams, file: plaintext, mediaHashKey: "other" }),
+    () => sender.encryptFile(withKey({ ...fileParams, file: plaintext, mediaHashKey: "other" })),
     /is not one of the message's files/,
   );
   assert.throws(
-    () => sender.encryptFile({ ...fileParams, file: [1, 2, 3] }),
+    () => sender.encryptFile(withKey({ ...fileParams, file: [1, 2, 3] })),
     /Invalid encryptFile params: file must be a Uint8Array/,
   );
   assert.throws(
-    () => sender.encryptFile({ ...fileParams, file: plaintext, conversationKeys: { "1": new Uint8Array(3) } }),
-    /the key for version '1' in the conversation key map is not 32 bytes/,
+    () => sender.encryptFile(withKey({ ...fileParams, file: plaintext, conversationKeys: { "1": new Uint8Array(3) } })),
+    /Invalid conversation key \(expected 32 bytes\)/,
   );
   assert.throws(
-    () => sender.encryptFile({ eventB64: mediaEvent, conversationKeys: mediaKeys, file: plaintext }),
+    () => sender.encryptFile(withKey({ ...fileParams, file: plaintext, conversationKeys: { "9": convKey } })),
+    /conversation_key_version '9' is not the message's key version '1'/,
+  );
+  assert.throws(
+    () => sender.encryptFile(withKey({ eventB64: mediaEvent, conversationKeys: mediaKeys, file: plaintext })),
     /Invalid encryptFile params.*missing field `mediaHashKey`/,
   );
 
@@ -349,7 +381,7 @@ async function main() {
       return out;
     };
     const bigPlain = new Uint8Array(5000).fill(0xab);
-    const enc = sender.fileEncryptor(fileParams);
+    const enc = sender.fileEncryptor(withKey(fileParams));
     const ctPieces = [];
     for (let i = 0; i < bigPlain.length; i += 700) {
       ctPieces.push(enc.push(bigPlain.subarray(i, i + 700)));
@@ -384,7 +416,9 @@ async function main() {
   // The SDK generates and returns the message id.
   assert.equal(typeof payload.messageId, "string");
   assert.ok(payload.messageId.length > 0);
-  assert.equal(typeof payload.encryptedContent, "string");
+  // The payload's fields take the send request's names.
+  assert.ok(payload.encodedMessageCreateEvent.length > 0);
+  assert.ok(payload.encodedMessageEventSignature.length > 0);
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
   assert.equal(payload.signatureInfo.signatureVersion, "7");
@@ -401,12 +435,12 @@ async function main() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
     replyToSequenceId: "seq-42",
-    replyToSenderId: 12345,
+    replyToSenderId: "12345",
     replyToText: "original message",
   });
-  assert.ok(replyPayload.encryptedContent.length > 0);
+  assert.ok(replyPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(replyPayload.signature.length > 0);
-  assert.ok(replyPayload.encodedEventSignature.length > 0);
+  assert.ok(replyPayload.encodedMessageEventSignature.length > 0);
   assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
@@ -472,23 +506,20 @@ async function main() {
     bigSenderId.toString(),
     "the decrypted reply preview must carry the exact sender id",
   );
-  // The same id as a number has already been rounded by JS — rejected.
+  // A user id is a digits-only string: numbers, which JS may already have
+  // rounded, and other strings are rejected.
   assert.throws(
     () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: Number(bigSenderId) }),
     /replyToSenderId/,
   );
-  // Non-integral numbers and non-numeric strings are rejected.
   assert.throws(
-    () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: 1.5 }),
+    () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: 12345 }),
     /replyToSenderId/,
   );
   assert.throws(
     () => chat.encryptReply({ ...replyParamsBase, replyToSenderId: "not-a-number" }),
-    /replyToSenderId/,
+    /Invalid reply_to_sender_id 'not-a-number'/,
   );
-  // Small integral numbers remain accepted.
-  const smallNumReply = chat.encryptReply({ ...replyParamsBase, replyToSenderId: 12345 });
-  assert.ok(smallNumReply.encryptedContent.length > 0);
 
   // 4c. encryptAddReaction / encryptRemoveReaction produce signed payloads
   const reactionParams = {
@@ -501,13 +532,13 @@ async function main() {
     signingKeyVersion: "1",
   };
   const addPayload = chat.encryptAddReaction(reactionParams);
-  assert.ok(addPayload.encryptedContent.length > 0);
+  assert.ok(addPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(addPayload.signature.length > 0);
-  assert.ok(addPayload.encodedEventSignature.length > 0);
+  assert.ok(addPayload.encodedMessageEventSignature.length > 0);
   const removePayload = chat.encryptRemoveReaction(reactionParams);
-  assert.ok(removePayload.encryptedContent.length > 0);
+  assert.ok(removePayload.encodedMessageCreateEvent.length > 0);
   assert.ok(removePayload.signature.length > 0);
-  assert.ok(removePayload.encodedEventSignature.length > 0);
+  assert.ok(removePayload.encodedMessageEventSignature.length > 0);
 
   // 4c2. encryptEdit produces a signed payload that decrypts back to the
   // edit: updated text, target sequence id, and the [start, end, type]
@@ -522,9 +553,9 @@ async function main() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.ok(editPayload.encryptedContent.length > 0);
+  assert.ok(editPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(editPayload.signature.length > 0);
-  assert.ok(editPayload.encodedEventSignature.length > 0);
+  assert.ok(editPayload.encodedMessageEventSignature.length > 0);
   assert.ok(editPayload.messageId.length > 0);
   const decodedEdit = decryptOwn(editPayload);
   assert.equal(decodedEdit.newText, "see https://example.com");
@@ -533,29 +564,39 @@ async function main() {
   assert.equal(decodedEdit.entities[0].startIndex, 4);
   assert.equal(decodedEdit.entities[0].endIndex, 23);
 
-  // 4c3. prepareMessageDelete returns a signed action with the encoded
-  // MessageDeleteEvent detail; 1:1 ids are signed in canonical colon form.
-  const deleteSig = chat.prepareMessageDelete({
+  // 4c3. prepareMessageDelete returns the request's actionSignatures: one
+  // signed action with the encoded MessageDeleteEvent detail, its signature
+  // nested; 1:1 ids are signed in canonical colon form.
+  const deleteSig = onlyAction(chat.prepareMessageDelete({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "222-111",
     sequenceIds: ["seq-10", "seq-11"],
     deleteForAll: true,
-  });
+  }));
   assert.ok(deleteSig.messageId.length > 0);
   assert.ok(deleteSig.encodedMessageEventDetail.length > 0);
-  assert.ok(deleteSig.signature.length > 0);
+  assert.deepEqual(Object.keys(deleteSig.messageEventSignature).sort(), [
+    "publicKeyVersion",
+    "signature",
+    "signatureVersion",
+    "signingPublicKey",
+  ]);
+  assert.ok(deleteSig.messageEventSignature.signature.length > 0);
+  assert.equal(deleteSig.messageEventSignature.signatureVersion, "7");
+  assert.equal(deleteSig.messageEventSignature.publicKeyVersion, "1");
+  assert.equal(deleteSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
   assert.equal(
     deleteSig.signaturePayload,
     `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`,
   );
-  const deleteForSelfSig = chat.prepareMessageDelete({
+  const deleteForSelfSig = onlyAction(chat.prepareMessageDelete({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g999",
     sequenceIds: ["seq-1"],
     deleteForAll: false,
-  });
+  }));
   assert.equal(
     deleteForSelfSig.signaturePayload,
     `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
@@ -563,16 +604,17 @@ async function main() {
 
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.
-  const readSig = chat.prepareMarkConversationRead({
+  const readSig = onlyAction(chat.prepareMarkConversationRead({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "222-111",
     seenUntilSequenceId: "2011626338877079553",
     seenAtMsec: 1700000000123,
-  });
+  }));
   assert.ok(readSig.messageId.length > 0);
   assert.ok(readSig.encodedMessageEventDetail.length > 0);
-  assert.equal(readSig.publicKeyVersion, "1");
+  assert.equal(readSig.messageEventSignature.publicKeyVersion, "1");
+  assert.equal(readSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
   assert.equal(
     readSig.signaturePayload,
     `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`,
@@ -580,7 +622,7 @@ async function main() {
   assert.equal(
     chat.verify(
       v.signing_public_b64,
-      b64ToBytes(readSig.signature),
+      b64ToBytes(readSig.messageEventSignature.signature),
       new TextEncoder().encode(readSig.signaturePayload),
     ),
     true,
@@ -588,12 +630,12 @@ async function main() {
 
   // An omitted seenAtMsec signs the JavaScript clock's current time.
   const beforeRead = Date.now();
-  const readNowSig = chat.prepareMarkConversationRead({
+  const readNowSig = onlyAction(chat.prepareMarkConversationRead({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g999",
     seenUntilSequenceId: "seq-1",
-  });
+  }));
   const afterRead = Date.now();
   const readNowPrefix = `MarkConversationReadEvent,${readNowSig.messageId},111,g999,seq-1,`;
   assert.ok(readNowSig.signaturePayload.startsWith(readNowPrefix));
@@ -623,13 +665,13 @@ async function main() {
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    newMemberIds: ["friend"],
-    currentMemberIds: ["me"],
-    currentAdminIds: ["me"],
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
     currentPendingMemberIds: [],
   });
   assert.equal(membersPrep.conversationId, "g-1");
@@ -648,13 +690,13 @@ async function main() {
 
   // 4d2. The group's screen-capture-blocking state fills the trailing signed slot.
   const membersPrepScb = chat.prepareGroupMembersChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    newMemberIds: ["friend"],
-    currentMemberIds: ["me"],
-    currentAdminIds: ["me"],
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
     currentPendingMemberIds: [],
     currentScreenCaptureBlockingEnabled: true,
   });
@@ -756,16 +798,16 @@ async function main() {
       },
     ],
   });
-  assert.ok(urlCardPayload.encryptedContent.length > 0);
+  assert.ok(urlCardPayload.encodedMessageCreateEvent.length > 0);
   assert.ok(urlCardPayload.signature.length > 0);
   assert.deepEqual(
     chat.decryptFile({
-      encrypted: sender.encryptFile({
+      encrypted: sender.encryptFile(withKey({
         file: plaintext,
         eventB64: urlCardPayload.eventB64,
         conversationKeys: mediaKeys,
         mediaHashKey: "favicon-hash",
-      }),
+      })),
       eventB64: urlCardPayload.eventB64,
       conversationKeys: mediaKeys,
       mediaHashKey: "favicon-hash",

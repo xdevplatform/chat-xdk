@@ -22,8 +22,9 @@ use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
     DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
     EncryptReactionParams, EncryptReplyParams, EntityDescriptor, FileDecryptorParams,
-    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, MarkConversationReadParams,
-    MessageDeleteParams, PublicKeyInput, QuickReply, SigningKeyEntry,
+    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, PublicKeyInput, QuickReply, SetIdentityParams,
+    SigningKeyEntry,
 };
 
 // FFI result type
@@ -500,24 +501,31 @@ pub extern "C" fn chat_xdk_set_reject_unverified(handle: *mut ChatHandle, reject
     })
 }
 
-/// Set the session identity: the owner's user id and signing-key version,
-/// used as defaults wherever a params document leaves `sender_id` /
-/// `signing_key_version` unset.
+/// Set the session identity from a params JSON document:
+/// `{"user_id": "...", "signing_key_version": "..."}`. They become the
+/// defaults wherever a params document omits `sender_id` /
+/// `signing_key_version`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_set_identity(
+pub extern "C" fn chat_xdk_set_identity_params(
     handle: *const ChatHandle,
-    user_id: *const c_char,
-    signing_key_version: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let user_id = try_str!(user_id);
-        let signing_key_version = try_str!(signing_key_version);
-        h.inner.set_identity(user_id, signing_key_version);
-        ok_void()
+        let p: FfiSetIdentityParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        match h
+            .inner
+            .set_identity(&SetIdentityParams::new(p.user_id, p.signing_key_version))
+        {
+            Ok(()) => ok_void(),
+            Err(e) => err_from(e),
+        }
     })
 }
 
@@ -754,53 +762,32 @@ pub extern "C" fn chat_xdk_export_keys(handle: *const ChatHandle) -> FfiResult {
     })
 }
 
-/// Import private keys from a base64 string.
+/// Import private keys: `keys` / `keys_len` is the blob
+/// `chat_xdk_export_keys` returns (32 bytes for the identity key, 64 with the
+/// signing key), and `params_json` is `{}` or
+/// `{"signing_key_version": "..."}` to record the `public_key_version` the
+/// keys were registered under. The key bytes stay out of the JSON so they are
+/// never copied into a string; NULL with length 0 is an empty blob.
 #[no_mangle]
-pub extern "C" fn chat_xdk_import_keys(
-    handle: *const ChatHandle,
-    keys_b64: *const c_char,
-) -> FfiResult {
-    catch_ffi(|| {
-        if handle.is_null() {
-            return err_result("Null handle");
-        }
-        let h = unsafe { &*handle };
-        let keys_b64 = try_str!(keys_b64);
-
-        let key_bytes = match BASE64.decode(keys_b64) {
-            Ok(b) => b,
-            Err(e) => return err_result(&format!("Base64 error: {}", e)),
-        };
-
-        match h.inner.import_keys(&key_bytes) {
-            Ok(()) => ok_void(),
-            Err(e) => err_from(e),
-        }
-    })
-}
-
-/// Like `chat_xdk_import_keys` but also records the public key version the
-/// keys were registered under, so participant-key filtering and the session
-/// `signing_key_version` are set in one call.
-///
-/// `keys` are the raw private key bytes (32 or 64) — no base64 transport
-/// copy, so the caller-owned buffer is the only copy to wipe.
-#[no_mangle]
-pub extern "C" fn chat_xdk_import_keys_with_version(
+pub extern "C" fn chat_xdk_import_keys_params(
     handle: *const ChatHandle,
     keys: *const u8,
     keys_len: usize,
-    version: *const c_char,
+    params_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let version = try_str!(version);
+        let p: FfiImportKeysParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
         let key_bytes = unsafe { bytes_from_ffi_ptr(keys, keys_len) };
-
-        match h.inner.import_keys_with_version(key_bytes, version) {
+        let mut params = ImportKeysParams::new(key_bytes);
+        params.signing_key_version = p.signing_key_version.filter(|v| !v.is_empty());
+        match h.inner.import_keys(&params) {
             Ok(()) => ok_void(),
             Err(e) => err_from(e),
         }
@@ -943,8 +930,8 @@ fn json_prepared_change(
         serde_json::Value::String(res.conversation_key_version.clone()),
     );
     out.insert(
-        "participant_keys".into(),
-        serde_json::to_value(&res.participant_keys)?,
+        "conversation_participant_keys".into(),
+        serde_json::to_value(&res.conversation_participant_keys)?,
     );
     out.insert(
         "action_signatures".into(),
@@ -1006,7 +993,7 @@ struct FfiEncryptReplyParams {
     conversation_key_version: Option<String>,
     #[serde(default)]
     reply_to_sequence_id: Option<String>,
-    reply_to_sender_id: Option<i64>,
+    reply_to_sender_id: Option<String>,
     reply_to_text: Option<String>,
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<serde_json::Value>,
@@ -1127,6 +1114,18 @@ struct FfiGroupCreateParams {
 // `{"version": "base64 raw 32-byte key"}` and byte fields as base64.
 
 #[derive(serde::Deserialize)]
+struct FfiSetIdentityParams {
+    user_id: String,
+    signing_key_version: String,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiImportKeysParams {
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct FfiDecryptEventParams {
     event_b64: String,
     #[serde(default)]
@@ -1146,8 +1145,21 @@ struct FfiDecryptEventsParams {
 struct FfiEncryptFileParams {
     file: String,
     event_b64: String,
-    conversation_keys: HashMap<String, String>,
     media_hash_key: String,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiFileEncryptorParams {
+    event_b64: String,
+    media_hash_key: String,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1214,7 +1226,7 @@ pub extern "C" fn chat_xdk_prepare_conversation_key_change(
         // Core treats an absent or empty id as "derive the one-to-one id".
         params.conversation_id = p.conversation_id;
 
-        match h.inner.prepare_conversation_key_change(params) {
+        match h.inner.prepare_conversation_key_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
                 Err(e) => err_result(&e.to_string()),
@@ -1263,7 +1275,7 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
         params.current_ttl_msec = p.current_ttl_msec;
         params.current_screen_capture_blocking_enabled = p.current_screen_capture_blocking_enabled;
 
-        match h.inner.prepare_group_members_change(params) {
+        match h.inner.prepare_group_members_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
                 Err(e) => err_result(&e.to_string()),
@@ -1302,7 +1314,7 @@ pub extern "C" fn chat_xdk_prepare_group_create(
         params.avatar_url = p.avatar_url;
         params.ttl_msec = p.ttl_msec;
 
-        match h.inner.prepare_group_create(params) {
+        match h.inner.prepare_group_create(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
                 Err(e) => err_result(&e.to_string()),
@@ -1319,8 +1331,9 @@ pub extern "C" fn chat_xdk_prepare_group_create(
 /// caller's view), plus optional `sender_id` / `signing_key_version` (unset
 /// resolves from the session identity).
 ///
-/// Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
-/// on it.
+/// Returns JSON `PreparedAction`: `action_signatures`, one entry with its
+/// signature nested under `message_event_signature`. The SDK-generated
+/// `message_id` is a field on the entry.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_message_delete(
     handle: *const ChatHandle,
@@ -1342,7 +1355,7 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_message_delete(&params) {
-            Ok(signature) => match serde_json::to_string(&signature) {
+            Ok(prepared) => match serde_json::to_string(&prepared) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
             },
@@ -1359,8 +1372,8 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
 /// epoch; unset takes the current time) and `sender_id` /
 /// `signing_key_version` (unset resolves from the session identity).
 ///
-/// Returns JSON `ActionSignature` to submit alongside the mark-read request;
-/// the SDK-generated `message_id` is a field on it.
+/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
+/// returns it: the mark-read request's `action_signatures`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
     handle: *const ChatHandle,
@@ -1383,7 +1396,7 @@ pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
         params.signing_key_version = p.signing_key_version;
 
         match h.inner.prepare_mark_conversation_read(&params) {
-            Ok(signature) => match serde_json::to_string(&signature) {
+            Ok(prepared) => match serde_json::to_string(&prepared) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
             },
@@ -1505,7 +1518,7 @@ pub extern "C" fn chat_xdk_encrypt_message(
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
 
-        match h.inner.encrypt_message(params) {
+        match h.inner.encrypt_message(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
@@ -1599,7 +1612,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
 
-        match h.inner.encrypt_reply(params) {
+        match h.inner.encrypt_reply(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
@@ -1858,11 +1871,12 @@ fn bytes_from_b64(field: &str, b64: &str) -> Result<Vec<u8>, FfiResult> {
 /// `params_json` — single JSON document: `file` (base64), `event_b64` (the
 /// `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
 /// `chat_xdk_encrypt_reply` returned for the message carrying the file),
-/// `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
-/// key the message was encrypted under), and `media_hash_key` (the media
-/// hash key the file's upload started with, as listed in the message's
-/// attachments). The SDK finds that attachment and encrypts the file under
-/// its key.
+/// `media_hash_key` (the media hash key the file's upload started with, as
+/// listed in the message's attachments), and optionally `conversation_key`
+/// (base64 raw 32-byte key) with `conversation_key_version`: the key the
+/// message was encrypted under, resolved from the key cache when both are
+/// omitted. The SDK finds that attachment and encrypts the file under its
+/// key.
 ///
 /// Returns the encrypted file, base64.
 #[no_mangle]
@@ -1883,12 +1897,14 @@ pub extern "C" fn chat_xdk_encrypt_file(
             Ok(b) => b,
             Err(e) => return e,
         };
-        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
+        let conversation_key = match decode_ckey_bytes(p.conversation_key.as_deref()) {
             Ok(k) => k,
             Err(e) => return e,
         };
-        let params = EncryptFileParams::new(file, p.event_b64, conversation_keys, p.media_hash_key);
-        match h.inner.encrypt_file(params) {
+        let mut params = EncryptFileParams::new(file, p.event_b64, p.media_hash_key);
+        params.conversation_key = conversation_key;
+        params.conversation_key_version = p.conversation_key_version;
+        match h.inner.encrypt_file(&params) {
             Ok(encrypted) => ok_data(&BASE64.encode(&encrypted)),
             Err(e) => err_from(e),
         }
@@ -1975,16 +1991,18 @@ pub extern "C" fn chat_xdk_file_encryptor_new(
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let p: FfiFileParams = match parse_params(try_str!(params_json)) {
+        let p: FfiFileEncryptorParams = match parse_params(try_str!(params_json)) {
             Ok(p) => p,
             Err(e) => return e,
         };
-        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
+        let conversation_key = match decode_ckey_bytes(p.conversation_key.as_deref()) {
             Ok(k) => k,
             Err(e) => return e,
         };
-        let params = FileEncryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
-        match h.inner.file_encryptor(params) {
+        let mut params = FileEncryptorParams::new(p.event_b64, p.media_hash_key);
+        params.conversation_key = conversation_key;
+        params.conversation_key_version = p.conversation_key_version;
+        match h.inner.file_encryptor(&params) {
             Ok(enc) => {
                 let boxed = Box::new(FileEncryptorHandle { inner: Some(enc) });
                 unsafe { *out_encryptor = Box::into_raw(boxed) };

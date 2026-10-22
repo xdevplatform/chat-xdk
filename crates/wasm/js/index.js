@@ -409,7 +409,7 @@ export class ChatWithJuicebox {
       if (ownsPin) pinBytes.fill(0);
     }
     try {
-      this.#inner.importKeys(secretBytes);
+      this.#inner.importKeys({ keys: secretBytes });
     } finally {
       secretBytes.fill(0);
     }
@@ -472,7 +472,7 @@ export class ChatWithJuicebox {
 
   setRejectUnverified(reject) { return this.#inner.setRejectUnverified(reject); }
   generateKeypairs() { return this.#inner.generateKeypairs(); }
-  setIdentity(userId, signingKeyVersion) { return this.#inner.setIdentity(userId, signingKeyVersion); }
+  setIdentity(params) { return this.#inner.setIdentity(params); }
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
   getPublicKeys() { return this.#inner.getPublicKeys(); }

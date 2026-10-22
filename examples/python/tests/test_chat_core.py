@@ -83,10 +83,10 @@ class TestChatCore(unittest.TestCase):
         # Conversation-key handling: prepare a fresh key for ourselves, then
         # ECIES-decrypt the per-participant blob back to the same raw key.
         core = self._loaded_core()
-        core.set_identity("me")
+        core.set_identity("910002")
         public_keys = [
             {
-                "user_id": "me",
+                "user_id": "910002",
                 "public_key": self.vectors["identity_public_b64"],
                 "key_version": "1",
             }
@@ -94,7 +94,7 @@ class TestChatCore(unittest.TestCase):
         prepared = core.prepare_conversation_key_change(public_keys, "conv-1")
         conv_key = prepared["conversation_key"]
         self.assertEqual(len(conv_key), 32)
-        encrypted = prepared["participant_keys"][0]["encrypted_key"]
+        encrypted = prepared["conversation_participant_keys"][0]["encrypted_conversation_key"]
         self.assertEqual(core.decrypt_conversation_key(encrypted), conv_key)
 
     def test_encrypt_reply_produces_sendable_payload(self):
@@ -179,7 +179,7 @@ class TestPreparedChanges(unittest.TestCase):
 
         core, keys = self._core_and_keys()
         prep = core.prepare_conversation_key_change(keys, conversation_id="1000:2000")
-        body = prep_to_request(prep, core.public_keys()["signing"])
+        body = prep_to_request(prep)
 
         self.assertEqual(body["conversation_key_version"], prep["conversation_key_version"])
         (pk,) = body["conversation_participant_keys"]
@@ -261,7 +261,7 @@ class TestPreparedChanges(unittest.TestCase):
         )
         self.assertTrue(body["event_b64"])
 
-        ciphertext = core.encrypt_media(plaintext, body["event_b64"], conv_keys, "photo")
+        ciphertext = core.encrypt_media(plaintext, body["event_b64"], conv_key, "1", "photo")
         self.assertEqual(len(ciphertext), encrypted_file_size(len(plaintext)))
         self.assertEqual(
             core.decrypt_media(ciphertext, body["event_b64"], conv_keys, "photo"), plaintext

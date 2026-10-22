@@ -18,7 +18,10 @@ const KEY_VERSION: &str = "7";
 
 fn author() -> Party {
     let party = Party::new(AUTHOR);
-    party.core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
+    party
+        .core
+        .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
     party
 }
 
@@ -45,7 +48,7 @@ fn create_event(event: &ThriftEvent) -> &MessageCreateEvent {
 fn every_send(party: &Party, ckey: &XChatConversationKey) -> Vec<(&'static str, SendPayload)> {
     let original = party
         .core
-        .encrypt_message(message_params("original", ckey))
+        .encrypt_message(&message_params("original", ckey))
         .unwrap();
     let original_event = frame(&delivered(&original, "100"));
     let reply = EncryptReplyParams::new(CONVERSATION, "reply", original_event.clone())
@@ -56,7 +59,7 @@ fn every_send(party: &Party, ckey: &XChatConversationKey) -> Vec<(&'static str, 
         .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
     vec![
         ("message", original),
-        ("reply", party.core.encrypt_reply(reply).unwrap()),
+        ("reply", party.core.encrypt_reply(&reply).unwrap()),
         (
             "reaction add",
             party.core.encrypt_add_reaction(&reaction).unwrap(),
@@ -133,7 +136,7 @@ fn the_v0_signature_covers_the_0_5_payload() {
     let ckey = key(3);
     let payload = party
         .core
-        .encrypt_message(message_params("signed like 0.5", &ckey))
+        .encrypt_message(&message_params("signed like 0.5", &ckey))
         .unwrap();
     let event = delivered(&payload, "100");
     let contents = create_event(&event).contents.clone().unwrap();
@@ -169,7 +172,7 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
         assert!(!party.core.is_enabled(crate::features::V1_SEND), "{body}");
         let payload = party
             .core
-            .encrypt_message(message_params("hi", &ckey))
+            .encrypt_message(&message_params("hi", &ckey))
             .unwrap();
         assert_v0(&party, &ckey, body, &payload);
     }
@@ -208,7 +211,7 @@ fn a_recheck_turns_v1_send_off_and_never_back_on() {
         .unwrap();
     let payload = party
         .core
-        .encrypt_message(message_params("after the kill switch", &ckey))
+        .encrypt_message(&message_params("after the kill switch", &ckey))
         .unwrap();
     assert_v0(&party, &ckey, "after downgrade", &payload);
 
@@ -233,12 +236,13 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     assert!(!core.feature_refetch_due());
 
     core.generate_keypairs().unwrap();
-    core.set_identity(AUTHOR, SIGNING_KEY_VERSION);
+    core.set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
     assert!(core.feature_refetch_due());
     assert!(!core.is_enabled(crate::features::V1_SEND));
     let ckey = key(3);
     let payload = core
-        .encrypt_message(message_params("before refetch", &ckey))
+        .encrypt_message(&message_params("before refetch", &ckey))
         .unwrap();
     assert_eq!(payload.signature_info.signature_version, "7");
 
@@ -253,7 +257,7 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     assert!(!core.feature_refetch_due());
     assert!(core.is_enabled(crate::features::V1_SEND));
     let payload = core
-        .encrypt_message(message_params("refetched", &ckey))
+        .encrypt_message(&message_params("refetched", &ckey))
         .unwrap();
     assert_eq!(payload.signature_info.signature_version, "10");
 }
@@ -270,7 +274,9 @@ fn the_feature_bucket_follows_the_identity_key() {
     assert_eq!(bucket, crate::features::bucket_for_public_key(&spki));
 
     let restored = ChatCore::new();
-    restored.import_keys(&core.export_keys().unwrap()).unwrap();
+    restored
+        .import_keys(&ImportKeysParams::new(core.export_keys().unwrap().to_vec()))
+        .unwrap();
     assert_eq!(restored.feature_bucket(), Some(bucket));
 
     core.lock();
@@ -291,16 +297,14 @@ fn files_of_a_v0_message_use_the_conversation_key() {
         media_type: Some(5),
         duration_millis: None,
     }]);
-    let payload = party.core.encrypt_message(params).unwrap();
+    let payload = party.core.encrypt_message(&params).unwrap();
     assert_v0(&party, &ckey, "message with a file", &payload);
 
     let encrypted = ChatCore::new()
-        .encrypt_file(EncryptFileParams::new(
-            b"hello".to_vec(),
-            payload.event_b64.clone(),
-            keys(KEY_VERSION, &ckey),
-            "file-1",
-        ))
+        .encrypt_file(
+            &EncryptFileParams::new(b"hello".to_vec(), payload.event_b64.clone(), "file-1")
+                .with_conversation_key(ckey.to_bytes(), KEY_VERSION),
+        )
         .unwrap();
     let mut opened = Vec::new();
     crate::crypto::encryption::decrypt_file(&ckey, encrypted.as_slice(), &mut opened).unwrap();
@@ -367,11 +371,11 @@ fn a_v0_message_with_files_takes_a_random_id_and_unnamed_attachments() {
     let ckey = key(3);
     let first = party
         .core
-        .encrypt_message(with_photos("photos", &ckey))
+        .encrypt_message(&with_photos("photos", &ckey))
         .unwrap();
     let again = party
         .core
-        .encrypt_message(with_photos("photos", &ckey))
+        .encrypt_message(&with_photos("photos", &ckey))
         .unwrap();
     assert_v0(&party, &ckey, "message with files", &first);
     assert_ne!(first.message_id, again.message_id);
@@ -385,11 +389,11 @@ fn a_v1_message_with_files_derives_its_id_and_names_its_attachments() {
     let ckey = key(3);
     let first = party
         .core
-        .encrypt_message(with_photos("photos", &ckey))
+        .encrypt_message(&with_photos("photos", &ckey))
         .unwrap();
     let again = party
         .core
-        .encrypt_message(with_photos("photos", &ckey))
+        .encrypt_message(&with_photos("photos", &ckey))
         .unwrap();
     assert_v1(&party, &ckey, "message with files", &first);
     assert_eq!(first.message_id, again.message_id);
@@ -406,7 +410,7 @@ fn only_a_v1_edit_names_the_message_it_edits() {
     let ckey = key(3);
     let original = party
         .core
-        .encrypt_message(message_params("original", &ckey))
+        .encrypt_message(&message_params("original", &ckey))
         .unwrap();
     let target = frame(&delivered(&original, "100"));
     let edit = |party: &Party| {

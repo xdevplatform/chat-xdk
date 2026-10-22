@@ -35,7 +35,7 @@ Every binding follows the same shape (names are camelCase in JS, snake_case in
 Python/Rust, PascalCase in .NET/Go):
 
 1. **Load keys** — import a private-key blob, or recover from Juicebox (below).
-2. **Set identity** — `setIdentity(userId, signingKeyVersion)` once per
+2. **Set identity** — `setIdentity({ userId, signingKeyVersion })` once per
    instance, where `signingKeyVersion` is the `public_key_version` returned
    when your keys were registered; every signed action defaults its sender and
    signing-key version to these values. Optionally `setCacheKeys(true)` and
@@ -53,9 +53,10 @@ Python/Rust, PascalCase in .NET/Go):
    the X Chat API.
 6. **Files** — a message with files is built first: start each upload, list
    its media hash key in the message's attachments, then
-   `encryptFile({file, eventB64, conversationKeys, mediaHashKey})` with the
-   payload's `eventB64`. `decryptFile` opens a received file from its
-   message's event.
+   `encryptFile({file, eventB64, mediaHashKey})` with the payload's
+   `eventB64` (plus `conversationKey` and `conversationKeyVersion` unless the
+   key cache holds them, as for the message). `decryptFile` opens a received
+   file from its message's event.
 
 | Method | Use case |
 |--------|----------|
@@ -70,11 +71,18 @@ Python/Rust, PascalCase in .NET/Go):
 ### Quick start (Python)
 
 ```python
-from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessageParams
+from chat_xdk import (
+    Chat,
+    DecryptEventParams,
+    DecryptEventsParams,
+    EncryptMessageParams,
+    ImportKeysParams,
+    SetIdentityParams,
+)
 
 chat = Chat()
-chat.import_keys(private_key_blob, version=key_version)  # or Chat(config).unlock(pin)
-chat.set_identity(my_user_id, key_version)
+chat.import_keys(ImportKeysParams(private_key_blob, signing_key_version=key_version))  # or Chat(config).unlock(pin)
+chat.set_identity(SetIdentityParams(my_user_id, key_version))
 chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)
 
@@ -94,7 +102,7 @@ import { createChat } from "@xdevplatform/chat-xdk";
 
 const chat = await createChat({ juiceboxConfig, getAuthToken });
 await chat.unlock("2580");
-chat.setIdentity(myUserId, signingKeyVersion);
+chat.setIdentity({ userId: myUserId, signingKeyVersion });
 chat.setCacheKeys(true);
 chat.setSigningKeys(signingKeys);
 

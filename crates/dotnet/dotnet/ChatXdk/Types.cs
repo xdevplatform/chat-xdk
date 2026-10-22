@@ -89,20 +89,23 @@ namespace ChatXdk
         [JsonPropertyName("event_b64")]
         public string EventB64 { get; init; } = "";
 
-        /// <summary>Base64-encoded ciphertext of the encrypted message event.</summary>
-        [JsonPropertyName("encrypted_content")]
-        public string EncryptedContent { get; init; } = "";
+        /// <summary>
+        /// Base64-encoded Thrift <c>MessageCreateEvent</c> carrying the encrypted contents:
+        /// the send request's <c>encoded_message_create_event</c>.
+        /// </summary>
+        [JsonPropertyName("encoded_message_create_event")]
+        public string EncodedMessageCreateEvent { get; init; } = "";
 
         /// <summary>Base64-encoded raw r||s signature over the encrypted content.</summary>
         [JsonPropertyName("signature")]
         public string Signature { get; init; } = "";
 
         /// <summary>
-        /// Base64-encoded Thrift <c>MessageEventSignature</c>.
-        /// Pass as <c>encoded_message_event_signature</c> in the X API request.
+        /// Base64-encoded Thrift <c>MessageEventSignature</c>: the send request's
+        /// <c>encoded_message_event_signature</c>.
         /// </summary>
-        [JsonPropertyName("encoded_event_signature")]
-        public string EncodedEventSignature { get; init; } = "";
+        [JsonPropertyName("encoded_message_event_signature")]
+        public string EncodedMessageEventSignature { get; init; } = "";
 
         /// <summary>Signing key and signature version metadata for this payload.</summary>
         [JsonPropertyName("signature_info")]
@@ -126,8 +129,10 @@ namespace ChatXdk
     // Action signatures (group operations)
 
     /// <summary>
-    /// Signed action payload authenticating a conversation key change, member
-    /// add, message delete, or read receipt.
+    /// Signed action authenticating a conversation key change, group change,
+    /// message delete, or read receipt, shaped as an entry of a request's
+    /// <c>action_signatures</c>: the signature is nested under
+    /// <c>message_event_signature</c>.
     /// </summary>
     public sealed class ActionSignature
     {
@@ -137,22 +142,49 @@ namespace ChatXdk
         [JsonPropertyName("encoded_message_event_detail")]
         public string EncodedMessageEventDetail { get; init; } = "";
 
-        [JsonPropertyName("signature")]
-        public string Signature { get; init; } = "";
-
-        [JsonPropertyName("signature_version")]
-        public string SignatureVersion { get; init; } = "";
-
-        [JsonPropertyName("public_key_version")]
-        public string PublicKeyVersion { get; init; } = "";
+        /// <summary>The signature over the action, with its versions and the signer's signing public key.</summary>
+        [JsonPropertyName("message_event_signature")]
+        public MessageEventSignature MessageEventSignature { get; init; } = new();
 
         /// <summary>
-        /// The comma-separated payload string that was signed. Empty for
+        /// The comma-separated payload string that was signed; <see langword="null"/> for
         /// conversation-key changes, whose payload embeds the plaintext
         /// conversation key and is withheld.
         /// </summary>
         [JsonPropertyName("signature_payload")]
-        public string SignaturePayload { get; init; } = "";
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SignaturePayload { get; init; }
+    }
+
+    /// <summary>The signature of an <see cref="ActionSignature"/>.</summary>
+    public sealed class MessageEventSignature
+    {
+        /// <summary>Base64 ECDSA signature of the payload.</summary>
+        [JsonPropertyName("signature")]
+        public string Signature { get; init; } = "";
+
+        /// <summary>Signature protocol version.</summary>
+        [JsonPropertyName("signature_version")]
+        public string SignatureVersion { get; init; } = "";
+
+        /// <summary>Version of the signing public key.</summary>
+        [JsonPropertyName("public_key_version")]
+        public string PublicKeyVersion { get; init; } = "";
+
+        /// <summary>The signer's base64 signing public key, as <see cref="Chat.GetPublicKeys"/> returns it.</summary>
+        [JsonPropertyName("signing_public_key")]
+        public string SigningPublicKey { get; init; } = "";
+    }
+
+    /// <summary>
+    /// A signed message delete or read receipt: the <c>action_signatures</c> a request
+    /// carries for it, one entry.
+    /// </summary>
+    public sealed class PreparedAction
+    {
+        /// <summary>The signed action, as the request's <c>action_signatures</c> entries.</summary>
+        [JsonPropertyName("action_signatures")]
+        public List<ActionSignature> ActionSignatures { get; init; } = new();
     }
 
     // Key / recipient types
@@ -220,8 +252,8 @@ namespace ChatXdk
         public string ConversationKeyVersion { get; init; } = "";
 
         /// <summary>The conversation key encrypted once per participant.</summary>
-        [JsonPropertyName("participant_keys")]
-        public List<EncryptedKeyForRecipient> ParticipantKeys { get; init; } = new();
+        [JsonPropertyName("conversation_participant_keys")]
+        public List<ConversationParticipantKey> ConversationParticipantKeys { get; init; } = new();
 
         /// <summary>Action signatures authenticating the change, ready to POST.</summary>
         [JsonPropertyName("action_signatures")]
@@ -274,14 +306,18 @@ namespace ChatXdk
         public Dictionary<string, string> Errors { get; init; } = new();
     }
 
-    /// <summary>An encrypted conversation key for one recipient.</summary>
-    public sealed class EncryptedKeyForRecipient
+    /// <summary>
+    /// One participant's copy of a conversation key, encrypted to their identity key: an entry
+    /// of the X API's <c>conversation_participant_keys</c>. A prepared change carries these for
+    /// its request, and a received key change carries them in its decrypted JSON.
+    /// </summary>
+    public sealed class ConversationParticipantKey
     {
         [JsonPropertyName("user_id")]
         public string UserId { get; init; } = "";
 
-        [JsonPropertyName("encrypted_key")]
-        public string EncryptedKey { get; init; } = "";
+        [JsonPropertyName("encrypted_conversation_key")]
+        public string EncryptedConversationKey { get; init; } = "";
 
         [JsonPropertyName("public_key_version")]
         public string PublicKeyVersion { get; init; } = "";
@@ -661,8 +697,8 @@ namespace ChatXdk
         public string? ConversationKeyVersion { get; init; }
         /// <summary>Sequence ID of the message being replied to; derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToSequenceId { get; init; }
-        /// <summary>Sender ID of the message being replied to (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
-        public long? ReplyToSenderId { get; init; }
+        /// <summary>User ID of the message's sender, as digits (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
+        public string? ReplyToSenderId { get; init; }
         /// <summary>Text of the message being replied to (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToText { get; init; }
         /// <summary>Optional rich-text entities in the reply text.</summary>
@@ -880,6 +916,45 @@ namespace ChatXdk
         public long? TtlMsec { get; init; }
     }
 
+    /// <summary>Parameters for <see cref="Chat.SetIdentity"/>.</summary>
+    public sealed class SetIdentityParams
+    {
+        /// <summary>Create params with both fields.</summary>
+        /// <param name="userId">Your user ID: the sender of everything this chat signs.</param>
+        /// <param name="signingKeyVersion">
+        /// The <c>public_key_version</c> the X API returned when your keys were registered.
+        /// </param>
+        public SetIdentityParams(string userId, string signingKeyVersion)
+        {
+            UserId = userId;
+            SigningKeyVersion = signingKeyVersion;
+        }
+
+        /// <summary>Your user ID: the sender of everything this chat signs.</summary>
+        public string UserId { get; }
+        /// <summary>The <c>public_key_version</c> the X API returned when your keys were registered.</summary>
+        public string SigningKeyVersion { get; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.ImportKeys"/>.</summary>
+    public sealed class ImportKeysParams
+    {
+        /// <summary>Create params with the key blob; <see cref="SigningKeyVersion"/> defaults to null.</summary>
+        /// <param name="keys">The key blob <see cref="Chat.ExportKeys"/> returned.</param>
+        public ImportKeysParams(byte[] keys)
+        {
+            Keys = keys;
+        }
+
+        /// <summary>The key blob <see cref="Chat.ExportKeys"/> returned: 32 or 64 bytes.</summary>
+        public byte[] Keys { get; }
+        /// <summary>
+        /// The <c>public_key_version</c> the X API returned when the keys were registered; null
+        /// leaves the signing-key version unset.
+        /// </summary>
+        public string? SigningKeyVersion { get; init; }
+    }
+
     /// <summary>Parameters for <see cref="Chat.DecryptEvent"/>.</summary>
     public sealed class DecryptEventParams
     {
@@ -933,27 +1008,22 @@ namespace ChatXdk
     /// <summary>Parameters for <see cref="Chat.EncryptFile"/>.</summary>
     public sealed class EncryptFileParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>
+        /// Create params with the required fields; the conversation key pair defaults to the key
+        /// cache.
+        /// </summary>
         /// <param name="file">The file to encrypt.</param>
         /// <param name="eventB64">
         /// The <see cref="SendPayload.EventB64"/> of the payload that <see cref="Chat.EncryptMessage"/>
         /// or <see cref="Chat.EncryptReply"/> returned for the message carrying the file.
         /// </param>
-        /// <param name="conversationKeys">
-        /// Version → raw 32-byte conversation key; it must hold the key the message was encrypted under.
-        /// </param>
         /// <param name="mediaHashKey">
         /// The media hash key the file's upload started with, as listed in the message's attachments.
         /// </param>
-        public EncryptFileParams(
-            byte[] file,
-            string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
-            string mediaHashKey)
+        public EncryptFileParams(byte[] file, string eventB64, string mediaHashKey)
         {
             File = file;
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
             MediaHashKey = mediaHashKey;
         }
 
@@ -961,10 +1031,16 @@ namespace ChatXdk
         public byte[] File { get; }
         /// <summary>The <see cref="SendPayload.EventB64"/> of the message carrying the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
-        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The media hash key the file's upload started with.</summary>
         public string MediaHashKey { get; }
+        /// <summary>
+        /// The raw 32-byte conversation key the message was encrypted under; with
+        /// <see cref="ConversationKeyVersion"/> null too, it resolves from the key cache, as for
+        /// <see cref="EncryptMessageParams"/>.
+        /// </summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>The version of <see cref="ConversationKey"/>: the message's key version.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>
@@ -973,30 +1049,28 @@ namespace ChatXdk
     /// </summary>
     public sealed class FileEncryptorParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>
+        /// Create params with the required fields; the conversation key pair defaults to the key
+        /// cache.
+        /// </summary>
         /// <param name="eventB64">The <see cref="SendPayload.EventB64"/> of the message carrying the file.</param>
-        /// <param name="conversationKeys">
-        /// Version → raw 32-byte conversation key; it must hold the key the message was encrypted under.
-        /// </param>
         /// <param name="mediaHashKey">
         /// The media hash key the file's upload started with, as listed in the message's attachments.
         /// </param>
-        public FileEncryptorParams(
-            string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
-            string mediaHashKey)
+        public FileEncryptorParams(string eventB64, string mediaHashKey)
         {
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
             MediaHashKey = mediaHashKey;
         }
 
         /// <summary>The <see cref="SendPayload.EventB64"/> of the message carrying the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
-        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The media hash key the file's upload started with.</summary>
         public string MediaHashKey { get; }
+        /// <summary>The raw 32-byte conversation key the message was encrypted under; null resolves it from the key cache.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>The version of <see cref="ConversationKey"/>: the message's key version.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>Parameters for <see cref="Chat.DecryptFile"/>.</summary>

@@ -167,13 +167,13 @@ int32_t chat_xdk_has_identity_key(const struct ChatHandle *handle);
 void chat_xdk_set_reject_unverified(struct ChatHandle *handle, int32_t reject);
 
 /**
- * Set the session identity: the owner's user id and signing-key version,
- * used as defaults wherever a params document leaves `sender_id` /
- * `signing_key_version` unset.
+ * Set the session identity from a params JSON document:
+ * `{"user_id": "...", "signing_key_version": "..."}`. They become the
+ * defaults wherever a params document omits `sender_id` /
+ * `signing_key_version`.
  */
-struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle,
-                                       const char *user_id,
-                                       const char *signing_key_version);
+struct FfiResult chat_xdk_set_identity_params(const struct ChatHandle *handle,
+                                              const char *params_json);
 
 /**
  * Enable (non-zero) or disable (0) the conversation-key cache (off by
@@ -233,22 +233,17 @@ struct FfiResult chat_xdk_get_public_key_fingerprint(const struct ChatHandle *ha
 struct FfiResult chat_xdk_export_keys(const struct ChatHandle *handle);
 
 /**
- * Import private keys from a base64 string.
+ * Import private keys: `keys` / `keys_len` is the blob
+ * `chat_xdk_export_keys` returns (32 bytes for the identity key, 64 with the
+ * signing key), and `params_json` is `{}` or
+ * `{"signing_key_version": "..."}` to record the `public_key_version` the
+ * keys were registered under. The key bytes stay out of the JSON so they are
+ * never copied into a string; NULL with length 0 is an empty blob.
  */
-struct FfiResult chat_xdk_import_keys(const struct ChatHandle *handle, const char *keys_b64);
-
-/**
- * Like `chat_xdk_import_keys` but also records the public key version the
- * keys were registered under, so participant-key filtering and the session
- * `signing_key_version` are set in one call.
- *
- * `keys` are the raw private key bytes (32 or 64) — no base64 transport
- * copy, so the caller-owned buffer is the only copy to wipe.
- */
-struct FfiResult chat_xdk_import_keys_with_version(const struct ChatHandle *handle,
-                                                   const uint8_t *keys,
-                                                   uintptr_t keys_len,
-                                                   const char *version);
+struct FfiResult chat_xdk_import_keys_params(const struct ChatHandle *handle,
+                                             const uint8_t *keys,
+                                             uintptr_t keys_len,
+                                             const char *params_json);
 
 /**
  * `events_json`: JSON array of base64-encoded event strings.
@@ -313,8 +308,9 @@ struct FfiResult chat_xdk_prepare_group_create(const struct ChatHandle *handle,
  * caller's view), plus optional `sender_id` / `signing_key_version` (unset
  * resolves from the session identity).
  *
- * Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
- * on it.
+ * Returns JSON `PreparedAction`: `action_signatures`, one entry with its
+ * signature nested under `message_event_signature`. The SDK-generated
+ * `message_id` is a field on the entry.
  */
 struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle,
                                                  const char *params_json);
@@ -328,8 +324,8 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
  * epoch; unset takes the current time) and `sender_id` /
  * `signing_key_version` (unset resolves from the session identity).
  *
- * Returns JSON `ActionSignature` to submit alongside the mark-read request;
- * the SDK-generated `message_id` is a field on it.
+ * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
+ * returns it: the mark-read request's `action_signatures`.
  */
 struct FfiResult chat_xdk_prepare_mark_conversation_read(const struct ChatHandle *handle,
                                                          const char *params_json);
@@ -458,11 +454,12 @@ struct FfiResult chat_xdk_decrypt(const struct ChatHandle *handle,
  * `params_json` — single JSON document: `file` (base64), `event_b64` (the
  * `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
  * `chat_xdk_encrypt_reply` returned for the message carrying the file),
- * `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
- * key the message was encrypted under), and `media_hash_key` (the media
- * hash key the file's upload started with, as listed in the message's
- * attachments). The SDK finds that attachment and encrypts the file under
- * its key.
+ * `media_hash_key` (the media hash key the file's upload started with, as
+ * listed in the message's attachments), and optionally `conversation_key`
+ * (base64 raw 32-byte key) with `conversation_key_version`: the key the
+ * message was encrypted under, resolved from the key cache when both are
+ * omitted. The SDK finds that attachment and encrypts the file under its
+ * key.
  *
  * Returns the encrypted file, base64.
  */

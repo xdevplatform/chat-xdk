@@ -41,11 +41,11 @@ using var chat = new Chat();
 chat.UpdateConfig(juiceboxConfigJson);
 chat.Unlock(pin, juiceboxConfigJson);
 // Or load a local key blob + its registered version instead of Juicebox:
-// chat.ImportKeys(privateKeyBytes, registeredKeyVersion);
+// chat.ImportKeys(new ImportKeysParams(privateKeyBytes) { SigningKeyVersion = registeredKeyVersion });
 
 // Set the session once: your user id + registered signing-key version,
 // the opt-in conversation-key cache, and the participants' signing keys.
-chat.SetIdentity(myUserId, registeredKeyVersion);
+chat.SetIdentity(new SetIdentityParams(myUserId, registeredKeyVersion));
 chat.SetCacheKeys(true);
 chat.SetSigningKeys(signingKeys);
 

@@ -240,14 +240,18 @@ namespace ChatXdk
         /// version is the <c>public_key_version</c> returned when the keys were
         /// registered.
         /// </summary>
-        public void SetIdentity(string userId, string signingKeyVersion)
+        public void SetIdentity(SetIdentityParams parameters)
         {
             ThrowIfDisposed();
-            var user = Utf8Z(userId);
-            var ver = Utf8Z(signingKeyVersion);
-            fixed (byte* userPtr = user)
-            fixed (byte* verPtr = ver)
-                ConsumeResult(NativeMethods.chat_xdk_set_identity(_handle, userPtr, verPtr));
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["user_id"] = parameters.UserId,
+                ["signing_key_version"] = parameters.SigningKeyVersion,
+            }, JsonOpts);
+            var jsonBytes = Utf8Z(json);
+            fixed (byte* jsonPtr = jsonBytes)
+                ConsumeResult(NativeMethods.chat_xdk_set_identity_params(_handle, jsonPtr));
             GC.KeepAlive(this);
         }
 
@@ -524,40 +528,39 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Import private keys from a byte array produced by <see cref="ExportKeys"/>.
-        /// Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-        /// When <paramref name="version"/> is given (the <c>public_key_version</c>
-        /// returned when the keys were registered), it is recorded as well, so
-        /// participant-key filtering and the session signing-key version are set in
-        /// one call. Without it, no signing-key version is set.
+        /// Import private keys from the byte array <see cref="ExportKeys"/> produced: 32 bytes
+        /// (identity only) or 64 bytes (identity + signing). When
+        /// <see cref="ImportKeysParams.SigningKeyVersion"/> is set (the <c>public_key_version</c>
+        /// returned when the keys were registered), it is recorded as well, so participant-key
+        /// filtering and the session signing-key version are set in one call. Without it, no
+        /// signing-key version is set. The key bytes are passed to the native side directly,
+        /// never copied into a string.
         /// </summary>
-        public void ImportKeys(byte[] keys, string? version = null)
+        public void ImportKeys(ImportKeysParams parameters)
         {
             ThrowIfDisposed();
-            if (version != null)
+            ArgumentNullException.ThrowIfNull(parameters);
+            var keys = parameters.Keys ?? Array.Empty<byte>();
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
             {
-                var ver = Utf8Z(version);
+                ["signing_key_version"] = parameters.SigningKeyVersion,
+            }, JsonOpts);
+            var jsonBytes = Utf8Z(json);
+            fixed (byte* jsonPtr = jsonBytes)
+            {
                 // A zero-length array pins to a null pointer on some CLRs; the
                 // native side treats NULL + length 0 as an empty key blob.
                 if (keys.Length == 0)
                 {
-                    fixed (byte* verPtr = ver)
-                        ConsumeResult(NativeMethods.chat_xdk_import_keys_with_version(_handle, null, 0, verPtr));
+                    ConsumeResult(NativeMethods.chat_xdk_import_keys_params(_handle, null, 0, jsonPtr));
                 }
                 else
                 {
                     fixed (byte* keysPtr = keys)
-                    fixed (byte* verPtr = ver)
-                        ConsumeResult(NativeMethods.chat_xdk_import_keys_with_version(
-                            _handle, keysPtr, (nuint)keys.Length, verPtr));
+                        ConsumeResult(NativeMethods.chat_xdk_import_keys_params(
+                            _handle, keysPtr, (nuint)keys.Length, jsonPtr));
                 }
-                GC.KeepAlive(this);
-                return;
             }
-            var b64 = Convert.ToBase64String(keys);
-            var b64Bytes = Utf8Z(b64);
-            fixed (byte* b64Ptr = b64Bytes)
-                ConsumeResult(NativeMethods.chat_xdk_import_keys(_handle, b64Ptr));
             GC.KeepAlive(this);
         }
 
@@ -731,13 +734,13 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Build the signed action for deleting messages from a conversation,
-        /// ready to submit alongside the delete request.
+        /// Build the signed action for deleting messages from a conversation:
+        /// the request's <c>action_signatures</c>, one entry.
         /// A delete is a signed plaintext event, not an encrypted message, so no
         /// conversation key is involved. The SDK generates the action's message
-        /// id; read it back from the result.
+        /// id; read it back from the entry.
         /// </summary>
-        public ActionSignature PrepareMessageDelete(MessageDeleteParams parameters)
+        public PreparedAction PrepareMessageDelete(MessageDeleteParams parameters)
         {
             ThrowIfDisposed();
             var jsonBytes = Utf8Z(BuildPrepareMessageDeleteJson(parameters));
@@ -745,17 +748,18 @@ namespace ChatXdk
             fixed (byte* jsonPtr = jsonBytes)
                 resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_message_delete(_handle, jsonPtr));
             GC.KeepAlive(this);
-            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+            return JsonSerializer.Deserialize<PreparedAction>(resultJson, JsonOpts)!;
         }
 
         /// <summary>
-        /// Build the signed action for marking a conversation read, ready to
-        /// submit alongside the mark-read request.
+        /// Build the signed action for marking a conversation read: the
+        /// <c>action_signatures</c> of the mark-read request
+        /// (<c>POST /2/chat/conversations/{id}/read</c>), one entry.
         /// A read receipt is a signed plaintext event, not an encrypted message,
         /// so no conversation key is involved. The SDK generates the action's
-        /// message id; read it back from the result.
+        /// message id; read it back from the entry.
         /// </summary>
-        public ActionSignature PrepareMarkConversationRead(MarkConversationReadParams parameters)
+        public PreparedAction PrepareMarkConversationRead(MarkConversationReadParams parameters)
         {
             ThrowIfDisposed();
             var jsonBytes = Utf8Z(BuildPrepareMarkConversationReadJson(parameters));
@@ -763,7 +767,7 @@ namespace ChatXdk
             fixed (byte* jsonPtr = jsonBytes)
                 resultJson = ConsumeResult(NativeMethods.chat_xdk_prepare_mark_conversation_read(_handle, jsonPtr));
             GC.KeepAlive(this);
-            return JsonSerializer.Deserialize<ActionSignature>(resultJson, JsonOpts)!;
+            return JsonSerializer.Deserialize<PreparedAction>(resultJson, JsonOpts)!;
         }
 
         // Shared helper: marshal the single-JSON params document, call the
@@ -888,7 +892,7 @@ namespace ChatXdk
         /// </summary>
         /// <param name="encryptedKeyB64">
         /// Base64-encoded encrypted key from the <c>KeyChange</c> event
-        /// (<c>participant_keys[].encrypted_key</c>).
+        /// (<c>conversation_participant_keys[].encrypted_conversation_key</c>).
         /// </param>
         /// <returns>Raw 32-byte decrypted conversation key.</returns>
         public byte[] DecryptConversationKey(string encryptedKeyB64)
@@ -911,8 +915,8 @@ namespace ChatXdk
         /// </summary>
         /// <returns>Encrypted bytes.</returns>
         /// <exception cref="ChatXdkException">
-        /// The event is not a message with this file, or the key map lacks its key. The message
-        /// says what to pass instead.
+        /// The event is not a message with this file, or the conversation key is not the one the
+        /// message was encrypted under. The message says what to pass instead.
         /// </exception>
         public byte[] EncryptFile(EncryptFileParams parameters)
         {
@@ -922,8 +926,9 @@ namespace ChatXdk
             {
                 ["file"] = Convert.ToBase64String(parameters.File ?? Array.Empty<byte>()),
                 ["event_b64"] = parameters.EventB64,
-                ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
                 ["media_hash_key"] = parameters.MediaHashKey,
+                ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
+                ["conversation_key_version"] = parameters.ConversationKeyVersion,
             }, JsonOpts);
             return CallFileEndpoint(json, NativeMethods.chat_xdk_encrypt_file);
         }
@@ -970,8 +975,14 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var encryptor = ChatXdk.FileEncryptor.Create(
-                _handle, FileParamsJson(parameters.EventB64, parameters.ConversationKeys, parameters.MediaHashKey));
+            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["event_b64"] = parameters.EventB64,
+                ["media_hash_key"] = parameters.MediaHashKey,
+                ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
+                ["conversation_key_version"] = parameters.ConversationKeyVersion,
+            }, JsonOpts);
+            var encryptor = ChatXdk.FileEncryptor.Create(_handle, json);
             GC.KeepAlive(this);
             return encryptor;
         }

@@ -6,11 +6,11 @@
 //! existing callers:
 //!
 //! ```rust,ignore
-//! chat.set_identity("1876543210", signing_key_version);
+//! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 //! params.ttl_msec = Some(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
-//! let payload = chat.encrypt_message(params)?;
+//! let payload = chat.encrypt_message(&params)?;
 //! let message_id = payload.message_id;
 //! ```
 //!
@@ -41,6 +41,74 @@ use crate::types::{
 fn non_empty(s: impl Into<String>) -> Option<String> {
     let s = s.into();
     (!s.is_empty()).then_some(s)
+}
+
+/// Parameters for [`crate::ChatCore::set_identity`].
+#[derive(Clone, Debug)]
+pub struct SetIdentityParams {
+    /// Your user id: the sender of everything this chat signs.
+    pub user_id: String,
+    /// The `public_key_version` the X API returned when your keys were
+    /// registered.
+    pub signing_key_version: String,
+}
+
+impl SetIdentityParams {
+    /// Create params with both fields.
+    pub fn new(user_id: impl Into<String>, signing_key_version: impl Into<String>) -> Self {
+        Self {
+            user_id: user_id.into(),
+            signing_key_version: signing_key_version.into(),
+        }
+    }
+}
+
+/// Parameters for [`crate::ChatCore::import_keys`].
+///
+/// The key bytes are zeroized when the params are dropped and are redacted
+/// from `Debug` output.
+#[derive(Clone)]
+pub struct ImportKeysParams {
+    /// The key blob from `export_keys`: 32 bytes (the identity key) or 64
+    /// (the identity and signing keys).
+    pub keys: Vec<u8>,
+    /// The `public_key_version` the X API returned when the keys were
+    /// registered. When set, it becomes the signing-key version, as with
+    /// `set_identity`; when unset, the chat has no signing-key version until
+    /// `set_identity` sets one.
+    pub signing_key_version: Option<String>,
+}
+
+impl ImportKeysParams {
+    /// Create params with the key blob; `signing_key_version` defaults to
+    /// `None`.
+    pub fn new(keys: impl Into<Vec<u8>>) -> Self {
+        Self {
+            keys: keys.into(),
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the registered `public_key_version` of the keys.
+    pub fn with_signing_key_version(mut self, signing_key_version: impl Into<String>) -> Self {
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+impl Drop for ImportKeysParams {
+    fn drop(&mut self) {
+        self.keys.zeroize();
+    }
+}
+
+impl std::fmt::Debug for ImportKeysParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportKeysParams")
+            .field("keys", &"[REDACTED]")
+            .field("signing_key_version", &self.signing_key_version)
+            .finish()
+    }
 }
 
 /// Parameters for [`crate::ChatCore::encrypt_message`].
@@ -198,9 +266,9 @@ pub struct EncryptReplyParams {
     /// The `sequence_id` of the message being replied to; derived from
     /// `reply_to_event` when unset.
     pub reply_to_sequence_id: Option<String>,
-    /// The sender ID of the message being replied to (for preview); derived
-    /// from `reply_to_event` when unset.
-    pub reply_to_sender_id: Option<i64>,
+    /// The user ID of the message's sender, as digits (for the preview);
+    /// derived from `reply_to_event` when unset.
+    pub reply_to_sender_id: Option<String>,
     /// The text of the message being replied to (for preview); derived from
     /// `reply_to_event` when unset.
     pub reply_to_text: Option<String>,
@@ -888,8 +956,10 @@ impl DecryptEventsParams {
 
 /// Parameters for [`crate::ChatCore::encrypt_file`].
 ///
-/// The conversation keys zeroize when the params are dropped and are
-/// redacted from `Debug` output, as is the file.
+/// The conversation key, like the one [`EncryptMessageParams`] takes, is
+/// optional: set it with its version, or leave both unset to resolve them
+/// from the opt-in key cache. It is zeroized when the params are dropped and,
+/// with the file, redacted from `Debug` output.
 #[derive(Clone)]
 pub struct EncryptFileParams {
     /// The file to encrypt.
@@ -897,28 +967,50 @@ pub struct EncryptFileParams {
     /// The `event_b64` of the payload that `encrypt_message` or
     /// `encrypt_reply` returned for the message carrying the file.
     pub event_b64: String,
-    /// The conversation's key map (`key version → key`); it must hold the
-    /// key the message was encrypted under.
-    pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// The media hash key the file's upload started with, as listed in the
     /// message's attachments.
     pub media_hash_key: String,
+    /// The raw 32-byte conversation key the message was encrypted under;
+    /// resolves from the key cache when unset, together with
+    /// `conversation_key_version`.
+    pub conversation_key: Option<Vec<u8>>,
+    /// The version of `conversation_key`: the message's key version.
+    pub conversation_key_version: Option<String>,
 }
 
 impl EncryptFileParams {
-    /// Create params; every field is required.
+    /// Create params with the required fields; the conversation key pair
+    /// defaults to the key cache.
     pub fn new(
         file: Vec<u8>,
         event_b64: impl Into<String>,
-        conversation_keys: HashMap<String, XChatConversationKey>,
         media_hash_key: impl Into<String>,
     ) -> Self {
         Self {
             file,
             event_b64: event_b64.into(),
-            conversation_keys,
             media_hash_key: media_hash_key.into(),
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the conversation key the message was encrypted under, and its
+    /// version.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = non_empty(conversation_key_version);
+        self
+    }
+}
+
+impl Drop for EncryptFileParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
     }
 }
 
@@ -927,8 +1019,12 @@ impl std::fmt::Debug for EncryptFileParams {
         f.debug_struct("EncryptFileParams")
             .field("file", &format_args!("[{} bytes]", self.file.len()))
             .field("event_b64", &self.event_b64)
-            .field("conversation_keys", &self.conversation_keys)
             .field("media_hash_key", &self.media_hash_key)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
             .finish()
     }
 }
@@ -987,33 +1083,66 @@ impl std::fmt::Debug for DecryptFileParams {
 /// Parameters for [`crate::ChatCore::file_encryptor`]: those of
 /// [`EncryptFileParams`] apart from the file, which is fed to the encryptor.
 ///
-/// The conversation keys zeroize when the params are dropped and are
+/// The conversation key is zeroized when the params are dropped and is
 /// redacted from `Debug` output.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FileEncryptorParams {
     /// The `event_b64` of the payload that `encrypt_message` or
     /// `encrypt_reply` returned for the message carrying the file.
     pub event_b64: String,
-    /// The conversation's key map (`key version → key`); it must hold the
-    /// key the message was encrypted under.
-    pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// The media hash key the file's upload started with, as listed in the
     /// message's attachments.
     pub media_hash_key: String,
+    /// The raw 32-byte conversation key the message was encrypted under;
+    /// resolves from the key cache when unset, together with
+    /// `conversation_key_version`.
+    pub conversation_key: Option<Vec<u8>>,
+    /// The version of `conversation_key`: the message's key version.
+    pub conversation_key_version: Option<String>,
 }
 
 impl FileEncryptorParams {
-    /// Create params; every field is required.
-    pub fn new(
-        event_b64: impl Into<String>,
-        conversation_keys: HashMap<String, XChatConversationKey>,
-        media_hash_key: impl Into<String>,
-    ) -> Self {
+    /// Create params with the required fields; the conversation key pair
+    /// defaults to the key cache.
+    pub fn new(event_b64: impl Into<String>, media_hash_key: impl Into<String>) -> Self {
         Self {
             event_b64: event_b64.into(),
-            conversation_keys,
             media_hash_key: media_hash_key.into(),
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the conversation key the message was encrypted under, and its
+    /// version.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = non_empty(conversation_key_version);
+        self
+    }
+}
+
+impl Drop for FileEncryptorParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for FileEncryptorParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileEncryptorParams")
+            .field("event_b64", &self.event_b64)
+            .field("media_hash_key", &self.media_hash_key)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .finish()
     }
 }
 
@@ -1066,7 +1195,7 @@ mod tests {
     fn self_public_keys(core: &ChatCore) -> Vec<PublicKeyInput> {
         let pk = core.get_public_keys().unwrap();
         vec![PublicKeyInput {
-            user_id: "me".to_string(),
+            user_id: "910002".to_string(),
             public_key: pk.identity,
             key_version: "1".to_string(),
         }]
@@ -1117,7 +1246,7 @@ mod tests {
         };
         assert_message_params_eq(&via_new, &full);
 
-        let payload = core.encrypt_message(via_new).unwrap();
+        let payload = core.encrypt_message(&via_new).unwrap();
         assert!(!payload.should_notify);
         assert_eq!(payload.conversation_key_version, "1");
     }
@@ -1133,10 +1262,10 @@ mod tests {
             .with_identity("1000", "2")
             .with_conversation_key(ckey, "1");
         params.reply_to_sequence_id = Some("seq-9".into());
-        params.reply_to_sender_id = Some(42);
+        params.reply_to_sender_id = Some("42".to_string());
         params.reply_to_text = Some("original".into());
 
-        let payload = core.encrypt_reply(params).unwrap();
+        let payload = core.encrypt_reply(&params).unwrap();
         assert!(
             payload.should_notify,
             "unset should_notify defaults to true"
@@ -1160,12 +1289,12 @@ mod tests {
         assert!(!core
             .encrypt_add_reaction(&params)
             .unwrap()
-            .encrypted_content
+            .encoded_message_create_event
             .is_empty());
         assert!(!core
             .encrypt_remove_reaction(&params)
             .unwrap()
-            .encrypted_content
+            .encoded_message_create_event
             .is_empty());
     }
 
@@ -1175,18 +1304,18 @@ mod tests {
         let public_keys = self_public_keys(&core);
 
         let mut via_new = ConversationKeyChangeParams::new(public_keys.clone());
-        via_new = via_new.with_identity("me", "1");
+        via_new = via_new.with_identity("910002", "1");
         via_new.conversation_id = Some("conv-1".into());
 
         let full = ConversationKeyChangeParams {
             public_keys,
-            sender_id: Some("me".into()),
+            sender_id: Some("910002".into()),
             signing_key_version: Some("1".into()),
             conversation_id: Some("conv-1".into()),
         };
         assert_eq!(via_new, full);
 
-        let prepared = core.prepare_conversation_key_change(via_new).unwrap();
+        let prepared = core.prepare_conversation_key_change(&via_new).unwrap();
         assert_eq!(prepared.conversation_id, "conv-1");
         assert_eq!(prepared.action_signatures.len(), 1);
     }
@@ -1199,22 +1328,22 @@ mod tests {
         let mut via_new = GroupMembersChangeParams::new(
             public_keys.clone(),
             "g123",
-            vec!["new-1".into()],
-            vec!["me".into()],
-            vec!["me".into()],
+            vec!["910006".into()],
+            vec!["910002".into()],
+            vec!["910002".into()],
             vec![],
         )
-        .with_identity("me", "1");
+        .with_identity("910002", "1");
         via_new.current_title = Some("Team".into());
 
         let full = GroupMembersChangeParams {
             public_keys,
             conversation_id: "g123".into(),
-            new_member_ids: vec!["new-1".into()],
-            current_member_ids: vec!["me".into()],
-            current_admin_ids: vec!["me".into()],
+            new_member_ids: vec!["910006".into()],
+            current_member_ids: vec!["910002".into()],
+            current_admin_ids: vec!["910002".into()],
             current_pending_member_ids: vec![],
-            sender_id: Some("me".into()),
+            sender_id: Some("910002".into()),
             signing_key_version: Some("1".into()),
             current_title: Some("Team".into()),
             current_avatar_url: None,
@@ -1226,10 +1355,10 @@ mod tests {
         // Both constructions encode identical member-add event details for
         // the same conversation-key version (the detail is deterministic).
         let a = core
-            .prepare_group_members_change_with_version(via_new, "42")
+            .prepare_group_members_change_with_version(&via_new, "42")
             .unwrap();
         let b = core
-            .prepare_group_members_change_with_version(full, "42")
+            .prepare_group_members_change_with_version(&full, "42")
             .unwrap();
         assert_eq!(
             a.action_signatures[1].encoded_message_event_detail,
@@ -1245,18 +1374,18 @@ mod tests {
         let mut via_new = GroupCreateParams::new(
             public_keys.clone(),
             "g123",
-            vec!["me".into(), "friend".into()],
-            vec!["me".into()],
+            vec!["910002".into(), "910005".into()],
+            vec!["910002".into()],
         )
-        .with_identity("me", "1");
+        .with_identity("910002", "1");
         via_new.title = Some("Team".into());
 
         let full = GroupCreateParams {
             public_keys,
             conversation_id: "g123".into(),
-            member_ids: vec!["me".into(), "friend".into()],
-            admin_ids: vec!["me".into()],
-            sender_id: Some("me".into()),
+            member_ids: vec!["910002".into(), "910005".into()],
+            admin_ids: vec!["910002".into()],
+            sender_id: Some("910002".into()),
             signing_key_version: Some("1".into()),
             title: Some("Team".into()),
             avatar_url: None,
@@ -1267,9 +1396,9 @@ mod tests {
         // Both constructions encode identical group-create event details for
         // the same conversation-key version (the detail is deterministic).
         let a = core
-            .prepare_group_create_with_version(via_new, "42")
+            .prepare_group_create_with_version(&via_new, "42")
             .unwrap();
-        let b = core.prepare_group_create_with_version(full, "42").unwrap();
+        let b = core.prepare_group_create_with_version(&full, "42").unwrap();
         assert_eq!(
             a.action_signatures[1].encoded_message_event_detail,
             b.action_signatures[1].encoded_message_event_detail,

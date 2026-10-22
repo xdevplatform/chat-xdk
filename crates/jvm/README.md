@@ -43,8 +43,8 @@ import java.util.Map;
 try (Chat chat = new Chat()) {
     // Load a key blob + its registered version, then set the session once:
     // identity, the opt-in conversation-key cache, and the signing-key store.
-    chat.importKeys(exportedBytes, registeredKeyVersion);
-    chat.setIdentity(myUserId, registeredKeyVersion);
+    chat.importKeys(new ImportKeysParams(exportedBytes, registeredKeyVersion));
+    chat.setIdentity(new SetIdentityParams(myUserId, registeredKeyVersion));
     chat.setCacheKeys(true);
     chat.setSigningKeys(signingKeys);
 

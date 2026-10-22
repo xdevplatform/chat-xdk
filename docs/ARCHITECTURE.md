@@ -456,11 +456,12 @@ Holds:
 - `owner_user_id: RwLock<Option<String>>` — the session identity's user id, set by `set_identity`
 
 The file methods (`encrypt_file` / `file_encryptor` / `decrypt_file` /
-`file_decryptor`) use none of this state: `core/media.rs` finds the
+`file_decryptor`) need no session identity: `core/media.rs` finds the
 attachment a media hash key names in the given message event — the outgoing
 message's `event_b64` when encrypting, the delivered event when decrypting —
-and derives its key from the given key map (see
-[CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
+and derives its key from the message's conversation key: the key passed (or
+cached) for the message's version when encrypting, the key map's entry for
+it when decrypting (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
 
 #### `chat.rs` — `Chat` (Juicebox wrapper)
 

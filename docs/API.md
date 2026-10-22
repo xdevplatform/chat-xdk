@@ -26,7 +26,7 @@ The config JSON accepted by the constructor, `update_config`, `setup`, and
 1. **Direct SDK config** — `{"sdk_config": "<json string>", "tokens": {realm_id: token}, "max_guess_count": N}`;
    `sdk_config` goes straight to the Juicebox SDK. Default guesses: 20.
 2. **X API `juicebox_config` object** — the `juicebox_config` field from
-   `GET /2/users/:id/public_keys` (your own user), passed through as-is:
+   `GET /2/users/{id}/public_keys` (your own user), passed through as-is:
    `{"key_store_token_map_json": "...", "max_guess_count": N, "token_map": [...]}`.
    The `key_store_token_map_json` string is used **verbatim** as the SDK
    config — it carries each realm's `public_key` and the server's
@@ -45,7 +45,7 @@ validated there (and a raw realms config is accepted as a fourth shape);
 a config accepted by JS may still be rejected by the native bindings.
 
 `createChat`'s `juiceboxConfig` is optional to support **JS first boot**: the
-account's `juicebox_config` is created by `POST /2/users/:id/public_keys`, so
+account's `juicebox_config` is created by `POST /2/users/{id}/public_keys`, so
 a brand-new user has none yet. Created without a config, the instance runs
 every crypto method (including `generateKeypairs`) but builds no Juicebox
 client; `setup`/`unlock`/`changePin`/`delete` throw a clear error until
@@ -74,8 +74,8 @@ accounts keep passing `juiceboxConfig` at creation, unchanged.
 | 12 | **get_public_keys** | `→ PublicKeys` | `getPublicKeys() → object` | `get_public_keys() → PublicKeys` | `GetPublicKeys() (*PublicKeys, error)` | `getPublicKeys()` | `GetPublicKeys()` |
 | 13 | **get_public_key_fingerprint** | `→ String` | `getPublicKeyFingerprint() → string` | `get_public_key_fingerprint() → str` | `GetPublicKeyFingerprint() (string, error)` | `getPublicKeyFingerprint()` | `GetPublicKeyFingerprint()` |
 | 14 | **export_keys** | `→ Vec<u8>` | not exposed¹ | `export_keys() → Optional[bytearray]` | `ExportKeys() ([]byte, error)` | `exportKeys()` → `byte[]` | `ExportKeys()` → `byte[]?` |
-| 15 | **import_keys** | `import_keys(&[u8])`; `import_keys_with_version(&[u8], version: &str)` | not exposed¹ | `import_keys(keys: bytes, version: str \| None = None)` | `ImportKeys([]byte) error`; `ImportKeysWithVersion(keys []byte, version string) error` | `importKeys(byte[])`; `importKeys(byte[], String version)` | `ImportKeys(byte[], string? version = null)` |
-| 16 | **set_identity** | `set_identity(user_id, signing_key_version)` | `setIdentity(userId: string, signingKeyVersion: string)` | `set_identity(user_id: str, signing_key_version: str)` | `SetIdentity(userID, signingKeyVersion string) error` | `setIdentity(String userId, String signingKeyVersion)` | `SetIdentity(string userId, string signingKeyVersion)` |
+| 15 | **import_keys** | `import_keys(&ImportKeysParams)` | not exposed¹ | `import_keys(ImportKeysParams)` | `ImportKeys(ImportKeysParams) error` | `importKeys(ImportKeysParams)` | `ImportKeys(ImportKeysParams)` |
+| 16 | **set_identity** | `set_identity(&SetIdentityParams) → Result<()>` | `setIdentity(params: SetIdentityParams)` | `set_identity(SetIdentityParams)` | `SetIdentity(SetIdentityParams) error` | `setIdentity(SetIdentityParams)` | `SetIdentity(SetIdentityParams)` |
 
 ¹ By design: the public JS surface (`createChat()`/`ChatWithJuicebox`) does
 not expose raw key export/import, so raw private key material stays inside
@@ -87,15 +87,19 @@ use). It requires a loaded identity key (the signing key is optional,
 giving a 32-byte export); Python/Go/.NET/JVM return `None`/`nil`/`null`
 when no identity key is loaded, while Rust errors.
 
+Both calls take a params object, as every call with more than one input
+does. `ImportKeysParams` holds the key blob (`keys`) and an optional
+`signing_key_version`; `SetIdentityParams` holds `user_id` and
+`signing_key_version`.
+
 The SDK needs to know the version the X API reports for your registered
 public key, so KeyChange participant entries targeting other key versions are
-skipped. Set it in either of two equivalent ways: pass the optional `version`
-to `import_keys` (Python/.NET/JVM) or call `import_keys_with_version`
-(Rust/Go); or call `set_identity`, which sets it together with the user id.
-After registering the keys from `generate_keypairs`, call `set_identity` with
-the `public_key_version` the registration returns.
+skipped. Set it in either of two equivalent ways: pass `signing_key_version`
+in `ImportKeysParams`, or call `set_identity`, which sets it together with the
+user id. After registering the keys from `generate_keypairs`, call
+`set_identity` with the `public_key_version` the registration returns.
 
-`set_identity(user_id, signing_key_version)` stores the **session identity**.
+`set_identity` stores the **session identity**.
 Every method with optional `sender_id` / `signing_key_version` fields — the
 `encrypt_*` family and the three `prepare_*` methods — resolves omitted values
 from it. An explicit per-call value always overrides, and an omitted value and
@@ -135,9 +139,9 @@ wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
 | 17 | **decrypt_conversation_key** | `(encrypted_b64: &str) → XChatConversationKey` | `decryptConversationKey(b64: string) → Uint8Array` | `decrypt_conversation_key(b64: str) → bytes` | `DecryptConversationKey(encryptedKeyB64 string) ([]byte, error)` | `decryptConversationKey(String)` → `byte[]` | `DecryptConversationKey(string)` → `byte[]` |
-| 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change(ConversationKeyChangeParams) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
-| 19 | **prepare_group_members_change** | `prepare_group_members_change(GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change(GroupMembersChangeParams) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
-| 20 | **prepare_group_create** | `prepare_group_create(GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create(GroupCreateParams) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
+| 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(&ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change(ConversationKeyChangeParams) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
+| 19 | **prepare_group_members_change** | `prepare_group_members_change(&GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change(GroupMembersChangeParams) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
+| 20 | **prepare_group_create** | `prepare_group_create(&GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create(GroupCreateParams) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
 single params value, named the same in every language: Rust
@@ -281,8 +285,8 @@ interface PreparedConversationChange {
   conversationId: string;           // derived (one-to-one) or the id you passed
   conversationKey: Uint8Array;      // raw 32-byte key — store locally
   conversationKeyVersion: string;   // timestamp-based version
-  participantKeys: EncryptedKeyForRecipient[];  // ready to POST
-  actionSignatures: ActionSignature[];          // ready to POST
+  conversationParticipantKeys: ConversationParticipantKey[];  // ready to POST
+  actionSignatures: ActionSignature[];                      // ready to POST
 }
 ```
 
@@ -292,8 +296,8 @@ interface PreparedConversationChange {
     "conversation_id": "17380288:1491585161162473473",
     "conversation_key": b"...",              # raw 32 bytes
     "conversation_key_version": "171000...", # timestamp string
-    "participant_keys": [ {"user_id": "111", "encrypted_key": "...", "public_key_version": "v1"} ],
-    "action_signatures": [ {"message_id": "...", "signature": "...", ...} ],
+    "conversation_participant_keys": [ {"user_id": "111", "encrypted_conversation_key": "...", "public_key_version": "1"} ],
+    "action_signatures": [ {"message_id": "...", "message_event_signature": {"signature": "...", ...}, ...} ],
 }
 ```
 
@@ -312,7 +316,7 @@ const result = chat.prepareConversationKeyChange({ publicKeys });
 await fetch(`/api/conversations/${result.conversationId}/keys`, {
   body: JSON.stringify({
     conversationKeyVersion: result.conversationKeyVersion,
-    conversationParticipantKeys: result.participantKeys,
+    conversationParticipantKeys: result.conversationParticipantKeys,
     actionSignatures: result.actionSignatures,
   })
 });
@@ -474,9 +478,9 @@ const rawEvents: string[] = await fetchConversationEvents(conversationId);
 
 // Fetch signing keys for all participants (pass the X API response through directly)
 const signingKeys: SigningKeyEntry[] = [
-  { userId: "111", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
-  { userId: "111", publicKeyVersion: "v2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
-  { userId: "222", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "111", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "111", publicKeyVersion: "2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "222", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
 ];
 
 const result = chat.decryptEvents({ events: rawEvents, signingKeys });
@@ -613,7 +617,7 @@ const event = chat.decryptEvent({
   eventB64: webhookEventB64,
   conversationKeys: cachedKeys,
   signingKeys: [
-    { userId: "111", publicKeyVersion: "v2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+    { userId: "111", publicKeyVersion: "2", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
   ],
 });
 
@@ -702,7 +706,7 @@ interface SigningKeyEntry {
 # Python
 {
   "user_id": "123",
-  "public_key_version": "v1",
+  "public_key_version": "1",
   "public_key": "BASE64...",                    # signing public key
   "identity_public_key": "BASE64...",
   "identity_public_key_signature": "BASE64...",
@@ -712,7 +716,7 @@ interface SigningKeyEntry {
 The SDK verifies each entry's identity binding (`identityPublicKeySignature`)
 before trusting it for signature verification, so all fields are required.
 
-**ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file params, and the `keys` field of `ConversationKeyResult`:
+**ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file decrypt params, and the `keys` field of `ConversationKeyResult`:
 ```typescript
 // JS
 type ConversationKeyMap = { [version: string]: Uint8Array };
@@ -722,19 +726,19 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 { "1": b"\x01\x02...", "2": b"\x03\x04..." }
 ```
 
-**Unencrypted events**: Events without a `conversationKeyVersion` carry no verifiable signature, so under the default reject-unverified policy they are **rejected** (`decryptEvent` throws; `decryptEvents` records them in `errors`). After `setRejectUnverified(false)` they are returned with `keyVersion: null` and `verified: false`.
+**Unencrypted events**: Events without a `conversationKeyVersion` carry no verifiable signature, so under the default reject-unverified policy they are **rejected** (`decryptEvent` throws; `decryptEvents` records them in `errors`). After `setRejectUnverified(false)` they are returned with `conversationKeyVersion: null` and `verified: false`.
 
 ### Message Encryption
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 26 | **encrypt_message** | `encrypt_message(EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(EncryptMessageParams) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
-| 27 | **encrypt_reply** | `encrypt_reply(EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(EncryptReplyParams) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
+| 26 | **encrypt_message** | `encrypt_message(&EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(EncryptMessageParams) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 27 | **encrypt_reply** | `encrypt_reply(&EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(EncryptReplyParams) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(EncryptReactionParams) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(EncryptReactionParams) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
 | 30 | **encrypt_edit** | `encrypt_edit(&EncryptEditParams) → SendPayload` | `encryptEdit(params: EncryptEditParams) → SendPayload` | `encrypt_edit(EncryptEditParams) → SendPayload` | `EncryptEdit(params EncryptEditParams) (*SendPayload, error)` | `encryptEdit(EncryptEditParams)` | `EncryptEdit(EncryptEditParams)` |
-| 31 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → ActionSignature` | `prepareMessageDelete(params: MessageDeleteParams) → ActionSignature` | `prepare_message_delete(MessageDeleteParams) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error)` | `prepareMessageDelete(MessageDeleteParams)` | `PrepareMessageDelete(MessageDeleteParams)` |
-| 32 | **prepare_mark_conversation_read** | `prepare_mark_conversation_read(&MarkConversationReadParams) → ActionSignature` | `prepareMarkConversationRead(params: MarkConversationReadParams) → ActionSignature` | `prepare_mark_conversation_read(MarkConversationReadParams) → dict` | `PrepareMarkConversationRead(params MarkConversationReadParams) (*ActionSignature, error)` | `prepareMarkConversationRead(MarkConversationReadParams)` | `PrepareMarkConversationRead(MarkConversationReadParams)` |
+| 31 | **prepare_message_delete** | `prepare_message_delete(&MessageDeleteParams) → PreparedAction` | `prepareMessageDelete(params: MessageDeleteParams) → PreparedAction` | `prepare_message_delete(MessageDeleteParams) → dict` | `PrepareMessageDelete(params MessageDeleteParams) (*PreparedAction, error)` | `prepareMessageDelete(MessageDeleteParams)` → `PreparedAction` | `PrepareMessageDelete(MessageDeleteParams)` → `PreparedAction` |
+| 32 | **prepare_mark_conversation_read** | `prepare_mark_conversation_read(&MarkConversationReadParams) → PreparedAction` | `prepareMarkConversationRead(params: MarkConversationReadParams) → PreparedAction` | `prepare_mark_conversation_read(MarkConversationReadParams) → dict` | `PrepareMarkConversationRead(params MarkConversationReadParams) (*PreparedAction, error)` | `prepareMarkConversationRead(MarkConversationReadParams)` → `PreparedAction` | `PrepareMarkConversationRead(MarkConversationReadParams)` → `PreparedAction` |
 
 Required fields of `EncryptMessageParams` (all bindings, names per language
 idiom): `conversation_id` and `text`. Everything else is an optional override:
@@ -786,6 +790,20 @@ their message's format. The sender id must be the sender's numeric user id
 and the conversation key version an integer, as the key-change event carries
 it; anything else is rejected, since v1 recipients derive the key from the
 numeric id and look the key up by the version.
+
+**Every user id is a string of digits** in every binding: the `set_identity`
+user id, `sender_id`, `reply_to_sender_id`, the `user_id` of each public key,
+and group member, admin and pending-member ids. Each must be a positive
+integer written without a sign or leading zeros, and anything else fails
+with an error naming the field (`Invalid reply_to_sender_id '…'`). JS takes
+no numbers for them: ids pass 2^53, where JS numbers stop being exact.
+
+**Every key version is a string of digits**, as the X API returns it: the
+signing-key version (`signing_key_version` in `set_identity`,
+`import_keys` and per call, and each public key's `key_version`) and the
+`conversation_key_version`. Both kinds take the same check, a non-negative
+integer written without a sign or leading zeros, and anything else fails
+with an error naming the field.
 
 The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings fetch in the background (see
@@ -867,45 +885,48 @@ overrides above apply) and returns a `SendPayload` with its own fresh
 requires `conversation_id`, the `sequence_ids` of the messages to delete,
 and `delete_for_all` — `true` deletes for every participant (own messages
 only), `false` only from the caller's view. No conversation key is involved:
-`prepare_message_delete` returns a single `ActionSignature` (the same shape
-as the prepare methods' `actionSignatures` entries, with its
-`signature_payload` populated) whose `encodedMessageEventDetail` carries the
-`MessageDeleteEvent`, ready to submit alongside the delete request. The
-optional `sender_id` / `signing_key_version` overrides resolve from the
-session identity, and a one-to-one id is signed in its canonical colon form,
-as everywhere.
+`prepare_message_delete` returns a `PreparedAction`, the request's
+`action_signatures` with one entry. The entry is an `ActionSignature`, the
+same shape as the conversation-change `actionSignatures` entries (see
+**Action signatures** below), with its `signature_payload` populated; its
+`encodedMessageEventDetail` carries the `MessageDeleteEvent`. The optional
+`sender_id` / `signing_key_version` overrides resolve from the session
+identity, and a one-to-one id is signed in its canonical colon form, as
+everywhere.
 
 **Read receipts are signed, not encrypted.** `MarkConversationReadParams`
 requires `conversation_id` and `seen_until_sequence_id` — the `sequence_id`
 of the newest event read. The optional `seen_at_msec` (milliseconds since the
 Unix epoch) records when it was read and defaults to the current time; the JS
 binding reads the JavaScript clock. `prepare_mark_conversation_read` returns a
-single `ActionSignature` whose `encodedMessageEventDetail` carries the
-`MarkConversationReadEvent`, ready to submit alongside the mark-read request.
-The signature covers the read point and its time, so a recipient's
+`PreparedAction` shaped as for deletes, whose entry's
+`encodedMessageEventDetail` carries the `MarkConversationReadEvent`. The
+signature covers the read point and its time, so a recipient's
 `decrypt_event` returns the receipt as a `ReadReceipt` event with `verified`
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
-Send the signature in the mark-read request,
-`POST /2/chat/conversations/:id/read`, as an entry of its
-`action_signatures`, nested the way the conversation-change requests nest
-theirs: `ActionSignature` returns `signature`, `signature_version` and
-`public_key_version` flat, and the entry carries them under
-`message_event_signature`, with your signing public key.
+Send the receipt in the mark-read request,
+`POST /2/chat/conversations/{id}/read`: its `action_signatures` take the
+`PreparedAction`'s entries as they are.
+
+**Action signatures.** Every prepare method returns its signed actions in
+the shape a request's `action_signatures` carries them, so they serialize
+into the request body as they are (snake_case shown; JS returns camelCase):
 
 ```json
 {
   "action_signatures": [
     {
-      "message_id": "<ActionSignature.message_id>",
-      "encoded_message_event_detail": "<ActionSignature.encoded_message_event_detail>",
+      "message_id": "<the action's message id, generated by the SDK>",
+      "encoded_message_event_detail": "<base64 MessageEventDetail>",
       "message_event_signature": {
-        "signature": "<ActionSignature.signature>",
-        "signature_version": "<ActionSignature.signature_version>",
-        "public_key_version": "<ActionSignature.public_key_version>",
-        "signing_public_key": "<your signing public key>"
-      }
+        "signature": "<base64 ECDSA signature>",
+        "signature_version": "7",
+        "public_key_version": "<your signing key version>",
+        "signing_public_key": "<your signing public key, as get_public_keys returns it>"
+      },
+      "signature_payload": "<the signed payload; omitted for conversation-key changes>"
     }
   ]
 }
@@ -916,16 +937,16 @@ fields:
 
 ```rust
 // Rust — session identity + key cache resolve the omitted fields
-chat.set_identity(my_user_id, signing_key_version);
+chat.set_identity(&SetIdentityParams::new(my_user_id, signing_key_version))?;
 chat.set_cache_keys(true); // filled by decrypt_events
 
 let mut params = EncryptMessageParams::new(conversation_id, "Hello");
 params.ttl_msec = Some(86_400_000);
-let payload = chat.encrypt_message(params)?;
+let payload = chat.encrypt_message(&params)?;
 let message_id = payload.message_id; // generated by the SDK
 
 // Reply / react by handing back the raw event being answered
-let reply = chat.encrypt_reply(EncryptReplyParams::new(
+let reply = chat.encrypt_reply(&EncryptReplyParams::new(
     conversation_id, "pong", original_event_b64,
 ))?;
 let reaction =
@@ -934,7 +955,7 @@ let reaction =
 
 ```typescript
 // JS
-chat.setIdentity(myUserId, signingKeyVersion);
+chat.setIdentity({ userId: myUserId, signingKeyVersion });
 chat.setCacheKeys(true);
 
 const payload = chat.encryptMessage({
@@ -954,9 +975,14 @@ const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: originalE
 
 ```python
 # Python — params classes: required fields positional, optionals as keywords
-from chat_xdk import EncryptMessageParams, EncryptReactionParams, EncryptReplyParams
+from chat_xdk import (
+    EncryptMessageParams,
+    EncryptReactionParams,
+    EncryptReplyParams,
+    SetIdentityParams,
+)
 
-chat.set_identity(my_user_id, signing_key_version)
+chat.set_identity(SetIdentityParams(my_user_id, signing_key_version))
 chat.set_cache_keys(True)
 
 payload = chat.encrypt_message(
@@ -972,27 +998,31 @@ reaction = chat.encrypt_add_reaction(EncryptReactionParams(original_event_b64, "
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 33 | **encrypt_file** | `encrypt_file(EncryptFileParams) → Vec<u8>` | `encryptFile(params: EncryptFileParams) → Uint8Array` | `encrypt_file(EncryptFileParams) → bytes` | `EncryptFile(EncryptFileParams) ([]byte, error)` | `encryptFile(EncryptFileParams)` → `byte[]` | `EncryptFile(EncryptFileParams)` → `byte[]` |
-| 34 | **file_encryptor** | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `fileEncryptor(params: FileEncryptorParams) → FileEncryptor` | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `FileEncryptor(FileEncryptorParams) (*FileEncryptor, error)` | `fileEncryptor(FileEncryptorParams)` → `FileEncryptor` | `FileEncryptor(FileEncryptorParams)` → `FileEncryptor` |
+| 33 | **encrypt_file** | `encrypt_file(&EncryptFileParams) → Vec<u8>` | `encryptFile(params: EncryptFileParams) → Uint8Array` | `encrypt_file(EncryptFileParams) → bytes` | `EncryptFile(EncryptFileParams) ([]byte, error)` | `encryptFile(EncryptFileParams)` → `byte[]` | `EncryptFile(EncryptFileParams)` → `byte[]` |
+| 34 | **file_encryptor** | `file_encryptor(&FileEncryptorParams) → FileEncryptor` | `fileEncryptor(params: FileEncryptorParams) → FileEncryptor` | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `FileEncryptor(FileEncryptorParams) (*FileEncryptor, error)` | `fileEncryptor(FileEncryptorParams)` → `FileEncryptor` | `FileEncryptor(FileEncryptorParams)` → `FileEncryptor` |
 | 35 | **decrypt_file** | `decrypt_file(DecryptFileParams) → Vec<u8>` | `decryptFile(params: DecryptFileParams) → Uint8Array` | `decrypt_file(DecryptFileParams) → bytes` | `DecryptFile(DecryptFileParams) ([]byte, error)` | `decryptFile(DecryptFileParams)` → `byte[]` | `DecryptFile(DecryptFileParams)` → `byte[]` |
 | 36 | **file_decryptor** | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `fileDecryptor(params: FileDecryptorParams) → FileDecryptor` | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `FileDecryptor(FileDecryptorParams) (*FileDecryptor, error)` | `fileDecryptor(FileDecryptorParams)` → `FileDecryptor` | `FileDecryptor(FileDecryptorParams)` → `FileDecryptor` |
 
-All four take the same three fields, plus the bytes for the one-shot calls
-(names per language idiom):
+The file calls take the key the way the message calls do: a send takes the
+one key its message was encrypted under, and a receive takes the
+conversation's key map, as `decrypt_event` does (names per language idiom):
 
 | Params | Fields |
 |---|---|
-| `EncryptFileParams` | `file`, `event_b64`, `conversation_keys`, `media_hash_key` |
-| `FileEncryptorParams` | `event_b64`, `conversation_keys`, `media_hash_key` |
+| `EncryptFileParams` | `file`, `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
+| `FileEncryptorParams` | `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
 | `DecryptFileParams` | `encrypted`, `event_b64`, `conversation_keys`, `media_hash_key` |
 | `FileDecryptorParams` | `event_b64`, `conversation_keys`, `media_hash_key` |
 
-`event_b64` is the base64 event of the message that carries the file,
-`conversation_keys` the conversation's key map (version → raw 32-byte key),
-and `media_hash_key` the file's media hash key. Each file of a message is
-encrypted under its own key, derived from the message's key and the file's
-attachment (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)), so a file
-encrypted for another message or attachment does not decrypt.
+`event_b64` is the base64 event of the message that carries the file and
+`media_hash_key` the file's media hash key. On a send, `conversation_key` and
+`conversation_key_version` are the raw 32-byte key the message was encrypted
+under and its version, set together as on `EncryptMessageParams`; with both
+unset they resolve from the key cache. On a receive, `conversation_keys` is
+the conversation's key map (version → raw 32-byte key). Each file of a
+message is encrypted under its own key, derived from the message's key and
+the file's attachment (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)),
+so a file encrypted for another message or attachment does not decrypt.
 
 **Sending files.** A message with files is built before its files are
 encrypted:
@@ -1005,9 +1035,10 @@ encrypted:
 2. Encrypt the message with `encrypt_message` or `encrypt_reply`, its
    attachments naming those media hash keys.
 3. Encrypt each file with `encrypt_file` or `file_encryptor`: pass the
-   payload's `event_b64`, a key map that holds the key the message was
-   encrypted under, and the file's `media_hash_key`. The SDK finds the file in
-   the message and encrypts it under that attachment's key.
+   payload's `event_b64`, the file's `media_hash_key`, and the conversation
+   key and version the message was encrypted under (or neither, to resolve
+   them from the key cache). The SDK finds the file in the message and
+   encrypts it under that attachment's key.
 4. Upload each encrypted file and finish its upload (`append` → `finalize`),
    then send the message.
 
@@ -1028,7 +1059,8 @@ const payload = chat.encryptMessage({
 const encrypted = chat.encryptFile({
   file: photo,
   eventB64: payload.eventB64,
-  conversationKeys: { [conversationKeyVersion]: conversationKey },
+  conversationKey,
+  conversationKeyVersion,
   mediaHashKey,
 });
 await finishMediaUpload(conversationId, { sessionId, mediaHashKey }, encrypted);
@@ -1070,7 +1102,8 @@ object; call `free()` only when abandoning a file without finishing it
 
 The file calls raise an error that says what to pass instead when:
 
-- the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
+- (encrypting) `conversation_key_version` is not the message's key version, `conversation_key` is not 32 bytes, or only one of the two is set;
+- (decrypting) the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
 - `media_hash_key` is empty, or is not one of the message's files (the error lists the media hash keys that are);
 - the event is not a message, is an edit, reaction or other entry without files, or is a message with no files;
 - (encrypting) `media_hash_key` names media the reply quotes: that file belongs to the quoted message, so there is nothing to encrypt;
@@ -1117,7 +1150,8 @@ one-call prepare methods (`prepare_conversation_key_change`,
 `actionSignatures` ready to POST. Group create and member-add each return two
 signatures (a conversation-key change plus the group change). Message deletes
 and read receipts are signed by `prepare_message_delete` and
-`prepare_mark_conversation_read`, which each return a single `ActionSignature`.
+`prepare_mark_conversation_read`, which each return a `PreparedAction` with
+one entry in its `actionSignatures`.
 
 ### Utilities
 
@@ -1204,7 +1238,7 @@ ImageDimensions? dims = ChatXdkUtilities.DetectImageDimensions(imageBytes);
 
 ### JavaScript/WASM
 
-First boot — `juicebox_config` is created by `POST /2/users/:id/public_keys`,
+First boot — `juicebox_config` is created by `POST /2/users/{id}/public_keys`,
 so a brand-new user creates the chat without one:
 
 ```typescript
@@ -1214,7 +1248,7 @@ const chat = await createChat({
   getAuthToken: async (realmId) => await backend.getToken(realmId),
 });
 const payload = chat.generateKeypairs();
-// … POST payload to /2/users/:id/public_keys, GET juicebox_config back …
+// … POST payload to /2/users/{id}/public_keys, GET juicebox_config back …
 chat.updateConfig(configJson);
 await chat.setup("2580");
 ```
@@ -1233,11 +1267,11 @@ await chat.unlock("2580");
 // ── Set the session once ──
 // Identity (sender + signing-key version), signing keys for all
 // participants, and the opt-in conversation-key cache.
-chat.setIdentity(myUserId, mySigningKeyVersion);
+chat.setIdentity({ userId: myUserId, signingKeyVersion: mySigningKeyVersion });
 chat.setCacheKeys(true);
 chat.setSigningKeys([
-  { userId: "111", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
-  { userId: "222", publicKeyVersion: "v1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "111", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
+  { userId: "222", publicKeyVersion: "1", publicKey: "BASE64...", identityPublicKey: "BASE64...", identityPublicKeySignature: "BASE64..." },
 ]);
 
 // ── Initial load: use decryptEvents ──
@@ -1306,7 +1340,6 @@ const photoMessage = chat.encryptMessage({
 const encryptedPhoto = chat.encryptFile({
   file: photo,
   eventB64: photoMessage.eventB64,
-  conversationKeys: keys,
   mediaHashKey: newMediaHashKey,
 });
 // … finish the upload with encryptedPhoto, then send photoMessage …
@@ -1324,6 +1357,7 @@ from chat_xdk import (
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
+    SetIdentityParams,
     encrypted_file_size,
 )
 
@@ -1331,7 +1365,7 @@ chat = Chat(config_json)
 chat.unlock("2580")
 
 # ── Set the session once ──
-chat.set_identity(my_user_id, my_signing_key_version)
+chat.set_identity(SetIdentityParams(my_user_id, my_signing_key_version))
 chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)  # all participants
 
@@ -1379,7 +1413,7 @@ photo_message = chat.encrypt_message(
     )
 )
 encrypted_photo = chat.encrypt_file(
-    EncryptFileParams(photo, photo_message.event_b64, keys, new_media_hash_key)
+    EncryptFileParams(photo, photo_message.event_b64, new_media_hash_key)
 )
 # … finish the upload with encrypted_photo, then send photo_message …
 ```
@@ -1400,7 +1434,7 @@ func main() {
     _ = chat.Unlock([]byte("2580"), juiceboxConfigJSON)
 
     // ── Set the session once ──
-    chat.SetIdentity(myUserID, mySigningKeyVersion)
+    chat.SetIdentity(chatxdk.SetIdentityParams{UserID: myUserID, SigningKeyVersion: mySigningKeyVersion})
     chat.SetCacheKeys(true)
     _ = chat.SetSigningKeys(signingKeys) // all participants
 
@@ -1487,10 +1521,9 @@ func main() {
         panic(err)
     }
     encryptedPhoto, err := chat.EncryptFile(chatxdk.EncryptFileParams{
-        File:             photo,
-        EventB64:         photoMessage.EventB64,
-        ConversationKeys: result.ConversationKeys.Keys,
-        MediaHashKey:     newMediaHashKey,
+        File:         photo,
+        EventB64:     photoMessage.EventB64,
+        MediaHashKey: newMediaHashKey,
     })
     _ = encryptedPhoto // … finish the upload with it, then send photoMessage …
 }
@@ -1512,7 +1545,7 @@ let chat = Chat::new(config);
 chat.unlock(b"2580").await?;
 
 // ── Set the session once ──
-chat.set_identity(my_user_id, my_signing_key_version);
+chat.set_identity(&SetIdentityParams::new(my_user_id, my_signing_key_version))?;
 chat.set_cache_keys(true);
 chat.set_signing_keys(signing_keys); // all participants
 
@@ -1530,8 +1563,8 @@ for dm in &result.messages {
 let event = chat.decrypt_event(DecryptEventParams::new(event_b64, HashMap::new()))?;
 
 // ── Send: identity and conversation key resolve from the session ──
-let payload = chat.encrypt_message(EncryptMessageParams::new(conversation_id, "hi!"))?;
-let reply = chat.encrypt_reply(EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
+let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "hi!"))?;
+let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
 let reaction = chat.encrypt_add_reaction(&EncryptReactionParams::new(event_b64, "👍"))?;
 
 // ── Metadata (group name, avatar, description) ──
@@ -1561,11 +1594,10 @@ params.attachments = Some(vec![AttachmentDescriptor::Media {
     media_type: Some(1),
     duration_millis: None,
 }]);
-let photo_message = chat.encrypt_message(params)?;
-let encrypted_photo = chat.encrypt_file(EncryptFileParams::new(
+let photo_message = chat.encrypt_message(&params)?;
+let encrypted_photo = chat.encrypt_file(&EncryptFileParams::new(
     photo,
     &photo_message.event_b64,
-    keys,
     new_media_hash_key,
 ))?;
 // … finish the upload with encrypted_photo, then send photo_message …
@@ -1583,7 +1615,7 @@ chat.UpdateConfig(juiceboxConfigJson);
 chat.Unlock(pin, juiceboxConfigJson);
 
 // Set the session once: identity, opt-in key cache, signing-key store.
-chat.SetIdentity(myUserId, mySigningKeyVersion);
+chat.SetIdentity(new SetIdentityParams(myUserId, mySigningKeyVersion));
 chat.SetCacheKeys(true);
 chat.SetSigningKeys(signingKeys); // all participants
 
@@ -1624,7 +1656,7 @@ var photoMessage = chat.EncryptMessage(new EncryptMessageParams(conversationId, 
     },
 });
 var encryptedPhoto = chat.EncryptFile(
-    new EncryptFileParams(photo, photoMessage.EventB64, keys, newMediaHashKey));
+    new EncryptFileParams(photo, photoMessage.EventB64, newMediaHashKey));
 // … finish the upload with encryptedPhoto, then send photoMessage …
 ```
 
@@ -1651,7 +1683,7 @@ try (Chat chat = new Chat()) {
     chat.unlock("2580", juiceboxConfigJson);
 
     // Set the session once: identity, opt-in key cache, signing-key store.
-    chat.setIdentity(myUserId, mySigningKeyVersion);
+    chat.setIdentity(new SetIdentityParams(myUserId, mySigningKeyVersion));
     chat.setCacheKeys(true);
     chat.setSigningKeys(signingKeys); // all participants
 
@@ -1692,7 +1724,7 @@ try (Chat chat = new Chat()) {
             AttachmentDescriptor.media(newMediaHashKey, width, height, size, "photo.jpg", 1, null));
     SendPayload photoMessage = chat.encryptMessage(photoParams);
     byte[] encryptedPhoto = chat.encryptFile(
-            new EncryptFileParams(photo, photoMessage.eventB64, keys, newMediaHashKey));
+            new EncryptFileParams(photo, photoMessage.eventB64, newMediaHashKey));
     // … finish the upload with encryptedPhoto, then send photoMessage …
 }
 ```
@@ -1803,7 +1835,7 @@ interface MessageEvent {
   conversationId?: string;
   createdAtMsec?: number;
   content: MessageContent;
-  keyVersion?: string;          // null for unencrypted messages
+  conversationKeyVersion?: string; // null for unencrypted messages
   verified: boolean;            // always false for unencrypted messages
   shouldNotify?: boolean;
   ttlMsec?: number;
@@ -1817,7 +1849,7 @@ interface MessageEvent {
 ```python
 # Python
 event["content"]       # dict
-event["key_version"]   # str or None
+event["conversation_key_version"]   # str or None
 event["verified"]      # bool
 event["attachments"]   # list[dict]
 event["media_hashes"]  # list[dict]
@@ -1836,7 +1868,7 @@ absent-on-a-preview) as an untrusted preview — render the claim only from the
 validated original. The validation contract is specified in
 [CRYPTO.md — Reply preview validation](CRYPTO.md#reply-preview-validation).
 
-**Unencrypted messages**: When `keyVersion` is `null`, the message was delivered without encryption. Because there is no signature to verify, the default reject-unverified policy **rejects** these messages (`decryptEvent` throws; `decryptEvents` records them in `errors`); they are returned only after `setRejectUnverified(false)`, with `verified: false`. When returned, the `content` is parsed identically to encrypted messages.
+**Unencrypted messages**: When `conversationKeyVersion` is `null`, the message was delivered without encryption. Because there is no signature to verify, the default reject-unverified policy **rejects** these messages (`decryptEvent` throws; `decryptEvents` records them in `errors`); they are returned only after `setRejectUnverified(false)`, with `verified: false`. When returned, the `content` is parsed identically to encrypted messages.
 
 ### MessageContent
 
@@ -1867,7 +1899,11 @@ For reactions and edits, `targetMessageId` is the message **sequenceId**.
 
 ### SendPayload
 
-Returned by `encrypt_message()` and all `encrypt_*()` methods.
+Returned by `encrypt_message()` and all `encrypt_*()` methods. The fields the
+send request takes carry its names: send `message_id`,
+`encoded_message_create_event` and `encoded_message_event_signature` as they
+are (JS returns them camelCased, as `messageId`,
+`encodedMessageCreateEvent` and `encodedMessageEventSignature`).
 
 The SDK generates the `message_id` (a UUID) and embeds it in the signed
 event: derived from its files for a v1 message with files (see
@@ -1888,9 +1924,9 @@ field of the send request.
 pub struct SendPayload {
     pub message_id: String,              // UUID, also embedded in the signed event
     pub event_b64: String,               // the outgoing message as a base64 event
-    pub encrypted_content: String,       // Base64-encoded Thrift MessageCreateEvent
-    pub signature: String,               // Base64-encoded ECDSA signature
-    pub encoded_event_signature: String, // Base64-encoded Thrift MessageEventSignature
+    pub encoded_message_create_event: String,    // Base64-encoded Thrift MessageCreateEvent
+    pub signature: String,                       // Base64-encoded ECDSA signature
+    pub encoded_message_event_signature: String, // Base64-encoded Thrift MessageEventSignature
     pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
@@ -1900,9 +1936,9 @@ pub struct SendPayload {
 // Python (SendPayload class attributes)
 // message_id: str
 // event_b64: str
-// encrypted_content: str
+// encoded_message_create_event: str
 // signature: str
-// encoded_event_signature: str
+// encoded_message_event_signature: str
 // signature_info: SignatureInfo
 // conversation_key_version: str
 // should_notify: bool
@@ -2118,14 +2154,15 @@ Payload when `type` is `"keyChange"` (JS) / `"KeyChange"` (Python).
 interface KeyChangeEvent {
   type: 'keyChange';
   // Flattened meta fields...
-  keyVersion: string;
+  conversationKeyVersion: string;
   verified: boolean;
-  participantKeys: ParticipantKey[];
+  conversationParticipantKeys: ConversationParticipantKey[];
 }
 
-interface ParticipantKey {
+// The same type a prepared change carries in conversationParticipantKeys.
+interface ConversationParticipantKey {
   userId: string;
-  encryptedKey: string;
+  encryptedConversationKey: string;
   publicKeyVersion: string;
 }
 ```

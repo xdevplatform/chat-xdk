@@ -75,9 +75,9 @@ class SignatureInfo:
 class SendPayload:
     message_id: str
     event_b64: str
-    encrypted_content: str
+    encoded_message_create_event: str
     signature: str
-    encoded_event_signature: str
+    encoded_message_event_signature: str
     signature_info: SignatureInfo
     conversation_key_version: str
     should_notify: bool
@@ -126,7 +126,7 @@ class EncryptReplyParams:
     conversation_key: Optional[bytes]
     conversation_key_version: Optional[str]
     reply_to_sequence_id: Optional[str]
-    reply_to_sender_id: Optional[int]
+    reply_to_sender_id: Optional[str]
     reply_to_text: Optional[str]
     entities: Optional[list[tuple[int, int, str]]]
     attachments: Optional[list[dict]]
@@ -148,7 +148,7 @@ class EncryptReplyParams:
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
         reply_to_sequence_id: Optional[str] = None,
-        reply_to_sender_id: Optional[int] = None,
+        reply_to_sender_id: Optional[str] = None,
         reply_to_text: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
         attachments: Optional[list[dict]] = None,
@@ -289,6 +289,16 @@ class MessageDeleteParams:
         signing_key_version: Optional[str] = None,
     ) -> None: ...
 
+class SetIdentityParams:
+    user_id: str
+    signing_key_version: str
+    def __init__(self, user_id: str, signing_key_version: str) -> None: ...
+
+class ImportKeysParams:
+    keys: bytes
+    signing_key_version: Optional[str]
+    def __init__(self, keys: bytes, *, signing_key_version: Optional[str] = None) -> None: ...
+
 class MarkConversationReadParams:
     conversation_id: str
     seen_until_sequence_id: str
@@ -330,25 +340,31 @@ class DecryptEventsParams:
 class EncryptFileParams:
     file: bytes
     event_b64: str
-    conversation_keys: dict[str, bytes]
     media_hash_key: str
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         file: bytes,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
         media_hash_key: str,
+        *,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class FileEncryptorParams:
     event_b64: str
-    conversation_keys: dict[str, bytes]
     media_hash_key: str
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
         media_hash_key: str,
+        *,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class DecryptFileParams:
@@ -383,7 +399,7 @@ class Chat:
     def set_reject_unverified(self, reject: bool) -> None: ...
 
     # Session state
-    def set_identity(self, user_id: str, signing_key_version: str) -> None: ...
+    def set_identity(self, params: SetIdentityParams) -> None: ...
     def set_cache_keys(self, enabled: bool) -> None: ...
     def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None: ...
 
@@ -409,7 +425,7 @@ class Chat:
     def get_public_keys(self) -> PublicKeys: ...
     def get_public_key_fingerprint(self) -> str: ...
     def export_keys(self) -> Optional[bytearray]: ...
-    def import_keys(self, keys: bytes, version: Optional[str] = None) -> None: ...
+    def import_keys(self, params: ImportKeysParams) -> None: ...
     def verify_key_binding(
         self,
         identity_public_key_b64: str,

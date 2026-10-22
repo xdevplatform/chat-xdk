@@ -281,7 +281,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         None,
     );
     let signature_bytes = serialize_thrift(&signature_struct)?;
-    let encoded_event_signature = base64_encode(&signature_bytes);
+    let encoded_message_event_signature = base64_encode(&signature_bytes);
     outgoing.detail = Some(detail);
     outgoing.message_event_signature = Some(signature_struct);
     let event_b64 = base64_encode(&serialize_thrift(&outgoing)?);
@@ -289,9 +289,9 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     Ok(SendPayload {
         message_id: params.message_id.to_string(),
         event_b64,
-        encrypted_content: base64_encode(&event_bytes),
+        encoded_message_create_event: base64_encode(&event_bytes),
         signature: signature_b64,
-        encoded_event_signature,
+        encoded_message_event_signature,
         signature_info: SignatureInfo {
             public_key_version: params.signing_key_version.to_string(),
             signature_version,
@@ -302,38 +302,62 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     })
 }
 
-/// Check that a sender id is a user id in canonical decimal form. The id is
-/// signed as given, while recipients rebuild the payload from the numeric id
-/// on the delivered event and derive the message key from that number, so
-/// any other spelling yields a message no recipient can verify.
-fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
-    let canonical = sender_id
+/// Check that `user_id` is a user id in canonical decimal form: digits only,
+/// no leading zero, a positive 64-bit integer. User ids are signed as given,
+/// while recipients rebuild payloads from the numeric ids on the delivered
+/// events (and derive message keys from the sender's), so any other spelling
+/// yields something no recipient can verify. `field` names the input in the
+/// error.
+pub(crate) fn validate_user_id(field: &str, user_id: &str) -> Result<(), SdkError> {
+    let canonical = user_id
         .parse::<i64>()
         .ok()
         .filter(|id| *id > 0)
         .map(|id| id.to_string());
-    if canonical.as_deref() == Some(sender_id) {
+    if canonical.as_deref() == Some(user_id) {
         Ok(())
     } else {
         Err(SdkError::InvalidInput(format!(
-            "Invalid sender_id '{sender_id}': pass the sender's numeric user id (digits only), \
-             which message keys are derived from"
+            "Invalid {field} '{user_id}': pass a numeric user id (digits only)"
         )))
     }
 }
 
-/// Check that a conversation key version is an integer in canonical decimal
-/// form: recipients look the key up by the version as carried, while the
-/// signature covers its integer value.
-fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
-    if version.parse::<i64>().map(|v| v.to_string()).as_deref() == Ok(version) {
+/// Check every id of a user id list with [`validate_user_id`].
+pub(crate) fn validate_user_ids(field: &str, user_ids: &[String]) -> Result<(), SdkError> {
+    user_ids
+        .iter()
+        .try_for_each(|user_id| validate_user_id(field, user_id))
+}
+
+fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
+    validate_user_id("sender_id", sender_id)
+}
+
+/// Check that `version` is a key version as the X API returns it: a
+/// non-negative integer in canonical decimal form (digits only, no leading
+/// zero). Signing-key versions (`public_key_version`) and conversation key
+/// versions both take this form; recipients look keys up by the version as
+/// carried, while signatures cover its integer value. `field` names the input
+/// in the error.
+pub(crate) fn validate_key_version(field: &str, version: &str) -> Result<(), SdkError> {
+    let canonical = version
+        .parse::<i64>()
+        .ok()
+        .filter(|v| *v >= 0)
+        .map(|v| v.to_string());
+    if canonical.as_deref() == Some(version) {
         Ok(())
     } else {
         Err(SdkError::InvalidInput(format!(
-            "Invalid conversation_key_version '{version}': pass the key version as the integer \
-             its key-change event carries"
+            "Invalid {field} '{version}': pass the key version as the X API returns it, \
+             an integer in digits"
         )))
     }
+}
+
+fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
+    validate_key_version("conversation_key_version", version)
 }
 
 // Content builders
@@ -763,9 +787,9 @@ mod tests {
         );
         let payload = encrypt_and_sign(params).unwrap();
 
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
-        assert!(!payload.encoded_event_signature.is_empty());
+        assert!(!payload.encoded_message_event_signature.is_empty());
         assert_eq!(payload.conversation_key_version, "1");
         assert!(payload.should_notify);
     }
@@ -992,8 +1016,12 @@ mod tests {
         let payload = encrypt_and_sign(params).unwrap();
 
         use base64::{engine::general_purpose::STANDARD, Engine};
-        assert!(STANDARD.decode(&payload.encrypted_content).is_ok());
-        assert!(STANDARD.decode(&payload.encoded_event_signature).is_ok());
+        assert!(STANDARD
+            .decode(&payload.encoded_message_create_event)
+            .is_ok());
+        assert!(STANDARD
+            .decode(&payload.encoded_message_event_signature)
+            .is_ok());
     }
 
     // build_thrift_attachments — URL attachments
@@ -1752,7 +1780,7 @@ mod tests {
             "1",
         );
         let payload = encrypt_and_sign(params).unwrap();
-        assert!(!payload.encrypted_content.is_empty());
+        assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.signature.is_empty());
     }
 
@@ -1787,7 +1815,7 @@ mod tests {
 
         // Random nonce means different ciphertext each time
         assert_ne!(
-            payload1.encrypted_content, payload2.encrypted_content,
+            payload1.encoded_message_create_event, payload2.encoded_message_create_event,
             "Two encryptions of the same content should differ due to random nonce"
         );
     }

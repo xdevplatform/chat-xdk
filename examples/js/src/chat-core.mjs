@@ -76,7 +76,7 @@ export class ChatCore {
   loadKeys(privateKeysB64, signingKeyVersion) {
     const bytes = base64ToBytes(privateKeysB64);
     if (!bytes) throw new Error("invalid base64 private keys");
-    this.#chat.importKeys(bytes, signingKeyVersion);
+    this.#chat.importKeys({ keys: bytes, signingKeyVersion: signingKeyVersion });
     this.signingKeyVersion = signingKeyVersion;
   }
 
@@ -104,7 +104,7 @@ export class ChatCore {
           "the X API returned when the keys were registered",
       );
     }
-    this.#chat.setIdentity(userId, this.signingKeyVersion);
+    this.#chat.setIdentity({ userId: userId, signingKeyVersion: this.signingKeyVersion });
   }
 
   /**
@@ -201,8 +201,8 @@ export class ChatCore {
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
       event_b64: payload.eventB64,
     };
   }
@@ -220,8 +220,8 @@ export class ChatCore {
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
     };
   }
 
@@ -241,14 +241,14 @@ export class ChatCore {
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
-      encoded_message_create_event: payload.encryptedContent,
-      encoded_message_event_signature: payload.encodedEventSignature,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
     };
   }
 
   /**
-   * Sign a message delete. Returns the action signature to submit alongside
-   * the delete request.
+   * Sign a message delete. Returns the delete request's `actionSignatures`,
+   * one entry.
    */
   prepareMessageDelete({ conversationId, sequenceIds, deleteForAll }) {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
@@ -292,15 +292,16 @@ export class ChatCore {
    * Encrypt a media file of an outgoing message with the incremental API.
    *
    * `eventB64` is the `event_b64` that `encryptReply` returned for the
-   * message, and `mediaHashKey` the hash key the file's upload started
-   * with, as listed in the message's attachments; the SDK encrypts the file
-   * under that attachment's key. Feeding fixed-size chunks through `push`
-   * keeps memory bounded no matter how large the file is (the WASM heap
-   * cannot hold large files whole); `finish` emits the final frame that
-   * seals the file — decryption fails without it.
+   * message, `conversationKey` and `conversationKeyVersion` the key the
+   * message was encrypted under, and `mediaHashKey` the hash key the file's
+   * upload started with, as listed in the message's attachments; the SDK
+   * encrypts the file under that attachment's key. Feeding fixed-size chunks
+   * through `push` keeps memory bounded no matter how large the file is (the
+   * WASM heap cannot hold large files whole); `finish` emits the final frame
+   * that seals the file — decryption fails without it.
    */
-  encryptMedia(plaintext, eventB64, conversationKeys, mediaHashKey) {
-    const enc = this.#chat.fileEncryptor({ eventB64, conversationKeys, mediaHashKey });
+  encryptMedia(plaintext, eventB64, conversationKey, conversationKeyVersion, mediaHashKey) {
+    const enc = this.#chat.fileEncryptor({ eventB64, conversationKey, conversationKeyVersion, mediaHashKey });
     const parts = [];
     // A throw from push would otherwise leak the encryptor's live key state
     // in WASM memory; free() reclaims it. finish() consumes the
@@ -365,27 +366,13 @@ export function messageText(event) {
  * Map a prepared conversation change into the X API request shape.
  *
  * Works for 1:1 key changes (one signature) and group create / member add
- * (two signatures). `signingPublicKey` is the sender's own signing key,
- * which the API expects alongside each signature.
+ * (two signatures). The participant keys and action signatures already have
+ * the request's shape.
  */
-export function prepToRequest(prep, signingPublicKey) {
+export function prepToRequest(prep) {
   return {
     conversationKeyVersion: prep.conversationKeyVersion,
-    conversationParticipantKeys: prep.participantKeys.map((pk) => ({
-      userId: String(pk.userId),
-      encryptedConversationKey: pk.encryptedKey,
-      publicKeyVersion: String(pk.publicKeyVersion),
-    })),
-    actionSignatures: prep.actionSignatures.map((sig) => ({
-      messageId: sig.messageId,
-      encodedMessageEventDetail: sig.encodedMessageEventDetail,
-      ...(sig.signaturePayload ? { signaturePayload: sig.signaturePayload } : {}),
-      messageEventSignature: {
-        signature: sig.signature,
-        signatureVersion: sig.signatureVersion,
-        publicKeyVersion: sig.publicKeyVersion,
-        signingPublicKey,
-      },
-    })),
+    conversationParticipantKeys: prep.conversationParticipantKeys,
+    actionSignatures: prep.actionSignatures,
   };
 }

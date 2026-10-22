@@ -179,8 +179,7 @@ const bothKeys = [
 const prep = core.prepareConversationKeyChange({
   publicKeys: bothKeys,
 });
-const signingPub = core.publicKeys().signing;
-const resp = await api.addConversationKeys(conv, prepToRequest(prep, signingPub));
+const resp = await api.addConversationKeys(conv, prepToRequest(prep));
 const data = resp.data ?? {};
 assert(
   data.sequenceId ||
@@ -297,7 +296,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     ],
     ttlMsec: 24 * 60 * 60 * 1000,
   });
-  const ciphertext = core.encryptMedia(plaintext, mediaMsg.event_b64, { [kv]: key }, mediaHashKey);
+  const ciphertext = core.encryptMedia(plaintext, mediaMsg.event_b64, key, kv, mediaHashKey);
   await api.finishMediaUpload(canonicalConv, upload, ciphertext);
   console.log(`encrypted media uploaded: ${mediaHashKey} (${ciphertext.length} bytes)`);
   await api.sendMessage(canonicalConv, mediaMsg);
@@ -344,7 +343,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       groupMembers: members,
       groupAdmins: [myId],
       groupName: "chat-xdk e2e",
-      ...prepToRequest(gPrep, signingPub),
+      ...prepToRequest(gPrep),
     });
   } catch {
     // Some deployments reject single-member groups; fall back to creating
@@ -361,7 +360,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       groupMembers: members,
       groupAdmins: [myId],
       groupName: "chat-xdk e2e",
-      ...prepToRequest(gPrep, signingPub),
+      ...prepToRequest(gPrep),
     });
   }
   const gkv = gPrep.conversationKeyVersion;
@@ -400,7 +399,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
     });
     await api.addGroupMembers(groupId, {
       userIds: [partnerId],
-      ...prepToRequest(mPrep, signingPub),
+      ...prepToRequest(mPrep),
     });
     console.log(
       `group member add: ${partnerId} added (key rotated to ${mPrep.conversationKeyVersion})`,

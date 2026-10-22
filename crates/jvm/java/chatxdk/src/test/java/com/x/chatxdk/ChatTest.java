@@ -26,7 +26,7 @@ class ChatTest {
         chat.generateKeypairs();
         byte[] exported = chat.exportKeys();
         assertNotNull(exported);
-        chat.importKeys(exported);
+        chat.importKeys(new ImportKeysParams(exported));
         return chat;
     }
 
@@ -71,6 +71,28 @@ class ChatTest {
         return Map.of(v.get("event_conversation_key_version").asText(), b64(v, "conversation_key_b64"));
     }
 
+    /** The one {@code action_signatures} entry of a prepared delete or read receipt. */
+    private static ActionSignature onlyAction(PreparedAction prepared) {
+        assertEquals(1, prepared.actionSignatures.size());
+        return prepared.actionSignatures.get(0);
+    }
+
+    /** File-encryption params under the fixture conversation key. */
+    private static EncryptFileParams encryptFileParams(JsonNode v, byte[] file, String eventB64, String mediaHashKey) {
+        EncryptFileParams params = new EncryptFileParams(file, eventB64, mediaHashKey);
+        params.conversationKey = b64(v, "conversation_key_b64");
+        params.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+        return params;
+    }
+
+    /** File-encryptor params under the fixture conversation key. */
+    private static FileEncryptorParams fileEncryptorParams(JsonNode v, String eventB64, String mediaHashKey) {
+        FileEncryptorParams params = new FileEncryptorParams(eventB64, mediaHashKey);
+        params.conversationKey = b64(v, "conversation_key_b64");
+        params.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+        return params;
+    }
+
     /** The key map that opens the message-key and link-card vectors. */
     private static Map<String, byte[]> messageKeyConversationKeys(JsonNode v) {
         return Map.of(
@@ -112,11 +134,11 @@ class ChatTest {
     /** Produce a fresh conversation key via a prepared key change (for crypto tests). */
     private static byte[] newConvKey(Chat chat) throws Exception {
         PublicKeyInput input = new PublicKeyInput();
-        input.userId = "me";
+        input.userId = "910002";
         input.publicKey = chat.getPublicKeys().identity;
         input.keyVersion = "1";
         ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
-        params.senderId = "me";
+        params.senderId = "910002";
         params.signingKeyVersion = "1";
         params.conversationId = "conv-1";
         return chat.prepareConversationKeyChange(params).conversationKey;
@@ -289,7 +311,7 @@ class ChatTest {
             assertEquals(64, exported.length);
             chat.lock();
             assertFalse(chat.isUnlocked());
-            chat.importKeys(exported);
+            chat.importKeys(new ImportKeysParams(exported));
             assertTrue(chat.isUnlocked());
             PublicKeys reimported = chat.getPublicKeys();
             assertEquals(original.identity, reimported.identity);
@@ -303,13 +325,13 @@ class ChatTest {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Hello from JVM!");
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptMessage(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
             assertEquals("7", payload.signatureInfo.signatureVersion);
             assertTrue(payload.shouldNotify);
@@ -324,7 +346,7 @@ class ChatTest {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "bad attachment");
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             // Core requires the media fields; an attachment missing one is
@@ -343,7 +365,7 @@ class ChatTest {
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "mixed attachments");
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             // Only image/gif/video media may appear in multiples; any other
@@ -360,7 +382,7 @@ class ChatTest {
     @Test
     void encryptMessageUrlAttachmentWithBannerImageSucceeds() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity("1001", "s1");
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
             byte[] ckey = newConvKey(chat);
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
             p.conversationKey = ckey;
@@ -391,7 +413,7 @@ class ChatTest {
 
             p.attachments = java.util.List.of(attachment);
             SendPayload payload = chat.encryptMessage(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
             assertFalse(payload.messageId.isEmpty());
         }
@@ -405,18 +427,40 @@ class ChatTest {
             // are supplied directly (null reply target).
             EncryptReplyParams p = new EncryptReplyParams("conv-1", "This is a reply", null);
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             p.replyToSequenceId = "seq-42";
-            p.replyToSenderId = 12345L;
+            p.replyToSenderId = "12345";
             p.replyToText = "Original message";
             SendPayload payload = chat.encryptReply(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("1", payload.conversationKeyVersion);
             assertEquals("7", payload.signatureInfo.signatureVersion);
+        }
+    }
+
+    @Test
+    void userIdsAreDigitStrings() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            byte[] ckey = newConvKey(chat);
+            ChatXdkException e = assertThrows(ChatXdkException.class,
+                    () -> chat.setIdentity(new SetIdentityParams("user-1", "1")));
+            assertTrue(e.getMessage().contains("Invalid user_id 'user-1'"), e.getMessage());
+            e = assertThrows(ChatXdkException.class,
+                    () -> chat.setIdentity(new SetIdentityParams("1001", "v1")));
+            assertTrue(e.getMessage().contains("Invalid signing_key_version 'v1'"), e.getMessage());
+            EncryptReplyParams p = new EncryptReplyParams("conv-1", "reply", null);
+            p.senderId = "1001";
+            p.signingKeyVersion = "1";
+            p.conversationKey = ckey;
+            p.conversationKeyVersion = "1";
+            p.replyToSequenceId = "seq-42";
+            p.replyToSenderId = "12x";
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptReply(p));
+            assertTrue(e.getMessage().contains("Invalid reply_to_sender_id '12x'"), e.getMessage());
         }
     }
 
@@ -430,13 +474,13 @@ class ChatTest {
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptAddReaction(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
@@ -449,13 +493,13 @@ class ChatTest {
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
             p.senderId = "1001";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptRemoveReaction(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
             assertEquals("7", payload.signatureInfo.signatureVersion);
         }
     }
@@ -475,14 +519,32 @@ class ChatTest {
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
             p.senderId = "111";
-            p.signingKeyVersion = "s1";
+            p.signingKeyVersion = "66";
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
             SendPayload payload = chat.encryptEdit(p);
             assertFalse(payload.messageId.isEmpty());
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.signature.isEmpty());
-            assertFalse(payload.encodedEventSignature.isEmpty());
+            assertFalse(payload.encodedMessageEventSignature.isEmpty());
+        }
+    }
+
+    @Test
+    void sendPayloadTakesTheRequestFieldNames() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            EncryptMessageParams params = new EncryptMessageParams(v.get("event_conversation_id").asText(), "hi");
+            params.conversationKey = b64(v, "conversation_key_b64");
+            params.conversationKeyVersion = v.get("event_conversation_key_version").asText();
+            SendPayload payload = chat.encryptMessage(params);
+
+            JsonNode json = ChatJson.MAPPER.valueToTree(payload);
+            assertEquals(payload.encodedMessageCreateEvent, json.get("encoded_message_create_event").asText());
+            assertEquals(payload.encodedMessageEventSignature, json.get("encoded_message_event_signature").asText());
+            SendPayload roundTrip = ChatJson.MAPPER.treeToValue(json, SendPayload.class);
+            assertEquals(payload.encodedMessageCreateEvent, roundTrip.encodedMessageCreateEvent);
+            assertEquals(payload.encodedMessageEventSignature, roundTrip.encodedMessageEventSignature);
         }
     }
 
@@ -494,10 +556,20 @@ class ChatTest {
             MessageDeleteParams p = new MessageDeleteParams("222-111", List.of("seq-10", "seq-11"), true);
             p.senderId = "111";
             p.signingKeyVersion = "1";
-            ActionSignature sig = chat.prepareMessageDelete(p);
+            PreparedAction prepared = chat.prepareMessageDelete(p);
+            ActionSignature sig = onlyAction(prepared);
             assertFalse(sig.messageId.isEmpty());
             assertFalse(sig.encodedMessageEventDetail.isEmpty());
-            assertFalse(sig.signature.isEmpty());
+            // The signature is nested as the request's action_signatures carry it.
+            MessageEventSignature signed = sig.messageEventSignature;
+            assertFalse(signed.signature.isEmpty());
+            assertEquals("7", signed.signatureVersion);
+            assertEquals("1", signed.publicKeyVersion);
+            assertEquals(chat.getPublicKeys().signing, signed.signingPublicKey);
+            JsonNode entry = ChatJson.MAPPER.<JsonNode>valueToTree(prepared).get("action_signatures").get(0);
+            assertFalse(entry.has("signature"), entry.toString());
+            assertEquals(signed.signingPublicKey,
+                    entry.get("message_event_signature").get("signing_public_key").asText());
             assertEquals(
                     "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11",
                     sig.signaturePayload);
@@ -512,7 +584,7 @@ class ChatTest {
             MessageDeleteParams p = new MessageDeleteParams("g999", List.of("seq-1"), false);
             p.senderId = "111";
             p.signingKeyVersion = "1";
-            ActionSignature sig = chat.prepareMessageDelete(p);
+            ActionSignature sig = onlyAction(chat.prepareMessageDelete(p));
             assertEquals(
                     "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1",
                     sig.signaturePayload);
@@ -528,17 +600,18 @@ class ChatTest {
             p.seenAtMsec = 1700000000123L;
             p.senderId = "111";
             p.signingKeyVersion = "1";
-            ActionSignature sig = chat.prepareMarkConversationRead(p);
+            ActionSignature sig = onlyAction(chat.prepareMarkConversationRead(p));
             assertFalse(sig.messageId.isEmpty());
             assertFalse(sig.encodedMessageEventDetail.isEmpty());
-            assertEquals("1", sig.publicKeyVersion);
+            assertEquals("1", sig.messageEventSignature.publicKeyVersion);
+            assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
             assertEquals(
                     "MarkConversationReadEvent," + sig.messageId
                             + ",111,111:222,2011626338877079553,1700000000123",
                     sig.signaturePayload);
             assertTrue(chat.verify(
                     chat.getPublicKeys().signing,
-                    Base64.getDecoder().decode(sig.signature),
+                    Base64.getDecoder().decode(sig.messageEventSignature.signature),
                     sig.signaturePayload.getBytes(StandardCharsets.UTF_8)));
         }
     }
@@ -546,13 +619,13 @@ class ChatTest {
     @Test
     void prepareMarkConversationReadDefaultsToSessionIdentityAndNow() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity("111", "7");
+            chat.setIdentity(new SetIdentityParams("111", "7"));
             long before = System.currentTimeMillis();
-            ActionSignature sig = chat.prepareMarkConversationRead(
-                    new MarkConversationReadParams("g999", "seq-1"));
+            ActionSignature sig = onlyAction(chat.prepareMarkConversationRead(
+                    new MarkConversationReadParams("g999", "seq-1")));
             long after = System.currentTimeMillis();
 
-            assertEquals("7", sig.publicKeyVersion);
+            assertEquals("7", sig.messageEventSignature.publicKeyVersion);
             String prefix = "MarkConversationReadEvent," + sig.messageId + ",111,g999,seq-1,";
             assertTrue(sig.signaturePayload.startsWith(prefix), sig.signaturePayload);
             long seenAt = Long.parseLong(sig.signaturePayload.substring(prefix.length()));
@@ -582,16 +655,18 @@ class ChatTest {
                     assertThrows(ChatXdkException.class, () -> chat.prepareMessageDelete(p));
             assertTrue(ex.getMessage().contains("signing_key_version"), ex.getMessage());
 
-            chat.setIdentity("1234", "1700000000123");
-            assertEquals("1700000000123", chat.prepareMessageDelete(p).publicKeyVersion);
+            chat.setIdentity(new SetIdentityParams("1234", "1700000000123"));
+            assertEquals("1700000000123",
+                    onlyAction(chat.prepareMessageDelete(p)).messageEventSignature.publicKeyVersion);
 
             // Restored keys carry the version passed to importKeys, and none
             // without it.
             byte[] keys = chat.exportKeys();
             assertNotNull(keys);
-            restored.importKeys(keys, "1700000000456");
-            assertEquals("1700000000456", restored.prepareMessageDelete(p).publicKeyVersion);
-            restored.importKeys(keys);
+            restored.importKeys(new ImportKeysParams(keys, "1700000000456"));
+            assertEquals("1700000000456",
+                    onlyAction(restored.prepareMessageDelete(p)).messageEventSignature.publicKeyVersion);
+            restored.importKeys(new ImportKeysParams(keys));
             assertThrows(ChatXdkException.class, () -> restored.prepareMessageDelete(p));
         }
     }
@@ -633,11 +708,11 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
-            params.senderId = "me";
+            params.senderId = "910002";
             params.signingKeyVersion = "1";
             params.conversationId = "conv-1";
             PreparedConversationChange prepared = chat.prepareConversationKeyChange(params);
@@ -646,11 +721,16 @@ class ChatTest {
             byte[] convKey = prepared.conversationKey;
             assertNotNull(convKey);
             assertEquals(32, convKey.length);
-            assertEquals(1, prepared.participantKeys.size());
-            assertFalse(prepared.participantKeys.get(0).encryptedKey.isEmpty());
+            assertEquals(1, prepared.conversationParticipantKeys.size());
+            assertFalse(prepared.conversationParticipantKeys.get(0).encryptedConversationKey.isEmpty());
             assertEquals(1, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertTrue(prepared.actionSignatures.get(0).signaturePayload.isEmpty());
+            assertNull(prepared.actionSignatures.get(0).signaturePayload);
+            // The participant keys serialize under the request's field names.
+            JsonNode entry = ChatJson.MAPPER.valueToTree(prepared).get("conversation_participant_keys").get(0);
+            assertEquals(
+                    prepared.conversationParticipantKeys.get(0).encryptedConversationKey,
+                    entry.get("encrypted_conversation_key").asText());
         }
     }
 
@@ -669,12 +749,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
-                    List.of(input), "g123", List.of("new-1"), List.of("me"), List.of("me"), List.of());
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.currentTitle = "Test Group";
             PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
@@ -682,7 +762,7 @@ class ChatTest {
             // A member add emits two signed actions: the key change and the add.
             assertEquals(2, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertTrue(prepared.actionSignatures.get(0).signaturePayload.isEmpty());
+            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
             assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
                     "GroupChangeEvent.GroupMemberAddChange,"));
@@ -697,12 +777,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
-                    List.of(input), "g123", List.of("new-1"), List.of("me"), List.of("me"), List.of());
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.currentScreenCaptureBlockingEnabled = true;
             PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
@@ -719,12 +799,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupCreateParams p = new GroupCreateParams(
-                    List.of(input), "g123", List.of("me", "friend"), List.of("me"));
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Test Group";
             PreparedConversationChange prepared = chat.prepareGroupCreate(p);
@@ -732,7 +812,7 @@ class ChatTest {
             // A group create emits two signed actions: the key change and the create.
             assertEquals(2, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertTrue(prepared.actionSignatures.get(0).signaturePayload.isEmpty());
+            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
             assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
                     "GroupChangeEvent.GroupCreate,"));
@@ -780,11 +860,11 @@ class ChatTest {
             params.signingKeyVersion = "1";
             PreparedConversationChange prepared = chat.prepareConversationKeyChange(params);
             assertEquals("17380288:1491585161162473473", prepared.conversationId);
-            assertEquals(2, prepared.participantKeys.size());
-            for (EncryptedKeyForRecipient pk : prepared.participantKeys) {
+            assertEquals(2, prepared.conversationParticipantKeys.size());
+            for (ConversationParticipantKey pk : prepared.conversationParticipantKeys) {
                 assertArrayEquals(
                         prepared.conversationKey,
-                        chat.decryptConversationKey(pk.encryptedKey));
+                        chat.decryptConversationKey(pk.encryptedConversationKey));
             }
         }
     }
@@ -833,7 +913,7 @@ class ChatTest {
     void vectorsPublicKeysAndSignatureMatchFixture() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"));
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
             assertTrue(chat.isUnlocked());
 
             PublicKeys keys = chat.getPublicKeys();
@@ -857,7 +937,7 @@ class ChatTest {
     void vectorsDecryptEventsBatchAndSingleEventContracts() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) { // default reject-unverified policy
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             List<SigningKeyEntry> signingKeys = eventSigningKeys(v);
             String ckVersion = v.get("event_conversation_key_version").asText();
 
@@ -887,12 +967,21 @@ class ChatTest {
             }
             assertEquals(1, keyChanges.size());
             assertTrue(keyChanges.get(0).path("verified").asBoolean());
-            assertEquals(ckVersion, keyChanges.get(0).path("key_version").asText());
+            assertEquals(ckVersion, keyChanges.get(0).path("conversation_key_version").asText());
+            // The received participant keys read into the type a prepared change carries.
+            JsonNode received = keyChanges.get(0).path("conversation_participant_keys");
+            assertTrue(received.isArray() && received.size() > 0, received.toString());
+            for (JsonNode node : received) {
+                ConversationParticipantKey key = ChatJson.MAPPER.treeToValue(node, ConversationParticipantKey.class);
+                assertFalse(key.userId.isEmpty() || key.encryptedConversationKey.isEmpty()
+                        || key.publicKeyVersion.isEmpty(), node.toString());
+            }
 
             assertEquals(1, messages.size());
             assertEquals(v.get("event_message_text").asText(),
                     messages.get(0).path("content").path("text").asText());
             assertTrue(messages.get(0).path("verified").asBoolean());
+            assertEquals(ckVersion, messages.get(0).path("conversation_key_version").asText());
 
             // Single-event path with pre-cached keys verifies the same message …
             DecryptEventParams cached =
@@ -933,7 +1022,7 @@ class ChatTest {
     void vectorsSetIdentityResolvesSenderAndSigningVersion() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             String conversationId = v.get("event_conversation_id").asText();
 
             // No identity set: the error names the missing sender_id.
@@ -944,12 +1033,12 @@ class ChatTest {
                     assertThrows(ChatXdkException.class, () -> chat.encryptMessage(withoutIdentity));
             assertTrue(ex.getMessage().contains("sender_id"), ex.getMessage());
 
-            chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+            chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
             EncryptMessageParams p = new EncryptMessageParams(conversationId, "session identity");
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
             SendPayload payload = chat.encryptMessage(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.messageId.isEmpty());
             assertEquals(v.get("event_signing_key_version").asText(), payload.signatureInfo.publicKeyVersion);
         }
@@ -962,8 +1051,8 @@ class ChatTest {
     void vectorsSetCacheKeysResolvesConversationKeyFromDecryptedKeyChange() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
-            chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+            chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
             String conversationId = v.get("event_conversation_id").asText();
 
             chat.setCacheKeys(true);
@@ -980,7 +1069,16 @@ class ChatTest {
             SendPayload payload =
                     chat.encryptMessage(new EncryptMessageParams(conversationId, "from the key cache"));
             assertEquals(v.get("event_conversation_key_version").asText(), payload.conversationKeyVersion);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
+
+            // A file of a message sent from the cache encrypts under the same cached key.
+            EncryptMessageParams withPhoto = new EncryptMessageParams(conversationId, "a photo");
+            withPhoto.attachments = List.of(photo("photo"));
+            SendPayload photoPayload = chat.encryptMessage(withPhoto);
+            byte[] file = "photo bytes".getBytes(StandardCharsets.UTF_8);
+            byte[] encrypted = chat.encryptFile(new EncryptFileParams(file, photoPayload.eventB64, "photo"));
+            assertArrayEquals(file, chat.decryptFile(
+                    new DecryptFileParams(encrypted, photoPayload.eventB64, conversationKeys(v), "photo")));
 
             // Disabling clears the cache, so the same short form now fails.
             chat.setCacheKeys(false);
@@ -996,7 +1094,7 @@ class ChatTest {
     void vectorsSetSigningKeysDecryptWithoutExplicitKeysVerifies() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) { // default reject-unverified policy
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             chat.setSigningKeys(eventSigningKeys(v));
 
             DecryptEventsResult result =
@@ -1018,7 +1116,7 @@ class ChatTest {
     void vectorsReplyPreviewValidationValidAndForged() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
 
             DecryptEventsParams replies = new DecryptEventsParams(List.of(
                     v.get("event_key_change_b64").asText(),
@@ -1047,15 +1145,15 @@ class ChatTest {
     void vectorsEncryptReplyByRawEventSucceeds() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
-            chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+            chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
 
             EncryptReplyParams p = new EncryptReplyParams(
                     v.get("event_conversation_id").asText(), "a reply", v.get("event_message_b64").asText());
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
             SendPayload payload = chat.encryptReply(p);
-            assertFalse(payload.encryptedContent.isEmpty());
+            assertFalse(payload.encodedMessageCreateEvent.isEmpty());
             assertFalse(payload.messageId.isEmpty());
         }
     }
@@ -1151,7 +1249,7 @@ class ChatTest {
     void vectorsMessageKeyEventDecryptsInABatchWithItsKeyChange() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
-            chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
             DecryptEventsParams batch = new DecryptEventsParams(List.of(
                     v.get("event_key_change_message_key_b64").asText(),
                     v.get("event_message_key_b64").asText()));
@@ -1282,8 +1380,7 @@ class ChatTest {
             SendPayload payload = sendFiles(chat, v, "a photo", photo("photo"));
 
             // A chat with no identity encrypts the file from the payload.
-            byte[] encrypted = worker.encryptFile(
-                    new EncryptFileParams(plaintext, payload.eventB64, conversationKeys(v), "photo"));
+            byte[] encrypted = worker.encryptFile(encryptFileParams(v, plaintext, payload.eventB64, "photo"));
             assertFalse(java.util.Arrays.equals(plaintext, encrypted));
             assertEquals(ChatXdkUtilities.encryptedFileSize(plaintext.length), encrypted.length);
             assertArrayEquals(plaintext, chat.decryptFile(
@@ -1315,8 +1412,7 @@ class ChatTest {
             SendPayload payload = sendFiles(chat, v, "two photos", photo("first"), photo("second"));
 
             ByteArrayOutputStream ciphertext = new ByteArrayOutputStream();
-            try (FileEncryptor enc = chat.fileEncryptor(
-                    new FileEncryptorParams(payload.eventB64, conversationKeys(v), "second"))) {
+            try (FileEncryptor enc = chat.fileEncryptor(fileEncryptorParams(v, payload.eventB64, "second"))) {
                 for (int i = 0; i < plaintext.length; i += 700) {
                     int end = Math.min(i + 700, plaintext.length);
                     ciphertext.write(enc.push(java.util.Arrays.copyOfRange(plaintext, i, end)));
@@ -1350,10 +1446,11 @@ class ChatTest {
 
     /** The file calls throw only the unchecked ChatXdkException, so no throws clause is needed. */
     private static byte[] roundTripWithoutThrowsClause(
-            Chat chat, SendPayload payload, Map<String, byte[]> keys, String mediaHashKey, byte[] file) {
-        byte[] whole = chat.encryptFile(new EncryptFileParams(file, payload.eventB64, keys, mediaHashKey));
+            Chat chat, JsonNode v, SendPayload payload, String mediaHashKey, byte[] file) {
+        Map<String, byte[]> keys = conversationKeys(v);
+        byte[] whole = chat.encryptFile(encryptFileParams(v, file, payload.eventB64, mediaHashKey));
         byte[] streamed;
-        try (FileEncryptor enc = chat.fileEncryptor(new FileEncryptorParams(payload.eventB64, keys, mediaHashKey))) {
+        try (FileEncryptor enc = chat.fileEncryptor(fileEncryptorParams(v, payload.eventB64, mediaHashKey))) {
             byte[] head = enc.push(file);
             byte[] tail = enc.finish();
             streamed = java.util.Arrays.copyOf(head, head.length + tail.length);
@@ -1372,7 +1469,7 @@ class ChatTest {
         try (Chat chat = quickReplyChat(v)) {
             SendPayload payload = sendFiles(chat, v, "a photo", photo("only"));
             byte[] file = "photo bytes".getBytes(StandardCharsets.UTF_8);
-            assertArrayEquals(file, roundTripWithoutThrowsClause(chat, payload, conversationKeys(v), "only", file));
+            assertArrayEquals(file, roundTripWithoutThrowsClause(chat, v, payload, "only", file));
         }
     }
 
@@ -1386,8 +1483,8 @@ class ChatTest {
                     Types.UrlAttachmentImageDescriptor.of("banner", 12L, "banner.png"),
                     Types.UrlAttachmentImageDescriptor.of("favicon", 13L, "favicon.png")));
             for (String name : new String[] {"banner", "favicon"}) {
-                byte[] encrypted = chat.encryptFile(new EncryptFileParams(
-                        (name + " bytes").getBytes(StandardCharsets.UTF_8), payload.eventB64, conversationKeys(v), name));
+                byte[] encrypted = chat.encryptFile(encryptFileParams(
+                        v, (name + " bytes").getBytes(StandardCharsets.UTF_8), payload.eventB64, name));
                 assertEquals(name + " bytes", new String(chat.decryptFile(
                         new DecryptFileParams(encrypted, payload.eventB64, conversationKeys(v), name)),
                         StandardCharsets.UTF_8));
@@ -1402,8 +1499,8 @@ class ChatTest {
             SendPayload draft = sendFiles(chat, v, "draft", photo("photo-a"), photo("photo-b"));
             assertTrue(draft.messageId.matches("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"),
                     draft.messageId);
-            byte[] encrypted = chat.encryptFile(new EncryptFileParams(
-                    "photo b".getBytes(StandardCharsets.UTF_8), draft.eventB64, conversationKeys(v), "photo-b"));
+            byte[] encrypted = chat.encryptFile(encryptFileParams(
+                    v, "photo b".getBytes(StandardCharsets.UTF_8), draft.eventB64, "photo-b"));
 
             // Building the message again gives the same id, so its encrypted files stay valid.
             SendPayload rebuilt = sendFiles(chat, v, "final text", photo("photo-a"), photo("photo-b"));
@@ -1434,11 +1531,18 @@ class ChatTest {
 
             SendPayload payload = sendFiles(chat, v, "a photo", photo("photo"));
             e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(
-                    new EncryptFileParams(new byte[] {1}, payload.eventB64, conversationKeys(v), "other")));
+                    encryptFileParams(v, new byte[] {1}, payload.eventB64, "other")));
             assertTrue(e.getMessage().contains("is not one of the message's files"), e.getMessage());
-            e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(
-                    new EncryptFileParams(new byte[] {1}, payload.eventB64, Map.of(keyVersion, new byte[3]), "photo")));
-            assertTrue(e.getMessage().contains("is not 32 bytes"), e.getMessage());
+            EncryptFileParams shortKey = new EncryptFileParams(new byte[] {1}, payload.eventB64, "photo");
+            shortKey.conversationKey = new byte[3];
+            shortKey.conversationKeyVersion = keyVersion;
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(shortKey));
+            assertTrue(e.getMessage().contains("expected 32 bytes"), e.getMessage());
+            EncryptFileParams otherVersion = encryptFileParams(v, new byte[] {1}, payload.eventB64, "photo");
+            otherVersion.conversationKeyVersion = "9";
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(otherVersion));
+            assertTrue(e.getMessage().contains(
+                    "conversation_key_version '9' is not the message's key version '" + keyVersion + "'"), e.getMessage());
 
             // A reply needs the delivered event, which carries the sequence id; the files it
             // quotes belong to the quoted message.
@@ -1454,11 +1558,11 @@ class ChatTest {
             replyParams.attachments = List.of(photo("reply-photo"));
             SendPayload reply = chat.encryptReply(replyParams);
             e = assertThrows(ChatXdkException.class, () -> chat.encryptFile(
-                    new EncryptFileParams(new byte[] {1}, reply.eventB64, conversationKeys(v), "photo")));
+                    encryptFileParams(v, new byte[] {1}, reply.eventB64, "photo")));
             assertTrue(e.getMessage().contains("is media the reply quotes"), e.getMessage());
 
             try (Chat noIdentity = new Chat()) {
-                noIdentity.importKeys(b64(v, "private_keys_concat_b64"));
+                noIdentity.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
                 EncryptMessageParams withPhoto = new EncryptMessageParams(conversationId, "a photo");
                 withPhoto.conversationKey = ckey;
                 withPhoto.conversationKeyVersion = keyVersion;
@@ -1520,8 +1624,8 @@ class ChatTest {
     @Test
     void importInvalidKeysThrows() {
         try (Chat chat = new Chat()) {
-            assertThrows(ChatXdkException.class, () -> chat.importKeys(new byte[16]));
-            assertThrows(ChatXdkException.class, () -> chat.importKeys(new byte[0]));
+            assertThrows(ChatXdkException.class, () -> chat.importKeys(new ImportKeysParams(new byte[16])));
+            assertThrows(ChatXdkException.class, () -> chat.importKeys(new ImportKeysParams(new byte[0])));
         }
     }
 
@@ -1544,7 +1648,7 @@ class ChatTest {
         // Identity-only sessions can export (32 bytes), matching core; only
         // a session with no identity key at all returns null.
         try (Chat chat = new Chat()) {
-            chat.importKeys(identityOnly);
+            chat.importKeys(new ImportKeysParams(identityOnly));
             byte[] exported = chat.exportKeys();
             assertNotNull(exported);
             assertArrayEquals(identityOnly, exported);
@@ -1557,7 +1661,7 @@ class ChatTest {
     @Test
     void setIdentityAndSetRejectUnverifiedSmoke() throws Exception {
         try (Chat chat = createUnlocked()) {
-            chat.setIdentity("user-1", "12345");
+            chat.setIdentity(new SetIdentityParams("910004", "12345"));
             chat.setRejectUnverified(false);
             chat.setRejectUnverified(true);
         }
@@ -1570,13 +1674,13 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             for (String title : new String[] {"", null}) {
                 GroupCreateParams p = new GroupCreateParams(
-                        List.of(input), "g123", List.of("me", "friend"), List.of("me"));
-                p.senderId = "me";
+                        List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
+                p.senderId = "910002";
                 p.signingKeyVersion = "1";
                 p.title = title;
                 p.avatarUrl = title;
@@ -1596,12 +1700,12 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = keys.identity;
             input.keyVersion = "1";
             GroupCreateParams p = new GroupCreateParams(
-                    List.of(input), "g123", List.of("me", "friend"), List.of("me"));
-            p.senderId = "me";
+                    List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
+            p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Team, the sequel";
             assertThrows(ChatXdkException.class, () -> chat.prepareGroupCreate(p));
@@ -1650,8 +1754,8 @@ class ChatTest {
 
     private static Chat quickReplyChat(JsonNode v) throws Exception {
         Chat chat = new Chat();
-        chat.importKeys(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText());
-        chat.setIdentity(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText());
+        chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+        chat.setIdentity(new SetIdentityParams(v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
         return chat;
     }
 
@@ -1714,7 +1818,7 @@ class ChatTest {
             p.conversationKey = b64(v, "conversation_key_b64");
             p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
             p.replyToSequenceId = "seq-orig";
-            p.replyToSenderId = Long.parseLong(v.get("event_sender_id").asText());
+            p.replyToSenderId = v.get("event_sender_id").asText();
             p.replyToText = "Continue?";
             p.quickReply = sent;
             JsonNode content = decryptOwnContent(chat, v, chat.encryptReply(p));

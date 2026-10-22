@@ -238,7 +238,7 @@ func TestPublicKeysAndSignature(t *testing.T) {
 	defer chat.Close()
 
 	// Import keys
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	if !chat.IsUnlocked() {
@@ -290,14 +290,14 @@ func TestECIESConversationKeyRoundtrip(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// Prepare a key change for ourselves, then decrypt our own participant key.
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -305,11 +305,11 @@ func TestECIESConversationKeyRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange failed: %v", err)
 	}
-	if len(prep.ParticipantKeys) != 1 {
-		t.Fatalf("expected 1 participant key, got %d", len(prep.ParticipantKeys))
+	if len(prep.ConversationParticipantKeys) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(prep.ConversationParticipantKeys))
 	}
 
-	decrypted, err := chat.DecryptConversationKey(prep.ParticipantKeys[0].EncryptedKey)
+	decrypted, err := chat.DecryptConversationKey(prep.ConversationParticipantKeys[0].EncryptedConversationKey)
 	if err != nil {
 		t.Fatalf("DecryptConversationKey failed: %v", err)
 	}
@@ -325,13 +325,13 @@ func TestEncryptMessageSmokeAndInvalidImport(t *testing.T) {
 	defer chat.Close()
 
 	// Invalid import (1 byte, not 32 or 64)
-	err := chat.ImportKeys([]byte{0x00})
+	err := chat.ImportKeys(ImportKeysParams{Keys: []byte{0x00}})
 	if err == nil {
 		t.Error("expected error for invalid key import, got nil")
 	}
 
 	// Import valid keys
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -349,8 +349,8 @@ func TestEncryptMessageSmokeAndInvalidImport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -371,7 +371,7 @@ func TestLockAndUnlockState(t *testing.T) {
 		t.Error("expected locked initially")
 	}
 
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	if !chat.IsUnlocked() {
@@ -473,7 +473,7 @@ func TestExportImportRoundtrip(t *testing.T) {
 		t.Fatal("expected nil exported keys while locked")
 	}
 
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -491,7 +491,7 @@ func TestExportImportRoundtrip(t *testing.T) {
 
 	// Lock and re-import
 	chat.Lock()
-	if err := chat.ImportKeys(exported); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: exported}); err != nil {
 		t.Fatalf("ImportKeys (re-import) failed: %v", err)
 	}
 
@@ -509,13 +509,13 @@ func TestPrepareConversationKeyChangeGeneratesRandomKey(t *testing.T) {
 	v := loadVectors(t)
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -530,7 +530,7 @@ func TestPrepareConversationKeyChangeGeneratesRandomKey(t *testing.T) {
 
 	// Two prepared changes must produce different keys (random).
 	prep2, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -586,7 +586,7 @@ func TestGetPublicKeyFingerprint(t *testing.T) {
 	}
 
 	// Import keys, then get fingerprint
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -620,7 +620,7 @@ func TestHasIdentityKey(t *testing.T) {
 	}
 
 	// After import
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	if !chat.HasIdentityKey() {
@@ -730,7 +730,7 @@ func TestEncryptDecryptRoundtrip(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -758,7 +758,7 @@ func TestEncryptDecryptEmptyString(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -782,11 +782,11 @@ func TestEncryptDecryptEmptyString(t *testing.T) {
 func mediaSender(t *testing.T, v sdkVectors) *Chat {
 	t.Helper()
 	chat := New()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		chat.Close()
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		chat.Close()
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
@@ -875,10 +875,11 @@ func TestEncryptFileDecryptFileRoundtrip(t *testing.T) {
 	worker := New()
 	defer worker.Close()
 	encrypted, err := worker.EncryptFile(EncryptFileParams{
-		File:             plaintext,
-		EventB64:         payload.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "photo",
+		File:                   plaintext,
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo",
 	})
 	if err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
@@ -909,9 +910,10 @@ func TestFileEncryptorDecryptorRoundtrip(t *testing.T) {
 	plaintext := bytes.Repeat([]byte{0xAB}, 5000)
 	payload := sendFiles(t, chat, v, "two photos", []AttachmentDescriptor{mediaAttachment("first"), mediaAttachment("second")})
 	enc, err := chat.FileEncryptor(FileEncryptorParams{
-		EventB64:         payload.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "second",
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "second",
 	})
 	if err != nil {
 		t.Fatalf("FileEncryptor failed: %v", err)
@@ -979,10 +981,11 @@ func TestLinkCardImagesTakeTheCardsKey(t *testing.T) {
 	}})
 	for _, name := range []string{"banner", "favicon"} {
 		encrypted, err := chat.EncryptFile(EncryptFileParams{
-			File:             []byte(name + " bytes"),
-			EventB64:         payload.EventB64,
-			ConversationKeys: v.conversationKeys(t),
-			MediaHashKey:     name,
+			File:                   []byte(name + " bytes"),
+			EventB64:               payload.EventB64,
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			MediaHashKey:           name,
 		})
 		if err != nil {
 			t.Fatalf("EncryptFile (%s) failed: %v", name, err)
@@ -1010,10 +1013,11 @@ func TestAMessageWithFilesTakesTheIDItsFilesDerive(t *testing.T) {
 		t.Errorf("message id %q is not a lowercase v4 UUID", draft.MessageID)
 	}
 	encrypted, err := chat.EncryptFile(EncryptFileParams{
-		File:             []byte("photo b"),
-		EventB64:         draft.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "photo-b",
+		File:                   []byte("photo b"),
+		EventB64:               draft.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo-b",
 	})
 	if err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
@@ -1063,16 +1067,30 @@ func TestFileSendInputIsChecked(t *testing.T) {
 
 	payload := sendFiles(t, chat, v, "a photo", []AttachmentDescriptor{mediaAttachment("photo")})
 	_, err = chat.EncryptFile(EncryptFileParams{
-		File: []byte("x"), EventB64: payload.EventB64, ConversationKeys: v.conversationKeys(t), MediaHashKey: "other",
+		File:                   []byte("x"),
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "other",
 	})
 	expectError("a hash key the message lacks", err, "is not one of the message's files")
 	_, err = chat.EncryptFile(EncryptFileParams{
-		File:             []byte("x"),
-		EventB64:         payload.EventB64,
-		ConversationKeys: map[string][]byte{v.EventConversationKeyVersion: {1, 2, 3}},
-		MediaHashKey:     "photo",
+		File:                   []byte("x"),
+		EventB64:               payload.EventB64,
+		ConversationKey:        []byte{1, 2, 3},
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo",
 	})
-	expectError("a short key", err, "is not 32 bytes")
+	expectError("a short key", err, "expected 32 bytes")
+	_, err = chat.EncryptFile(EncryptFileParams{
+		File:                   []byte("x"),
+		EventB64:               payload.EventB64,
+		ConversationKey:        key,
+		ConversationKeyVersion: "9",
+		MediaHashKey:           "photo",
+	})
+	expectError("another key version", err,
+		"conversation_key_version '9' is not the message's key version '"+v.EventConversationKeyVersion+"'")
 
 	// A reply needs the delivered event, which carries the sequence id; the
 	// files it quotes belong to the quoted message.
@@ -1096,13 +1114,17 @@ func TestFileSendInputIsChecked(t *testing.T) {
 		t.Fatalf("EncryptReply failed: %v", err)
 	}
 	_, err = chat.EncryptFile(EncryptFileParams{
-		File: []byte("x"), EventB64: reply.EventB64, ConversationKeys: v.conversationKeys(t), MediaHashKey: "photo",
+		File:                   []byte("x"),
+		EventB64:               reply.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "photo",
 	})
 	expectError("quoted media", err, "is media the reply quotes")
 
 	noIdentity := New()
 	defer noIdentity.Close()
-	if err := noIdentity.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := noIdentity.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	_, err = noIdentity.EncryptMessage(EncryptMessageParams{
@@ -1120,7 +1142,7 @@ func TestEncryptReply(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1138,14 +1160,14 @@ func TestEncryptReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 	if payload.ConversationKeyVersion != "1" {
 		t.Errorf("expected conversation_key_version '1', got %q", payload.ConversationKeyVersion)
@@ -1157,7 +1179,7 @@ func TestEncryptAddReaction(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1173,8 +1195,8 @@ func TestEncryptAddReaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptAddReaction failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -1186,7 +1208,7 @@ func TestEncryptRemoveReaction(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1202,8 +1224,8 @@ func TestEncryptRemoveReaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptRemoveReaction failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -1215,7 +1237,7 @@ func TestEncryptEdit(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1232,18 +1254,31 @@ func TestEncryptEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptEdit failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 	if payload.MessageID == "" {
 		t.Error("expected non-empty message_id")
 	}
+}
+
+// onlyAction returns the one action_signatures entry of a prepared delete or
+// read receipt.
+func onlyAction(t *testing.T, prepared *PreparedAction, err error) ActionSignature {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("prepare failed: %v", err)
+	}
+	if len(prepared.ActionSignatures) != 1 {
+		t.Fatalf("expected one action signature, got %d", len(prepared.ActionSignatures))
+	}
+	return prepared.ActionSignatures[0]
 }
 
 func TestPrepareMessageDelete(t *testing.T) {
@@ -1251,30 +1286,50 @@ func TestPrepareMessageDelete(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// A 1:1 id is signed in its canonical colon form; delete-for-all signs
 	// the wire action 2.
-	sig, err := chat.PrepareMessageDelete(MessageDeleteParams{
+	prepared, err := chat.PrepareMessageDelete(MessageDeleteParams{
 		SenderID:          "111",
 		SigningKeyVersion: "1",
 		ConversationID:    "222-111",
 		SequenceIDs:       []string{"seq-10", "seq-11"},
 		DeleteForAll:      true,
 	})
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete failed: %v", err)
-	}
+	sig := onlyAction(t, prepared, err)
 	if sig.MessageID == "" {
 		t.Error("expected non-empty message_id")
 	}
 	if sig.EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty encoded_message_event_detail")
 	}
-	if sig.Signature == "" {
-		t.Error("expected non-empty signature")
+	// The signature is nested as the request's action_signatures carry it.
+	keys, err := chat.GetPublicKeys()
+	if err != nil {
+		t.Fatalf("GetPublicKeys failed: %v", err)
+	}
+	signed := sig.MessageEventSignature
+	if signed.Signature == "" || signed.SignatureVersion != "7" || signed.PublicKeyVersion != "1" ||
+		signed.SigningPublicKey != keys.Signing {
+		t.Errorf("unexpected message_event_signature: %+v", signed)
+	}
+	var body map[string][]map[string]any
+	data, err := json.Marshal(prepared)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	entry := body["action_signatures"][0]
+	if _, flat := entry["signature"]; flat {
+		t.Errorf("signature is flat in %s", data)
+	}
+	if nested, ok := entry["message_event_signature"].(map[string]any); !ok || nested["signing_public_key"] != keys.Signing {
+		t.Errorf("message_event_signature missing from %s", data)
 	}
 	want := fmt.Sprintf("MessageDeleteEvent,%s,111,111:222,2,seq-10,seq-11", sig.MessageID)
 	if sig.SignaturePayload != want {
@@ -1283,16 +1338,14 @@ func TestPrepareMessageDelete(t *testing.T) {
 
 	// Group ids pass through unchanged; delete-for-self signs the wire
 	// action 1.
-	selfSig, err := chat.PrepareMessageDelete(MessageDeleteParams{
+	selfPrepared, err := chat.PrepareMessageDelete(MessageDeleteParams{
 		SenderID:          "111",
 		SigningKeyVersion: "1",
 		ConversationID:    "g999",
 		SequenceIDs:       []string{"seq-1"},
 		DeleteForAll:      false,
 	})
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete (delete-for-self) failed: %v", err)
-	}
+	selfSig := onlyAction(t, selfPrepared, err)
 	want = fmt.Sprintf("MessageDeleteEvent,%s,111,g999,1,seq-1", selfSig.MessageID)
 	if selfSig.SignaturePayload != want {
 		t.Errorf("expected signature_payload %q, got %q", want, selfSig.SignaturePayload)
@@ -1304,31 +1357,29 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// A 1:1 id is signed in its canonical colon form, followed by the read
 	// point and its time.
 	seenAt := int64(1700000000123)
-	sig, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
+	prepared, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
 		SenderID:            "111",
 		SigningKeyVersion:   "1",
 		ConversationID:      "222-111",
 		SeenUntilSequenceID: "2011626338877079553",
 		SeenAtMsec:          &seenAt,
 	})
-	if err != nil {
-		t.Fatalf("PrepareMarkConversationRead failed: %v", err)
-	}
+	sig := onlyAction(t, prepared, err)
 	if sig.MessageID == "" {
 		t.Error("expected non-empty message_id")
 	}
 	if sig.EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty encoded_message_event_detail")
 	}
-	if sig.PublicKeyVersion != "1" {
-		t.Errorf("expected public_key_version 1, got %q", sig.PublicKeyVersion)
+	if sig.MessageEventSignature.PublicKeyVersion != "1" {
+		t.Errorf("expected public_key_version 1, got %q", sig.MessageEventSignature.PublicKeyVersion)
 	}
 	want := fmt.Sprintf(
 		"MarkConversationReadEvent,%s,111,111:222,2011626338877079553,1700000000123",
@@ -1337,7 +1388,7 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 	if sig.SignaturePayload != want {
 		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
 	}
-	rawSig, err := base64.RawStdEncoding.DecodeString(sig.Signature)
+	rawSig, err := base64.RawStdEncoding.DecodeString(sig.MessageEventSignature.Signature)
 	if err != nil {
 		t.Fatalf("decode signature: %v", err)
 	}
@@ -1351,20 +1402,18 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 
 	// With no identity in the params the session identity signs, and a nil
 	// SeenAtMsec takes the current time.
-	if err := chat.SetIdentity("111", "7"); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "111", SigningKeyVersion: "7"}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	before := time.Now().UnixMilli()
-	nowSig, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
+	nowPrepared, err := chat.PrepareMarkConversationRead(MarkConversationReadParams{
 		ConversationID:      "g999",
 		SeenUntilSequenceID: "seq-1",
 	})
 	after := time.Now().UnixMilli()
-	if err != nil {
-		t.Fatalf("PrepareMarkConversationRead (defaults) failed: %v", err)
-	}
-	if nowSig.PublicKeyVersion != "7" {
-		t.Errorf("expected public_key_version 7, got %q", nowSig.PublicKeyVersion)
+	nowSig := onlyAction(t, nowPrepared, err)
+	if nowSig.MessageEventSignature.PublicKeyVersion != "7" {
+		t.Errorf("expected public_key_version 7, got %q", nowSig.MessageEventSignature.PublicKeyVersion)
 	}
 	prefix := fmt.Sprintf("MarkConversationReadEvent,%s,111,g999,seq-1,", nowSig.MessageID)
 	if !strings.HasPrefix(nowSig.SignaturePayload, prefix) {
@@ -1384,20 +1433,56 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 	}
 }
 
+// TestSendPayloadTakesTheRequestFieldNames checks that a payload marshals
+// under the send request's field names and unmarshals unchanged.
+func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
+	payload, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "hi",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage failed: %v", err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fields["encoded_message_create_event"] != payload.EncodedMessageCreateEvent ||
+		fields["encoded_message_event_signature"] != payload.EncodedMessageEventSignature {
+		t.Errorf("payload JSON lacks the request field names: %s", data)
+	}
+	var roundTrip SendPayload
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(roundTrip, *payload) {
+		t.Errorf("round trip changed the payload: %+v", roundTrip)
+	}
+}
+
 func TestPrepareConversationKeyChange(t *testing.T) {
 	v := loadVectors(t)
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -1417,11 +1502,26 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	if prepared.ConversationKeyVersion == "" {
 		t.Error("expected non-empty conversation_key_version")
 	}
-	if len(prepared.ParticipantKeys) != 1 {
-		t.Fatalf("expected 1 participant key, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(prepared.ConversationParticipantKeys))
 	}
-	if prepared.ParticipantKeys[0].UserID != "me" {
-		t.Errorf("expected user_id 'me', got %q", prepared.ParticipantKeys[0].UserID)
+	if prepared.ConversationParticipantKeys[0].UserID != "910002" {
+		t.Errorf("expected user_id '910002', got %q", prepared.ConversationParticipantKeys[0].UserID)
+	}
+	// The participant keys marshal under the request's field names.
+	data, err := json.Marshal(prepared)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields struct {
+		ConversationParticipantKeys []map[string]any `json:"conversation_participant_keys"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(fields.ConversationParticipantKeys) != 1 ||
+		fields.ConversationParticipantKeys[0]["encrypted_conversation_key"] != prepared.ConversationParticipantKeys[0].EncryptedConversationKey {
+		t.Errorf("prepared change JSON lacks the request field names: %s", data)
 	}
 	if len(prepared.ActionSignatures) != 1 {
 		t.Fatalf("expected 1 action signature, got %d", len(prepared.ActionSignatures))
@@ -1432,7 +1532,7 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	}
 
 	// The encrypted key should be decryptable back to the conversation key.
-	decryptedKey, err := chat.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey)
+	decryptedKey, err := chat.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey)
 	if err != nil {
 		t.Fatalf("DecryptConversationKey (prepared) failed: %v", err)
 	}
@@ -1446,7 +1546,7 @@ func TestPrepareConversationKeyChangeDerivesOneToOneID(t *testing.T) {
 
 	chat1 := New()
 	defer chat1.Close()
-	if err := chat1.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat1.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys (chat1) failed: %v", err)
 	}
 
@@ -1474,8 +1574,8 @@ func TestPrepareConversationKeyChangeDerivesOneToOneID(t *testing.T) {
 	if prepared.ConversationID != "17380288:1491585161162473473" {
 		t.Errorf("unexpected derived conversation_id: %q", prepared.ConversationID)
 	}
-	if len(prepared.ParticipantKeys) != 2 {
-		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 2 {
+		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ConversationParticipantKeys))
 	}
 }
 
@@ -1484,7 +1584,7 @@ func TestConversationKeyChangeParamsDeriveAndDecryptRoundTrip(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1506,12 +1606,12 @@ func TestConversationKeyChangeParamsDeriveAndDecryptRoundTrip(t *testing.T) {
 	if prepared.ConversationID != "17380288:1491585161162473473" {
 		t.Errorf("unexpected derived conversation_id: %q", prepared.ConversationID)
 	}
-	if len(prepared.ParticipantKeys) != 2 {
-		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 2 {
+		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ConversationParticipantKeys))
 	}
 
-	for _, pk := range prepared.ParticipantKeys {
-		decrypted, err := chat.DecryptConversationKey(pk.EncryptedKey)
+	for _, pk := range prepared.ConversationParticipantKeys {
+		decrypted, err := chat.DecryptConversationKey(pk.EncryptedConversationKey)
 		if err != nil {
 			t.Fatalf("DecryptConversationKey (%s) failed: %v", pk.UserID, err)
 		}
@@ -1526,21 +1626,21 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "g123",
-		NewMemberIDs:      []string{"new-user"},
-		CurrentMemberIDs:  []string{"me"},
-		CurrentAdminIDs:   []string{"me"},
+		NewMemberIDs:      []string{"910009"},
+		CurrentMemberIDs:  []string{"910002"},
+		CurrentAdminIDs:   []string{"910002"},
 		CurrentTitle:      "Team",
 	})
 	if err != nil {
@@ -1573,20 +1673,20 @@ func TestPrepareGroupCreate(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "g123",
-		MemberIDs:         []string{"me", "friend"},
-		AdminIDs:          []string{"me"},
+		MemberIDs:         []string{"910002", "910005"},
+		AdminIDs:          []string{"910002"},
 		Title:             "Team",
 	})
 	if err != nil {
@@ -1622,17 +1722,17 @@ func TestPrepareGroupCreateEmptyTitleSignsNullSentinel(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
-		PublicKeys:        []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
+		PublicKeys:        []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
 		ConversationID:    "g123",
-		MemberIDs:         []string{"me", "friend"},
-		AdminIDs:          []string{"me"},
+		MemberIDs:         []string{"910002", "910005"},
+		AdminIDs:          []string{"910002"},
 		// Title and AvatarURL left as the zero value.
 	})
 	if err != nil {
@@ -1653,17 +1753,17 @@ func TestPrepareGroupCreateCommaTitleErrors(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	_, err := chat.PrepareGroupCreate(GroupCreateParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
-		PublicKeys:        []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
+		PublicKeys:        []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
 		ConversationID:    "g123",
-		MemberIDs:         []string{"me", "friend"},
-		AdminIDs:          []string{"me"},
+		MemberIDs:         []string{"910002", "910005"},
+		AdminIDs:          []string{"910002"},
 		Title:             "Team, the sequel",
 	})
 	if err == nil {
@@ -1676,7 +1776,7 @@ func TestDecryptEventInvalidInput(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1692,7 +1792,7 @@ func TestDecryptEventsEmptyList(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1711,7 +1811,7 @@ func TestDecryptEventsInvalidEvent(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -1744,8 +1844,8 @@ func TestDecryptEventsFixtureVectors(t *testing.T) {
 	chat := New() // default reject-unverified policy
 	defer chat.Close()
 	// Import + registered key version in one call.
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
 	signingKeys := v.eventSigningKeys()
 
@@ -1796,11 +1896,18 @@ func TestDecryptEventsFixtureVectors(t *testing.T) {
 	if !keyChanges[0].Verified {
 		t.Error("expected the fixture KeyChange to verify")
 	}
-	if keyChanges[0].KeyVersion != v.EventConversationKeyVersion {
-		t.Errorf("unexpected KeyChange key_version: %q", keyChanges[0].KeyVersion)
+	if keyChanges[0].ConversationKeyVersion != v.EventConversationKeyVersion {
+		t.Errorf("unexpected KeyChange conversation_key_version: %q", keyChanges[0].ConversationKeyVersion)
+	}
+	if keys := keyChanges[0].ConversationParticipantKeys; len(keys) == 0 ||
+		keys[0].UserID == "" || keys[0].EncryptedConversationKey == "" || keys[0].PublicKeyVersion == "" {
+		t.Errorf("KeyChange conversation_participant_keys not read: %+v", keys)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if version := messages[0].ConversationKeyVersion; version == nil || *version != v.EventConversationKeyVersion {
+		t.Errorf("unexpected message conversation_key_version: %v", version)
 	}
 	if messages[0].Text() != v.EventMessageText {
 		t.Errorf("message text mismatch:\ngot  %q\nwant %q", messages[0].Text(), v.EventMessageText)
@@ -1900,7 +2007,7 @@ func TestDecryptEventsMalformedSigningKeysError(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2014,14 +2121,14 @@ func TestEncryptDecryptWithGeneratedKey(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// Get a fresh conversation key from a prepared key change and use it for encryption.
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -2050,7 +2157,7 @@ func TestEncryptMessageWithEntitiesAndAttachments(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2072,8 +2179,8 @@ func TestEncryptMessageWithEntitiesAndAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage (entities+attachments) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -2085,14 +2192,14 @@ func TestEncryptMessageMixedAttachmentTypesRejected(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// Only image/gif/video media may appear in multiples; any other
 	// attachment type must be the message's only attachment.
 	_, err := chat.EncryptMessage(EncryptMessageParams{
-		SenderID:               "me",
+		SenderID:               "910002",
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "mixed attachments",
@@ -2126,7 +2233,7 @@ func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2168,7 +2275,7 @@ func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 		}
 	}
 
-	if err := chat.SetIdentity("1001", "1"); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "1001", SigningKeyVersion: "1"}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
@@ -2181,8 +2288,8 @@ func TestEncryptMessageURLAttachmentWithBannerImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage (url attachment with banner) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
@@ -2194,7 +2301,7 @@ func TestDecryptWithWrongKey(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2205,9 +2312,9 @@ func TestDecryptWithWrongKey(t *testing.T) {
 	}
 
 	// Decrypt with a different key should fail
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	wrong, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
-		SenderID:          "me",
+		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
 		ConversationID:    "conv-1",
@@ -2249,22 +2356,21 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	if err := chat.SetIdentity("1001", "1"); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "1001", SigningKeyVersion: "1"}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	replyText := "original message"
-	senderID := int64(12345)
 	payload, err := chat.EncryptReply(EncryptReplyParams{
 		ConversationID:         "conv-1",
 		ConversationKey:        v.conversationKey(t),
 		Text:                   "replying with media",
 		ConversationKeyVersion: "1",
 		ReplyToSequenceID:      "seq-100",
-		ReplyToSenderID:        &senderID,
+		ReplyToSenderID:        "12345",
 		ReplyToText:            &replyText,
 		Attachments: []AttachmentDescriptor{
 			{
@@ -2280,8 +2386,8 @@ func TestEncryptReplyWithAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply (with attachments) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 }
 
@@ -2290,14 +2396,14 @@ func TestEncryptMessageMediaAttachmentZeroDimensions(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// Zero-valued media dimensions are valid (e.g. audio or file media) and
 	// must be transmitted rather than dropped by omitempty: core requires
 	// the fields and would reject an attachment missing them.
-	if err := chat.SetIdentity("1001", "1"); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "1001", SigningKeyVersion: "1"}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
@@ -2319,8 +2425,8 @@ func TestEncryptMessageMediaAttachmentZeroDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage (zero-dimension media) failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 }
 
@@ -2330,7 +2436,7 @@ func TestExportKeysIdentityOnly(t *testing.T) {
 	chat := New()
 	defer chat.Close()
 	identityOnly := v.privateKeys(t)[:32]
-	if err := chat.ImportKeys(identityOnly); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: identityOnly}); err != nil {
 		t.Fatalf("ImportKeys (identity only) failed: %v", err)
 	}
 
@@ -2350,21 +2456,21 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	ttl := int64(86400000)
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
-		SenderID:                "me",
+		SenderID:                "910002",
 		SigningKeyVersion:       "1",
 		PublicKeys:              publicKeys,
 		ConversationID:          "g123",
-		NewMemberIDs:            []string{"user-new"},
-		CurrentMemberIDs:        []string{"me"},
-		CurrentAdminIDs:         []string{"me"},
-		CurrentPendingMemberIDs: []string{"user-pending"},
+		NewMemberIDs:            []string{"910010"},
+		CurrentMemberIDs:        []string{"910002"},
+		CurrentAdminIDs:         []string{"910002"},
+		CurrentPendingMemberIDs: []string{"910011"},
 		CurrentTitle:            "My Group Chat",
 		CurrentAvatarURL:        "https://example.com/avatar.png",
 		CurrentTTLMsec:          &ttl,
@@ -2374,7 +2480,7 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 	}
 	// Two signed actions: the key change and the member add. The title lives
 	// in the member-add payload (index 1).
-	if len(prepared.ActionSignatures) != 2 || prepared.ActionSignatures[1].Signature == "" {
+	if len(prepared.ActionSignatures) != 2 || prepared.ActionSignatures[1].MessageEventSignature.Signature == "" {
 		t.Fatalf("expected 2 action signatures with a non-empty member-add signature, got %d", len(prepared.ActionSignatures))
 	}
 	if !strings.Contains(prepared.ActionSignatures[1].SignaturePayload, "My Group Chat") {
@@ -2391,20 +2497,20 @@ func TestPrepareGroupMembersChangeScreenCaptureBlocking(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	enabled := true
-	publicKeys := []PublicKeyInput{{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
-		SenderID:                            "me",
+		SenderID:                            "910002",
 		SigningKeyVersion:                   "1",
 		PublicKeys:                          publicKeys,
 		ConversationID:                      "g123",
-		NewMemberIDs:                        []string{"user-new"},
-		CurrentMemberIDs:                    []string{"me"},
-		CurrentAdminIDs:                     []string{"me"},
+		NewMemberIDs:                        []string{"910010"},
+		CurrentMemberIDs:                    []string{"910002"},
+		CurrentAdminIDs:                     []string{"910002"},
 		CurrentScreenCaptureBlockingEnabled: &enabled,
 	})
 	if err != nil {
@@ -2428,10 +2534,11 @@ func TestEncryptFileLargerPayload(t *testing.T) {
 	file := bytes.Repeat([]byte{'A'}, 100_000)
 	payload := sendFiles(t, chat, v, "a large file", []AttachmentDescriptor{mediaAttachment("large")})
 	encrypted, err := chat.EncryptFile(EncryptFileParams{
-		File:             file,
-		EventB64:         payload.EventB64,
-		ConversationKeys: v.conversationKeys(t),
-		MediaHashKey:     "large",
+		File:                   file,
+		EventB64:               payload.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		MediaHashKey:           "large",
 	})
 	if err != nil {
 		t.Fatalf("EncryptFile (large) failed: %v", err)
@@ -2452,14 +2559,14 @@ func TestDecryptEventsWithSigningKeys(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
 	// Pass signing keys with empty events; should succeed
 	signingKeys := []SigningKeyEntry{
 		{
-			UserID:           "me",
+			UserID:           "910002",
 			PublicKeyVersion: "1",
 			PublicKey:        v.SigningPublicB64,
 		},
@@ -2478,7 +2585,7 @@ func TestEncryptMessageThenVerifySignature(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2501,8 +2608,8 @@ func TestEncryptMessageThenVerifySignature(t *testing.T) {
 	if payload.SignatureInfo.SignatureVersion == "" {
 		t.Error("expected non-empty signature_version in signature_info")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 }
 
@@ -2551,12 +2658,12 @@ func TestEventUnmarshalAndTypeAccessors(t *testing.T) {
 func TestEventAsKeyChange(t *testing.T) {
 	kcJSON := `{
 		"type": "KeyChange",
-		"key_version": "2",
-		"sender_id": "user-1",
+		"conversation_key_version": "2",
+		"sender_id": "910004",
 		"verified": true,
-		"participant_keys": [
-			{"user_id": "user-1", "encrypted_key": "abc123", "public_key_version": "1"},
-			{"user_id": "user-2", "encrypted_key": "def456", "public_key_version": "1"}
+		"conversation_participant_keys": [
+			{"user_id": "910004", "encrypted_conversation_key": "abc123", "public_key_version": "1"},
+			{"user_id": "910007", "encrypted_conversation_key": "def456", "public_key_version": "1"}
 		]
 	}`
 	var event Event
@@ -2571,14 +2678,17 @@ func TestEventAsKeyChange(t *testing.T) {
 	if kc == nil {
 		t.Fatal("AsKeyChange() returned nil")
 	}
-	if kc.KeyVersion != "2" {
-		t.Errorf("expected key_version '2', got %q", kc.KeyVersion)
+	if kc.ConversationKeyVersion != "2" {
+		t.Errorf("expected conversation_key_version '2', got %q", kc.ConversationKeyVersion)
 	}
 	if !kc.Verified {
 		t.Error("expected verified == true on the typed KeyChangeEvent")
 	}
-	if len(kc.ParticipantKeys) != 2 {
-		t.Fatalf("expected 2 participant keys, got %d", len(kc.ParticipantKeys))
+	if len(kc.ConversationParticipantKeys) != 2 {
+		t.Fatalf("expected 2 participant keys, got %d", len(kc.ConversationParticipantKeys))
+	}
+	if kc.ConversationParticipantKeys[1].EncryptedConversationKey != "def456" {
+		t.Errorf("expected encrypted_conversation_key 'def456', got %q", kc.ConversationParticipantKeys[1].EncryptedConversationKey)
 	}
 
 	// AsMessage should return nil for a KeyChange event
@@ -2592,7 +2702,7 @@ func TestEventAsGroupChange(t *testing.T) {
 		"type": "GroupChange",
 		"sender_id": "admin-1",
 		"verified": true,
-		"change": {"action": "member_added", "user_id": "new-user"}
+		"change": {"action": "member_added", "user_id": "910009"}
 	}`
 	var event Event
 	if err := json.Unmarshal([]byte(gcJSON), &event); err != nil {
@@ -2617,7 +2727,7 @@ func TestEventAsGroupChange(t *testing.T) {
 func TestReadReceiptEventVerified(t *testing.T) {
 	rrJSON := `{
 		"type": "ReadReceipt",
-		"sender_id": "user-1",
+		"sender_id": "910004",
 		"seen_until_id": "seq-77",
 		"verified": true
 	}`
@@ -2744,11 +2854,11 @@ func TestMessageContentReactionRemoved(t *testing.T) {
 
 func TestFindKeyForUser(t *testing.T) {
 	kc := &KeyChangeEvent{
-		KeyVersion: "3",
-		ParticipantKeys: []ParticipantKey{
-			{UserID: "user-a", EncryptedKey: "key-a", PublicKeyVersion: "1"},
-			{UserID: "user-b", EncryptedKey: "key-b", PublicKeyVersion: "2"},
-			{UserID: "user-c", EncryptedKey: "key-c", PublicKeyVersion: "1"},
+		ConversationKeyVersion: "3",
+		ConversationParticipantKeys: []ConversationParticipantKey{
+			{UserID: "user-a", EncryptedConversationKey: "key-a", PublicKeyVersion: "1"},
+			{UserID: "user-b", EncryptedConversationKey: "key-b", PublicKeyVersion: "2"},
+			{UserID: "user-c", EncryptedConversationKey: "key-c", PublicKeyVersion: "1"},
 		},
 	}
 
@@ -2757,8 +2867,8 @@ func TestFindKeyForUser(t *testing.T) {
 	if pk == nil {
 		t.Fatal("FindKeyForUser('user-b') returned nil")
 	}
-	if pk.EncryptedKey != "key-b" {
-		t.Errorf("expected encrypted_key 'key-b', got %q", pk.EncryptedKey)
+	if pk.EncryptedConversationKey != "key-b" {
+		t.Errorf("expected encrypted_conversation_key 'key-b', got %q", pk.EncryptedConversationKey)
 	}
 	if pk.PublicKeyVersion != "2" {
 		t.Errorf("expected public_key_version '2', got %q", pk.PublicKeyVersion)
@@ -2776,7 +2886,7 @@ func TestExtractConversationKeysEmpty(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2795,7 +2905,7 @@ func TestExtractConversationKeysInvalid(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2857,7 +2967,7 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	enableV1Send(t, chat)
@@ -2873,14 +2983,14 @@ func TestEncryptMessageSignatureVersionAndRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptMessage failed: %v", err)
 	}
-	if payload.EncryptedContent == "" {
-		t.Error("expected non-empty encrypted_content")
+	if payload.EncodedMessageCreateEvent == "" {
+		t.Error("expected non-empty encoded_message_create_event")
 	}
 	if payload.Signature == "" {
 		t.Error("expected non-empty signature")
 	}
-	if payload.EncodedEventSignature == "" {
-		t.Error("expected non-empty encoded_event_signature")
+	if payload.EncodedMessageEventSignature == "" {
+		t.Error("expected non-empty encoded_message_event_signature")
 	}
 	if payload.ConversationKeyVersion != v.EventConversationKeyVersion {
 		t.Errorf("expected conversation_key_version %q, got %q", v.EventConversationKeyVersion, payload.ConversationKeyVersion)
@@ -2915,7 +3025,7 @@ func TestExtractConversationKeysEmptyResultShape(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -2959,7 +3069,7 @@ func TestVerifyWithKeyFromGetPublicKeys(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -3051,30 +3161,30 @@ func TestDetectMimeTypeAndDimensionsJPEG(t *testing.T) {
 	}
 }
 
-// TestImportKeysWithVersion pins the one-call import + key-version path: the
+// TestImportKeysWithSigningKeyVersion pins the one-call import + key-version path: the
 // imported keys must match the fixture and invalid key material must error.
-func TestImportKeysWithVersion(t *testing.T) {
+func TestImportKeysWithSigningKeyVersion(t *testing.T) {
 	v := loadVectors(t)
 
 	chat := New()
 	defer chat.Close()
 
-	if err := chat.ImportKeysWithVersion([]byte{0x00}, "1"); err == nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: []byte{0x00}, SigningKeyVersion: "1"}); err == nil {
 		t.Error("expected an error for invalid key material")
 	}
 
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
 	if !chat.IsUnlocked() {
-		t.Fatal("expected IsUnlocked() == true after ImportKeysWithVersion")
+		t.Fatal("expected IsUnlocked() == true after ImportKeys")
 	}
 	keys, err := chat.GetPublicKeys()
 	if err != nil {
 		t.Fatalf("GetPublicKeys failed: %v", err)
 	}
 	if keys.Identity != v.IdentityPublicB64 {
-		t.Error("identity key mismatch after ImportKeysWithVersion")
+		t.Error("identity key mismatch after ImportKeys")
 	}
 }
 
@@ -3087,7 +3197,7 @@ func TestSetIdentityResolvesEncryptDefaults(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
@@ -3105,7 +3215,7 @@ func TestSetIdentityResolvesEncryptDefaults(t *testing.T) {
 		t.Fatalf("expected the error to mention sender_id, got: %v", err)
 	}
 
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
@@ -3128,7 +3238,7 @@ func TestSetIdentityResolvesEncryptDefaults(t *testing.T) {
 
 // TestGeneratedKeysSignOnlyWithTheRegisteredVersion pins that generated keys
 // have no signing-key version: signing fails until SetIdentity or
-// ImportKeysWithVersion supplies it.
+// ImportKeysParams.SigningKeyVersion supplies it.
 func TestGeneratedKeysSignOnlyWithTheRegisteredVersion(t *testing.T) {
 	chat := New()
 	defer chat.Close()
@@ -3146,18 +3256,16 @@ func TestGeneratedKeysSignOnlyWithTheRegisteredVersion(t *testing.T) {
 		t.Fatalf("expected an error naming signing_key_version, got: %v", err)
 	}
 
-	if err := chat.SetIdentity("1234", "1700000000123"); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "1234", SigningKeyVersion: "1700000000123"}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
-	sig, err := chat.PrepareMessageDelete(deleteParams)
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete after SetIdentity failed: %v", err)
-	}
-	if sig.PublicKeyVersion != "1700000000123" {
-		t.Errorf("expected public_key_version %q, got %q", "1700000000123", sig.PublicKeyVersion)
+	prepared, err := chat.PrepareMessageDelete(deleteParams)
+	sig := onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "1700000000123" {
+		t.Errorf("expected public_key_version %q, got %q", "1700000000123", sig.MessageEventSignature.PublicKeyVersion)
 	}
 
-	// Restored keys carry the version passed to ImportKeysWithVersion, and
+	// Restored keys carry the version passed to ImportKeys, and
 	// none after a plain ImportKeys.
 	keys, err := chat.ExportKeys()
 	if err != nil {
@@ -3165,17 +3273,15 @@ func TestGeneratedKeysSignOnlyWithTheRegisteredVersion(t *testing.T) {
 	}
 	restored := New()
 	defer restored.Close()
-	if err := restored.ImportKeysWithVersion(keys, "1700000000456"); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := restored.ImportKeys(ImportKeysParams{Keys: keys, SigningKeyVersion: "1700000000456"}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
-	sig, err = restored.PrepareMessageDelete(deleteParams)
-	if err != nil {
-		t.Fatalf("PrepareMessageDelete after ImportKeysWithVersion failed: %v", err)
+	prepared, err = restored.PrepareMessageDelete(deleteParams)
+	sig = onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "1700000000456" {
+		t.Errorf("expected public_key_version %q, got %q", "1700000000456", sig.MessageEventSignature.PublicKeyVersion)
 	}
-	if sig.PublicKeyVersion != "1700000000456" {
-		t.Errorf("expected public_key_version %q, got %q", "1700000000456", sig.PublicKeyVersion)
-	}
-	if err := restored.ImportKeys(keys); err != nil {
+	if err := restored.ImportKeys(ImportKeysParams{Keys: keys}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	if _, err := restored.PrepareMessageDelete(deleteParams); err == nil {
@@ -3192,10 +3298,10 @@ func TestSetCacheKeysResolvesConversationKey(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
 
@@ -3230,6 +3336,30 @@ func TestSetCacheKeysResolvesConversationKey(t *testing.T) {
 			v.EventConversationKeyVersion, payload.ConversationKeyVersion)
 	}
 
+	// A file of a message sent from the cache encrypts under the same cached key.
+	photo, err := chat.EncryptMessage(EncryptMessageParams{
+		ConversationID: v.EventConversationID,
+		Text:           "a photo",
+		Attachments:    []AttachmentDescriptor{mediaAttachment("photo")},
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage with files and a cached key failed: %v", err)
+	}
+	file := []byte("photo bytes")
+	encrypted, err := chat.EncryptFile(EncryptFileParams{File: file, EventB64: photo.EventB64, MediaHashKey: "photo"})
+	if err != nil {
+		t.Fatalf("EncryptFile with a cached key failed: %v", err)
+	}
+	decryptedFile, err := chat.DecryptFile(DecryptFileParams{
+		Encrypted:        encrypted,
+		EventB64:         photo.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		MediaHashKey:     "photo",
+	})
+	if err != nil || !bytes.Equal(decryptedFile, file) {
+		t.Fatalf("DecryptFile = %q, %v; want %q", decryptedFile, err, file)
+	}
+
 	// Disabling the cache clears it; the omitted key errors again.
 	chat.SetCacheKeys(false)
 	if _, err := chat.EncryptMessage(EncryptMessageParams{
@@ -3249,8 +3379,8 @@ func TestSetSigningKeysFallback(t *testing.T) {
 
 	chat := New() // default reject-unverified policy
 	defer chat.Close()
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
 	chat.SetCacheKeys(true)
 	if err := chat.SetSigningKeys(v.eventSigningKeys()); err != nil {
@@ -3289,8 +3419,8 @@ func TestReplyPreviewValidationFixtureVectors(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
 
 	result, err := chat.DecryptEvents(DecryptEventsParams{
@@ -3333,10 +3463,10 @@ func TestEncryptReplyByEvent(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
 
@@ -3350,7 +3480,7 @@ func TestEncryptReplyByEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptReply by event failed: %v", err)
 	}
-	if payload.EncryptedContent == "" || payload.Signature == "" || payload.MessageID == "" {
+	if payload.EncodedMessageCreateEvent == "" || payload.Signature == "" || payload.MessageID == "" {
 		t.Errorf("incomplete payload: %+v", payload)
 	}
 }
@@ -3364,10 +3494,10 @@ func TestEncryptReactionByTargetEvent(t *testing.T) {
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion failed: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
 	}
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
 
@@ -3381,7 +3511,7 @@ func TestEncryptReactionByTargetEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptAddReaction by target event failed: %v", err)
 	}
-	if add.EncryptedContent == "" || add.MessageID == "" {
+	if add.EncodedMessageCreateEvent == "" || add.MessageID == "" {
 		t.Errorf("incomplete add payload: %+v", add)
 	}
 	// The same params value serves the matching remove.
@@ -3445,10 +3575,10 @@ func decryptOwnText(t *testing.T, chat *Chat, v sdkVectors, p *SendPayload) *Tex
 func quickReplyChat(t *testing.T, v sdkVectors) *Chat {
 	t.Helper()
 	chat := New()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 	return chat
@@ -3510,7 +3640,6 @@ func TestEncryptReplyQuickReplyRoundTrip(t *testing.T) {
 	chat := quickReplyChat(t, v)
 	defer chat.Close()
 
-	senderID := int64(1111)
 	originalText := "Continue?"
 	payload, err := chat.EncryptReply(EncryptReplyParams{
 		ConversationID:         v.EventConversationID,
@@ -3518,7 +3647,7 @@ func TestEncryptReplyQuickReplyRoundTrip(t *testing.T) {
 		ConversationKey:        v.conversationKey(t),
 		ConversationKeyVersion: v.EventConversationKeyVersion,
 		ReplyToSequenceID:      "seq-orig",
-		ReplyToSenderID:        &senderID,
+		ReplyToSenderID:        "1111",
 		ReplyToText:            &originalText,
 		QuickReply:             quickReplyResponse(),
 	})
@@ -3662,8 +3791,8 @@ func TestMessageKeyEventDecryptsInABatchWithItsKeyChange(t *testing.T) {
 	v := loadVectors(t)
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeysWithVersion(v.privateKeys(t), v.EventRecipientKeyVersion); err != nil {
-		t.Fatalf("ImportKeysWithVersion: %v", err)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version: %v", err)
 	}
 	result, err := chat.DecryptEvents(DecryptEventsParams{
 		Events:      []string{v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64},
@@ -3743,5 +3872,35 @@ func TestKnownSignatureCoversTheContentsEncryptionVersion(t *testing.T) {
 	stripped, err := chat.Verify(v.SignatureV10Cev1PublicKeyB64, signature, []byte(v.PayloadMessageV10))
 	if err != nil || stripped {
 		t.Fatalf("known signature verified without its contents encryption version: err=%v", err)
+	}
+}
+
+func TestUserIDsAreDigitStrings(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	err := chat.SetIdentity(SetIdentityParams{UserID: "user-1", SigningKeyVersion: "1"})
+	if err == nil || !strings.Contains(err.Error(), "Invalid user_id 'user-1'") {
+		t.Fatalf("SetIdentity with a non-numeric id: got %v", err)
+	}
+	err = chat.SetIdentity(SetIdentityParams{UserID: "1001", SigningKeyVersion: "v1"})
+	if err == nil || !strings.Contains(err.Error(), "Invalid signing_key_version 'v1'") {
+		t.Fatalf("SetIdentity with a non-integer key version: got %v", err)
+	}
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         "conv-1",
+		Text:                   "reply",
+		SenderID:               "1001",
+		SigningKeyVersion:      "1",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: "1",
+		ReplyToSequenceID:      "seq-42",
+		ReplyToSenderID:        "12x",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Invalid reply_to_sender_id '12x'") {
+		t.Fatalf("EncryptReply with a non-numeric reply sender: got %v", err)
 	}
 }

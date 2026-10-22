@@ -43,7 +43,14 @@ pub(super) fn media_key(
              that carries the media",
         ));
     };
-    let message = open_message(&event, create, conversation_keys, None, "the message")?;
+    let message = open_message(
+        &event,
+        create,
+        conversation_keys,
+        None,
+        "the message",
+        KeySource::Map,
+    )?;
     if let Some(key) = message.attachment_key(media_hash_key)? {
         return Ok(key);
     }
@@ -84,7 +91,7 @@ pub(super) fn media_key(
 /// it, so it is never encrypted again.
 pub(super) fn outgoing_media_key(
     event_b64: &str,
-    conversation_keys: &HashMap<String, XChatConversationKey>,
+    conversation_key: Option<(&XChatConversationKey, &str)>,
     media_hash_key: &str,
 ) -> Result<XChatConversationKey, SdkError> {
     if media_hash_key.is_empty() {
@@ -100,7 +107,18 @@ pub(super) fn outgoing_media_key(
              or encrypt_reply returned",
         ));
     };
-    let message = open_message(&event, create, conversation_keys, None, "the message")?;
+    let conversation_keys: HashMap<String, XChatConversationKey> = conversation_key
+        .map(|(key, version)| (version.to_string(), key.clone()))
+        .into_iter()
+        .collect();
+    let message = open_message(
+        &event,
+        create,
+        &conversation_keys,
+        None,
+        "the message",
+        KeySource::Single,
+    )?;
     if let Some(key) = message.attachment_key(media_hash_key)? {
         return Ok(key);
     }
@@ -175,16 +193,27 @@ impl OpenedMessage {
     }
 }
 
+/// How the caller passed the conversation key, so errors name that input.
+#[derive(Clone, Copy)]
+enum KeySource {
+    /// A key map (`conversation_keys`), as the decrypt calls take.
+    Map,
+    /// One key and its version (`conversation_key`), as the encrypt calls take.
+    Single,
+}
+
 /// Decrypt the message `event`, whose detail is `create`. Its key is the
 /// conversation key for its version from `conversation_keys`, or, when the
 /// map lacks that version, `carried_message_key` for a message that uses a
-/// message key. `which` names the message in errors.
+/// message key. `which` names the message in errors and `key_source` how
+/// the key was passed.
 fn open_message(
     event: &MessageEvent,
     create: &MessageCreateEvent,
     conversation_keys: &HashMap<String, XChatConversationKey>,
     carried_message_key: Option<&[u8]>,
     which: &str,
+    key_source: KeySource,
 ) -> Result<OpenedMessage, SdkError> {
     let Some(version) = create.conversation_key_version.as_deref() else {
         return Err(invalid_input(format!(
@@ -203,10 +232,11 @@ fn open_message(
                 },
                 None => AttachmentKeys::Conversation(conversation_key.clone()),
             };
-            (
-                keys,
-                format!("the key for version '{version}' in conversation_keys"),
-            )
+            let source = match key_source {
+                KeySource::Map => format!("the key for version '{version}' in conversation_keys"),
+                KeySource::Single => format!("conversation_key (version '{version}')"),
+            };
+            (keys, source)
         }
         (None, Some(bytes)) => {
             let message_key =
@@ -296,6 +326,7 @@ fn open_quoted(
         conversation_keys,
         preview.raw_event_message_key.as_deref(),
         "the quoted message",
+        KeySource::Map,
     )
 }
 

@@ -96,7 +96,7 @@ func register(force bool) error {
 		if err != nil {
 			return fmt.Errorf("invalid saved blob: %w", err)
 		}
-		if err := chat.ImportKeys(raw); err != nil {
+		if err := chat.ImportKeys(chatxdk.ImportKeysParams{Keys: raw}); err != nil {
 			return err
 		}
 		body, _ = marker["body"].(map[string]any)
@@ -167,7 +167,7 @@ func register(force bool) error {
 		return errors.New("the X API did not return a public_key_version for the key; re-run to look it up on the account (the saved identity resumes)")
 	}
 
-	if err := chat.SetIdentity(userID, version); err != nil {
+	if err := chat.SetIdentity(chatxdk.SetIdentityParams{UserID: userID, SigningKeyVersion: version}); err != nil {
 		return err
 	}
 	if err := writeMarker(map[string]any{

@@ -73,9 +73,9 @@ test("conversation key prepare -> decrypt round-trip", async () => {
     ],
     conversationId: "conv-1",
   });
-  assert.equal(prepared.participantKeys.length, 1);
+  assert.equal(prepared.conversationParticipantKeys.length, 1);
   assert.equal(prepared.actionSignatures.length, 1);
-  const decrypted = core.decryptConversationKey(prepared.participantKeys[0].encryptedKey);
+  const decrypted = core.decryptConversationKey(prepared.conversationParticipantKeys[0].encryptedConversationKey);
   assert.deepEqual(Array.from(decrypted), Array.from(prepared.conversationKey));
 });
 
@@ -145,7 +145,7 @@ test("prepToRequest maps the X API request shape", async () => {
     ],
     conversationId: "1000:2000",
   });
-  const body = prepToRequest(prep, core.publicKeys().signing);
+  const body = prepToRequest(prep);
 
   assert.equal(body.conversationKeyVersion, prep.conversationKeyVersion);
   assert.equal(body.conversationParticipantKeys.length, 1);
@@ -241,7 +241,7 @@ test("media encrypt -> decrypt round-trip and truncation", async () => {
   });
   assert.ok(body.event_b64);
 
-  const ciphertext = core.encryptMedia(plaintext, body.event_b64, keys, "photo");
+  const ciphertext = core.encryptMedia(plaintext, body.event_b64, key, "1", "photo");
   assert.equal(ciphertext.length, ChatCore.encryptedFileSize(plaintext.length));
   const decrypted = core.decryptMedia(ciphertext, body.event_b64, keys, "photo");
   assert.equal(decrypted.length, plaintext.length);

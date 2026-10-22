@@ -124,8 +124,9 @@ class TestFeatureSwitches(unittest.TestCase):
         return chat
 
     def _import_keys(self, chat):
-        chat.import_keys(base64.b64decode(self.vectors["private_keys_concat_b64"]))
-        chat.set_identity("1001", "1")
+        from chat_xdk import ImportKeysParams, SetIdentityParams
+        chat.import_keys(ImportKeysParams(base64.b64decode(self.vectors["private_keys_concat_b64"])))
+        chat.set_identity(SetIdentityParams("1001", "1"))
 
     def _keyed_request(self, chat):
         """Wait for a request carrying ``chat``'s key bucket."""
@@ -288,6 +289,7 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(len(self.server.buckets), seen)
 
     def test_chats_asking_at_once_share_a_request(self):
+        from chat_xdk import ImportKeysParams
         self.server.delay = 0.3
         chats = [self._chat(with_keys=False) for _ in range(4)]
         self.assertTrue(_wait_for(lambda: all(c._is_enabled("v1_send") for c in chats)))
@@ -295,7 +297,7 @@ class TestFeatureSwitches(unittest.TestCase):
 
         keys = base64.b64decode(self.vectors["private_keys_concat_b64"])
         for chat in chats:
-            chat.import_keys(keys)
+            chat.import_keys(ImportKeysParams(keys))
         self.assertTrue(_wait_for(lambda: not any(c._feature_refetch_due() for c in chats)))
         self.assertEqual(self.server.buckets, [None, str(chats[0]._feature_bucket())])
 

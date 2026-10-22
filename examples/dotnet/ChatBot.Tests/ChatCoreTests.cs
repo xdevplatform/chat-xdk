@@ -109,13 +109,13 @@ public class ChatCoreTests
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
-        core.SetIdentity("me");
+        core.SetIdentity("910002");
         var prepared = core.PrepareConversationKeyChange(new[]
         {
-            new PublicKeyInput { UserId = "me", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "910002", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
         }, "conv-1");
-        Assert.Single(prepared.ParticipantKeys);
-        var decrypted = core.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey);
+        Assert.Single(prepared.ConversationParticipantKeys);
+        var decrypted = core.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
         Assert.Equal(prepared.ConversationKey, decrypted);
     }
 
@@ -166,7 +166,7 @@ public class ChatCoreTests
 
         // Assert on the serialized form — the exact JSON the HTTP layer posts.
         using var doc = JsonDocument.Parse(
-            JsonSerializer.Serialize(EventHelpers.PrepToRequest(prep, signingPub)));
+            JsonSerializer.Serialize(EventHelpers.PrepToRequest(prep)));
         var body = doc.RootElement;
 
         Assert.Equal(prep.ConversationKeyVersion, body.GetProperty("conversation_key_version").GetString());
@@ -242,7 +242,7 @@ public class ChatCoreTests
             attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, plaintext.Length, "photo.bin", 5) });
         Assert.False(string.IsNullOrEmpty(body.EventB64));
 
-        var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKeys, "photo");
+        var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKey, "1", "photo");
         Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)ciphertext.Length);
         Assert.Equal(plaintext, core.DecryptMedia(ciphertext, body.EventB64, convKeys, "photo"));
         var ex = Assert.Throws<ChatXdkException>(

@@ -45,7 +45,7 @@ func (c *ChatCore) LoadKeys(privateKeysB64, signingKeyVersion string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.chat.ImportKeysWithVersion(keys, signingKeyVersion); err != nil {
+	if err := c.chat.ImportKeys(chatxdk.ImportKeysParams{Keys: keys, SigningKeyVersion: signingKeyVersion}); err != nil {
 		return err
 	}
 	c.SigningKeyVersion = signingKeyVersion
@@ -60,7 +60,7 @@ func (c *ChatCore) SetIdentity(userID string) error {
 		return errors.New("signing key version unknown: pass LoadKeys the public_key_version " +
 			"the X API returned when the keys were registered")
 	}
-	return c.chat.SetIdentity(userID, c.SigningKeyVersion)
+	return c.chat.SetIdentity(chatxdk.SetIdentityParams{UserID: userID, SigningKeyVersion: c.SigningKeyVersion})
 }
 
 // SetSigningKeys stores the senders' signing keys for decrypt calls that
@@ -218,8 +218,8 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 	return &SendBody{
 		// The SDK generates the message id and returns it in the payload.
 		MessageID:                    payload.MessageID,
-		EncodedMessageCreateEvent:    payload.EncryptedContent,
-		EncodedMessageEventSignature: payload.EncodedEventSignature,
+		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
+		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
 		EventB64:                     payload.EventB64,
 	}, nil
 }
@@ -255,8 +255,8 @@ func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conve
 	return &SendBody{
 		// The SDK generates the message id and returns it in the payload.
 		MessageID:                    payload.MessageID,
-		EncodedMessageCreateEvent:    payload.EncryptedContent,
-		EncodedMessageEventSignature: payload.EncodedEventSignature,
+		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
+		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
 		EventB64:                     payload.EventB64,
 	}, nil
 }
@@ -296,16 +296,18 @@ const mediaChunk = 1024 * 1024
 // incremental file API.
 //
 // eventB64 is the EventB64 of the body EncryptReply returned for the message,
-// and mediaHashKey the hash key the file's upload started with, as listed in
-// the message's attachments; the SDK encrypts the file under that
-// attachment's key. Feeding fixed-size chunks through Push keeps memory
-// bounded no matter how large the file is; Finish emits the final frame that
-// seals the file (decryption fails without it).
-func (c *ChatCore) EncryptMedia(plaintext []byte, eventB64 string, conversationKeys map[string][]byte, mediaHashKey string) ([]byte, error) {
+// conversationKey and conversationKeyVersion the key the message was
+// encrypted under, and mediaHashKey the hash key the file's upload started
+// with, as listed in the message's attachments; the SDK encrypts the file
+// under that attachment's key. Feeding fixed-size chunks through Push keeps
+// memory bounded no matter how large the file is; Finish emits the final
+// frame that seals the file (decryption fails without it).
+func (c *ChatCore) EncryptMedia(plaintext []byte, eventB64 string, conversationKey []byte, conversationKeyVersion, mediaHashKey string) ([]byte, error) {
 	enc, err := c.chat.FileEncryptor(chatxdk.FileEncryptorParams{
-		EventB64:         eventB64,
-		ConversationKeys: conversationKeys,
-		MediaHashKey:     mediaHashKey,
+		EventB64:               eventB64,
+		MediaHashKey:           mediaHashKey,
+		ConversationKey:        conversationKey,
+		ConversationKeyVersion: conversationKeyVersion,
 	})
 	if err != nil {
 		return nil, err
@@ -385,37 +387,12 @@ func MessageText(event *chatxdk.Event) string {
 // PrepToRequest maps a prepared conversation change into the X API request shape.
 //
 // Works for 1:1 key changes (one signature) and group create / member add
-// (two signatures). signingPublicKey is the sender's own signing key, which
-// the API expects alongside each signature.
-func PrepToRequest(prep *chatxdk.PreparedConversationChange, signingPublicKey string) map[string]any {
-	participantKeys := make([]map[string]any, 0, len(prep.ParticipantKeys))
-	for _, pk := range prep.ParticipantKeys {
-		participantKeys = append(participantKeys, map[string]any{
-			"user_id":                    pk.UserID,
-			"encrypted_conversation_key": pk.EncryptedKey,
-			"public_key_version":         pk.PublicKeyVersion,
-		})
-	}
-	actionSignatures := make([]map[string]any, 0, len(prep.ActionSignatures))
-	for _, sig := range prep.ActionSignatures {
-		entry := map[string]any{
-			"message_id":                   sig.MessageID,
-			"encoded_message_event_detail": sig.EncodedMessageEventDetail,
-			"message_event_signature": map[string]any{
-				"signature":          sig.Signature,
-				"signature_version":  sig.SignatureVersion,
-				"public_key_version": sig.PublicKeyVersion,
-				"signing_public_key": signingPublicKey,
-			},
-		}
-		if sig.SignaturePayload != "" {
-			entry["signature_payload"] = sig.SignaturePayload
-		}
-		actionSignatures = append(actionSignatures, entry)
-	}
+// (two signatures). The participant keys and action signatures already have
+// the request's shape.
+func PrepToRequest(prep *chatxdk.PreparedConversationChange) map[string]any {
 	return map[string]any{
 		"conversation_key_version":      prep.ConversationKeyVersion,
-		"conversation_participant_keys": participantKeys,
-		"action_signatures":             actionSignatures,
+		"conversation_participant_keys": prep.ConversationParticipantKeys,
+		"action_signatures":             prep.ActionSignatures,
 	}
 }

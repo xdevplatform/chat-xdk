@@ -36,7 +36,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from chat_xdk import Chat
+from chat_xdk import Chat, ImportKeysParams, SetIdentityParams
 
 from x_api import XChatClient
 
@@ -119,7 +119,8 @@ def register(*, force: bool) -> None:
     # safe to retry without wasting the daily registration budget.
     resuming = BLOB_PATH.exists() and marker.get("body") and not force
     if resuming:
-        chat.import_keys(base64.b64decode(BLOB_PATH.read_text(encoding="utf-8").strip()))
+        blob = base64.b64decode(BLOB_PATH.read_text(encoding="utf-8").strip())
+        chat.import_keys(ImportKeysParams(blob))
         body = marker["body"]
         print(f"Resuming the saved identity ({BLOB_PATH}).")
     else:
@@ -165,7 +166,7 @@ def register(*, force: bool) -> None:
             "look it up on the account; the saved identity resumes."
         )
     version = str(version)
-    chat.set_identity(user_id, version)
+    chat.set_identity(SetIdentityParams(user_id, version))
     _write_marker(
         {
             "registered": True,
@@ -181,7 +182,8 @@ def register(*, force: bool) -> None:
         try:
             config_json, _ = api.get_juicebox_config(user_id)
             jb = Chat(config_json)
-            jb.import_keys(base64.b64decode(BLOB_PATH.read_text(encoding="utf-8").strip()))
+            blob = base64.b64decode(BLOB_PATH.read_text(encoding="utf-8").strip())
+            jb.import_keys(ImportKeysParams(blob))
             jb.setup(pin)
             print("Stored the keys in Juicebox under the PIN.")
         except Exception as err:  # noqa: BLE001 — best-effort; the blob is already safe

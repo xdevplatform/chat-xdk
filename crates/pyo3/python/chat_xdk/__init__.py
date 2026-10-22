@@ -22,10 +22,8 @@ Quick Start:
                              conversation_key=key,
                              conversation_key_version=version)
     )
-    # payload.message_id, payload.encrypted_content, payload.signature, etc.
+    # payload.message_id, payload.encoded_message_create_event, payload.signature, etc.
 """
-
-__version__ = "0.1.0"
 
 import os as _os
 import re as _re
@@ -36,6 +34,7 @@ import weakref as _weakref
 from typing import Optional, TypedDict
 
 from chat_xdk._native import Chat as _NativeChat
+from chat_xdk._native import __version__
 from chat_xdk._native import (
     ConversationKeyChangeParams,
     DecryptEventParams,
@@ -53,6 +52,8 @@ from chat_xdk._native import (
     GroupCreateParams,
     GroupMembersChangeParams,
     MarkConversationReadParams,
+    SetIdentityParams,
+    ImportKeysParams,
     MessageDeleteParams,
     PublicKeyRegistration,
     PublicKeyRegistrationPayload,
@@ -325,6 +326,8 @@ __all__ = [
     "GroupCreateParams",
     "GroupMembersChangeParams",
     "MarkConversationReadParams",
+    "SetIdentityParams",
+    "ImportKeysParams",
     "MessageDeleteParams",
     "PublicKeyRegistration",
     "PublicKeyRegistrationPayload",

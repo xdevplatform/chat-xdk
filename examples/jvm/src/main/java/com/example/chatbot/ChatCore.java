@@ -2,7 +2,6 @@ package com.example.chatbot;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.Chat;
 import com.x.chatxdk.FileDecryptor;
@@ -46,7 +45,7 @@ public final class ChatCore implements AutoCloseable {
      * together with the public_key_version the X API returned when it was
      * registered. */
     public void loadKeys(String privateKeysB64, String signingKeyVersion) {
-        chat.importKeys(Base64.getDecoder().decode(privateKeysB64), signingKeyVersion);
+        chat.importKeys(new ImportKeysParams(Base64.getDecoder().decode(privateKeysB64), signingKeyVersion));
         this.signingKeyVersion = signingKeyVersion;
     }
 
@@ -59,7 +58,7 @@ public final class ChatCore implements AutoCloseable {
             throw new IllegalStateException("signing key version unknown: pass loadKeys the "
                     + "public_key_version the X API returned when the keys were registered");
         }
-        chat.setIdentity(userId, signingKeyVersion);
+        chat.setIdentity(new SetIdentityParams(userId, signingKeyVersion));
     }
 
     /** Generated identity: the registration payload + the private blob to persist. */
@@ -196,7 +195,7 @@ public final class ChatCore implements AutoCloseable {
         }
         // The SDK generates the message id and returns it in the payload.
         return new SendBody(
-                payload.messageId, payload.encryptedContent, payload.encodedEventSignature, payload.eventB64);
+                payload.messageId, payload.encodedMessageCreateEvent, payload.encodedMessageEventSignature, payload.eventB64);
     }
 
     /** Encrypt + sign a reaction add/remove targeting a raw event
@@ -214,7 +213,7 @@ public final class ChatCore implements AutoCloseable {
         SendPayload payload = add ? chat.encryptAddReaction(params) : chat.encryptRemoveReaction(params);
         // The SDK generates the message id and returns it in the payload.
         return new SendBody(
-                payload.messageId, payload.encryptedContent, payload.encodedEventSignature, payload.eventB64);
+                payload.messageId, payload.encodedMessageCreateEvent, payload.encodedMessageEventSignature, payload.eventB64);
     }
 
     // -- Group management -----------------------------------------------------
@@ -250,18 +249,26 @@ public final class ChatCore implements AutoCloseable {
      * Encrypt a media file of an outgoing message with the incremental file API.
      *
      * <p>{@code eventB64} is the {@code eventB64} of the body
-     * {@link #encryptReply} returned for the message, and {@code mediaHashKey}
-     * the hash key the file's upload started with, as listed in the message's
-     * attachments; the SDK encrypts the file under that attachment's key.
-     * Feeding fixed-size chunks through {@code push} keeps memory bounded no
-     * matter how large the file is; {@code finish} emits the final frame that
-     * seals the file (decryption fails without it).
+     * {@link #encryptReply} returned for the message, {@code conversationKey}
+     * and {@code conversationKeyVersion} the key the message was encrypted
+     * under, and {@code mediaHashKey} the hash key the file's upload started
+     * with, as listed in the message's attachments; the SDK encrypts the file
+     * under that attachment's key. Feeding fixed-size chunks through
+     * {@code push} keeps memory bounded no matter how large the file is;
+     * {@code finish} emits the final frame that seals the file (decryption
+     * fails without it).
      */
     public byte[] encryptMedia(
-            byte[] plaintext, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey)
+            byte[] plaintext,
+            String eventB64,
+            byte[] conversationKey,
+            String conversationKeyVersion,
+            String mediaHashKey)
             throws Exception {
-        try (FileEncryptor enc = chat.fileEncryptor(
-                new FileEncryptorParams(eventB64, conversationKeys, mediaHashKey))) {
+        FileEncryptorParams params = new FileEncryptorParams(eventB64, mediaHashKey);
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        try (FileEncryptor enc = chat.fileEncryptor(params)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             for (int offset = 0; offset < plaintext.length; offset += MEDIA_CHUNK) {
                 int end = Math.min(offset + MEDIA_CHUNK, plaintext.length);
@@ -320,35 +327,14 @@ public final class ChatCore implements AutoCloseable {
      * Map a prepared conversation change into the X API request shape.
      *
      * <p>Works for 1:1 key changes (one signature) and group create / member add
-     * (two signatures). {@code signingPublicKey} is the sender's own signing key,
-     * which the API expects alongside each signature. A conversation-key change's
-     * {@code signature_payload} is withheld (it embeds the plaintext key), so it
-     * is included only when non-empty.
+     * (two signatures). The participant keys and action signatures already have the
+     * request's shape.
      */
-    public static ObjectNode prepToRequest(PreparedConversationChange prep, String signingPublicKey) {
+    public static ObjectNode prepToRequest(PreparedConversationChange prep) {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("conversation_key_version", prep.conversationKeyVersion);
-        ArrayNode participantKeys = body.putArray("conversation_participant_keys");
-        for (EncryptedKeyForRecipient pk : prep.participantKeys) {
-            ObjectNode entry = participantKeys.addObject();
-            entry.put("user_id", pk.userId);
-            entry.put("encrypted_conversation_key", pk.encryptedKey);
-            entry.put("public_key_version", pk.publicKeyVersion);
-        }
-        ArrayNode signatures = body.putArray("action_signatures");
-        for (ActionSignature sig : prep.actionSignatures) {
-            ObjectNode entry = signatures.addObject();
-            entry.put("message_id", sig.messageId);
-            entry.put("encoded_message_event_detail", sig.encodedMessageEventDetail);
-            ObjectNode inner = entry.putObject("message_event_signature");
-            inner.put("signature", sig.signature);
-            inner.put("signature_version", sig.signatureVersion);
-            inner.put("public_key_version", sig.publicKeyVersion);
-            inner.put("signing_public_key", signingPublicKey);
-            if (sig.signaturePayload != null && !sig.signaturePayload.isEmpty()) {
-                entry.put("signature_payload", sig.signaturePayload);
-            }
-        }
+        body.set("conversation_participant_keys", MAPPER.valueToTree(prep.conversationParticipantKeys));
+        body.set("action_signatures", MAPPER.valueToTree(prep.actionSignatures));
         return body;
     }
 

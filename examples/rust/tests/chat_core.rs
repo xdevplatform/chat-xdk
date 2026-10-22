@@ -82,7 +82,7 @@ fn conversation_key_prepare_and_decrypt_roundtrip() {
     let prepared = core
         .prepare_conversation_key_change(
             &[PublicKeyInput {
-                user_id: "me".to_string(),
+                user_id: "910002".to_string(),
                 public_key: v["identity_public_b64"].as_str().unwrap().to_string(),
                 key_version: "1".to_string(),
             }],
@@ -96,7 +96,9 @@ fn conversation_key_prepare_and_decrypt_roundtrip() {
         .encoded()
         .to_vec();
     let decrypted = core
-        .decrypt_conversation_key(&prepared.participant_keys[0].encrypted_key)
+        .decrypt_conversation_key(
+            &prepared.conversation_participant_keys[0].encrypted_conversation_key,
+        )
         .expect("decrypt_conversation_key");
     assert_eq!(decrypted.encoded(), expected.as_slice());
 }
@@ -166,7 +168,7 @@ fn prep_to_request_maps_the_rest_shape() {
         .prepare_conversation_key_change(&keys, Some("1000:2000"))
         .expect("prepare_conversation_key_change");
     let signing = core.public_keys().expect("public_keys").signing;
-    let body = prep_to_request(&prep, &signing);
+    let body = prep_to_request(&prep);
 
     assert_eq!(
         body["conversation_key_version"].as_str().unwrap(),
@@ -307,7 +309,7 @@ fn media_encrypt_decrypt_roundtrip() {
     assert!(!body.event_b64.is_empty());
 
     let ciphertext = core
-        .encrypt_media(&plaintext, &body.event_b64, &keys, "photo")
+        .encrypt_media(&plaintext, &body.event_b64, &key, "1", "photo")
         .expect("encrypt_media");
     assert_eq!(
         Some(ciphertext.len() as u64),

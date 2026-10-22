@@ -4,6 +4,12 @@ import fs from "node:fs/promises";
 import init, { Chat } from "../../pkg/chat_xdk_wasm.js";
 import { delivered } from "./frame.mjs";
 
+/** File encrypt params from params that carry a one-key `conversationKeys` map. */
+const withKey = ({ conversationKeys, ...rest }) => {
+  const [[conversationKeyVersion, conversationKey]] = Object.entries(conversationKeys);
+  return { ...rest, conversationKey, conversationKeyVersion };
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -53,8 +59,8 @@ async function main() {
   const chat = new Chat();
 
   // import keys (raw bytes, not base64)
-  assert.throws(() => chat.importKeys(new Uint8Array([0])), /Invalid key format|expected/i);
-  chat.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+  assert.throws(() => chat.importKeys({ keys: new Uint8Array([0]) }), /Invalid key format|expected/i);
+  chat.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
   assert.equal(chat.isUnlocked(), true);
 
   // public keys match fixture
@@ -72,12 +78,12 @@ async function main() {
 
   // conversation-key change ECIES roundtrip (ciphertext randomized, key retained locally)
   const prep = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
-  const decryptedKey = chat.decryptConversationKey(prep.participantKeys[0].encryptedKey);
+  const decryptedKey = chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey);
   assert.deepEqual(decryptedKey, prep.conversationKey);
 
   // file fixtures use the deterministic conversation key
@@ -88,8 +94,8 @@ async function main() {
   // and opens from the sent message's event.
   const fixtureKeys = { [v.event_conversation_key_version]: convKey };
   const sender = new Chat();
-  sender.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-  sender.setIdentity(v.event_sender_id, v.event_signing_key_version);
+  sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+  sender.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
   sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
   const media = (mediaHashKey) => ({
     attachment_type: "media",
@@ -118,11 +124,11 @@ async function main() {
     mediaHashKey,
   });
   const plaintext = b64ToBytes(v.plaintext_b64);
-  const ct1 = sender.encryptFile({ ...fileParams("photo-0"), file: plaintext });
-  const ct2 = sender.encryptFile({ ...fileParams("photo-0"), file: plaintext });
+  const ct1 = sender.encryptFile(withKey({ ...fileParams("photo-0"), file: plaintext }));
+  const ct2 = sender.encryptFile(withKey({ ...fileParams("photo-0"), file: plaintext }));
   assert.notDeepEqual(ct1, ct2); // randomized nonces
   const second = new Uint8Array(5000).fill(0xab);
-  const secondEncryptor = sender.fileEncryptor(fileParams("photo-1"));
+  const secondEncryptor = sender.fileEncryptor(withKey(fileParams("photo-1")));
   const secondPieces = [];
   for (let i = 0; i < second.length; i += 700) {
     secondPieces.push(...secondEncryptor.push(second.subarray(i, i + 700)));
@@ -174,7 +180,7 @@ async function main() {
     ]);
     for (const name of ["banner", "favicon"]) {
       const params = { eventB64: cardPayload.eventB64, conversationKeys: fixtureKeys, mediaHashKey: name };
-      const encrypted = sender.encryptFile({ ...params, file: new TextEncoder().encode(`${name} bytes`) });
+      const encrypted = sender.encryptFile(withKey({ ...params, file: new TextEncoder().encode(`${name} bytes`) }));
       assert.equal(new TextDecoder().decode(chat.decryptFile({ ...params, encrypted })), `${name} bytes`);
     }
   }
@@ -203,11 +209,11 @@ async function main() {
       attachments: [media("reply-photo")],
     });
     const params = { eventB64: reply.eventB64, conversationKeys: fixtureKeys };
-    const encrypted = sender.encryptFile({ ...params, file: plaintext, mediaHashKey: "reply-photo" });
+    const encrypted = sender.encryptFile(withKey({ ...params, file: plaintext, mediaHashKey: "reply-photo" }));
     assert.deepEqual(chat.decryptFile({ ...params, encrypted, mediaHashKey: "reply-photo" }), plaintext);
     assert.deepEqual(chat.decryptFile({ ...params, encrypted: ct1, mediaHashKey: "photo-0" }), plaintext);
     assert.throws(
-      () => sender.encryptFile({ ...params, file: plaintext, mediaHashKey: "photo-0" }),
+      () => sender.encryptFile(withKey({ ...params, file: plaintext, mediaHashKey: "photo-0" })),
       /is media the reply quotes/,
     );
   }
@@ -215,7 +221,7 @@ async function main() {
   // A message with files needs a sender identity like any other send.
   {
     const noIdentity = new Chat();
-    noIdentity.importKeys(b64ToBytes(v.private_keys_concat_b64));
+    noIdentity.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
     assert.throws(
       () =>
         noIdentity.encryptMessage({
@@ -255,11 +261,16 @@ async function main() {
   const keyChanges = batch.messages.filter((m) => m.event.type === "keyChange");
   assert.equal(keyChanges.length, 1);
   assert.equal(keyChanges[0].event.verified, true);
-  assert.equal(keyChanges[0].event.keyVersion, v.event_conversation_key_version);
+  assert.equal(keyChanges[0].event.conversationKeyVersion, v.event_conversation_key_version);
+  assert.ok(keyChanges[0].event.conversationParticipantKeys.length > 0);
+  for (const key of keyChanges[0].event.conversationParticipantKeys) {
+    assert.deepEqual(Object.keys(key).sort(), ["encryptedConversationKey", "publicKeyVersion", "userId"]);
+  }
   const messages = batch.messages.filter((m) => m.event.type === "message");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].event.content.text, v.event_message_text);
   assert.equal(messages[0].event.verified, true);
+  assert.equal(messages[0].event.conversationKeyVersion, v.event_conversation_key_version);
 
   // Single-event path with pre-cached keys verifies the same message …
   const conversationKeys = batch.conversationKeys.keys;
@@ -304,14 +315,14 @@ async function main() {
   assert.equal(failure.rateLimitTier, "premium");
   assert.equal(failure.senderId, v.event_sender_id);
 
-  // Session identity + opt-in key cache: importKeys(bytes, version) records
-  // the registered key version, decryptEvents populates the cache from the
-  // verified KeyChange, and encryptMessage resolves the omitted identity and
-  // key pair from the session.
+  // Session identity + opt-in key cache: importKeys with a signingKeyVersion
+  // records the registered key version, decryptEvents populates the cache
+  // from the verified KeyChange, and encryptMessage resolves the omitted
+  // identity and key pair from the session.
   {
     const session = new Chat();
-    session.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-    session.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    session.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+    session.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
     session.setCacheKeys(true);
     session.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
     const cached = session.encryptMessage({
@@ -320,6 +331,19 @@ async function main() {
     });
     assert.equal(cached.conversationKeyVersion, v.event_conversation_key_version);
     assert.equal(cached.signatureInfo.publicKeyVersion, v.event_signing_key_version);
+
+    // A file of a message sent from the cache encrypts under the same cached key.
+    const photo = session.encryptMessage({
+      conversationId: v.event_conversation_id,
+      text: "a photo",
+      attachments: [media("photo")],
+    });
+    const photoBytes = new TextEncoder().encode("photo bytes");
+    const photoCt = session.encryptFile({ file: photoBytes, eventB64: photo.eventB64, mediaHashKey: "photo" });
+    assert.deepEqual(
+      chat.decryptFile({ encrypted: photoCt, eventB64: photo.eventB64, conversationKeys: fixtureKeys, mediaHashKey: "photo" }),
+      photoBytes,
+    );
 
     // Replying by raw event derives the preview from the signed original.
     const reply = session.encryptReply({
@@ -330,22 +354,22 @@ async function main() {
       conversationKeyVersion: v.event_conversation_key_version,
     });
     assert.ok(reply.messageId.length > 0);
-    assert.ok(reply.encryptedContent.length > 0);
+    assert.ok(reply.encodedMessageCreateEvent.length > 0);
 
     // Reacting by raw event derives the conversation id and sequence id.
     const reaction = session.encryptAddReaction({
       emoji: "\u{1F44D}",
       targetEvent: v.event_message_b64,
     });
-    assert.ok(reaction.encryptedContent.length > 0);
+    assert.ok(reaction.encodedMessageCreateEvent.length > 0);
   }
 
   // Without the opt-in cache, an omitted conversation key is an error even
   // after the key change decrypted.
   {
     const noCache = new Chat();
-    noCache.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
-    noCache.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    noCache.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+    noCache.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
     noCache.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
     assert.throws(
       () => noCache.encryptMessage({ conversationId: v.event_conversation_id, text: "x" }),
@@ -357,7 +381,7 @@ async function main() {
   // the core naming the missing sender_id.
   {
     const noIdentity = new Chat();
-    noIdentity.importKeys(b64ToBytes(v.private_keys_concat_b64));
+    noIdentity.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
     assert.throws(
       () =>
         noIdentity.encryptMessage({
@@ -374,8 +398,8 @@ async function main() {
   // decrypts back to the same quickReply, in the shape decryption returns.
   {
     const qr = new Chat();
-    qr.importKeys(b64ToBytes(v.private_keys_concat_b64));
-    qr.setIdentity(v.event_sender_id, v.event_signing_key_version);
+    qr.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
+    qr.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
     const key = {
       conversationKey: b64ToBytes(v.conversation_key_b64),
       conversationKeyVersion: v.event_conversation_key_version,
@@ -507,7 +531,7 @@ async function main() {
 
     // Batch path: the key change in the batch supplies the conversation key.
     const batchReceiver = new Chat();
-    batchReceiver.importKeys(b64ToBytes(v.private_keys_concat_b64), v.event_recipient_key_version);
+    batchReceiver.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
     const mkBatch = batchReceiver.decryptEvents({
       events: [v.event_key_change_message_key_b64, v.event_message_key_b64],
       signingKeys: signingKeysFor(v.event_sender_id, v.message_key_sender_id),

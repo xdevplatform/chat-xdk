@@ -113,7 +113,7 @@ class FeatureSwitchTest {
 
     private static Chat withKeys(Chat chat) throws Exception {
         chat.generateKeypairs();
-        chat.setIdentity("1001", "1");
+        chat.setIdentity(new SetIdentityParams("1001", "1"));
         return chat;
     }
 
@@ -421,7 +421,7 @@ class FeatureSwitchTest {
                 chats.get(0).generateKeypairs();
                 byte[] keys = chats.get(0).exportKeys();
                 for (Chat chat : chats.subList(1, chats.size())) {
-                    chat.importKeys(keys);
+                    chat.importKeys(new ImportKeysParams(keys));
                 }
                 waitFor("the key answer", () -> chats.stream().noneMatch(Chat::featureRefetchDue));
                 assertEquals(list(null, chats.get(0).featureBucket().toString()), server.buckets());

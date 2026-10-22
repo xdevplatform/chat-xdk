@@ -4,8 +4,9 @@
 //! ECDSA P-256, and packages them as [`ActionSignature`] structs.
 
 use crate::crypto::key_factory::KeyFactory;
-use crate::crypto::keys::XChatPrivateKey;
+use crate::crypto::keys::{KeypairPurpose, XChatPrivateKey};
 use crate::error::SdkError;
+use crate::protocol::serialization::base64_encode;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 
 /// [`SIGNATURE_VERSION`] as the integer used in verification.
@@ -38,7 +39,9 @@ pub(crate) const MAX_SIGNATURE_VERSION: i32 = 11;
 /// receives in full and therefore cannot reproduce.
 pub const CKEY_PLAINTEXT_SIGNATURE_VERSION: i32 = 6;
 
-/// A signed action for group operations.
+/// A signed action (conversation-key change, group change, message delete
+/// or read receipt), shaped as an entry of a request's `action_signatures`:
+/// the signature is nested under `message_event_signature`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct ActionSignature {
@@ -46,17 +49,52 @@ pub struct ActionSignature {
     pub message_id: String,
     /// Base64-encoded Thrift-serialized MessageEventDetail.
     pub encoded_message_event_detail: String,
+    /// The signature over the action, with its versions and the signer's
+    /// signing public key.
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub message_event_signature: MessageEventSignature,
+    /// The comma-separated payload string that was signed, kept as a
+    /// debugging aid. Empty for conversation-key changes, whose payload
+    /// embeds the plaintext conversation key and must not be exposed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub signature_payload: String,
+}
+
+/// The signature of an [`ActionSignature`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+pub struct MessageEventSignature {
     /// Base64 ECDSA signature of the payload.
     pub signature: String,
     /// Signature protocol version.
     pub signature_version: String,
     /// Version of the signing public key.
     pub public_key_version: String,
-    /// The comma-separated payload string that was signed, kept as a
-    /// debugging aid. Empty for conversation-key changes, whose payload
-    /// embeds the plaintext conversation key and must not be exposed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub signature_payload: String,
+    /// The signer's base64 signing public key, as `get_public_keys` returns
+    /// it.
+    pub signing_public_key: String,
+}
+
+impl MessageEventSignature {
+    /// Sign `payload` at [`SIGNATURE_VERSION`].
+    fn sign(
+        signing_key: &XChatPrivateKey,
+        public_key_version: &str,
+        payload: &[u8],
+    ) -> Result<Self, SdkError> {
+        let signature = KeyFactory::sign(signing_key, payload).map_err(SdkError::Crypto)?;
+        let signing_keypair = KeyFactory::get_keypair_from_private_key_bytes(
+            signing_key.encoded(),
+            KeypairPurpose::Signing,
+        )
+        .map_err(SdkError::Crypto)?;
+        Ok(Self {
+            signature: STANDARD_NO_PAD.encode(&signature),
+            signature_version: SIGNATURE_VERSION.to_string(),
+            public_key_version: public_key_version.to_string(),
+            signing_public_key: base64_encode(signing_keypair.public.encoded()),
+        })
+    }
 }
 
 /// Build and sign a GroupMemberAdd action signature (signed at v7).
@@ -234,15 +272,15 @@ pub fn build_ckey_change_signature(
         ]
         .join(","),
     );
-    let signature_bytes =
-        KeyFactory::sign(signing_key, payload.as_bytes()).map_err(SdkError::Crypto)?;
 
     Ok(ActionSignature {
         message_id: message_id.to_string(),
         encoded_message_event_detail: String::new(),
-        signature: STANDARD_NO_PAD.encode(&signature_bytes),
-        signature_version: SIGNATURE_VERSION.to_string(),
-        public_key_version: public_key_version.to_string(),
+        message_event_signature: MessageEventSignature::sign(
+            signing_key,
+            public_key_version,
+            payload.as_bytes(),
+        )?,
         signature_payload: String::new(),
     })
 }
@@ -331,15 +369,15 @@ fn sign_payload(
         ));
     }
     let payload = components.join(",");
-    let signature_bytes =
-        KeyFactory::sign(signing_key, payload.as_bytes()).map_err(SdkError::Crypto)?;
 
     Ok(ActionSignature {
         message_id: message_id.to_string(),
         encoded_message_event_detail: String::new(),
-        signature: STANDARD_NO_PAD.encode(&signature_bytes),
-        signature_version: SIGNATURE_VERSION.to_string(),
-        public_key_version: public_key_version.to_string(),
+        message_event_signature: MessageEventSignature::sign(
+            signing_key,
+            public_key_version,
+            payload.as_bytes(),
+        )?,
         signature_payload: payload,
     })
 }
@@ -347,7 +385,46 @@ fn sign_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::keys::KeypairPurpose;
+
+    #[test]
+    fn action_signatures_nest_the_signature_as_requests_do() {
+        let kp = KeyFactory::generate_keypair(KeypairPurpose::Signing).unwrap();
+        let delete = build_message_delete_signature(
+            &kp.private,
+            "3",
+            "msg-1",
+            "1",
+            "1:2",
+            &["5".to_string()],
+            2,
+        )
+        .unwrap();
+        let key_change =
+            build_ckey_change_signature(&kp.private, "3", "msg-2", "1", "1:2", "9", &[7u8; 32])
+                .unwrap();
+
+        for sig in [&delete, &key_change] {
+            let inner = &sig.message_event_signature;
+            assert_eq!(inner.signing_public_key, base64_encode(kp.public.encoded()));
+            let json = serde_json::to_value(sig).unwrap();
+            assert_eq!(
+                json["message_event_signature"],
+                serde_json::json!({
+                    "signature": inner.signature,
+                    "signature_version": "7",
+                    "public_key_version": "3",
+                    "signing_public_key": inner.signing_public_key,
+                })
+            );
+            for flat in ["signature", "signature_version", "public_key_version"] {
+                assert!(json.get(flat).is_none(), "{flat} is nested, not flat");
+            }
+        }
+        let delete_json = serde_json::to_value(&delete).unwrap();
+        assert_eq!(delete_json["signature_payload"], delete.signature_payload);
+        let key_change_json = serde_json::to_value(&key_change).unwrap();
+        assert!(key_change_json.get("signature_payload").is_none());
+    }
 
     #[test]
     fn test_group_member_add_payload_format() {
@@ -376,8 +453,8 @@ mod tests {
             "GroupChangeEvent.GroupMemberAddChange,msg-1,sender-1,conv-1,\
              new-user-1,existing-1,existing-2,existing-1,null,null,null,42,null"
         );
-        assert!(!sig.signature.is_empty());
-        assert_eq!(sig.signature_version, "7");
+        assert!(!sig.message_event_signature.signature.is_empty());
+        assert_eq!(sig.message_event_signature.signature_version, "7");
     }
 
     #[test]
@@ -402,12 +479,12 @@ mod tests {
             sig.signature_payload,
             "GroupChangeEvent.GroupCreate,msg-gc,sender-1,42,member-1,member-2,null,null,null"
         );
-        assert!(!sig.signature.is_empty());
-        assert_eq!(sig.signature_version, "7");
+        assert!(!sig.message_event_signature.signature.is_empty());
+        assert_eq!(sig.message_event_signature.signature_version, "7");
 
         let verified = KeyFactory::verify(
             &kp.public,
-            &base64_decode_sig(&sig.signature),
+            &base64_decode_sig(&sig.message_event_signature.signature),
             sig.signature_payload.as_bytes(),
         )
         .unwrap();
@@ -434,7 +511,7 @@ mod tests {
             sig.signature_payload,
             "GroupChangeEvent.GroupCreate,msg-gc2,admin-1,7,a,true,My Group,https://img.com/a.png"
         );
-        assert_eq!(sig.public_key_version, "3");
+        assert_eq!(sig.message_event_signature.public_key_version, "3");
     }
 
     #[test]
@@ -462,10 +539,10 @@ mod tests {
             "ConversationKeyChangeEvent,msg-2,sender-1,conv-1,42,{}",
             expected_ckey_b64
         );
-        assert!(!sig.signature.is_empty());
+        assert!(!sig.message_event_signature.signature.is_empty());
         let verified = KeyFactory::verify(
             &kp.public,
-            &base64_decode_sig(&sig.signature),
+            &base64_decode_sig(&sig.message_event_signature.signature),
             expected_payload.as_bytes(),
         )
         .unwrap();
@@ -519,7 +596,7 @@ mod tests {
         assert!(sig.signature_payload.contains("604800000"));
         // ckey version followed by the null screen-capture slot
         assert!(sig.signature_payload.ends_with(",99,null"));
-        assert_eq!(sig.public_key_version, "2");
+        assert_eq!(sig.message_event_signature.public_key_version, "2");
         assert_eq!(sig.message_id, "msg-full");
     }
 
@@ -620,7 +697,7 @@ mod tests {
 
         let verified = KeyFactory::verify(
             &kp.public,
-            &base64_decode_sig(&sig.signature),
+            &base64_decode_sig(&sig.message_event_signature.signature),
             sig.signature_payload.as_bytes(),
         )
         .unwrap();
@@ -646,7 +723,7 @@ mod tests {
 
         // Payload embeds the plaintext conversation key and is withheld.
         assert!(sig.signature_payload.is_empty());
-        assert_eq!(sig.signature_version, "7");
+        assert_eq!(sig.message_event_signature.signature_version, "7");
         assert_eq!(sig.message_id, "msg-multi");
 
         // Verify the signature against the reconstructed signed bytes to pin
@@ -657,7 +734,7 @@ mod tests {
         );
         let verified = KeyFactory::verify(
             &kp.public,
-            &base64_decode_sig(&sig.signature),
+            &base64_decode_sig(&sig.message_event_signature.signature),
             expected_payload.as_bytes(),
         )
         .unwrap();
@@ -683,8 +760,8 @@ mod tests {
                 STANDARD_NO_PAD.encode(ckey)
             )
         };
-        let sig1_bytes = base64_decode_sig(&sig1.signature);
-        let sig2_bytes = base64_decode_sig(&sig2.signature);
+        let sig1_bytes = base64_decode_sig(&sig1.message_event_signature.signature);
+        let sig2_bytes = base64_decode_sig(&sig2.message_event_signature.signature);
         assert!(KeyFactory::verify(&kp.public, &sig1_bytes, payload(&ckey1).as_bytes()).unwrap());
         assert!(KeyFactory::verify(&kp.public, &sig2_bytes, payload(&ckey2).as_bytes()).unwrap());
         assert!(!KeyFactory::verify(&kp.public, &sig1_bytes, payload(&ckey2).as_bytes()).unwrap());
@@ -694,7 +771,7 @@ mod tests {
         // Empty key → just the base64 of empty bytes
         assert!(KeyFactory::verify(
             &kp.public,
-            &base64_decode_sig(&sig_empty.signature),
+            &base64_decode_sig(&sig_empty.message_event_signature.signature),
             payload(&[]).as_bytes()
         )
         .unwrap());

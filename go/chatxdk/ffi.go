@@ -120,12 +120,10 @@ func ffiSetRejectUnverified(h handle, reject bool) {
 	C.chat_xdk_set_reject_unverified(h, v)
 }
 
-func ffiSetIdentity(h handle, userID, signingKeyVersion string) error {
-	cU := C.CString(userID)
-	defer C.free(unsafe.Pointer(cU))
-	cV := C.CString(signingKeyVersion)
-	defer C.free(unsafe.Pointer(cV))
-	_, err := ffiResult(C.chat_xdk_set_identity(h, cU, cV))
+func ffiSetIdentityParams(h handle, paramsJSON string) error {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	_, err := ffiResult(C.chat_xdk_set_identity_params(h, c))
 	return err
 }
 
@@ -194,21 +192,17 @@ func ffiExportKeys(h handle) (string, error) {
 // ffiImportKeys takes the base64 key material as a NUL-terminated byte buffer
 // and passes its pointer straight to C (cgo pins it for the call), instead of
 // C.CString, so the caller can wipe the only transport copy of the secret.
-func ffiImportKeys(h handle, keysB64z []byte) (string, error) {
-	return ffiResult(C.chat_xdk_import_keys(h, (*C.char)(unsafe.Pointer(&keysB64z[0]))))
-}
-
-// ffiImportKeysWithVersion passes the raw private key bytes straight to C
-// (cgo pins them for the call) — no base64 transport copy, so the caller's
-// slice remains the only copy to wipe.
-func ffiImportKeysWithVersion(h handle, keys []byte, version string) (string, error) {
+// ffiImportKeysParams passes the raw private key bytes straight to C (cgo
+// pins them for the call), so the caller's slice remains the only copy to
+// wipe; only the signing-key version travels as JSON.
+func ffiImportKeysParams(h handle, keys []byte, paramsJSON string) (string, error) {
 	var ptr *C.uint8_t
 	if len(keys) > 0 {
 		ptr = (*C.uint8_t)(unsafe.Pointer(&keys[0]))
 	}
-	cV := C.CString(version)
-	defer C.free(unsafe.Pointer(cV))
-	return ffiResult(C.chat_xdk_import_keys_with_version(h, ptr, C.uintptr_t(len(keys)), cV))
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_import_keys_params(h, ptr, C.uintptr_t(len(keys)), c))
 }
 
 // conversation keys

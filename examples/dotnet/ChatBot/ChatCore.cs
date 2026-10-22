@@ -29,7 +29,7 @@ public sealed class ChatCore : IDisposable
     /// registered.</summary>
     public void LoadKeys(string privateKeysB64, string signingKeyVersion)
     {
-        _chat.ImportKeys(Convert.FromBase64String(privateKeysB64), signingKeyVersion);
+        _chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(privateKeysB64)) { SigningKeyVersion = signingKeyVersion });
         SigningKeyVersion = signingKeyVersion;
     }
 
@@ -43,7 +43,7 @@ public sealed class ChatCore : IDisposable
             throw new InvalidOperationException(
                 "signing key version unknown: pass LoadKeys the public_key_version the X API "
                 + "returned when the keys were registered");
-        _chat.SetIdentity(userId, SigningKeyVersion);
+        _chat.SetIdentity(new SetIdentityParams(userId, SigningKeyVersion));
     }
 
     /// <summary>Generate a fresh identity. Returns the registration payload to
@@ -137,7 +137,7 @@ public sealed class ChatCore : IDisposable
                 TtlMsec = ttlMsec,
             });
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature, payload.EventB64);
+        return new SendBody(payload.MessageId, payload.EncodedMessageCreateEvent, payload.EncodedMessageEventSignature, payload.EventB64);
     }
 
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
@@ -156,7 +156,7 @@ public sealed class ChatCore : IDisposable
         };
         var payload = add ? _chat.EncryptAddReaction(parameters) : _chat.EncryptRemoveReaction(parameters);
         // The SDK generates the message id and returns it in the payload.
-        return new SendBody(payload.MessageId, payload.EncryptedContent, payload.EncodedEventSignature, payload.EventB64);
+        return new SendBody(payload.MessageId, payload.EncodedMessageCreateEvent, payload.EncodedMessageEventSignature, payload.EventB64);
     }
 
     // -- Group management -----------------------------------------------------
@@ -192,18 +192,23 @@ public sealed class ChatCore : IDisposable
     /// Encrypt a media file of an outgoing message with the incremental file API.
     ///
     /// <paramref name="eventB64"/> is the <c>EventB64</c> of the body
-    /// <see cref="EncryptReply"/> returned for the message, and
-    /// <paramref name="mediaHashKey"/> the hash key the file's upload started
-    /// with, as listed in the message's attachments; the SDK encrypts the file
-    /// under that attachment's key. Feeding fixed-size chunks through
-    /// <c>Push</c> keeps memory bounded no matter how large the file is;
-    /// <c>Finish</c> emits the final frame that seals the file (decryption fails
-    /// without it).
+    /// <see cref="EncryptReply"/> returned for the message,
+    /// <paramref name="conversationKey"/> and <paramref name="conversationKeyVersion"/>
+    /// the key the message was encrypted under, and <paramref name="mediaHashKey"/>
+    /// the hash key the file's upload started with, as listed in the message's
+    /// attachments; the SDK encrypts the file under that attachment's key.
+    /// Feeding fixed-size chunks through <c>Push</c> keeps memory bounded no
+    /// matter how large the file is; <c>Finish</c> emits the final frame that
+    /// seals the file (decryption fails without it).
     /// </summary>
     public byte[] EncryptMedia(
-        byte[] plaintext, string eventB64, Dictionary<string, byte[]> conversationKeys, string mediaHashKey)
+        byte[] plaintext, string eventB64, byte[] conversationKey, string conversationKeyVersion, string mediaHashKey)
     {
-        using var enc = _chat.FileEncryptor(new FileEncryptorParams(eventB64, conversationKeys, mediaHashKey));
+        using var enc = _chat.FileEncryptor(new FileEncryptorParams(eventB64, mediaHashKey)
+        {
+            ConversationKey = conversationKey,
+            ConversationKeyVersion = conversationKeyVersion,
+        });
         using var output = new MemoryStream();
         for (var offset = 0; offset < plaintext.Length; offset += MediaChunk)
         {
@@ -273,44 +278,14 @@ public static class EventHelpers
     /// (snake_case field names, ready to serialize as the JSON body).
     ///
     /// Works for 1:1 key changes (one signature) and group create / member add
-    /// (two signatures). <paramref name="signingPublicKey"/> is the sender's own
-    /// signing key, which the API expects alongside each signature.
+    /// (two signatures). The participant keys and action signatures already
+    /// have the request's shape.
     /// </summary>
-    public static Dictionary<string, object?> PrepToRequest(PreparedConversationChange prep, string signingPublicKey)
-    {
-        var actionSignatures = new List<Dictionary<string, object?>>();
-        foreach (var sig in prep.ActionSignatures)
-        {
-            var entry = new Dictionary<string, object?>
-            {
-                ["message_id"] = sig.MessageId,
-                ["encoded_message_event_detail"] = sig.EncodedMessageEventDetail,
-                ["message_event_signature"] = new Dictionary<string, object?>
-                {
-                    ["signature"] = sig.Signature,
-                    ["signature_version"] = sig.SignatureVersion,
-                    ["public_key_version"] = sig.PublicKeyVersion,
-                    ["signing_public_key"] = signingPublicKey,
-                },
-            };
-            // Conversation-key-change payloads are withheld by the SDK (they
-            // embed the plaintext key); only include the field when present.
-            if (!string.IsNullOrEmpty(sig.SignaturePayload))
-                entry["signature_payload"] = sig.SignaturePayload;
-            actionSignatures.Add(entry);
-        }
-        return new Dictionary<string, object?>
+    public static Dictionary<string, object?> PrepToRequest(PreparedConversationChange prep) =>
+        new()
         {
             ["conversation_key_version"] = prep.ConversationKeyVersion,
-            ["conversation_participant_keys"] = prep.ParticipantKeys
-                .Select(pk => new Dictionary<string, object?>
-                {
-                    ["user_id"] = pk.UserId,
-                    ["encrypted_conversation_key"] = pk.EncryptedKey,
-                    ["public_key_version"] = pk.PublicKeyVersion,
-                })
-                .ToList(),
-            ["action_signatures"] = actionSignatures,
+            ["conversation_participant_keys"] = prep.ConversationParticipantKeys,
+            ["action_signatures"] = prep.ActionSignatures,
         };
-    }
 }

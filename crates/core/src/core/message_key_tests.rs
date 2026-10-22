@@ -690,7 +690,7 @@ fn a_reply_to_a_message_key_original_carries_its_key_and_its_edits_key() {
         .with_identity(REPLIER, SIGNING_KEY_VERSION)
         .with_conversation_key(f.ckey.to_bytes(), "7");
     params.reply_to_edit_event = Some(frame(&edit));
-    let payload = f.replier.core.encrypt_reply(params).unwrap();
+    let payload = f.replier.core.encrypt_reply(&params).unwrap();
 
     let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &f.ckey) else {
         panic!("expected a message");
@@ -726,7 +726,7 @@ fn a_reply_to_a_conversation_key_original_carries_no_key() {
     let payload = replier
         .core
         .encrypt_reply(
-            crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&original))
+            &crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&original))
                 .with_identity(REPLIER, SIGNING_KEY_VERSION)
                 .with_conversation_key(ckey.to_bytes(), "7"),
         )
@@ -748,7 +748,7 @@ fn a_reply_with_every_preview_field_set_needs_no_key_for_a_message_key_original(
     params.reply_to_text = Some("Hello there".to_string());
     params.reply_to_entities = Some(vec![]);
     params.reply_to_attachments = Some(vec![]);
-    let payload = f.replier.core.encrypt_reply(params).unwrap();
+    let payload = f.replier.core.encrypt_reply(&params).unwrap();
     let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &key(8)) else {
         panic!("expected a message");
     };
@@ -778,7 +778,7 @@ fn a_reply_still_embeds_the_key_changes_it_is_given() {
         .with_identity(REPLIER, SIGNING_KEY_VERSION)
         .with_conversation_key(f.ckey.to_bytes(), "7");
     params.reply_to_ckces = Some(vec![frame(&kce)]);
-    let payload = f.replier.core.encrypt_reply(params).unwrap();
+    let payload = f.replier.core.encrypt_reply(&params).unwrap();
     let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &f.ckey) else {
         panic!("expected a message");
     };

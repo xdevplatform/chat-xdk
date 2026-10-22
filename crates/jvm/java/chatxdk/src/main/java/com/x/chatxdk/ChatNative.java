@@ -26,7 +26,7 @@ public interface ChatNative extends Library {
 
     void chat_xdk_set_reject_unverified(Pointer handle, int reject);
 
-    FfiResult.ByValue chat_xdk_set_identity(Pointer handle, Pointer userId, Pointer signingKeyVersion);
+    FfiResult.ByValue chat_xdk_set_identity_params(Pointer handle, Pointer paramsJson);
 
     void chat_xdk_set_cache_keys(Pointer handle, int enabled);
 
@@ -52,10 +52,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_export_keys(Pointer handle);
 
-    FfiResult.ByValue chat_xdk_import_keys(Pointer handle, Pointer keysB64);
-
-    FfiResult.ByValue chat_xdk_import_keys_with_version(
-            Pointer handle, Pointer keys, long keysLen, Pointer version);
+    FfiResult.ByValue chat_xdk_import_keys_params(
+            Pointer handle, Pointer keys, long keysLen, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_extract_conversation_keys(Pointer handle, Pointer eventsJson);
 

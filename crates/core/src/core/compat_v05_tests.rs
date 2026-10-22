@@ -130,7 +130,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
     };
     let payload = match kind {
         "message" => core.encrypt_message(
-            EncryptMessageParams::new(conversation.clone(), "hello from 0.5")
+            &EncryptMessageParams::new(conversation.clone(), "hello from 0.5")
                 .with_conversation_key(key.clone(), version),
         ),
         "message_with_entities" => {
@@ -141,7 +141,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
                 end: 17,
                 entity_type: "url".to_string(),
             }]);
-            core.encrypt_message(params)
+            core.encrypt_message(&params)
         }
         "reaction_add" => core.encrypt_add_reaction(&reaction("\u{1f44d}")),
         "reaction_remove" => core.encrypt_remove_reaction(&reaction("\u{1f44d}")),
@@ -160,7 +160,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
                 fixture["media_attachment"].clone(),
             )
             .unwrap()]);
-            core.encrypt_message(params)
+            core.encrypt_message(&params)
         }
         "reply" => {
             let mut params = EncryptReplyParams::new(conversation.clone(), "a reply", "")
@@ -168,10 +168,10 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
             params.reply_to_sequence_id = Some(target.clone());
             params.reply_to_sender_id = Some(text(fixture, "sender_id").parse().unwrap());
             params.reply_to_text = Some("hello from 0.5".to_string());
-            core.encrypt_reply(params)
+            core.encrypt_reply(&params)
         }
         "reply_from_event" => core.encrypt_reply(
-            EncryptReplyParams::new(conversation.clone(), "a reply to the event", target_event)
+            &EncryptReplyParams::new(conversation.clone(), "a reply to the event", target_event)
                 .with_conversation_key(key.clone(), version),
         ),
         "edit_from_event" => core.encrypt_edit(
@@ -188,12 +188,15 @@ fn v0_sends_match_0_5_on_the_wire() {
     for (version, json) in FIXTURES {
         let fixture: Value = serde_json::from_str(json).unwrap();
         let core = ChatCore::new();
-        core.import_keys(&bytes(&fixture, "private_keys_b64"))
-            .unwrap();
-        core.set_identity(
+        core.import_keys(&ImportKeysParams::new(
+            bytes(&fixture, "private_keys_b64").to_vec(),
+        ))
+        .unwrap();
+        core.set_identity(&SetIdentityParams::new(
             text(&fixture, "sender_id"),
             text(&fixture, "signing_key_version"),
-        );
+        ))
+        .unwrap();
         assert!(!core.is_enabled(crate::features::V1_SEND));
         let ckey = conversation_key(&fixture);
         let signing_key: SigningKeyEntry =
@@ -210,7 +213,7 @@ fn v0_sends_match_0_5_on_the_wire() {
 
             let mut theirs_create: MessageCreateEvent = read(&bytes(send, "encrypted_content"));
             let mut ours_create: MessageCreateEvent =
-                read(&base64_decode(&ours.encrypted_content).unwrap());
+                read(&base64_decode(&ours.encoded_message_create_event).unwrap());
             assert_eq!(ours_create.contents_encryption_version, None);
             let ours_contents = ours_create.contents.take().unwrap();
             let theirs_contents = theirs_create.contents.take().unwrap();
@@ -228,7 +231,7 @@ fn v0_sends_match_0_5_on_the_wire() {
             let mut theirs_signature: MessageEventSignature =
                 read(&bytes(send, "encoded_event_signature"));
             let mut ours_signature: MessageEventSignature =
-                read(&base64_decode(&ours.encoded_event_signature).unwrap());
+                read(&base64_decode(&ours.encoded_message_event_signature).unwrap());
             theirs_signature.signature = None;
             ours_signature.signature = None;
             assert_eq!(

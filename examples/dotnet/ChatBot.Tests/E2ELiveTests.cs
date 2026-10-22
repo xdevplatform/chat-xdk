@@ -212,8 +212,7 @@ public class E2ELiveTests
             .Concat(KeyEntries(pksByUser.GetValueOrDefault(partnerId!) ?? new(), partnerId!))
             .ToList();
         var prep = core.PrepareConversationKeyChange(bothKeys);
-        var signingPub = core.PublicKeys().Signing;
-        var resp = await api.AddConversationKeysAsync(conv, EventHelpers.PrepToRequest(prep, signingPub));
+        var resp = await api.AddConversationKeysAsync(conv, EventHelpers.PrepToRequest(prep));
         var data = resp.ValueKind == JsonValueKind.Object && resp.TryGetProperty("data", out var dEl) ? dEl : default;
         Assert.True(
             !string.IsNullOrEmpty(Str(data, "sequence_id"))
@@ -310,8 +309,7 @@ public class E2ELiveTests
                     AttachmentDescriptor.Media(mediaHashKey, 0, 0, plaintext.Length, "e2e.bin", 5),
                 },
                 ttlMsec: 24L * 60 * 60 * 1000);
-            var ciphertext = core.EncryptMedia(
-                plaintext, mediaMsg.EventB64, new Dictionary<string, byte[]> { [kv] = key }, mediaHashKey);
+            var ciphertext = core.EncryptMedia(plaintext, mediaMsg.EventB64, key, kv, mediaHashKey);
             await api.FinishMediaUploadAsync(canonicalConv, sessionId, mediaHashKey, ciphertext);
             Console.WriteLine($"encrypted media uploaded: {mediaHashKey} ({ciphertext.Length} bytes)");
             await api.SendMessageAsync(canonicalConv, mediaMsg);
@@ -354,7 +352,6 @@ public class E2ELiveTests
         List<SigningKeyEntry> signing)
     {
         var myKeys = bothKeys.Where(k => k.UserId == myId).ToList();
-        var signingPub = core.PublicKeys().Signing;
 
         var groupId = await api.InitializeGroupAsync();
         Assert.True(groupId.StartsWith("g"), $"unexpected group id: \"{groupId}\"");
@@ -363,7 +360,7 @@ public class E2ELiveTests
         // exercises PrepareGroupMembersChange with the partner.
         var prep = core.PrepareGroupCreate(myKeys, groupId, new[] { myId }, new[] { myId });
         var members = new List<string> { myId };
-        var body = EventHelpers.PrepToRequest(prep, signingPub);
+        var body = EventHelpers.PrepToRequest(prep);
         body["conversation_id"] = groupId;
         body["group_members"] = members;
         body["group_admins"] = new[] { myId };
@@ -378,7 +375,7 @@ public class E2ELiveTests
             // with both participants (skipping the member-add below).
             prep = core.PrepareGroupCreate(bothKeys, groupId, new[] { myId, partnerId }, new[] { myId });
             members = new List<string> { myId, partnerId };
-            body = EventHelpers.PrepToRequest(prep, signingPub);
+            body = EventHelpers.PrepToRequest(prep);
             body["conversation_id"] = groupId;
             body["group_members"] = members;
             body["group_admins"] = new[] { myId };
@@ -404,7 +401,7 @@ public class E2ELiveTests
         {
             var mPrep = core.PrepareGroupMembersChange(
                 bothKeys, groupId, new[] { partnerId }, members, new[] { myId });
-            var mBody = EventHelpers.PrepToRequest(mPrep, signingPub);
+            var mBody = EventHelpers.PrepToRequest(mPrep);
             mBody["user_ids"] = new[] { partnerId };
             await api.AddGroupMembersAsync(groupId, mBody);
             Console.WriteLine($"group member add: {partnerId} added (key rotated to {mPrep.ConversationKeyVersion})");

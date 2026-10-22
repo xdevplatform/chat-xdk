@@ -36,13 +36,19 @@ type SendPayload struct {
 	// receive, without the fields the server assigns. Pass it to EncryptFile
 	// or FileEncryptor to encrypt the message's files, or to DecryptEvent to
 	// read the message back.
-	EventB64               string        `json:"event_b64"`
-	EncryptedContent       string        `json:"encrypted_content"`
-	Signature              string        `json:"signature"`
-	EncodedEventSignature  string        `json:"encoded_event_signature"`
-	SignatureInfo          SignatureInfo `json:"signature_info"`
-	ConversationKeyVersion string        `json:"conversation_key_version"`
-	ShouldNotify           bool          `json:"should_notify"`
+	EventB64 string `json:"event_b64"`
+	// EncodedMessageCreateEvent is the base64 Thrift MessageCreateEvent
+	// carrying the encrypted contents: the send request's
+	// encoded_message_create_event.
+	EncodedMessageCreateEvent string `json:"encoded_message_create_event"`
+	Signature                 string `json:"signature"`
+	// EncodedMessageEventSignature is the base64 Thrift
+	// MessageEventSignature: the send request's
+	// encoded_message_event_signature.
+	EncodedMessageEventSignature string        `json:"encoded_message_event_signature"`
+	SignatureInfo                SignatureInfo `json:"signature_info"`
+	ConversationKeyVersion       string        `json:"conversation_key_version"`
+	ShouldNotify                 bool          `json:"should_notify"`
 	// XdkVersion is the version of the Chat XDK that built the payload.
 	XdkVersion string `json:"xdk_version"`
 }
@@ -53,11 +59,14 @@ type SignatureInfo struct {
 	SignatureVersion string `json:"signature_version"`
 }
 
-// EncryptedKeyForRecipient is one participant's encrypted conversation key.
-type EncryptedKeyForRecipient struct {
-	UserID           string `json:"user_id"`
-	EncryptedKey     string `json:"encrypted_key"`
-	PublicKeyVersion string `json:"public_key_version"`
+// ConversationParticipantKey is one participant's copy of a conversation key,
+// encrypted to their identity key: an entry of the X API's
+// conversation_participant_keys. A prepared change carries these for its
+// request, and a received key change carries them as delivered.
+type ConversationParticipantKey struct {
+	UserID                   string `json:"user_id"`
+	EncryptedConversationKey string `json:"encrypted_conversation_key"`
+	PublicKeyVersion         string `json:"public_key_version"`
 }
 
 // SigningKeyEntry is used for signature verification in DecryptEvent and DecryptEvents.
@@ -114,10 +123,10 @@ type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey        []byte                     `json:"conversation_key"`
-	ConversationKeyVersion string                     `json:"conversation_key_version"`
-	ParticipantKeys        []EncryptedKeyForRecipient `json:"participant_keys"`
-	ActionSignatures       []ActionSignature          `json:"action_signatures"`
+	ConversationKey             []byte                       `json:"conversation_key"`
+	ConversationKeyVersion      string                       `json:"conversation_key_version"`
+	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
+	ActionSignatures            []ActionSignature            `json:"action_signatures"`
 }
 
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.
@@ -161,6 +170,25 @@ type GroupCreateParams struct {
 	Title             string           `json:"title,omitempty"`      // empty = unset
 	AvatarURL         string           `json:"avatar_url,omitempty"` // empty = unset
 	TTLMsec           *int64           `json:"ttl_msec,omitempty"`
+}
+
+// SetIdentityParams are the parameters for SetIdentity.
+type SetIdentityParams struct {
+	// UserID is your user ID: the sender of everything this chat signs.
+	UserID string `json:"user_id"`
+	// SigningKeyVersion is the public_key_version the X API returned when
+	// your keys were registered.
+	SigningKeyVersion string `json:"signing_key_version"`
+}
+
+// ImportKeysParams are the parameters for ImportKeys.
+type ImportKeysParams struct {
+	// Keys is the blob ExportKeys returned. It is passed to the native side
+	// directly and never serialized.
+	Keys []byte `json:"-"`
+	// SigningKeyVersion is the public_key_version the X API returned when the
+	// keys were registered; empty leaves the signing-key version unset.
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
 }
 
 // EncryptMessageParams are the parameters for EncryptMessage.
@@ -306,7 +334,7 @@ type EncryptReplyParams struct {
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
 	ReplyToSequenceID      string                 `json:"reply_to_sequence_id,omitempty"`     // empty = derived from ReplyToEvent
-	ReplyToSenderID        *int64                 `json:"reply_to_sender_id,omitempty"`
+	ReplyToSenderID        string                 `json:"reply_to_sender_id,omitempty"`       // digits; empty = derived from ReplyToEvent
 	ReplyToText            *string                `json:"reply_to_text,omitempty"`
 	Entities               []EntityTuple          `json:"entities,omitempty"`
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
@@ -428,20 +456,25 @@ type EncryptFileParams struct {
 	// EventB64 is the EventB64 of the payload that EncryptMessage or
 	// EncryptReply returned for the message carrying the file.
 	EventB64 string `json:"event_b64"`
-	// ConversationKeys maps key version to the raw 32-byte conversation key;
-	// it must hold the key the message was encrypted under.
-	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// MediaHashKey is the media hash key the file's upload started with, as
 	// listed in the message's attachments.
 	MediaHashKey string `json:"media_hash_key"`
+	// ConversationKey is the raw 32-byte conversation key the message was
+	// encrypted under; with ConversationKeyVersion empty too, it resolves from
+	// the key cache, as for EncryptMessageParams.
+	ConversationKey []byte `json:"conversation_key,omitempty"`
+	// ConversationKeyVersion is the version of ConversationKey: the message's
+	// key version.
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
 }
 
 // FileEncryptorParams are the parameters for FileEncryptor: those of
 // EncryptFile apart from the file, which is fed to the encryptor.
 type FileEncryptorParams struct {
-	EventB64         string            `json:"event_b64"`
-	ConversationKeys map[string][]byte `json:"conversation_keys"`
-	MediaHashKey     string            `json:"media_hash_key"`
+	EventB64               string `json:"event_b64"`
+	MediaHashKey           string `json:"media_hash_key"`
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // DecryptFileParams are the parameters for DecryptFile.
@@ -468,15 +501,33 @@ type FileDecryptorParams struct {
 	MediaHashKey     string            `json:"media_hash_key"`
 }
 
-// ActionSignature authenticates a conversation key change, member add,
-// message delete, or read receipt.
+// ActionSignature authenticates a conversation key change, group change,
+// message delete, or read receipt. It is shaped as an entry of a request's
+// action_signatures: the signature is nested under message_event_signature.
 type ActionSignature struct {
-	MessageID                 string `json:"message_id"`
-	EncodedMessageEventDetail string `json:"encoded_message_event_detail"`
-	Signature                 string `json:"signature"`
-	SignatureVersion          string `json:"signature_version"`
-	PublicKeyVersion          string `json:"public_key_version"`
-	SignaturePayload          string `json:"signature_payload"`
+	MessageID                 string                `json:"message_id"`
+	EncodedMessageEventDetail string                `json:"encoded_message_event_detail"`
+	MessageEventSignature     MessageEventSignature `json:"message_event_signature"`
+	// SignaturePayload is the comma-separated payload that was signed;
+	// empty for conversation-key changes, whose payload embeds the
+	// plaintext conversation key.
+	SignaturePayload string `json:"signature_payload,omitempty"`
+}
+
+// MessageEventSignature is the signature of an ActionSignature.
+type MessageEventSignature struct {
+	Signature        string `json:"signature"`
+	SignatureVersion string `json:"signature_version"`
+	PublicKeyVersion string `json:"public_key_version"`
+	// SigningPublicKey is the signer's base64 signing public key, as
+	// GetPublicKeys returns it.
+	SigningPublicKey string `json:"signing_public_key"`
+}
+
+// PreparedAction is a signed message delete or read receipt: the
+// action_signatures a request carries for it, one entry.
+type PreparedAction struct {
+	ActionSignatures []ActionSignature `json:"action_signatures"`
 }
 
 // orEmpty returns a non-nil slice so JSON marshals it as [] rather than null.
@@ -581,13 +632,13 @@ func (e *Event) Raw() json.RawMessage {
 // Message is a decrypted chat message.
 type Message struct {
 	EventMeta
-	Content      MessageContent       `json:"content"`
-	KeyVersion   *string              `json:"key_version,omitempty"`
-	Verified     bool                 `json:"verified"`
-	ShouldNotify *bool                `json:"should_notify,omitempty"`
-	TTLMsec      *int64               `json:"ttl_msec,omitempty"`
-	Attachments  []json.RawMessage    `json:"attachments,omitempty"`
-	MediaHashes  []MediaHashReference `json:"media_hashes,omitempty"`
+	Content                MessageContent       `json:"content"`
+	ConversationKeyVersion *string              `json:"conversation_key_version,omitempty"`
+	Verified               bool                 `json:"verified"`
+	ShouldNotify           *bool                `json:"should_notify,omitempty"`
+	TTLMsec                *int64               `json:"ttl_msec,omitempty"`
+	Attachments            []json.RawMessage    `json:"attachments,omitempty"`
+	MediaHashes            []MediaHashReference `json:"media_hashes,omitempty"`
 	// ReplyPreviewValidation is the outcome of validating the reply preview
 	// against the raw signed original event embedded in it: "Valid" when the
 	// raw event verified and the preview matches the original, "Invalid" when
@@ -669,26 +720,19 @@ type MediaHashReference struct {
 // KeyChangeEvent indicates a conversation key rotation.
 type KeyChangeEvent struct {
 	EventMeta
-	KeyVersion      string           `json:"key_version"`
-	ParticipantKeys []ParticipantKey `json:"participant_keys"`
-	Verified        bool             `json:"verified"`
+	ConversationKeyVersion      string                       `json:"conversation_key_version"`
+	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
+	Verified                    bool                         `json:"verified"`
 }
 
 // FindKeyForUser returns the encrypted key for a specific user.
-func (kc *KeyChangeEvent) FindKeyForUser(userID string) *ParticipantKey {
-	for i := range kc.ParticipantKeys {
-		if kc.ParticipantKeys[i].UserID == userID {
-			return &kc.ParticipantKeys[i]
+func (kc *KeyChangeEvent) FindKeyForUser(userID string) *ConversationParticipantKey {
+	for i := range kc.ConversationParticipantKeys {
+		if kc.ConversationParticipantKeys[i].UserID == userID {
+			return &kc.ConversationParticipantKeys[i]
 		}
 	}
 	return nil
-}
-
-// ParticipantKey is an encrypted conversation key for a participant.
-type ParticipantKey struct {
-	UserID           string `json:"user_id"`
-	EncryptedKey     string `json:"encrypted_key"`
-	PublicKeyVersion string `json:"public_key_version"`
 }
 
 // GroupChangeEvent indicates a group membership or settings change.

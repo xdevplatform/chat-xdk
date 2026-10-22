@@ -32,6 +32,8 @@ from chat_xdk import (
     GroupCreateParams,
     GroupMembersChangeParams,
     QuickReply,
+    ImportKeysParams,
+    SetIdentityParams,
 )
 
 
@@ -73,7 +75,9 @@ class ChatCore:
         This is the quickstart key-storage path. For production key storage see
         ``unlock`` / ``setup`` (Juicebox).
         """
-        self.chat.import_keys(_b64decode(private_keys_b64), version=signing_key_version)
+        self.chat.import_keys(
+            ImportKeysParams(_b64decode(private_keys_b64), signing_key_version=signing_key_version)
+        )
         self.signing_key_version = signing_key_version
 
     def unlock(self, juicebox_config_json: str, pin: str, signing_key_version: str) -> None:
@@ -99,7 +103,7 @@ class ChatCore:
                 "signing key version unknown: pass load_keys or unlock the "
                 "public_key_version the X API returned when the keys were registered"
             )
-        self.chat.set_identity(user_id, self.signing_key_version)
+        self.chat.set_identity(SetIdentityParams(user_id, self.signing_key_version))
 
     def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None:
         """Store participants' signing keys for decrypt calls that omit them.
@@ -285,8 +289,8 @@ class ChatCore:
         return {
             # The SDK generates the message id and returns it in the payload.
             "message_id": payload.message_id,
-            "encoded_message_create_event": payload.encrypted_content,
-            "encoded_message_event_signature": payload.encoded_event_signature,
+            "encoded_message_create_event": payload.encoded_message_create_event,
+            "encoded_message_event_signature": payload.encoded_message_event_signature,
             "event_b64": payload.event_b64,
         }
 
@@ -318,8 +322,8 @@ class ChatCore:
         return {
             # The SDK generates the message id and returns it in the payload.
             "message_id": payload.message_id,
-            "encoded_message_create_event": payload.encrypted_content,
-            "encoded_message_event_signature": payload.encoded_event_signature,
+            "encoded_message_create_event": payload.encoded_message_create_event,
+            "encoded_message_event_signature": payload.encoded_message_event_signature,
         }
 
     # -- Group management -----------------------------------------------------
@@ -370,21 +374,28 @@ class ChatCore:
         self,
         plaintext: bytes,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
+        conversation_key: bytes,
+        conversation_key_version: str,
         media_hash_key: str,
     ) -> bytes:
         """Encrypt a media file of an outgoing message with the incremental API.
 
         ``event_b64`` is the ``event_b64`` that ``encrypt_reply`` returned for
-        the message, and ``media_hash_key`` the hash key its upload started
-        with, as listed in the message's attachments; the SDK encrypts the
-        file under that attachment's key. Feeding fixed-size chunks through
-        ``push`` keeps memory bounded no matter how large the file is;
-        ``finish`` emits the final frame that seals the file (decryption
-        fails without it).
+        the message, ``conversation_key`` and ``conversation_key_version`` the
+        key the message was encrypted under, and ``media_hash_key`` the hash
+        key its upload started with, as listed in the message's attachments;
+        the SDK encrypts the file under that attachment's key. Feeding
+        fixed-size chunks through ``push`` keeps memory bounded no matter how
+        large the file is; ``finish`` emits the final frame that seals the
+        file (decryption fails without it).
         """
         enc = self.chat.file_encryptor(
-            FileEncryptorParams(event_b64, conversation_keys, media_hash_key)
+            FileEncryptorParams(
+                event_b64,
+                media_hash_key,
+                conversation_key=conversation_key,
+                conversation_key_version=conversation_key_version,
+            )
         )
         out = bytearray()
         for offset in range(0, len(plaintext), self.MEDIA_CHUNK):
@@ -434,40 +445,15 @@ def message_text(event: dict[str, Any]) -> str | None:
     return content.get("text")
 
 
-def prep_to_request(prep: dict[str, Any], signing_public_key: str) -> dict[str, Any]:
+def prep_to_request(prep: dict[str, Any]) -> dict[str, Any]:
     """Map a prepared conversation change into the X API request shape.
 
     Works for 1:1 key changes (one signature) and group create / member add
-    (two signatures). ``signing_public_key`` is the sender's own signing key,
-    which the API expects alongside each signature.
+    (two signatures). The participant keys and action signatures already have
+    the request's shape.
     """
-    body: dict[str, Any] = {
+    return {
         "conversation_key_version": prep["conversation_key_version"],
-        "conversation_participant_keys": [
-            {
-                "user_id": str(pk["user_id"]),
-                "encrypted_conversation_key": pk["encrypted_key"],
-                "public_key_version": str(pk["public_key_version"]),
-            }
-            for pk in prep["participant_keys"]
-        ],
-        "action_signatures": [
-            {
-                "message_id": sig["message_id"],
-                "encoded_message_event_detail": sig["encoded_message_event_detail"],
-                "message_event_signature": {
-                    "signature": sig["signature"],
-                    "signature_version": sig["signature_version"],
-                    "public_key_version": sig["public_key_version"],
-                    "signing_public_key": signing_public_key,
-                },
-                **(
-                    {"signature_payload": sig["signature_payload"]}
-                    if sig.get("signature_payload")
-                    else {}
-                ),
-            }
-            for sig in prep["action_signatures"]
-        ],
+        "conversation_participant_keys": prep["conversation_participant_keys"],
+        "action_signatures": prep["action_signatures"],
     }
-    return body

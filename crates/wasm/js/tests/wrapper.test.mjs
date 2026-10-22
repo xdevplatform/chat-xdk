@@ -15,6 +15,12 @@ import {
   guessesRemaining,
 } from "../index.js";
 
+/** File encrypt params from params that carry a one-key `conversationKeys` map. */
+const withKey = ({ conversationKeys, ...rest }) => {
+  const [[conversationKeyVersion, conversationKey]] = Object.entries(conversationKeys);
+  return { ...rest, conversationKey, conversationKeyVersion };
+};
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -158,7 +164,15 @@ async function delegationTests() {
   assert.equal(chat.matchesRegisteredKey(v.signing_public_b64), false);
 
   // Event decryption over the fixture vectors.
-  chat.setIdentity(v.event_sender_id, v.event_recipient_key_version);
+  chat.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_recipient_key_version });
+  assert.throws(
+    () => chat.setIdentity({ userId: "user-1", signingKeyVersion: "1" }),
+    /Invalid user_id 'user-1'/,
+  );
+  assert.throws(
+    () => chat.setIdentity({ userId: "1001", signingKeyVersion: "v1" }),
+    /Invalid signing_key_version 'v1'/,
+  );
   const signingKeys = [
     {
       userId: v.event_sender_id,
@@ -213,7 +227,7 @@ async function delegationTests() {
   // setIdentity + setCacheKeys delegations: the session identity and the
   // cached key (populated by the decryptEvents call above re-run with the
   // cache enabled) back an encryptMessage with no explicit identity or key.
-  chat.setIdentity(v.event_sender_id, v.event_signing_key_version);
+  chat.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
   chat.setCacheKeys(true);
   chat.decryptEvents({ events: [v.event_key_change_b64], signingKeys });
   // With no conversationKeys, decryptEvent takes the key from the cache.
@@ -229,37 +243,37 @@ async function delegationTests() {
 
   // Conversation-key change + ECIES decrypt through the wrapper.
   const prep = chat.prepareConversationKeyChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.equal(prep.conversationKey.length, 32);
   assert.deepEqual(
-    chat.decryptConversationKey(prep.participantKeys[0].encryptedKey),
+    chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey),
     prep.conversationKey,
   );
 
   const groupPrep = chat.prepareGroupCreate({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    memberIds: ["me", "friend"],
-    adminIds: ["me"],
+    memberIds: ["910002", "910005"],
+    adminIds: ["910002"],
     title: "Wrapper Group",
   });
   assert.equal(groupPrep.actionSignatures.length, 2);
   assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
 
   const membersPrep = chat.prepareGroupMembersChange({
-    senderId: "me",
+    senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "me", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "g-1",
-    newMemberIds: ["friend"],
-    currentMemberIds: ["me"],
-    currentAdminIds: ["me"],
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
     currentPendingMemberIds: [],
   });
   assert.equal(membersPrep.actionSignatures.length, 2);
@@ -290,7 +304,7 @@ async function delegationTests() {
     signingKeyVersion: "1",
     replyToSequenceId: "seq-1",
   });
-  assert.ok(replyPayload.encryptedContent.length > 0);
+  assert.ok(replyPayload.encodedMessageCreateEvent.length > 0);
   const addReaction = chat.encryptAddReaction({
     senderId: "111",
     conversationId: "conv-1",
@@ -300,7 +314,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.ok(addReaction.encryptedContent.length > 0);
+  assert.ok(addReaction.encodedMessageCreateEvent.length > 0);
   const removeReaction = chat.encryptRemoveReaction({
     senderId: "111",
     conversationId: "conv-1",
@@ -310,7 +324,7 @@ async function delegationTests() {
     conversationKeyVersion: "1",
     signingKeyVersion: "1",
   });
-  assert.ok(removeReaction.encryptedContent.length > 0);
+  assert.ok(removeReaction.encodedMessageCreateEvent.length > 0);
 
   // Generic + file crypto delegations (roundtrips prove every field): two
   // files encrypted from the message's eventB64 open from the same event.
@@ -333,17 +347,17 @@ async function delegationTests() {
     conversationKeyVersion: v.event_conversation_key_version,
     attachments: [photo("first"), photo("second")],
   });
-  const fileCt = chat.encryptFile({
+  const fileCt = chat.encryptFile(withKey({
     file: b64ToBytes(v.plaintext_b64),
     eventB64: mediaPayload.eventB64,
     conversationKeys: mediaKeys,
     mediaHashKey: "first",
-  });
-  const enc = chat.fileEncryptor({
+  }));
+  const enc = chat.fileEncryptor(withKey({
     eventB64: mediaPayload.eventB64,
     conversationKeys: mediaKeys,
     mediaHashKey: "second",
-  });
+  }));
   const piece = enc.push(b64ToBytes(v.plaintext_b64));
   const finalPiece = enc.finish();
   const streamed = new Uint8Array([...piece, ...finalPiece]);

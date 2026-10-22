@@ -428,8 +428,8 @@ pub struct Message {
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub content: MessageContent,
 
-    /// Version of the conversation key used.
-    pub key_version: Option<String>,
+    /// Version of the conversation key the message is encrypted under.
+    pub conversation_key_version: Option<String>,
 
     /// Whether signature was verified.
     pub verified: bool,
@@ -668,8 +668,8 @@ pub enum AttachmentInfo {
 
 /// Conversation key rotation event.
 ///
-/// When you receive this, find your entry in `participant_keys` and store
-/// the new encrypted key.
+/// When you receive this, find your entry in `conversation_participant_keys`
+/// and store the new encrypted key.
 ///
 /// Maps to `ConversationKeyChangeEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,36 +681,41 @@ pub struct KeyChangeEvent {
     pub meta: EventMeta,
 
     /// New conversation key version.
-    pub key_version: String,
+    pub conversation_key_version: String,
 
     /// Whether the signature was verified.
     pub verified: bool,
 
     /// Encrypted keys for each participant.
     #[cfg_attr(feature = "js", js_camel(wrap))]
-    pub participant_keys: Vec<ParticipantKey>,
+    pub conversation_participant_keys: Vec<ConversationParticipantKey>,
 }
 
 impl KeyChangeEvent {
     /// Find the encrypted key for a specific user.
-    pub fn find_key_for_user(&self, user_id: &str) -> Option<&ParticipantKey> {
-        self.participant_keys.iter().find(|k| k.user_id == user_id)
+    pub fn find_key_for_user(&self, user_id: &str) -> Option<&ConversationParticipantKey> {
+        self.conversation_participant_keys
+            .iter()
+            .find(|k| k.user_id == user_id)
     }
 }
 
-/// An encrypted conversation key for a participant.
-///
-/// Maps to `ConversationParticipantKey` in Thrift.
+/// One participant's copy of a conversation key, encrypted to their identity
+/// key: an entry of the X API's `conversation_participant_keys`, and Thrift's
+/// `ConversationParticipantKey`. A prepared change carries these for its
+/// request, and a received key change carries them as delivered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
-pub struct ParticipantKey {
-    /// The user's ID.
+pub struct ConversationParticipantKey {
+    /// The participant's user id.
     pub user_id: String,
 
-    /// Base64-encoded encrypted conversation key.
-    pub encrypted_key: String,
+    /// Base64-encoded conversation key, encrypted to the participant's
+    /// identity key.
+    pub encrypted_conversation_key: String,
 
-    /// Version of the user's public key used for encryption.
+    /// Version of the participant's public key the conversation key is
+    /// encrypted to.
     pub public_key_version: String,
 }
 
@@ -1051,21 +1056,20 @@ pub struct SendPayload {
     /// The outgoing message as a base64 event: what recipients receive,
     /// without the fields the server assigns. Pass it to `encrypt_file` or
     /// `file_encryptor` to encrypt the message's files, or to
-    /// `decrypt_event` to read the message back. Empty in a payload stored
-    /// by 0.5.x.
-    #[serde(default)]
+    /// `decrypt_event` to read the message back.
     pub event_b64: String,
 
-    /// Base64-encoded encrypted content.
-    pub encrypted_content: String,
+    /// Base64-encoded Thrift `MessageCreateEvent` carrying the encrypted
+    /// contents: the send request's `encoded_message_create_event`.
+    pub encoded_message_create_event: String,
 
     /// Base64-encoded signature.
     pub signature: String,
 
-    /// Base64-encoded Thrift `MessageEventSignature` (for `encoded_message_event_signature`).
-    ///
-    /// The X API expects this value (not the raw signature bytes) when sending messages.
-    pub encoded_event_signature: String,
+    /// Base64-encoded Thrift `MessageEventSignature`: the send request's
+    /// `encoded_message_event_signature`, which takes this value rather than
+    /// the raw signature bytes.
+    pub encoded_message_event_signature: String,
 
     /// Signature metadata.
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1079,7 +1083,6 @@ pub struct SendPayload {
     pub should_notify: bool,
 
     /// Version of the Chat XDK that built this payload.
-    #[serde(default)]
     pub xdk_version: String,
 }
 
@@ -1374,11 +1377,25 @@ pub struct PreparedConversationChange {
     /// Timestamp-based version string for this conversation key.
     pub conversation_key_version: String,
 
-    /// Encrypted keys for each participant, ready to POST to the API.
+    /// Encrypted keys for each participant: the request's
+    /// `conversation_participant_keys`, ready to POST to the API.
     #[cfg_attr(feature = "js", js_camel(wrap))]
-    pub participant_keys: Vec<EncryptedKeyForRecipient>,
+    pub conversation_participant_keys: Vec<ConversationParticipantKey>,
 
     /// Action signatures authenticating the change, ready to POST to the API.
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub action_signatures: Vec<ActionSignature>,
+}
+
+/// A signed message delete or read receipt: the `action_signatures` a
+/// request carries for it.
+///
+/// Returned by `prepare_message_delete` and `prepare_mark_conversation_read`,
+/// each with one entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+pub struct PreparedAction {
+    /// The signed action, as the request's `action_signatures` entries.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub action_signatures: Vec<ActionSignature>,
 }
@@ -1392,22 +1409,6 @@ pub(crate) struct RecipientInput {
     pub public_key: String,
     /// Version of the recipient's public key (from the X API).
     pub key_version: String,
-}
-
-/// Encrypted conversation key for a recipient.
-///
-/// Used when creating a new conversation or rotating keys.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
-pub struct EncryptedKeyForRecipient {
-    /// Recipient's user ID.
-    pub user_id: String,
-
-    /// Base64-encoded encrypted conversation key.
-    pub encrypted_key: String,
-
-    /// Version of recipient's public key used.
-    pub public_key_version: String,
 }
 
 #[cfg(test)]
@@ -1427,7 +1428,7 @@ mod tests {
                 quick_reply: None,
                 ctas: None,
             },
-            key_version: None,
+            conversation_key_version: None,
             verified: true,
             should_notify: Some(true),
             ttl_msec: None,
@@ -1453,7 +1454,7 @@ mod tests {
                 emoji: "👍".to_string(),
                 target_message_id: "seq-1".to_string(),
             },
-            key_version: None,
+            conversation_key_version: None,
             verified: true,
             should_notify: None,
             ttl_msec: None,
@@ -1474,7 +1475,7 @@ mod tests {
                 emoji: "👎".to_string(),
                 target_message_id: "seq-2".to_string(),
             },
-            key_version: None,
+            conversation_key_version: None,
             verified: false,
             should_notify: None,
             ttl_msec: None,
@@ -1490,27 +1491,34 @@ mod tests {
     fn test_key_change_find_key_for_user() {
         let kc = KeyChangeEvent {
             meta: EventMeta::default(),
-            key_version: "v1".to_string(),
+            conversation_key_version: "v1".to_string(),
             verified: true,
-            participant_keys: vec![
-                ParticipantKey {
+            conversation_participant_keys: vec![
+                ConversationParticipantKey {
                     user_id: "alice".to_string(),
-                    encrypted_key: "key_a".to_string(),
+                    encrypted_conversation_key: "key_a".to_string(),
                     public_key_version: "v1".to_string(),
                 },
-                ParticipantKey {
+                ConversationParticipantKey {
                     user_id: "bob".to_string(),
-                    encrypted_key: "key_b".to_string(),
+                    encrypted_conversation_key: "key_b".to_string(),
                     public_key_version: "v1".to_string(),
                 },
             ],
         };
 
         assert_eq!(
-            kc.find_key_for_user("alice").unwrap().encrypted_key,
+            kc.find_key_for_user("alice")
+                .unwrap()
+                .encrypted_conversation_key,
             "key_a"
         );
-        assert_eq!(kc.find_key_for_user("bob").unwrap().encrypted_key, "key_b");
+        assert_eq!(
+            kc.find_key_for_user("bob")
+                .unwrap()
+                .encrypted_conversation_key,
+            "key_b"
+        );
         assert!(kc.find_key_for_user("charlie").is_none());
     }
 
@@ -1543,17 +1551,40 @@ mod tests {
         assert!(json.contains("\"sender_id\":\"user-1\""));
     }
 
+    fn key_change(version: &str) -> KeyChangeEvent {
+        KeyChangeEvent {
+            meta: EventMeta::default(),
+            conversation_key_version: version.to_string(),
+            verified: true,
+            conversation_participant_keys: vec![ConversationParticipantKey {
+                user_id: "2".to_string(),
+                encrypted_conversation_key: "ekey".to_string(),
+                public_key_version: "1".to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn test_event_serde_roundtrip_key_change() {
-        let event = Event::KeyChange(KeyChangeEvent {
-            meta: EventMeta::default(),
-            key_version: "v42".to_string(),
-            verified: true,
-            participant_keys: vec![],
-        });
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"KeyChange\""));
-        assert!(json.contains("\"key_version\":\"v42\""));
+        let json = serde_json::to_value(Event::KeyChange(key_change("v42"))).unwrap();
+        assert_eq!(json["type"], "KeyChange");
+        assert_eq!(json["conversation_key_version"], "v42");
+        assert_eq!(
+            json["conversation_participant_keys"],
+            serde_json::json!([{
+                "user_id": "2",
+                "encrypted_conversation_key": "ekey",
+                "public_key_version": "1",
+            }])
+        );
+    }
+
+    #[test]
+    fn test_message_names_its_conversation_key_version() {
+        let mut message = text_message("hi");
+        message.conversation_key_version = Some("7".to_string());
+        let json = serde_json::to_value(Event::Message(Box::new(message))).unwrap();
+        assert_eq!(json["conversation_key_version"], "7");
     }
 
     #[test]
@@ -1561,9 +1592,9 @@ mod tests {
         let payload = SendPayload {
             message_id: "mid".to_string(),
             event_b64: "ev".to_string(),
-            encrypted_content: "enc".to_string(),
+            encoded_message_create_event: "enc".to_string(),
             signature: "sig".to_string(),
-            encoded_event_signature: "esig".to_string(),
+            encoded_message_event_signature: "esig".to_string(),
             signature_info: SignatureInfo {
                 public_key_version: "v1".to_string(),
                 signature_version: "4".to_string(),
@@ -1574,30 +1605,14 @@ mod tests {
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"xdk_version\":\"0.6.0\""));
+        // Serialized under the send request's field names.
+        assert!(json.contains("\"encoded_message_create_event\":\"enc\""));
+        assert!(json.contains("\"encoded_message_event_signature\":\"esig\""));
         let decoded: SendPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.event_b64, "ev");
-        assert_eq!(decoded.encrypted_content, "enc");
+        assert_eq!(decoded.encoded_message_create_event, "enc");
         assert_eq!(decoded.signature_info.signature_version, "4");
         assert_eq!(decoded.xdk_version, "0.6.0");
-
-        let without: SendPayload =
-            serde_json::from_str(&json.replace(",\"xdk_version\":\"0.6.0\"", "")).unwrap();
-        assert_eq!(without.xdk_version, "");
-    }
-
-    #[test]
-    fn test_send_payload_stored_by_0_5_still_reads() {
-        // A SendPayload as 0.5.x serialized it, before event_b64 and
-        // xdk_version existed.
-        let stored = r#"{"message_id":"mid","encrypted_content":"enc","signature":"sig",
-            "encoded_event_signature":"esig",
-            "signature_info":{"public_key_version":"v1","signature_version":"7"},
-            "conversation_key_version":"v1","should_notify":false}"#;
-        let payload: SendPayload = serde_json::from_str(stored).unwrap();
-        assert_eq!(payload.message_id, "mid");
-        assert_eq!(payload.event_b64, "");
-        assert_eq!(payload.xdk_version, "");
-        assert!(!payload.should_notify);
     }
 
     #[test]
@@ -1757,6 +1772,70 @@ mod tests {
         assert!(
             !snake.contains('_'),
             "JS output must be camelCase, got: {snake}"
+        );
+    }
+
+    fn prepared_change() -> PreparedConversationChange {
+        PreparedConversationChange {
+            conversation_id: "1:2".to_string(),
+            conversation_key: None,
+            conversation_key_version: "5".to_string(),
+            conversation_participant_keys: vec![ConversationParticipantKey {
+                user_id: "2".to_string(),
+                encrypted_conversation_key: "ekey".to_string(),
+                public_key_version: "1".to_string(),
+            }],
+            action_signatures: vec![],
+        }
+    }
+
+    #[test]
+    fn test_prepared_change_takes_the_request_field_names() {
+        let json = serde_json::to_value(prepared_change()).unwrap();
+        assert_eq!(
+            json["conversation_participant_keys"],
+            serde_json::json!([{
+                "user_id": "2",
+                "encrypted_conversation_key": "ekey",
+                "public_key_version": "1",
+            }])
+        );
+        assert_eq!(json["conversation_key_version"], "5");
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_received_events_are_camel_case() {
+        let json =
+            serde_json::to_value(JsEvent::from(Event::KeyChange(key_change("v42")))).unwrap();
+        assert_eq!(json["conversationKeyVersion"], "v42");
+        assert_eq!(
+            json["conversationParticipantKeys"],
+            serde_json::json!([{
+                "userId": "2",
+                "encryptedConversationKey": "ekey",
+                "publicKeyVersion": "1",
+            }])
+        );
+
+        let mut message = text_message("hi");
+        message.conversation_key_version = Some("7".to_string());
+        let json = serde_json::to_value(JsEvent::from(Event::Message(Box::new(message)))).unwrap();
+        assert_eq!(json["conversationKeyVersion"], "7");
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_prepared_change_is_camel_case() {
+        let json =
+            serde_json::to_value(JsPreparedConversationChange::from(prepared_change())).unwrap();
+        assert_eq!(
+            json["conversationParticipantKeys"],
+            serde_json::json!([{
+                "userId": "2",
+                "encryptedConversationKey": "ekey",
+                "publicKeyVersion": "1",
+            }])
         );
     }
 }

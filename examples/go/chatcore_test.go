@@ -135,15 +135,15 @@ func TestConversationKeyRoundtrip(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
 	prepared, err := core.PrepareConversationKeyChange([]chatxdk.PublicKeyInput{
-		{UserID: "me", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
 	}, "conv-1")
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
 	}
-	if len(prepared.ParticipantKeys) != 1 {
-		t.Fatalf("expected 1 participant key, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(prepared.ConversationParticipantKeys))
 	}
-	got, err := core.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey)
+	got, err := core.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey)
 	if err != nil {
 		t.Fatalf("DecryptConversationKey: %v", err)
 	}
@@ -214,12 +214,24 @@ func TestPrepToRequestMapsTheRESTShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublicKeys: %v", err)
 	}
-	body := PrepToRequest(prep, keys.Signing)
-
-	if body["conversation_key_version"] != prep.ConversationKeyVersion {
-		t.Errorf("conversation_key_version mismatch: %v", body["conversation_key_version"])
+	// Inspect the JSON the X API receives.
+	data, err := json.Marshal(PrepToRequest(prep))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	pks := body["conversation_participant_keys"].([]map[string]any)
+	var body struct {
+		ConversationKeyVersion      string           `json:"conversation_key_version"`
+		ConversationParticipantKeys []map[string]any `json:"conversation_participant_keys"`
+		ActionSignatures            []map[string]any `json:"action_signatures"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if body.ConversationKeyVersion != prep.ConversationKeyVersion {
+		t.Errorf("conversation_key_version mismatch: %v", body.ConversationKeyVersion)
+	}
+	pks := body.ConversationParticipantKeys
 	if len(pks) != 1 {
 		t.Fatalf("expected 1 participant key, got %d", len(pks))
 	}
@@ -231,7 +243,7 @@ func TestPrepToRequestMapsTheRESTShape(t *testing.T) {
 	if len(pks[0]) != 3 {
 		t.Errorf("unexpected participant key fields: %v", pks[0])
 	}
-	sigs := body["action_signatures"].([]map[string]any)
+	sigs := body.ActionSignatures
 	if len(sigs) != 1 {
 		t.Fatalf("expected 1 action signature, got %d", len(sigs))
 	}
@@ -327,7 +339,7 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 		t.Fatal("empty event_b64")
 	}
 
-	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, keys, "photo")
+	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, key, "1", "photo")
 	if err != nil {
 		t.Fatalf("EncryptMedia: %v", err)
 	}

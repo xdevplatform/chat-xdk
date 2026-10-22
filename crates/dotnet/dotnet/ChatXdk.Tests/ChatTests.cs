@@ -115,7 +115,7 @@ namespace ChatXdk.Tests
             // ExportKeys + ImportKeys is the round-trip that bypasses Juicebox.
             var exported = chat.ExportKeys();
             Assert.NotNull(exported);
-            chat.ImportKeys(exported!);
+            chat.ImportKeys(new ImportKeysParams(exported!));
             return chat;
         }
 
@@ -125,9 +125,9 @@ namespace ChatXdk.Tests
         private static byte[] NewConvKey(Chat chat)
         {
             var prep = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = chat.GetPublicKeys().Identity, KeyVersion = "1" } })
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = chat.GetPublicKeys().Identity, KeyVersion = "1" } })
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 ConversationId = "conv-1",
             });
@@ -141,6 +141,17 @@ namespace ChatXdk.Tests
         /// conversation-key media message and the reply vectors.</summary>
         private static Dictionary<string, byte[]> ConversationKeys(SdkVectors v) =>
             new() { [v.EventConversationKeyVersion] = Convert.FromBase64String(v.ConversationKeyB64) };
+
+        /// <summary>The one <c>action_signatures</c> entry of a prepared delete or read receipt.</summary>
+        private static ActionSignature OnlyAction(PreparedAction prepared) => Assert.Single(prepared.ActionSignatures);
+
+        /// <summary>File-encryption params under the fixture conversation key.</summary>
+        private static EncryptFileParams EncryptFileParamsFor(SdkVectors v, byte[] file, string eventB64, string mediaHashKey) =>
+            new(file, eventB64, mediaHashKey)
+            {
+                ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            };
 
         /// <summary>The key map that opens the message-key and link-card vectors.</summary>
         private static Dictionary<string, byte[]> MessageKeyConversationKeys(SdkVectors v) =>
@@ -284,16 +295,20 @@ namespace ChatXdk.Tests
             var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareMessageDelete(deleteParams));
             Assert.Contains("signing_key_version", ex.Message);
 
-            chat.SetIdentity("1234", "1700000000123");
-            Assert.Equal("1700000000123", chat.PrepareMessageDelete(deleteParams).PublicKeyVersion);
+            chat.SetIdentity(new SetIdentityParams("1234", "1700000000123"));
+            Assert.Equal(
+                "1700000000123",
+                OnlyAction(chat.PrepareMessageDelete(deleteParams)).MessageEventSignature.PublicKeyVersion);
 
             // Restored keys carry the version passed to ImportKeys, and none
             // without it.
             var keys = chat.ExportKeys()!;
             using var restored = new Chat();
-            restored.ImportKeys(keys, "1700000000456");
-            Assert.Equal("1700000000456", restored.PrepareMessageDelete(deleteParams).PublicKeyVersion);
-            restored.ImportKeys(keys);
+            restored.ImportKeys(new ImportKeysParams(keys) { SigningKeyVersion = "1700000000456" });
+            Assert.Equal(
+                "1700000000456",
+                OnlyAction(restored.PrepareMessageDelete(deleteParams)).MessageEventSignature.PublicKeyVersion);
+            restored.ImportKeys(new ImportKeysParams(keys));
             Assert.Throws<ChatXdkException>(() => restored.PrepareMessageDelete(deleteParams));
         }
 
@@ -344,7 +359,7 @@ namespace ChatXdk.Tests
             chat.Lock();
             Assert.False(chat.IsUnlocked);
 
-            chat.ImportKeys(exported);
+            chat.ImportKeys(new ImportKeysParams(exported));
             Assert.True(chat.IsUnlocked);
 
             var reimported = chat.GetPublicKeys();
@@ -356,8 +371,8 @@ namespace ChatXdk.Tests
         public void ImportInvalidKeys_Throws()
         {
             using var chat = new Chat();
-            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(new byte[16]));
-            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(Array.Empty<byte>()));
+            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(new ImportKeysParams(new byte[16])));
+            Assert.Throws<ChatXdkException>(() => chat.ImportKeys(new ImportKeysParams(Array.Empty<byte>())));
         }
 
         [Fact]
@@ -369,7 +384,7 @@ namespace ChatXdk.Tests
             // Identity-only sessions can export (32 bytes), matching core;
             // only a session with no identity key at all returns null.
             using var chat = new Chat();
-            chat.ImportKeys(identityOnly);
+            chat.ImportKeys(new ImportKeysParams(identityOnly));
             var exported = chat.ExportKeys();
             Assert.NotNull(exported);
             Assert.Equal(identityOnly, exported);
@@ -386,7 +401,7 @@ namespace ChatXdk.Tests
             Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "bad attachment")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 Attachments = new List<AttachmentDescriptor>
@@ -407,7 +422,7 @@ namespace ChatXdk.Tests
             var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "mixed attachments")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 Attachments = new List<AttachmentDescriptor>
@@ -430,14 +445,14 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Hello from .NET!")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.Signature);
-            Assert.NotEmpty(payload.EncodedEventSignature);
+            Assert.NotEmpty(payload.EncodedMessageEventSignature);
             Assert.Equal("1", payload.ConversationKeyVersion);
             Assert.Equal("7", payload.SignatureInfo.SignatureVersion);
             Assert.True(payload.ShouldNotify);
@@ -455,7 +470,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Silent message")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 ShouldNotify = false,
@@ -473,13 +488,13 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Disappearing!")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 TtlMsec = 30_000,
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -491,7 +506,7 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Hello @world https://x.com")
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 Entities = new List<EntityDescriptor>
@@ -501,14 +516,14 @@ namespace ChatXdk.Tests
                 },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
         public void EncryptMessage_WithMediaAttachment_Succeeds()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity("1001", "s1");
+            chat.SetIdentity(new SetIdentityParams("1001", "66"));
             var ckey = NewConvKey(chat);
 
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
@@ -521,7 +536,7 @@ namespace ChatXdk.Tests
                 },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -559,7 +574,7 @@ namespace ChatXdk.Tests
                 Assert.Contains(key, json);
             }
 
-            chat.SetIdentity("1001", "s1");
+            chat.SetIdentity(new SetIdentityParams("1001", "66"));
             var payload = chat.EncryptMessage(new EncryptMessageParams("conv-1", "Check this out")
             {
                 ConversationKey = ckey,
@@ -567,7 +582,7 @@ namespace ChatXdk.Tests
                 Attachments = new List<AttachmentDescriptor> { attachment },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.Signature);
         }
 
@@ -584,15 +599,39 @@ namespace ChatXdk.Tests
             var payload = chat.EncryptReply(new EncryptReplyParams("conv-1", "This is a reply", replyToEvent: null)
             {
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
                 ReplyToSequenceId = "seq-42",
-                ReplyToSenderId = 12345,
+                ReplyToSenderId = "12345",
                 ReplyToText = "Original message",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
+        }
+
+        [Fact]
+        public void UserIds_AreDigitStrings()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+            var ex = Assert.Throws<ChatXdkException>(
+                () => chat.SetIdentity(new SetIdentityParams("user-1", "1")));
+            Assert.Contains("Invalid user_id 'user-1'", ex.Message);
+            ex = Assert.Throws<ChatXdkException>(
+                () => chat.SetIdentity(new SetIdentityParams("1001", "v1")));
+            Assert.Contains("Invalid signing_key_version 'v1'", ex.Message);
+            ex = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
+                new EncryptReplyParams("conv-1", "reply", replyToEvent: null)
+                {
+                    SenderId = "1001",
+                    SigningKeyVersion = "1",
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "1",
+                    ReplyToSequenceId = "seq-42",
+                    ReplyToSenderId = "12x",
+                }));
+            Assert.Contains("Invalid reply_to_sender_id '12x'", ex.Message);
         }
 
         // EncryptAdd/RemoveReaction
@@ -610,12 +649,12 @@ namespace ChatXdk.Tests
                 ConversationId = "conv-1",
                 TargetMessageSequenceId = "seq-99",
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         [Fact]
@@ -629,12 +668,12 @@ namespace ChatXdk.Tests
                 ConversationId = "conv-1",
                 TargetMessageSequenceId = "seq-99",
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         // EncryptEdit
@@ -653,15 +692,34 @@ namespace ChatXdk.Tests
                 TargetMessageSequenceId = "seq-99",
                 Entities = new[] { new EntityDescriptor { Start = 4, End = 23, EntityType = "url" } },
                 SenderId = "1001",
-                SigningKeyVersion = "s1",
+                SigningKeyVersion = "66",
                 ConversationKey = ckey,
                 ConversationKeyVersion = "1",
             });
 
             Assert.NotEmpty(payload.MessageId);
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.Signature);
-            Assert.NotEmpty(payload.EncodedEventSignature);
+            Assert.NotEmpty(payload.EncodedMessageEventSignature);
+        }
+
+        [Fact]
+        public void SendPayload_TakesTheRequestFieldNames()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v);
+            var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "hi")
+            {
+                ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            });
+
+            var json = JsonSerializer.SerializeToElement(payload);
+            Assert.Equal(payload.EncodedMessageCreateEvent, json.GetProperty("encoded_message_create_event").GetString());
+            Assert.Equal(payload.EncodedMessageEventSignature, json.GetProperty("encoded_message_event_signature").GetString());
+            var roundTrip = json.Deserialize<SendPayload>()!;
+            Assert.Equal(payload.EncodedMessageCreateEvent, roundTrip.EncodedMessageCreateEvent);
+            Assert.Equal(payload.EncodedMessageEventSignature, roundTrip.EncodedMessageEventSignature);
         }
 
         // PrepareMessageDelete
@@ -673,16 +731,26 @@ namespace ChatXdk.Tests
 
             // A 1:1 id is signed in its canonical colon form; delete-for-all
             // signs the wire action 2.
-            var sig = chat.PrepareMessageDelete(new MessageDeleteParams(
+            var prepared = chat.PrepareMessageDelete(new MessageDeleteParams(
                 "222-111", new[] { "seq-10", "seq-11" }, deleteForAll: true)
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
             });
+            var sig = OnlyAction(prepared);
 
             Assert.NotEmpty(sig.MessageId);
             Assert.NotEmpty(sig.EncodedMessageEventDetail);
-            Assert.NotEmpty(sig.Signature);
+            // The signature is nested as the request's action_signatures carry it.
+            Assert.NotEmpty(sig.MessageEventSignature.Signature);
+            Assert.Equal("7", sig.MessageEventSignature.SignatureVersion);
+            Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
+            Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
+            var entry = JsonSerializer.SerializeToElement(prepared).GetProperty("action_signatures")[0];
+            Assert.False(entry.TryGetProperty("signature", out _));
+            Assert.Equal(
+                sig.MessageEventSignature.SigningPublicKey,
+                entry.GetProperty("message_event_signature").GetProperty("signing_public_key").GetString());
             Assert.Equal(
                 $"MessageDeleteEvent,{sig.MessageId},111,111:222,2,seq-10,seq-11",
                 sig.SignaturePayload);
@@ -695,12 +763,12 @@ namespace ChatXdk.Tests
 
             // Group ids pass through unchanged; delete-for-self signs the wire
             // action 1.
-            var sig = chat.PrepareMessageDelete(new MessageDeleteParams(
+            var sig = OnlyAction(chat.PrepareMessageDelete(new MessageDeleteParams(
                 "g999", new[] { "seq-1" }, deleteForAll: false)
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
-            });
+            }));
 
             Assert.Equal(
                 $"MessageDeleteEvent,{sig.MessageId},111,g999,1,seq-1",
@@ -716,40 +784,41 @@ namespace ChatXdk.Tests
 
             // A 1:1 id is signed in its canonical colon form, followed by the
             // read point and its time.
-            var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams(
+            var sig = OnlyAction(chat.PrepareMarkConversationRead(new MarkConversationReadParams(
                 "222-111", "2011626338877079553")
             {
                 SeenAtMsec = 1700000000123,
                 SenderId = "111",
                 SigningKeyVersion = "1",
-            });
+            }));
 
             Assert.NotEmpty(sig.MessageId);
             Assert.NotEmpty(sig.EncodedMessageEventDetail);
-            Assert.Equal("1", sig.PublicKeyVersion);
+            Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
+            Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
             Assert.Equal(
                 $"MarkConversationReadEvent,{sig.MessageId},111,111:222,2011626338877079553,1700000000123",
                 sig.SignaturePayload);
-            var signature = Convert.FromBase64String(
-                sig.Signature.PadRight(sig.Signature.Length + (4 - sig.Signature.Length % 4) % 4, '='));
+            var signed = sig.MessageEventSignature.Signature;
+            var signature = Convert.FromBase64String(signed.PadRight(signed.Length + (4 - signed.Length % 4) % 4, '='));
             Assert.True(chat.Verify(
-                chat.GetPublicKeys().Signing, signature, System.Text.Encoding.UTF8.GetBytes(sig.SignaturePayload)));
+                chat.GetPublicKeys().Signing, signature, System.Text.Encoding.UTF8.GetBytes(sig.SignaturePayload!)));
         }
 
         [Fact]
         public void PrepareMarkConversationRead_DefaultsToSessionIdentityAndNow()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity("111", "7");
+            chat.SetIdentity(new SetIdentityParams("111", "7"));
 
             var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var sig = chat.PrepareMarkConversationRead(new MarkConversationReadParams("g999", "seq-1"));
+            var sig = OnlyAction(chat.PrepareMarkConversationRead(new MarkConversationReadParams("g999", "seq-1")));
             var after = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            Assert.Equal("7", sig.PublicKeyVersion);
+            Assert.Equal("7", sig.MessageEventSignature.PublicKeyVersion);
             var prefix = $"MarkConversationReadEvent,{sig.MessageId},111,g999,seq-1,";
             Assert.StartsWith(prefix, sig.SignaturePayload);
-            var seenAt = long.Parse(sig.SignaturePayload.Substring(prefix.Length));
+            var seenAt = long.Parse(sig.SignaturePayload!.Substring(prefix.Length));
             Assert.InRange(seenAt, before, after);
         }
 
@@ -784,19 +853,26 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = publicKeys.Identity, KeyVersion = "1" } })
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } })
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 ConversationId = "conv-1",
             });
 
-            Assert.Single(prepared.ParticipantKeys);
+            Assert.Single(prepared.ConversationParticipantKeys);
             Assert.Single(prepared.ActionSignatures);
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Equal("", prepared.ActionSignatures[0].SignaturePayload);
+            // Absent: the payload embeds the plaintext conversation key and is withheld.
+            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
 
-            var decrypted = chat.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey);
+            // The participant keys serialize under the request's field names.
+            var json = JsonSerializer.SerializeToElement(prepared);
+            var entry = Assert.Single(json.GetProperty("conversation_participant_keys").EnumerateArray());
+            Assert.Equal(
+                prepared.ConversationParticipantKeys[0].EncryptedConversationKey,
+                entry.GetProperty("encrypted_conversation_key").GetString());
+
+            var decrypted = chat.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
             Assert.Equal(prepared.ConversationKey, decrypted);
         }
 
@@ -844,7 +920,7 @@ namespace ChatXdk.Tests
 
             // A chat with no identity encrypts the file from the payload.
             using var worker = new Chat();
-            var encrypted = worker.EncryptFile(new EncryptFileParams(plaintext, payload.EventB64, ConversationKeys(v), "photo"));
+            var encrypted = worker.EncryptFile(EncryptFileParamsFor(v, plaintext, payload.EventB64, "photo"));
             Assert.NotEqual(plaintext, encrypted);
             Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)encrypted.Length);
             Assert.Equal(plaintext, chat.DecryptFile(new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), "photo")));
@@ -870,7 +946,11 @@ namespace ChatXdk.Tests
             var plaintext = Enumerable.Repeat((byte)0xAB, 5000).ToArray();
             var payload = SendFiles(chat, v, "two photos", Photo("first"), Photo("second"));
 
-            using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, ConversationKeys(v), "second"));
+            using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, "second")
+            {
+                ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            });
             var ciphertext = new List<byte>();
             for (var i = 0; i < plaintext.Length; i += 700)
                 ciphertext.AddRange(encryptor.Push(plaintext[i..Math.Min(i + 700, plaintext.Length)]));
@@ -903,8 +983,7 @@ namespace ChatXdk.Tests
                 faviconImage: new UrlAttachmentImageDescriptor { MediaHashKey = "favicon", FilesizeBytes = 13, Filename = "favicon.png" }));
             foreach (var name in new[] { "banner", "favicon" })
             {
-                var encrypted = chat.EncryptFile(new EncryptFileParams(
-                    System.Text.Encoding.UTF8.GetBytes(name + " bytes"), payload.EventB64, ConversationKeys(v), name));
+                var encrypted = chat.EncryptFile(EncryptFileParamsFor(v, System.Text.Encoding.UTF8.GetBytes(name + " bytes"), payload.EventB64, name));
                 Assert.Equal(name + " bytes", System.Text.Encoding.UTF8.GetString(
                     chat.DecryptFile(new DecryptFileParams(encrypted, payload.EventB64, ConversationKeys(v), name))));
             }
@@ -917,8 +996,7 @@ namespace ChatXdk.Tests
             using var chat = QuickReplyChat(v);
             var draft = SendFiles(chat, v, "draft", Photo("photo-a"), Photo("photo-b"));
             Assert.Matches("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", draft.MessageId);
-            var encrypted = chat.EncryptFile(new EncryptFileParams(
-                System.Text.Encoding.UTF8.GetBytes("photo b"), draft.EventB64, ConversationKeys(v), "photo-b"));
+            var encrypted = chat.EncryptFile(EncryptFileParamsFor(v, System.Text.Encoding.UTF8.GetBytes("photo b"), draft.EventB64, "photo-b"));
 
             // Building the message again gives the same id, so its encrypted files stay valid.
             var rebuilt = SendFiles(chat, v, "final text", Photo("photo-a"), Photo("photo-b"));
@@ -948,10 +1026,20 @@ namespace ChatXdk.Tests
 
             var payload = SendFiles(chat, v, "a photo", Photo("photo"));
             Assert.Contains("is not one of the message's files", Assert.Throws<ChatXdkException>(
-                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, ConversationKeys(v), "other"))).Message);
-            Assert.Contains("is not 32 bytes", Assert.Throws<ChatXdkException>(
-                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64,
-                    new Dictionary<string, byte[]> { [v.EventConversationKeyVersion] = new byte[3] }, "photo"))).Message);
+                () => chat.EncryptFile(EncryptFileParamsFor(v, new byte[] { 1 }, payload.EventB64, "other"))).Message);
+            Assert.Contains("expected 32 bytes", Assert.Throws<ChatXdkException>(
+                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, "photo")
+                {
+                    ConversationKey = new byte[3],
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                })).Message);
+            Assert.Contains(
+                $"conversation_key_version '9' is not the message's key version '{v.EventConversationKeyVersion}'",
+                Assert.Throws<ChatXdkException>(() => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, payload.EventB64, "photo")
+                {
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "9",
+                })).Message);
 
             // A reply needs the delivered event, which carries the sequence id; the files it
             // quotes belong to the quoted message.
@@ -968,10 +1056,10 @@ namespace ChatXdk.Tests
                 Attachments = new[] { Photo("reply-photo") },
             });
             Assert.Contains("is media the reply quotes", Assert.Throws<ChatXdkException>(
-                () => chat.EncryptFile(new EncryptFileParams(new byte[] { 1 }, reply.EventB64, ConversationKeys(v), "photo"))).Message);
+                () => chat.EncryptFile(EncryptFileParamsFor(v, new byte[] { 1 }, reply.EventB64, "photo"))).Message);
 
             using var noIdentity = new Chat();
-            noIdentity.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            noIdentity.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
             Assert.Contains("set_identity", Assert.Throws<ChatXdkException>(
                 () => noIdentity.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "a photo")
                 {
@@ -1014,14 +1102,14 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
                 "g123",
-                new[] { "new-1" },
-                new[] { "me" },
-                new[] { "me" },
+                new[] { "910006" },
+                new[] { "910002" },
+                new[] { "910002" },
                 Array.Empty<string>())
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 CurrentTitle = "Test Group",
             });
@@ -1029,8 +1117,8 @@ namespace ChatXdk.Tests
             Assert.Equal("g123", prepared.ConversationId);
             // A member add emits two signed actions: the key change and the add.
             Assert.Equal(2, prepared.ActionSignatures.Count);
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Equal("", prepared.ActionSignatures[0].SignaturePayload);
+            // Absent: the payload embeds the plaintext conversation key and is withheld.
+            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[0].EncodedMessageEventDetail);
             Assert.StartsWith("GroupChangeEvent.GroupMemberAddChange,", prepared.ActionSignatures[1].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
@@ -1045,14 +1133,14 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
                 "g123",
-                new[] { "new-1" },
-                new[] { "me" },
-                new[] { "me" },
+                new[] { "910006" },
+                new[] { "910002" },
+                new[] { "910002" },
                 Array.Empty<string>())
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 CurrentScreenCaptureBlockingEnabled = true,
             });
@@ -1070,12 +1158,12 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupCreate(new GroupCreateParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
                 "g123",
-                new[] { "me", "friend" },
-                new[] { "me" })
+                new[] { "910002", "910005" },
+                new[] { "910002" })
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 Title = "Test Group",
             });
@@ -1083,8 +1171,8 @@ namespace ChatXdk.Tests
             Assert.Equal("g123", prepared.ConversationId);
             // A group create emits two signed actions: the key change and the create.
             Assert.Equal(2, prepared.ActionSignatures.Count);
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Equal("", prepared.ActionSignatures[0].SignaturePayload);
+            // Absent: the payload embeds the plaintext conversation key and is withheld.
+            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[0].EncodedMessageEventDetail);
             Assert.StartsWith("GroupChangeEvent.GroupCreate,", prepared.ActionSignatures[1].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
@@ -1129,10 +1217,10 @@ namespace ChatXdk.Tests
             });
 
             Assert.Equal("17380288:1491585161162473473", prepared.ConversationId);
-            Assert.Equal(2, prepared.ParticipantKeys.Count);
-            foreach (var pk in prepared.ParticipantKeys)
+            Assert.Equal(2, prepared.ConversationParticipantKeys.Count);
+            foreach (var pk in prepared.ConversationParticipantKeys)
             {
-                var decrypted = chat.DecryptConversationKey(pk.EncryptedKey);
+                var decrypted = chat.DecryptConversationKey(pk.EncryptedConversationKey);
                 Assert.Equal(prepared.ConversationKey, decrypted);
             }
         }
@@ -1168,7 +1256,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
             Assert.True(chat.IsUnlocked);
 
             var keys = chat.GetPublicKeys();
@@ -1190,7 +1278,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
 
             Assert.True(chat.VerifyKeyBinding(
                 v.IdentityPublicB64, v.SigningPublicB64, v.IdentityPublicKeySignatureB64));
@@ -1230,7 +1318,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat(); // default reject-unverified policy
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             var signingKeys = EventSigningKeys(v);
 
@@ -1258,7 +1346,17 @@ namespace ChatXdk.Tests
             Assert.Single(keyChanges);
             Assert.True(keyChanges[0].GetProperty("verified").GetBoolean());
             Assert.Equal(v.EventConversationKeyVersion,
-                keyChanges[0].GetProperty("key_version").GetString());
+                keyChanges[0].GetProperty("conversation_key_version").GetString());
+            // The received participant keys read into the type a prepared change carries.
+            var participantKeys = keyChanges[0].GetProperty("conversation_participant_keys")
+                .Deserialize<List<ConversationParticipantKey>>()!;
+            Assert.NotEmpty(participantKeys);
+            foreach (var key in participantKeys)
+            {
+                Assert.False(string.IsNullOrEmpty(key.UserId));
+                Assert.False(string.IsNullOrEmpty(key.EncryptedConversationKey));
+                Assert.False(string.IsNullOrEmpty(key.PublicKeyVersion));
+            }
 
             var messages = result.Messages
                 .Where(m => m.Event.GetProperty("type").GetString() == "Message")
@@ -1268,6 +1366,8 @@ namespace ChatXdk.Tests
             Assert.Equal(v.EventMessageText,
                 messages[0].GetProperty("content").GetProperty("text").GetString());
             Assert.True(messages[0].GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventConversationKeyVersion,
+                messages[0].GetProperty("conversation_key_version").GetString());
 
             // Single-event path with pre-cached keys verifies the same message …
             var single = chat.DecryptEvent(
@@ -1309,7 +1409,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             // No identity set: the error names the missing sender_id.
             var ex = Assert.Throws<ChatXdkException>(() =>
@@ -1320,13 +1420,13 @@ namespace ChatXdk.Tests
                 }));
             Assert.Contains("sender_id", ex.Message);
 
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "session identity")
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                 ConversationKeyVersion = v.EventConversationKeyVersion,
             });
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.MessageId);
             Assert.Equal(v.EventSigningKeyVersion, payload.SignatureInfo.PublicKeyVersion);
         }
@@ -1339,8 +1439,8 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
 
             chat.SetCacheKeys(true);
             chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }) { SigningKeys = EventSigningKeys(v) });
@@ -1351,7 +1451,16 @@ namespace ChatXdk.Tests
 
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "from the key cache"));
             Assert.Equal(v.EventConversationKeyVersion, payload.ConversationKeyVersion);
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
+
+            // A file of a message sent from the cache encrypts under the same cached key.
+            var photo = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "a photo")
+            {
+                Attachments = new[] { Photo("photo") },
+            });
+            var file = System.Text.Encoding.UTF8.GetBytes("photo bytes");
+            var encrypted = chat.EncryptFile(new EncryptFileParams(file, photo.EventB64, "photo"));
+            Assert.Equal(file, chat.DecryptFile(new DecryptFileParams(encrypted, photo.EventB64, ConversationKeys(v), "photo")));
 
             // Disabling clears the cache, so the same short form now fails.
             chat.SetCacheKeys(false);
@@ -1367,7 +1476,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat(); // default reject-unverified policy
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
             chat.SetSigningKeys(EventSigningKeys(v));
 
             var result = chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }));
@@ -1387,7 +1496,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             var result = chat.DecryptEvents(
                 new DecryptEventsParams(new[] { v.EventKeyChangeB64, v.EventReplyValidB64, v.EventReplyForgedB64 })
@@ -1417,15 +1526,15 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
 
             var payload = chat.EncryptReply(new EncryptReplyParams(v.EventConversationId, "a reply", v.EventMessageB64)
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                 ConversationKeyVersion = v.EventConversationKeyVersion,
             });
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
             Assert.NotEmpty(payload.MessageId);
         }
 
@@ -1540,7 +1649,7 @@ namespace ChatXdk.Tests
         {
             var v = LoadVectors();
             using var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64), v.EventRecipientKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
 
             var result = chat.DecryptEvents(
                 new DecryptEventsParams(new[] { v.EventKeyChangeMessageKeyB64, v.EventMessageKeyB64 })
@@ -1629,12 +1738,12 @@ namespace ChatXdk.Tests
             foreach (var title in new string?[] { "", null })
             {
                 var prepared = chat.PrepareGroupCreate(new GroupCreateParams(
-                    new[] { new PublicKeyInput { UserId = "me", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                    new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
                     "g123",
-                    new[] { "me", "friend" },
-                    new[] { "me" })
+                    new[] { "910002", "910005" },
+                    new[] { "910002" })
                 {
-                    SenderId = "me",
+                    SenderId = "910002",
                     SigningKeyVersion = "1",
                     Title = title,
                     AvatarUrl = title,
@@ -1653,12 +1762,12 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             Assert.Throws<ChatXdkException>(() => chat.PrepareGroupCreate(new GroupCreateParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
                 "g123",
-                new[] { "me", "friend" },
-                new[] { "me" })
+                new[] { "910002", "910005" },
+                new[] { "910002" })
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 Title = "Team, the sequel",
             }));
@@ -1747,7 +1856,7 @@ namespace ChatXdk.Tests
         public void EncryptMessage_MediaAttachment_ZeroDimensions_Succeeds()
         {
             using var chat = CreateUnlocked();
-            chat.SetIdentity("1001", "s1");
+            chat.SetIdentity(new SetIdentityParams("1001", "66"));
             var ckey = NewConvKey(chat);
 
             // Width=0 and Height=0 are unusual but must not cause a serialization bug.
@@ -1766,7 +1875,7 @@ namespace ChatXdk.Tests
                 },
             });
 
-            Assert.NotEmpty(payload.EncryptedContent);
+            Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
         // Verify the correct sign/verify contract end-to-end
@@ -1880,9 +1989,9 @@ namespace ChatXdk.Tests
             var keys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
-                new[] { new PublicKeyInput { UserId = "me", PublicKey = keys.Identity, KeyVersion = "1" } })
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = keys.Identity, KeyVersion = "1" } })
             {
-                SenderId = "me",
+                SenderId = "910002",
                 SigningKeyVersion = "1",
                 ConversationId = "conv-1",
             });
@@ -1891,8 +2000,8 @@ namespace ChatXdk.Tests
             Assert.Equal("conv-1", prepared.ConversationId);
             Assert.NotNull(prepared.ConversationKey);
             Assert.Equal(32, prepared.ConversationKey!.Length);
-            Assert.Single(prepared.ParticipantKeys);
-            Assert.NotEmpty(prepared.ParticipantKeys[0].EncryptedKey);
+            Assert.Single(prepared.ConversationParticipantKeys);
+            Assert.NotEmpty(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
             Assert.Single(prepared.ActionSignatures);
         }
 
@@ -1978,8 +2087,8 @@ namespace ChatXdk.Tests
         private static Chat QuickReplyChat(SdkVectors v)
         {
             var chat = new Chat();
-            chat.ImportKeys(Convert.FromBase64String(v.PrivateKeysConcatB64));
-            chat.SetIdentity(v.EventSenderId, v.EventSigningKeyVersion);
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
             return chat;
         }
 
@@ -2069,7 +2178,7 @@ namespace ChatXdk.Tests
                     ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),
                     ConversationKeyVersion = v.EventConversationKeyVersion,
                     ReplyToSequenceId = "seq-orig",
-                    ReplyToSenderId = long.Parse(v.EventSenderId),
+                    ReplyToSenderId = v.EventSenderId,
                     ReplyToText = "Continue?",
                     QuickReply = sent,
                 }));

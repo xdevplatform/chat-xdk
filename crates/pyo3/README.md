@@ -48,30 +48,32 @@ from chat_xdk import (
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
+    ImportKeysParams,
+    SetIdentityParams,
 )
 
 chat = Chat(config_json)
 chat.unlock("2580")
 # Or load a local key blob + its registered version instead of Juicebox:
-# chat.import_keys(private_key_bytes, version=registered_key_version)
+# chat.import_keys(ImportKeysParams(private_key_bytes, signing_key_version=registered_key_version))
 
 # Set the session once: your user id + registered signing-key version,
 # the opt-in conversation-key cache, and the participants' signing keys.
 # Each signing-key entry must include the identity public key and its binding
 # signature so the SDK can verify the signing key is authentic.
-chat.set_identity("111", "v1")
+chat.set_identity(SetIdentityParams("111", "1"))
 chat.set_cache_keys(True)
 chat.set_signing_keys([
     {
         "user_id": "111",
-        "public_key_version": "v1",
+        "public_key_version": "1",
         "public_key": "BASE64...",
         "identity_public_key": "BASE64...",
         "identity_public_key_signature": "BASE64...",
     },
     {
         "user_id": "222",
-        "public_key_version": "v1",
+        "public_key_version": "1",
         "public_key": "BASE64...",
         "identity_public_key": "BASE64...",
         "identity_public_key_signature": "BASE64...",

@@ -5,6 +5,7 @@ use chat_xdk_core::crypto::{
     keys::{KeypairPurpose, XChatConversationKey},
 };
 use chat_xdk_core::keys::conversation_keys::{decrypt_conversation_key, encrypt_conversation_key};
+use chat_xdk_core::ImportKeysParams;
 use chat_xdk_core::{
     DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams,
 };
@@ -167,9 +168,9 @@ fn vectors_conversation_key_ecies_roundtrip_and_wrong_key_fails() {
 fn vectors_decrypt_events_batch_and_single_event_contracts() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
-    core.import_keys_with_version(
-        &B64.decode(&v.private_keys_concat_b64).unwrap(),
-        &v.event_recipient_key_version,
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
     )
     .unwrap();
 
@@ -220,7 +221,27 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
         .collect();
     assert_eq!(key_changes.len(), 1);
     assert!(key_changes[0].verified);
-    assert_eq!(key_changes[0].key_version, v.event_conversation_key_version);
+    assert_eq!(
+        key_changes[0].conversation_key_version,
+        v.event_conversation_key_version
+    );
+    let key_change_json = serde_json::to_value(key_changes[0]).unwrap();
+    let participant_keys = key_change_json["conversation_participant_keys"]
+        .as_array()
+        .expect("conversation_participant_keys");
+    assert!(!participant_keys.is_empty());
+    for key in participant_keys {
+        let mut names: Vec<&String> = key.as_object().unwrap().keys().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "encrypted_conversation_key",
+                "public_key_version",
+                "user_id"
+            ]
+        );
+    }
 
     // Exactly one verified message with the fixture text.
     let messages: Vec<_> = result
@@ -293,9 +314,9 @@ fn vectors_failure_event_decodes_type_and_rate_limit_tier() {
 fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new();
-    core.import_keys_with_version(
-        &B64.decode(&v.private_keys_concat_b64).unwrap(),
-        &v.event_recipient_key_version,
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
     )
     .unwrap();
 
@@ -621,9 +642,9 @@ fn vectors_media_errors_say_what_to_pass() {
 fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new();
-    core.import_keys_with_version(
-        &B64.decode(&v.private_keys_concat_b64).unwrap(),
-        &v.event_recipient_key_version,
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
     )
     .unwrap();
     let signing_keys = [

@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -45,6 +46,20 @@ def _media(media_hash_key: str, filesize_bytes: int = 1000) -> dict:
     }
 
 
+
+def _key_kwargs(keys):
+    """The one conversation key of a key map, as the file encrypt params take it."""
+    ((version, key),) = keys.items()
+    return {"conversation_key": key, "conversation_key_version": version}
+
+
+def _only_action(prepared):
+    """The one ``action_signatures`` entry of a prepared delete or read receipt."""
+    assert list(prepared) == ["action_signatures"], prepared
+    (entry,) = prepared["action_signatures"]
+    return entry
+
+
 class TestUtilityFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -56,6 +71,15 @@ class TestUtilityFunctions(unittest.TestCase):
             import chat_xdk  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+
+    def test_version_is_the_release_version(self):
+        import chat_xdk
+
+        with open(os.path.join(_repo_root(), "Cargo.toml"), encoding="utf-8") as f:
+            cargo = f.read()
+        workspace = cargo[cargo.index("[workspace.package]"):]
+        version = re.search(r'^version\s*=\s*"([^"]+)"', workspace, re.M).group(1)
+        self.assertEqual(chat_xdk.__version__, version)
 
     def test_base64_roundtrip(self):
         from chat_xdk import base64_to_bytes, bytes_to_base64
@@ -146,6 +170,8 @@ class TestParams(unittest.TestCase):
             "GroupCreateParams",
             "MessageDeleteParams",
             "MarkConversationReadParams",
+            "SetIdentityParams",
+            "ImportKeysParams",
             "DecryptEventParams",
             "DecryptEventsParams",
             "EncryptFileParams",
@@ -203,8 +229,10 @@ class TestParams(unittest.TestCase):
             FileEncryptorParams,
             GroupCreateParams,
             GroupMembersChangeParams,
+            ImportKeysParams,
             MarkConversationReadParams,
             MessageDeleteParams,
+            SetIdentityParams,
         )
 
         missing_required = [
@@ -217,10 +245,12 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
             lambda: MarkConversationReadParams("conv-1"),
+            lambda: SetIdentityParams("1001"),
+            lambda: ImportKeysParams(),
             lambda: DecryptEventParams(),
             lambda: DecryptEventsParams(),
-            lambda: EncryptFileParams(b"file", "event", {}),
-            lambda: FileEncryptorParams("event", {}),
+            lambda: EncryptFileParams(b"file", "event"),
+            lambda: FileEncryptorParams("event"),
             lambda: DecryptFileParams(b"file", "event", {}),
             lambda: FileDecryptorParams("event", {}),
         ]
@@ -238,6 +268,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
+            lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
             lambda: DecryptEventsParams([], []),
         ]
@@ -248,7 +279,7 @@ class TestParams(unittest.TestCase):
     def test_the_event_a_reply_reaction_or_edit_targets_is_optional(self):
         from chat_xdk import EncryptEditParams, EncryptReactionParams, EncryptReplyParams
 
-        reply = EncryptReplyParams("conv-1", "hi", reply_to_sequence_id="5", reply_to_sender_id=1001)
+        reply = EncryptReplyParams("conv-1", "hi", reply_to_sequence_id="5", reply_to_sender_id="1001")
         self.assertIsNone(reply.reply_to_event)
         self.assertEqual(EncryptReplyParams("conv-1", "hi", "event").reply_to_event, "event")
         self.assertEqual(
@@ -314,11 +345,11 @@ class TestApiShapes(unittest.TestCase):
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
 
     def _unlocked_chat(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ImportKeysParams
 
         v = _load_vectors()
         chat = Chat()
-        chat.import_keys(base64.b64decode(v["private_keys_concat_b64"]))
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
         return chat, v
 
     def _signing_key(self, user_id: str, version: str) -> dict:
@@ -539,7 +570,7 @@ class TestApiShapes(unittest.TestCase):
             EncryptReplyParams(
                 "conv-1", "this is my reply", None,
                 reply_to_sequence_id="seq-42",
-                reply_to_sender_id=12345,
+                reply_to_sender_id="12345",
                 reply_to_text="original message",
                 sender_id="1001",
                 signing_key_version="1",
@@ -549,11 +580,34 @@ class TestApiShapes(unittest.TestCase):
         )
 
         self.assertTrue(payload.message_id)
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
-        self.assertTrue(payload.encoded_event_signature)
+        self.assertTrue(payload.encoded_message_event_signature)
         self.assertEqual(payload.conversation_key_version, "1")
         self.assertEqual(payload.signature_info.signature_version, "7")
+
+    def test_user_ids_are_digit_strings(self):
+        from chat_xdk import EncryptReplyParams, SetIdentityParams
+
+        chat, v = self._unlocked_chat()
+        with self.assertRaisesRegex(ValueError, "Invalid user_id 'user-1'"):
+            chat.set_identity(SetIdentityParams("user-1", "1"))
+        with self.assertRaisesRegex(ValueError, "Invalid signing_key_version 'v1'"):
+            chat.set_identity(SetIdentityParams("1001", "v1"))
+
+        params = EncryptReplyParams(
+            "conv-1", "reply", None,
+            reply_to_sequence_id="seq-42",
+            reply_to_sender_id="12x",
+            sender_id="1001",
+            signing_key_version="1",
+            conversation_key=base64.b64decode(v["conversation_key_b64"]),
+            conversation_key_version="1",
+        )
+        with self.assertRaisesRegex(ValueError, "Invalid reply_to_sender_id '12x'"):
+            chat.encrypt_reply(params)
+        with self.assertRaises(TypeError):
+            params.reply_to_sender_id = 12345
 
     def test_encrypt_reply_without_target_rejected(self):
         from chat_xdk import EncryptReplyParams
@@ -589,9 +643,9 @@ class TestApiShapes(unittest.TestCase):
             conversation_key_version="1",
         )
         for payload in (chat.encrypt_add_reaction(params), chat.encrypt_remove_reaction(params)):
-            self.assertTrue(payload.encrypted_content)
+            self.assertTrue(payload.encoded_message_create_event)
             self.assertTrue(payload.signature)
-            self.assertTrue(payload.encoded_event_signature)
+            self.assertTrue(payload.encoded_message_event_signature)
 
     def test_encrypt_edit_shape(self):
         from chat_xdk import EncryptEditParams
@@ -612,9 +666,9 @@ class TestApiShapes(unittest.TestCase):
             )
         )
 
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
-        self.assertTrue(payload.encoded_event_signature)
+        self.assertTrue(payload.encoded_message_event_signature)
         self.assertTrue(payload.message_id)
 
     def test_prepare_conversation_key_change_shape(self):
@@ -623,11 +677,11 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
-                public_keys, conversation_id="conv-1", sender_id="me", signing_key_version="1"
+                public_keys, conversation_id="conv-1", sender_id="910002", signing_key_version="1"
             )
         )
 
@@ -637,16 +691,17 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(len(result["conversation_key"]), 32)
         self.assertIsInstance(result["conversation_key_version"], str)
 
-        self.assertIn("participant_keys", result)
-        self.assertEqual(len(result["participant_keys"]), 1)
-        entry = result["participant_keys"][0]
-        self.assertEqual(entry["user_id"], "me")
-        self.assertTrue(entry["encrypted_key"])
-        self.assertIn("public_key_version", entry)
+        self.assertIn("conversation_participant_keys", result)
+        self.assertEqual(len(result["conversation_participant_keys"]), 1)
+        entry = result["conversation_participant_keys"][0]
+        # The entries take the request's field names.
+        self.assertEqual(set(entry), {"user_id", "encrypted_conversation_key", "public_key_version"})
+        self.assertEqual(entry["user_id"], "910002")
+        self.assertTrue(entry["encrypted_conversation_key"])
 
         self.assertEqual(len(result["action_signatures"]), 1)
         sig = result["action_signatures"][0]
-        self.assertTrue(sig["signature"])
+        self.assertTrue(sig["message_event_signature"]["signature"])
         # Absent: the payload embeds the plaintext conversation key and is withheld.
         self.assertNotIn("signature_payload", sig)
 
@@ -665,24 +720,24 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
                 public_keys,
                 "g123",         # conversation_id
-                ["new-user"],   # new_member_ids
-                ["me"],         # current_member_ids
-                ["me"],         # current_admin_ids
+                ["910009"],   # new_member_ids
+                ["910002"],         # current_member_ids
+                ["910002"],         # current_admin_ids
                 [],             # current_pending_member_ids
-                sender_id="me",
+                sender_id="910002",
                 signing_key_version="1",
                 current_title="Team",
             )
         )
 
         self.assertEqual(result["conversation_id"], "g123")
-        self.assertEqual(len(result["participant_keys"]), 1)
+        self.assertEqual(len(result["conversation_participant_keys"]), 1)
         # A member add emits two signed actions: the key change and the add.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
@@ -690,7 +745,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         add = result["action_signatures"][1]
-        self.assertTrue(add["signature"])
+        self.assertTrue(add["message_event_signature"]["signature"])
         self.assertTrue(
             add["signature_payload"].startswith("GroupChangeEvent.GroupMemberAddChange,")
         )
@@ -704,17 +759,17 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
                 public_keys,
                 "g123",
-                ["new-user"],
-                ["me"],
-                ["me"],
+                ["910009"],
+                ["910002"],
+                ["910002"],
                 [],
-                sender_id="me",
+                sender_id="910002",
                 signing_key_version="1",
                 current_screen_capture_blocking_enabled=True,
             )
@@ -734,22 +789,22 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         result = chat.prepare_group_create(
             GroupCreateParams(
                 public_keys,
                 "g123",            # conversation_id
-                ["me", "friend"],  # member_ids
-                ["me"],            # admin_ids
-                sender_id="me",
+                ["910002", "910005"],  # member_ids
+                ["910002"],            # admin_ids
+                sender_id="910002",
                 signing_key_version="1",
                 title="Team",
             )
         )
 
         self.assertEqual(result["conversation_id"], "g123")
-        self.assertEqual(len(result["participant_keys"]), 1)
+        self.assertEqual(len(result["conversation_participant_keys"]), 1)
         # A group create emits two signed actions: the key change and the create.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
@@ -757,7 +812,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         create = result["action_signatures"][1]
-        self.assertTrue(create["signature"])
+        self.assertTrue(create["message_event_signature"]["signature"])
         self.assertTrue(
             create["signature_payload"].startswith("GroupChangeEvent.GroupCreate,")
         )
@@ -769,7 +824,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "me", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
         ]
         # An empty string is the "not set" encoding: it must sign the null
         # sentinel, exactly like leaving the field None.
@@ -777,9 +832,9 @@ class TestApiShapes(unittest.TestCase):
             GroupCreateParams(
                 public_keys,
                 "g123",
-                ["me", "friend"],
-                ["me"],
-                sender_id="me",
+                ["910002", "910005"],
+                ["910002"],
+                sender_id="910002",
                 signing_key_version="1",
                 title="",
                 avatar_url="",
@@ -789,9 +844,9 @@ class TestApiShapes(unittest.TestCase):
             GroupCreateParams(
                 public_keys,
                 "g123",
-                ["me", "friend"],
-                ["me"],
-                sender_id="me",
+                ["910002", "910005"],
+                ["910002"],
+                sender_id="910002",
                 signing_key_version="1",
             )
         )
@@ -809,19 +864,30 @@ class TestApiShapes(unittest.TestCase):
 
         # A 1:1 id is signed in its canonical colon form; delete-for-all
         # signs the wire action 2.
-        sig = chat.prepare_message_delete(
-            MessageDeleteParams(
-                "222-111",
-                ["seq-10", "seq-11"],
-                True,
-                sender_id="111",
-                signing_key_version="1",
+        sig = _only_action(
+            chat.prepare_message_delete(
+                MessageDeleteParams(
+                    "222-111",
+                    ["seq-10", "seq-11"],
+                    True,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
             )
         )
 
         self.assertTrue(sig["message_id"])
         self.assertTrue(sig["encoded_message_event_detail"])
-        self.assertTrue(sig["signature"])
+        # The signature is nested as the request's action_signatures carry it.
+        signed = sig["message_event_signature"]
+        self.assertEqual(
+            sorted(signed),
+            ["public_key_version", "signature", "signature_version", "signing_public_key"],
+        )
+        self.assertTrue(signed["signature"])
+        self.assertEqual(signed["signature_version"], "7")
+        self.assertEqual(signed["public_key_version"], "1")
+        self.assertEqual(signed["signing_public_key"], chat.get_public_keys().signing)
         self.assertEqual(
             sig["signature_payload"],
             f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11",
@@ -834,13 +900,15 @@ class TestApiShapes(unittest.TestCase):
 
         # Group ids pass through unchanged; delete-for-self signs the wire
         # action 1.
-        sig = chat.prepare_message_delete(
-            MessageDeleteParams(
-                "g999",
-                ["seq-1"],
-                False,
-                sender_id="111",
-                signing_key_version="1",
+        sig = _only_action(
+            chat.prepare_message_delete(
+                MessageDeleteParams(
+                    "g999",
+                    ["seq-1"],
+                    False,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
             )
         )
 
@@ -856,25 +924,30 @@ class TestApiShapes(unittest.TestCase):
 
         # A 1:1 id is signed in its canonical colon form, followed by the
         # read point and its time.
-        sig = chat.prepare_mark_conversation_read(
-            MarkConversationReadParams(
-                "222-111",
-                "2011626338877079553",
-                seen_at_msec=1700000000123,
-                sender_id="111",
-                signing_key_version="1",
+        sig = _only_action(
+            chat.prepare_mark_conversation_read(
+                MarkConversationReadParams(
+                    "222-111",
+                    "2011626338877079553",
+                    seen_at_msec=1700000000123,
+                    sender_id="111",
+                    signing_key_version="1",
+                )
             )
         )
 
         self.assertTrue(sig["message_id"])
         self.assertTrue(sig["encoded_message_event_detail"])
-        self.assertEqual(sig["public_key_version"], "1")
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "1")
+        self.assertEqual(
+            sig["message_event_signature"]["signing_public_key"], chat.get_public_keys().signing
+        )
         self.assertEqual(
             sig["signature_payload"],
             f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
             "2011626338877079553,1700000000123",
         )
-        signature = sig["signature"]
+        signature = sig["message_event_signature"]["signature"]
         self.assertTrue(
             chat.verify(
                 v["signing_public_b64"],
@@ -886,17 +959,19 @@ class TestApiShapes(unittest.TestCase):
     def test_prepare_mark_conversation_read_defaults_seen_at_to_now(self):
         import time
 
-        from chat_xdk import MarkConversationReadParams
+        from chat_xdk import MarkConversationReadParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("111", "7")
+        chat.set_identity(SetIdentityParams("111", "7"))
 
         before = int(time.time() * 1000)
-        sig = chat.prepare_mark_conversation_read(MarkConversationReadParams("g999", "seq-1"))
+        sig = _only_action(
+            chat.prepare_mark_conversation_read(MarkConversationReadParams("g999", "seq-1"))
+        )
         after = int(time.time() * 1000)
 
         # The session identity signs; the unset time is the current time.
-        self.assertEqual(sig["public_key_version"], "7")
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
         prefix = f"MarkConversationReadEvent,{sig['message_id']},111,g999,seq-1,"
         self.assertTrue(sig["signature_payload"].startswith(prefix))
         seen_at = int(sig["signature_payload"][len(prefix) :])
@@ -947,6 +1022,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(chat.decrypt(ciphertext, conv_key), plaintext)
 
     def test_export_lock_reimport_roundtrip(self):
+        from chat_xdk import ImportKeysParams
         chat, v = self._unlocked_chat()
 
         exported = chat.export_keys()
@@ -959,20 +1035,20 @@ class TestApiShapes(unittest.TestCase):
         # Locked: export returns None instead of raising.
         self.assertIsNone(chat.export_keys())
 
-        chat.import_keys(bytes(exported))
+        chat.import_keys(ImportKeysParams(bytes(exported)))
         self.assertTrue(chat.is_unlocked())
         keys = chat.get_public_keys()
         self.assertEqual(keys.identity, v["identity_public_b64"])
         self.assertEqual(keys.signing, v["signing_public_b64"])
 
     def test_export_keys_identity_only_round_trip(self):
-        from chat_xdk import Chat
+        from chat_xdk import Chat, ImportKeysParams
 
         v = _load_vectors()
         identity_only = base64.b64decode(v["private_keys_concat_b64"])[:32]
 
         chat = Chat()
-        chat.import_keys(identity_only)
+        chat.import_keys(ImportKeysParams(identity_only))
         # Identity-only sessions can export (32 bytes), matching core; only
         # a session with no identity key at all returns None.
         exported = chat.export_keys()
@@ -1027,10 +1103,10 @@ class TestApiShapes(unittest.TestCase):
             )
 
     def test_url_attachment_with_banner_image_encrypts(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("123", "1")
+        chat.set_identity(SetIdentityParams("123", "1"))
 
         payload = chat.encrypt_message(
             EncryptMessageParams(
@@ -1059,7 +1135,7 @@ class TestApiShapes(unittest.TestCase):
                 ],
             )
         )
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
         self.assertTrue(payload.signature)
         self.assertTrue(payload.message_id)
 
@@ -1104,10 +1180,11 @@ class TestApiShapes(unittest.TestCase):
             FileDecryptorParams,
             FileEncryptorParams,
             encrypted_file_size,
+            SetIdentityParams,
         )
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
         keys = {"7": conv_key}
         photos = {"photo-a": bytes(range(256)) * 40, "photo-b": b"second photo"}
@@ -1122,12 +1199,12 @@ class TestApiShapes(unittest.TestCase):
 
         for media_hash_key, photo in photos.items():
             encrypted = chat.encrypt_file(
-                EncryptFileParams(photo, payload.event_b64, keys, media_hash_key)
+                EncryptFileParams(photo, payload.event_b64, media_hash_key, **_key_kwargs(keys))
             )
             self.assertEqual(len(encrypted), encrypted_file_size(len(photo)))
 
             encryptor = chat.file_encryptor(
-                FileEncryptorParams(payload.event_b64, keys, media_hash_key)
+                FileEncryptorParams(payload.event_b64, media_hash_key, **_key_kwargs(keys))
             )
             streamed = b"".join(encryptor.push(photo[i:i + 700]) for i in range(0, len(photo), 700))
             streamed += encryptor.finish()
@@ -1151,10 +1228,10 @@ class TestApiShapes(unittest.TestCase):
             encryptor.finish()
 
     def _sender_of_files(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
         def send(text, hashes):
@@ -1184,10 +1261,10 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotEqual(send("draft", ["photo-a", "photo-b"]), send("draft", ["photo-a", "photo-b"]))
 
     def test_file_errors_say_what_to_pass(self):
-        from chat_xdk import EncryptFileParams, EncryptMessageParams
+        from chat_xdk import EncryptFileParams, EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         conv_key = base64.b64decode(v["conversation_key_b64"])
         payload = chat.encrypt_message(
             EncryptMessageParams(
@@ -1199,19 +1276,19 @@ class TestApiShapes(unittest.TestCase):
         )
         cases = [
             ({"7": conv_key}, "other", "is not one of the message's files"),
-            ({"8": conv_key}, "photo", "has no key for version '7'"),
-            ({"7": bytes(3)}, "photo", "the key for version '7' in the conversation key map is not 32 bytes"),
+            ({"8": conv_key}, "photo", "conversation_key_version '8' is not the message's key version '7'"),
+            ({"7": bytes(3)}, "photo", "Invalid conversation key (expected 32 bytes)"),
         ]
         for keys, media_hash_key, expected in cases:
             with self.assertRaises(ValueError) as ctx:
-                chat.encrypt_file(EncryptFileParams(b"x", payload.event_b64, keys, media_hash_key))
+                chat.encrypt_file(EncryptFileParams(b"x", payload.event_b64, media_hash_key, **_key_kwargs(keys)))
             self.assertIn(expected, str(ctx.exception))
 
     def test_each_file_needs_its_own_media_hash_key(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
-        chat.set_identity("1001", "1")
+        chat.set_identity(SetIdentityParams("1001", "1"))
         with self.assertRaisesRegex(ValueError, "media_hash_key 'photo' is in more than one attachment"):
             chat.encrypt_message(
                 EncryptMessageParams(
@@ -1292,7 +1369,7 @@ class TestApiShapes(unittest.TestCase):
         # Missing the identity binding fields (identity_public_key /
         # identity_public_key_signature) -> raises ValueError.
         incomplete = [{
-            "user_id": "me",
+            "user_id": "910002",
             "public_key_version": "1",
             "public_key": "abc",
         }]
@@ -1305,7 +1382,7 @@ class TestApiShapes(unittest.TestCase):
         chat, _ = self._unlocked_chat()
 
         incomplete = [{
-            "user_id": "me",
+            "user_id": "910002",
             "public_key_version": "1",
             "public_key": "abc",
             "identity_public_key": "def",
@@ -1323,12 +1400,12 @@ class TestApiShapes(unittest.TestCase):
         self.assertIn("the key for version '1' in the conversation key map is not 32 bytes", str(ctx.exception))
 
     def test_session_identity_is_the_default_sender(self):
-        from chat_xdk import EncryptMessageParams
+        from chat_xdk import EncryptMessageParams, SetIdentityParams
 
         chat, v = self._unlocked_chat()
         conv_key = base64.b64decode(v["conversation_key_b64"])
 
-        chat.set_identity("1001", "7")
+        chat.set_identity(SetIdentityParams("1001", "7"))
         payload = chat.encrypt_message(
             EncryptMessageParams(
                 "conv-1", "hi",
@@ -1337,7 +1414,7 @@ class TestApiShapes(unittest.TestCase):
             )
         )
         self.assertEqual(payload.signature_info.public_key_version, "7")
-        self.assertTrue(payload.encrypted_content)
+        self.assertTrue(payload.encoded_message_create_event)
 
         # The explicit-override form signs with the same key version and
         # produces an equally complete payload.
@@ -1351,7 +1428,7 @@ class TestApiShapes(unittest.TestCase):
             )
         )
         self.assertEqual(explicit.signature_info.public_key_version, "7")
-        self.assertTrue(explicit.encrypted_content)
+        self.assertTrue(explicit.encoded_message_create_event)
         self.assertTrue(explicit.signature)
 
     def test_encrypt_without_identity_mentions_sender_id(self):
@@ -1373,7 +1450,7 @@ class TestApiShapes(unittest.TestCase):
             self.assertIn("sender_id", str(ctx.exception))
 
     def test_generated_keys_sign_only_with_the_registered_version(self):
-        from chat_xdk import Chat, MessageDeleteParams
+        from chat_xdk import Chat, MessageDeleteParams, SetIdentityParams, ImportKeysParams
 
         chat = Chat()
         chat.generate_keypairs()
@@ -1383,20 +1460,24 @@ class TestApiShapes(unittest.TestCase):
             )
         self.assertIn("signing_key_version", str(ctx.exception))
 
-        chat.set_identity("1234", "1700000000123")
-        sig = chat.prepare_message_delete(MessageDeleteParams("1234-5678", ["seq-1"], False))
-        self.assertEqual(sig["public_key_version"], "1700000000123")
+        chat.set_identity(SetIdentityParams("1234", "1700000000123"))
+        sig = _only_action(
+            chat.prepare_message_delete(MessageDeleteParams("1234-5678", ["seq-1"], False))
+        )
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "1700000000123")
 
         # Restored keys carry the version passed to import_keys, and none
         # without it.
         keys = bytes(chat.export_keys())
         restored = Chat()
-        restored.import_keys(keys, version="1700000000456")
-        sig = restored.prepare_message_delete(
-            MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+        restored.import_keys(ImportKeysParams(keys, signing_key_version="1700000000456"))
+        sig = _only_action(
+            restored.prepare_message_delete(
+                MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")
+            )
         )
-        self.assertEqual(sig["public_key_version"], "1700000000456")
-        restored.import_keys(keys)
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "1700000000456")
+        restored.import_keys(ImportKeysParams(keys))
         with self.assertRaises(ValueError):
             restored.prepare_message_delete(
                 MessageDeleteParams("1234-5678", ["seq-1"], False, sender_id="1234")

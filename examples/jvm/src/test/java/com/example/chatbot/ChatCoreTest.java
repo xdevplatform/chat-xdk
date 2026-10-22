@@ -89,15 +89,15 @@ class ChatCoreTest {
     void conversationKeyPrepareAndDecryptRoundtrip() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
-            core.setIdentity("me");
+            core.setIdentity("910002");
             PublicKeyInput input = new PublicKeyInput();
-            input.userId = "me";
+            input.userId = "910002";
             input.publicKey = v.get("identity_public_b64").asText();
             input.keyVersion = "1";
             PreparedConversationChange prepared =
                     core.prepareConversationKeyChange(List.of(input), "conv-1");
-            assertEquals(1, prepared.participantKeys.size());
-            byte[] decrypted = core.decryptConversationKey(prepared.participantKeys.get(0).encryptedKey);
+            assertEquals(1, prepared.conversationParticipantKeys.size());
+            byte[] decrypted = core.decryptConversationKey(prepared.conversationParticipantKeys.get(0).encryptedConversationKey);
             assertArrayEquals(prepared.conversationKey, decrypted);
         }
     }
@@ -151,7 +151,7 @@ class ChatCoreTest {
             PreparedConversationChange prep =
                     core.prepareConversationKeyChange(fixtureKeys(v), "1000:2000");
             String signingPub = core.publicKeys().signing;
-            ObjectNode body = ChatCore.prepToRequest(prep, signingPub);
+            ObjectNode body = ChatCore.prepToRequest(prep);
 
             assertEquals(prep.conversationKeyVersion, body.path("conversation_key_version").asText());
             JsonNode pks = body.path("conversation_participant_keys");
@@ -261,7 +261,7 @@ class ChatCoreTest {
                     null);
             assertFalse(body.eventB64().isEmpty());
 
-            byte[] ciphertext = core.encryptMedia(plaintext, body.eventB64(), convKeys, "photo");
+            byte[] ciphertext = core.encryptMedia(plaintext, body.eventB64(), key, "1", "photo");
             assertEquals(ChatXdkUtilities.encryptedFileSize(plaintext.length), ciphertext.length);
             assertArrayEquals(plaintext, core.decryptMedia(ciphertext, body.eventB64(), convKeys, "photo"));
             byte[] truncated = Arrays.copyOf(ciphertext, ciphertext.length - 4);

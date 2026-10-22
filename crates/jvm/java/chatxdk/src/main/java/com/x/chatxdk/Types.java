@@ -100,20 +100,23 @@ public final class Types {
         @JsonProperty("event_b64")
         public String eventB64 = "";
 
-        /** Base64-encoded ciphertext of the encrypted message event. */
-        @JsonProperty("encrypted_content")
-        public String encryptedContent = "";
+        /**
+         * Base64-encoded Thrift {@code MessageCreateEvent} carrying the encrypted contents: the
+         * send request's {@code encoded_message_create_event}.
+         */
+        @JsonProperty("encoded_message_create_event")
+        public String encodedMessageCreateEvent = "";
 
         /** Base64-encoded raw r||s signature over the encrypted content. */
         @JsonProperty("signature")
         public String signature = "";
 
         /**
-         * Base64-encoded Thrift {@code MessageEventSignature}.
-         * Pass as {@code encoded_message_event_signature} in the X API request.
+         * Base64-encoded Thrift {@code MessageEventSignature}: the send request's
+         * {@code encoded_message_event_signature}.
          */
-        @JsonProperty("encoded_event_signature")
-        public String encodedEventSignature = "";
+        @JsonProperty("encoded_message_event_signature")
+        public String encodedMessageEventSignature = "";
 
         /** Signing key and signature version metadata for this payload. */
         @JsonProperty("signature_info")
@@ -135,9 +138,12 @@ public final class Types {
     }
 
     /**
-     * Signed action payload authenticating a conversation key change, member
-     * add, message delete, or read receipt.
+     * Signed action authenticating a conversation key change, group change,
+     * message delete, or read receipt, shaped as an entry of a request's
+     * {@code action_signatures}: the signature is nested under
+     * {@code message_event_signature}.
      */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class ActionSignature {
         /** ID of the message carrying the action. */
         @JsonProperty("message_id")
@@ -147,6 +153,21 @@ public final class Types {
         @JsonProperty("encoded_message_event_detail")
         public String encodedMessageEventDetail = "";
 
+        /** The signature over the action, with its versions and the signer's signing public key. */
+        @JsonProperty("message_event_signature")
+        public MessageEventSignature messageEventSignature = new MessageEventSignature();
+
+        /**
+         * The comma-separated payload string that was signed; {@code null} for
+         * conversation-key changes, whose payload embeds the plaintext
+         * conversation key and is withheld.
+         */
+        @JsonProperty("signature_payload")
+        public String signaturePayload;
+    }
+
+    /** The signature of an {@link ActionSignature}. */
+    public static final class MessageEventSignature {
         /** Base64-encoded raw r||s signature over the action payload. */
         @JsonProperty("signature")
         public String signature = "";
@@ -159,13 +180,19 @@ public final class Types {
         @JsonProperty("public_key_version")
         public String publicKeyVersion = "";
 
-        /**
-         * The comma-separated payload string that was signed. Empty for
-         * conversation-key changes, whose payload embeds the plaintext
-         * conversation key and is withheld.
-         */
-        @JsonProperty("signature_payload")
-        public String signaturePayload = "";
+        /** The signer's base64 signing public key, as {@link Chat#getPublicKeys} returns it. */
+        @JsonProperty("signing_public_key")
+        public String signingPublicKey = "";
+    }
+
+    /**
+     * A signed message delete or read receipt: the {@code action_signatures} a
+     * request carries for it, one entry.
+     */
+    public static final class PreparedAction {
+        /** The signed action, as the request's {@code action_signatures} entries. */
+        @JsonProperty("action_signatures")
+        public List<ActionSignature> actionSignatures = Collections.emptyList();
     }
 
     /** A signing key entry for {@link Chat#decryptEvent} and {@link Chat#decryptEvents}. */
@@ -231,8 +258,8 @@ public final class Types {
         public String conversationKeyVersion = "";
 
         /** The conversation key encrypted once per participant. */
-        @JsonProperty("participant_keys")
-        public List<EncryptedKeyForRecipient> participantKeys = Collections.emptyList();
+        @JsonProperty("conversation_participant_keys")
+        public List<ConversationParticipantKey> conversationParticipantKeys = Collections.emptyList();
 
         /** Action signatures authenticating the change, ready to POST. */
         @JsonProperty("action_signatures")
@@ -285,17 +312,21 @@ public final class Types {
         public Map<String, String> errors = Collections.emptyMap();
     }
 
-    /** An encrypted conversation key for one recipient. */
-    public static final class EncryptedKeyForRecipient {
-        /** ID of the recipient user. */
+    /**
+     * One participant's copy of a conversation key, encrypted to their identity key: an entry of
+     * the X API's {@code conversation_participant_keys}. A prepared change carries these for its
+     * request, and a received key change carries them in its decrypted JSON.
+     */
+    public static final class ConversationParticipantKey {
+        /** ID of the participant. */
         @JsonProperty("user_id")
         public String userId = "";
 
-        /** Base64-encoded conversation key encrypted to the recipient (ECIES). */
-        @JsonProperty("encrypted_key")
-        public String encryptedKey = "";
+        /** Base64-encoded conversation key encrypted to the participant (ECIES). */
+        @JsonProperty("encrypted_conversation_key")
+        public String encryptedConversationKey = "";
 
-        /** Version of the recipient's public key used to encrypt the conversation key. */
+        /** Version of the participant's public key used to encrypt the conversation key. */
         @JsonProperty("public_key_version")
         public String publicKeyVersion = "";
     }
@@ -686,8 +717,8 @@ public final class Types {
         /** Sequence ID of the message being replied to; derived from {@link #replyToEvent} when null. */
         public String replyToSequenceId;
 
-        /** Sender ID of the message being replied to (for the preview); derived from {@link #replyToEvent} when null. */
-        public Long replyToSenderId;
+        /** User ID of the message's sender, as digits (for the preview); derived from {@link #replyToEvent} when null. */
+        public String replyToSenderId;
 
         /** Text of the message being replied to (for the preview); derived from {@link #replyToEvent} when null. */
         public String replyToText;
@@ -970,6 +1001,58 @@ public final class Types {
         }
     }
 
+    /** Parameters for {@link Chat#setIdentity}. */
+    public static final class SetIdentityParams {
+        /** Your user ID: the sender of everything this chat signs. */
+        public final String userId;
+
+        /** The {@code public_key_version} the X API returned when your keys were registered. */
+        public final String signingKeyVersion;
+
+        /**
+         * Create params with both fields.
+         *
+         * @param userId Your user ID.
+         * @param signingKeyVersion Your registered {@code public_key_version}.
+         */
+        public SetIdentityParams(String userId, String signingKeyVersion) {
+            this.userId = userId;
+            this.signingKeyVersion = signingKeyVersion;
+        }
+    }
+
+    /** Parameters for {@link Chat#importKeys}. */
+    public static final class ImportKeysParams {
+        /** The key blob {@link Chat#exportKeys} returned: 32 or 64 bytes. */
+        public final byte[] keys;
+
+        /**
+         * The {@code public_key_version} the X API returned when the keys were registered; null
+         * leaves the signing-key version unset.
+         */
+        public String signingKeyVersion;
+
+        /**
+         * Create params with the key blob; {@link #signingKeyVersion} defaults to null.
+         *
+         * @param keys The key blob {@link Chat#exportKeys} returned.
+         */
+        public ImportKeysParams(byte[] keys) {
+            this.keys = keys;
+        }
+
+        /**
+         * Create params with the key blob and its registered {@code public_key_version}.
+         *
+         * @param keys The key blob {@link Chat#exportKeys} returned.
+         * @param signingKeyVersion The {@code public_key_version} the keys were registered under.
+         */
+        public ImportKeysParams(byte[] keys, String signingKeyVersion) {
+            this.keys = keys;
+            this.signingKeyVersion = signingKeyVersion;
+        }
+    }
+
     /** Parameters for {@link Chat#decryptEvent}. */
     public static final class DecryptEventParams {
         /** The base64 event, as delivered. */
@@ -1046,25 +1129,29 @@ public final class Types {
          */
         public final String eventB64;
 
-        /** Version &#8594; raw 32-byte conversation key; it must hold the key the message was encrypted under. */
-        public final Map<String, byte[]> conversationKeys;
-
         /** The media hash key the file's upload started with, as listed in the message's attachments. */
         public final String mediaHashKey;
 
         /**
-         * Create params with the required fields.
+         * The raw 32-byte conversation key the message was encrypted under; with {@link
+         * #conversationKeyVersion} null too, it resolves from the key cache, as for {@link
+         * EncryptMessageParams}.
+         */
+        public byte[] conversationKey;
+
+        /** The version of {@link #conversationKey}: the message's key version. */
+        public String conversationKeyVersion;
+
+        /**
+         * Create params with the required fields; the conversation key pair defaults to the key cache.
          *
          * @param file The file to encrypt.
          * @param eventB64 The {@link SendPayload#eventB64} of the message carrying the file.
-         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
          * @param mediaHashKey The media hash key the file's upload started with.
          */
-        public EncryptFileParams(
-                byte[] file, String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+        public EncryptFileParams(byte[] file, String eventB64, String mediaHashKey) {
             this.file = file;
             this.eventB64 = eventB64;
-            this.conversationKeys = conversationKeys;
             this.mediaHashKey = mediaHashKey;
         }
     }
@@ -1077,22 +1164,23 @@ public final class Types {
         /** The {@link SendPayload#eventB64} of the message carrying the file. */
         public final String eventB64;
 
-        /** Version &#8594; raw 32-byte conversation key; it must hold the key the message was encrypted under. */
-        public final Map<String, byte[]> conversationKeys;
-
         /** The media hash key the file's upload started with, as listed in the message's attachments. */
         public final String mediaHashKey;
 
+        /** The raw 32-byte conversation key the message was encrypted under; null resolves it from the key cache. */
+        public byte[] conversationKey;
+
+        /** The version of {@link #conversationKey}: the message's key version. */
+        public String conversationKeyVersion;
+
         /**
-         * Create params with the required fields.
+         * Create params with the required fields; the conversation key pair defaults to the key cache.
          *
          * @param eventB64 The {@link SendPayload#eventB64} of the message carrying the file.
-         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
          * @param mediaHashKey The media hash key the file's upload started with.
          */
-        public FileEncryptorParams(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
+        public FileEncryptorParams(String eventB64, String mediaHashKey) {
             this.eventB64 = eventB64;
-            this.conversationKeys = conversationKeys;
             this.mediaHashKey = mediaHashKey;
         }
     }

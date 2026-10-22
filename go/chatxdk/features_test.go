@@ -135,10 +135,10 @@ func featureChat(t *testing.T, opts featureOptions) *Chat {
 
 func importFeatureKeys(t *testing.T, chat *Chat, v sdkVectors) {
 	t.Helper()
-	if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
-	if err := chat.SetIdentity(v.EventSenderID, v.EventSigningKeyVersion); err != nil {
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
 }
@@ -546,7 +546,7 @@ func TestChatsAskingAtOnceShareARequest(t *testing.T) {
 	}
 
 	for _, chat := range chats {
-		if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+		if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 			t.Fatalf("ImportKeys failed: %v", err)
 		}
 	}

@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.Chat;
+import com.x.chatxdk.Types.ImportKeysParams;
 import com.x.chatxdk.Types.PublicKeyRegistrationPayload;
+import com.x.chatxdk.Types.SetIdentityParams;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -91,7 +93,7 @@ public final class Register {
             // POST or Juicebox step safe to retry without wasting the budget.
             boolean resuming = Files.exists(BLOB_PATH) && marker.has("body") && !force;
             if (resuming) {
-                chat.importKeys(Base64.getDecoder().decode(Files.readString(BLOB_PATH).trim()));
+                chat.importKeys(new ImportKeysParams(Base64.getDecoder().decode(Files.readString(BLOB_PATH).trim())));
                 body = marker.get("body");
                 System.out.println("Resuming the saved identity (" + BLOB_PATH + ").");
             } else {
@@ -165,7 +167,7 @@ public final class Register {
                 return;
             }
 
-            chat.setIdentity(userId, version);
+            chat.setIdentity(new SetIdentityParams(userId, version));
             ObjectNode done = MAPPER.createObjectNode();
             done.put("registered", true);
             done.put("user_id", userId);

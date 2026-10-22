@@ -94,7 +94,7 @@ async function newChat(endpoint, hooks = {}) {
 
 function loadKeys(chat) {
   chat.generateKeypairs();
-  chat.setIdentity("111", "1");
+  chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
 }
 
 function send(chat, v) {
@@ -342,7 +342,7 @@ async function chatsAskingAtOnceShareARequest(v, server) {
   assert.deepEqual(server.buckets, [null]);
 
   const keys = b64ToBytes(v.private_keys_concat_b64);
-  for (const { inner } of chats) inner.importKeys(keys);
+  for (const { inner } of chats) inner.importKeys({ keys: keys });
   await waitFor("the key answer", () => chats.every(({ inner }) => !inner.__featureRefetchDue()));
   assert.deepEqual(server.buckets, [null, String(chats[0].inner.__featureBucket())]);
   for (const { chat } of chats) chat.free();

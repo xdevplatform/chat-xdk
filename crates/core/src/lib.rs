@@ -15,7 +15,7 @@
 //!
 //! // On startup: unlock keys and set the session identity once.
 //! chat.unlock(b"2580").await?;
-//! chat.set_identity("1876543210", signing_key_version);
+//! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! chat.set_cache_keys(true);
 //! chat.set_signing_keys(signing_keys);
 //!
@@ -32,15 +32,15 @@
 //! // Send messages. The SDK generates the message id and returns it in the
 //! // payload (payload.message_id); sender, signing-key version, and the
 //! // conversation key resolve from the session and cache.
-//! let payload = chat.encrypt_message(EncryptMessageParams::new("conv-1", "Hello!"))?;
+//! let payload = chat.encrypt_message(&EncryptMessageParams::new("conv-1", "Hello!"))?;
 //! // POST payload to X API
 //!
 //! // A message with a file: start the upload to get its media hash key, list
-//! // it in the attachments, then encrypt the file from the payload's event.
-//! let encrypted = chat.encrypt_file(EncryptFileParams::new(
+//! // it in the attachments, then encrypt the file from the payload's event
+//! // (its conversation key resolves from the cache, as for the message).
+//! let encrypted = chat.encrypt_file(&EncryptFileParams::new(
 //!     photo,
 //!     payload.event_b64.clone(),
-//!     keys,
 //!     media_hash_key,
 //! ))?;
 //! ```
@@ -175,7 +175,8 @@ pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, MarkConversationReadParams, MessageDeleteParams,
+    GroupMembersChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    SetIdentityParams,
 };
 pub use types::*;
 
@@ -184,14 +185,14 @@ pub use types::*;
 // The derive macro JsCamelCase generates Js* types alongside each annotated type.
 #[cfg(feature = "js")]
 pub mod js {
-    pub use crate::signatures::JsActionSignature;
+    pub use crate::signatures::{JsActionSignature, JsMessageEventSignature};
     pub use crate::types::{
         JsAttachmentInfo,
         JsConversationDeletedEvent,
         JsConversationKeyResult,
+        JsConversationParticipantKey,
         JsDecryptEventsResult,
         JsDecryptedMessage,
-        JsEncryptedKeyForRecipient,
         // Event hierarchy
         JsEvent,
         // Supporting types
@@ -210,8 +211,8 @@ pub mod js {
         JsMessageContent,
         JsMessageDeletedEvent,
         JsMoneyAttachmentInfo,
-        JsParticipantKey,
         JsPostAttachmentInfo,
+        JsPreparedAction,
         JsPreparedConversationChange,
         JsPublicKeyInput,
         JsPublicKeyRegistration,
@@ -246,7 +247,7 @@ pub mod prelude {
     pub use crate::params::{
         ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
         EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-        MarkConversationReadParams, MessageDeleteParams,
+        ImportKeysParams, MarkConversationReadParams, MessageDeleteParams, SetIdentityParams,
     };
 
     // Types (always available)

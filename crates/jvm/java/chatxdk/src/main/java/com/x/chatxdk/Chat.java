@@ -181,11 +181,14 @@ public final class Chat implements AutoCloseable {
      * version is the {@code public_key_version} returned when the keys were
      * registered.
      */
-    public void setIdentity(String userId, String signingKeyVersion) {
+    public void setIdentity(SetIdentityParams parameters) {
         throwIfDisposed();
-        try (Memory user = FfiStrings.utf8(userId);
-                Memory ver = FfiStrings.utf8(signingKeyVersion)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_identity(handle, user, ver));
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("user_id", parameters.userId);
+        n.put("signing_key_version", parameters.signingKeyVersion);
+        try (Memory j = FfiStrings.utf8(n.toString())) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_identity_params(handle, j));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -502,39 +505,34 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Import private keys from a byte array produced by {@link #exportKeys}.
-     * Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-     * No signing-key version is set; {@link #importKeys(byte[], String)} sets it.
+     * Import private keys from the byte array {@link #exportKeys} produced: 32 bytes (identity
+     * only) or 64 bytes (identity + signing). When {@link ImportKeysParams#signingKeyVersion} is
+     * set (the {@code public_key_version} returned when the keys were registered), it is recorded
+     * as well, so participant-key filtering and the session signing-key version are set in one
+     * call. The key bytes are passed to the native side directly, never copied into a string.
      */
-    public void importKeys(byte[] keys) {
+    public void importKeys(ImportKeysParams parameters) {
         throwIfDisposed();
-        String b64 = Base64.getEncoder().encodeToString(keys);
-        try (Memory b64m = FfiStrings.utf8(b64)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_import_keys(handle, b64m));
-        } finally {
-            Reference.reachabilityFence(this);
+        Objects.requireNonNull(parameters, "parameters");
+        byte[] keys = parameters.keys == null ? new byte[0] : parameters.keys;
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        if (parameters.signingKeyVersion != null) {
+            n.put("signing_key_version", parameters.signingKeyVersion);
         }
-    }
-
-    /**
-     * Like {@link #importKeys(byte[])} but also records the
-     * {@code public_key_version} returned when the keys were registered, so
-     * participant-key filtering and the session signing-key version are set in
-     * one call.
-     */
-    public void importKeys(byte[] keys, String version) {
-        throwIfDisposed();
-        Objects.requireNonNull(keys, "keys");
         FfiResult.ByValue r;
-        try (Memory ver = FfiStrings.utf8(version)) {
+        try (Memory j = FfiStrings.utf8(n.toString())) {
             if (keys.length == 0) {
                 // A zero-length Memory cannot be allocated; the native side
                 // treats NULL + length 0 as an empty key blob.
-                r = ChatNative.INSTANCE.chat_xdk_import_keys_with_version(handle, null, 0, ver);
+                r = ChatNative.INSTANCE.chat_xdk_import_keys_params(handle, null, 0, j);
             } else {
                 try (Memory m = new Memory(keys.length)) {
                     m.write(0, keys, 0, keys.length);
-                    r = ChatNative.INSTANCE.chat_xdk_import_keys_with_version(handle, m, keys.length, ver);
+                    try {
+                        r = ChatNative.INSTANCE.chat_xdk_import_keys_params(handle, m, keys.length, j);
+                    } finally {
+                        m.clear();
+                    }
                 }
             }
         } finally {
@@ -687,39 +685,40 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Build the signed action for deleting messages from a conversation, ready
-     * to submit alongside the delete request.
+     * Build the signed action for deleting messages from a conversation: the
+     * request's {@code action_signatures}, one entry.
      *
      * <p>A delete is a signed plaintext event, not an encrypted message, so no
      * conversation key is involved. The SDK generates the action's message id;
-     * read it back from the result.
+     * read it back from the entry.
      */
-    public ActionSignature prepareMessageDelete(MessageDeleteParams parameters) throws Exception {
+    public PreparedAction prepareMessageDelete(MessageDeleteParams parameters) throws Exception {
         throwIfDisposed();
         try (Memory j = FfiStrings.utf8(buildPrepareMessageDeleteJson(parameters))) {
             String resultJson = FfiStrings.consume(
                     ChatNative.INSTANCE.chat_xdk_prepare_message_delete(handle, j));
-            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+            return ChatJson.MAPPER.readValue(resultJson, PreparedAction.class);
         } finally {
             Reference.reachabilityFence(this);
         }
     }
 
     /**
-     * Build the signed action for marking a conversation read, ready to submit
-     * alongside the mark-read request.
+     * Build the signed action for marking a conversation read: the
+     * {@code action_signatures} of the mark-read request
+     * ({@code POST /2/chat/conversations/{id}/read}), one entry.
      *
      * <p>A read receipt is a signed plaintext event, not an encrypted message,
      * so no conversation key is involved. The SDK generates the action's
-     * message id; read it back from the result.
+     * message id; read it back from the entry.
      */
-    public ActionSignature prepareMarkConversationRead(MarkConversationReadParams parameters)
+    public PreparedAction prepareMarkConversationRead(MarkConversationReadParams parameters)
             throws Exception {
         throwIfDisposed();
         try (Memory j = FfiStrings.utf8(buildPrepareMarkConversationReadJson(parameters))) {
             String resultJson = FfiStrings.consume(
                     ChatNative.INSTANCE.chat_xdk_prepare_mark_conversation_read(handle, j));
-            return ChatJson.MAPPER.readValue(resultJson, ActionSignature.class);
+            return ChatJson.MAPPER.readValue(resultJson, PreparedAction.class);
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -824,7 +823,7 @@ public final class Chat implements AutoCloseable {
      * {@link #decryptEvent} for all subsequent messages.
      *
      * @param encryptedKeyB64 Base64-encoded encrypted key from the {@code KeyChange} event
-     *     ({@code participant_keys[].encrypted_key}).
+     *     ({@code conversation_participant_keys[].encrypted_conversation_key}).
      * @return Raw 32-byte decrypted conversation key.
      */
     public byte[] decryptConversationKey(String encryptedKeyB64) {
@@ -846,6 +845,16 @@ public final class Chat implements AutoCloseable {
             }
         }
         return json;
+    }
+
+    /** Add an optional conversation key (base64) and its version to file params. */
+    private static void putConversationKey(ObjectNode n, byte[] conversationKey, String conversationKeyVersion) {
+        if (conversationKey != null) {
+            n.put("conversation_key", Base64.getEncoder().encodeToString(conversationKey));
+        }
+        if (conversationKeyVersion != null) {
+            n.put("conversation_key_version", conversationKeyVersion);
+        }
     }
 
     private static String fileParamsJson(
@@ -874,8 +883,8 @@ public final class Chat implements AutoCloseable {
      * {@link ChatXdkUtilities#encryptedFileSize}.
      *
      * @return Encrypted bytes.
-     * @throws ChatXdkException if the event is not a message with this file, or the key map
-     *     lacks its key. The message says what to pass instead.
+     * @throws ChatXdkException if the event is not a message with this file, or the conversation
+     *     key is not the one the message was encrypted under. The message says what to pass instead.
      */
     public byte[] encryptFile(EncryptFileParams parameters) {
         throwIfDisposed();
@@ -883,8 +892,8 @@ public final class Chat implements AutoCloseable {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("file", Base64.getEncoder().encodeToString(parameters.file == null ? new byte[0] : parameters.file));
         n.put("event_b64", parameters.eventB64);
-        n.set("conversation_keys", conversationKeysJson(parameters.conversationKeys));
         n.put("media_hash_key", parameters.mediaHashKey);
+        putConversationKey(n, parameters.conversationKey, parameters.conversationKeyVersion);
         return callFile(n, ChatNative.INSTANCE::chat_xdk_encrypt_file);
     }
 
@@ -913,15 +922,18 @@ public final class Chat implements AutoCloseable {
      * {@link #encryptFile} apart from the file, which is fed to the encryptor.
      *
      * @return A new {@link FileEncryptor}; close it when finished.
-     * @throws ChatXdkException if the event is not a message with this file, or the key map
-     *     lacks its key. The message says what to pass instead.
+     * @throws ChatXdkException if the event is not a message with this file, or the conversation
+     *     key is not the one the message was encrypted under. The message says what to pass instead.
      */
     public FileEncryptor fileEncryptor(FileEncryptorParams parameters) {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
         try {
-            return FileEncryptor.create(
-                    handle, fileParamsJson(parameters.eventB64, parameters.conversationKeys, parameters.mediaHashKey));
+            ObjectNode n = ChatJson.MAPPER.createObjectNode();
+            n.put("event_b64", parameters.eventB64);
+            n.put("media_hash_key", parameters.mediaHashKey);
+            putConversationKey(n, parameters.conversationKey, parameters.conversationKeyVersion);
+            return FileEncryptor.create(handle, n.toString());
         } finally {
             Reference.reachabilityFence(this);
         }

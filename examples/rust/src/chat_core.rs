@@ -23,6 +23,7 @@ use chat_xdk_core::{
     GroupCreateParams, GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
     PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
+use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
 
 /// Optional extras for [`ChatCore::encrypt_reply`].
@@ -87,8 +88,9 @@ impl ChatCore {
         let bytes = B64
             .decode(private_keys_b64)
             .map_err(|e| SdkError::Parse(format!("invalid base64 private keys: {e}")))?;
-        self.inner
-            .import_keys_with_version(&bytes, signing_key_version)?;
+        self.inner.import_keys(
+            &ImportKeysParams::new(bytes).with_signing_key_version(signing_key_version),
+        )?;
         self.signing_key_version = signing_key_version.to_string();
         Ok(())
     }
@@ -100,7 +102,7 @@ impl ChatCore {
         let bytes = B64
             .decode(private_keys_b64)
             .map_err(|e| SdkError::Parse(format!("invalid base64 private keys: {e}")))?;
-        self.inner.import_keys(&bytes)
+        self.inner.import_keys(&ImportKeysParams::new(bytes))
     }
 
     /// Generate a fresh identity. Returns the registration payload to POST to
@@ -134,8 +136,10 @@ impl ChatCore {
                     .into(),
             ));
         }
-        self.inner.set_identity(user_id, &self.signing_key_version);
-        Ok(())
+        self.inner.set_identity(&SetIdentityParams::new(
+            user_id,
+            self.signing_key_version.as_str(),
+        ))
     }
 
     // -- Conversation keys --------------------------------------------------
@@ -147,7 +151,7 @@ impl ChatCore {
     ) -> Result<PreparedConversationChange, SdkError> {
         let mut params = ConversationKeyChangeParams::new(public_keys.to_vec());
         params.conversation_id = conversation_id.map(String::from);
-        self.inner.prepare_conversation_key_change(params)
+        self.inner.prepare_conversation_key_change(&params)
     }
 
     pub fn decrypt_conversation_key(
@@ -213,7 +217,7 @@ impl ChatCore {
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
-                self.inner.encrypt_message(params)?
+                self.inner.encrypt_message(&params)?
             }
             Some(reply_to_event) => {
                 let mut params =
@@ -227,14 +231,14 @@ impl ChatCore {
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
-                self.inner.encrypt_reply(params)?
+                self.inner.encrypt_reply(&params)?
             }
         };
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
-            encoded_message_create_event: payload.encrypted_content,
-            encoded_message_event_signature: payload.encoded_event_signature,
+            encoded_message_create_event: payload.encoded_message_create_event,
+            encoded_message_event_signature: payload.encoded_message_event_signature,
             conversation_token: None,
             event_b64: payload.event_b64,
         })
@@ -260,8 +264,8 @@ impl ChatCore {
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
-            encoded_message_create_event: payload.encrypted_content,
-            encoded_message_event_signature: payload.encoded_event_signature,
+            encoded_message_create_event: payload.encoded_message_create_event,
+            encoded_message_event_signature: payload.encoded_message_event_signature,
             conversation_token: None,
             event_b64: payload.event_b64,
         })
@@ -277,7 +281,7 @@ impl ChatCore {
         member_ids: &[String],
         admin_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
-        self.inner.prepare_group_create(GroupCreateParams::new(
+        self.inner.prepare_group_create(&GroupCreateParams::new(
             public_keys.to_vec(),
             conversation_id,
             member_ids.to_vec(),
@@ -295,7 +299,7 @@ impl ChatCore {
         current_admin_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
         self.inner
-            .prepare_group_members_change(GroupMembersChangeParams::new(
+            .prepare_group_members_change(&GroupMembersChangeParams::new(
                 public_keys.to_vec(),
                 conversation_id,
                 new_member_ids.to_vec(),
@@ -314,24 +318,25 @@ impl ChatCore {
     /// API.
     ///
     /// `event_b64` is the `event_b64` of the body [`ChatCore::encrypt_reply`]
-    /// returned for the message, and `media_hash_key` the hash key the file's
-    /// upload started with, as listed in the message's attachments; the SDK
-    /// encrypts the file under that attachment's key. Feeding fixed-size
-    /// chunks through `push` keeps memory bounded no matter how large the
-    /// file is; `finish` emits the final frame that seals the file
-    /// (decryption fails without it).
+    /// returned for the message, `conversation_key` and
+    /// `conversation_key_version` the key the message was encrypted under,
+    /// and `media_hash_key` the hash key the file's upload started with, as
+    /// listed in the message's attachments; the SDK encrypts the file under
+    /// that attachment's key. Feeding fixed-size chunks through `push` keeps
+    /// memory bounded no matter how large the file is; `finish` emits the
+    /// final frame that seals the file (decryption fails without it).
     pub fn encrypt_media(
         &self,
         plaintext: &[u8],
         event_b64: &str,
-        conversation_keys: &HashMap<String, XChatConversationKey>,
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
         media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut enc = self.inner.file_encryptor(FileEncryptorParams::new(
-            event_b64,
-            conversation_keys.clone(),
-            media_hash_key,
-        ))?;
+        let mut enc = self.inner.file_encryptor(
+            &FileEncryptorParams::new(event_b64, media_hash_key)
+                .with_conversation_key(conversation_key.to_bytes(), conversation_key_version),
+        )?;
         let mut out = Vec::new();
         for chunk in plaintext.chunks(Self::MEDIA_CHUNK) {
             out.extend(enc.push(chunk)?);
@@ -404,45 +409,12 @@ pub fn message_text(event: &Event) -> Option<&str> {
 /// Map a prepared conversation change into the X API request shape.
 ///
 /// Works for 1:1 key changes (one signature) and group create / member add
-/// (two signatures). `signing_public_key` is the sender's own signing key,
-/// which the API expects alongside each signature.
-pub fn prep_to_request(prep: &PreparedConversationChange, signing_public_key: &str) -> Value {
-    let participant_keys: Vec<Value> = prep
-        .participant_keys
-        .iter()
-        .map(|pk| {
-            json!({
-                "user_id": pk.user_id,
-                "encrypted_conversation_key": pk.encrypted_key,
-                "public_key_version": pk.public_key_version,
-            })
-        })
-        .collect();
-    let action_signatures: Vec<Value> = prep
-        .action_signatures
-        .iter()
-        .map(|sig| {
-            let mut entry = json!({
-                "message_id": sig.message_id,
-                "encoded_message_event_detail": sig.encoded_message_event_detail,
-                "message_event_signature": {
-                    "signature": sig.signature,
-                    "signature_version": sig.signature_version,
-                    "public_key_version": sig.public_key_version,
-                    "signing_public_key": signing_public_key,
-                },
-            });
-            // Conversation-key-change payloads are withheld by the SDK (they
-            // embed the plaintext key); only forward one when it is present.
-            if !sig.signature_payload.is_empty() {
-                entry["signature_payload"] = json!(sig.signature_payload);
-            }
-            entry
-        })
-        .collect();
+/// (two signatures). The participant keys and action signatures already have
+/// the request's shape.
+pub fn prep_to_request(prep: &PreparedConversationChange) -> Value {
     json!({
         "conversation_key_version": prep.conversation_key_version,
-        "conversation_participant_keys": participant_keys,
-        "action_signatures": action_signatures,
+        "conversation_participant_keys": prep.conversation_participant_keys,
+        "action_signatures": prep.action_signatures,
     })
 }

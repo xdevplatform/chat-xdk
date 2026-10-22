@@ -138,9 +138,13 @@ func (c *Chat) SetRejectUnverified(reject bool) {
 // produce byte-identical signed output for the same logical inputs. The
 // signing-key version is the public_key_version returned when the keys were
 // registered.
-func (c *Chat) SetIdentity(userID, signingKeyVersion string) error {
+func (c *Chat) SetIdentity(params SetIdentityParams) error {
 	defer runtime.KeepAlive(c)
-	return ffiSetIdentity(c.h, userID, signingKeyVersion)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	return ffiSetIdentityParams(c.h, string(j))
 }
 
 // SetCacheKeys enables or disables the conversation-key cache (off by
@@ -231,30 +235,20 @@ func (c *Chat) ExportKeys() ([]byte, error) {
 	return base64.StdEncoding.DecodeString(keysB64)
 }
 
-// ImportKeys imports private keys from a byte slice produced by ExportKeys:
-// 32 bytes (identity only) or 64 bytes (identity + signing). Unlike a string,
-// the byte slice can be zeroed by the caller once imported; the base64 copy
-// built here for the FFI transport is wiped before returning. It sets no
-// signing-key version; ImportKeysWithVersion does.
-func (c *Chat) ImportKeys(keys []byte) error {
+// ImportKeys imports private keys from the byte slice ExportKeys produced:
+// 32 bytes (identity only) or 64 bytes (identity + signing). When
+// params.SigningKeyVersion is set, it also records the public_key_version
+// returned when the keys were registered, so participant-key filtering and
+// the session signing-key version are set in one call. The key bytes are
+// handed to the native side directly, never copied into a string, so the
+// caller's slice remains the only copy to wipe.
+func (c *Chat) ImportKeys(params ImportKeysParams) error {
 	defer runtime.KeepAlive(c)
-	// NUL-terminated base64 buffer handed to C by pointer (no extra C-side
-	// copy), so wiping it here covers the whole transport copy.
-	buf := make([]byte, base64.StdEncoding.EncodedLen(len(keys))+1)
-	base64.StdEncoding.Encode(buf, keys)
-	_, err := ffiImportKeys(c.h, buf)
-	clear(buf)
-	return err
-}
-
-// ImportKeysWithVersion imports private keys like ImportKeys and also records
-// the public_key_version returned when they were registered, so
-// participant-key filtering and the session signing-key version are set in
-// one call. The raw bytes are handed to the native side directly (no
-// transport copy), so the caller's slice remains the only copy to wipe.
-func (c *Chat) ImportKeysWithVersion(keys []byte, version string) error {
-	defer runtime.KeepAlive(c)
-	_, err := ffiImportKeysWithVersion(c.h, keys, version)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	_, err = ffiImportKeysParams(c.h, params.Keys, string(j))
 	return err
 }
 
@@ -391,12 +385,12 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 }
 
 // PrepareMessageDelete builds the signed action for deleting messages from a
-// conversation, ready to submit alongside the delete request.
+// conversation: the request's action_signatures, one entry.
 //
 // A delete is a signed plaintext event, not an encrypted message, so no
 // conversation key is involved. The SDK generates the action's message id;
-// read it back from the result.
-func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignature, error) {
+// read it back from the entry.
+func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*PreparedAction, error) {
 	defer runtime.KeepAlive(c)
 	// Sequence ids are a required field; marshal a nil slice as [] rather
 	// than null.
@@ -409,7 +403,7 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 	if err != nil {
 		return nil, err
 	}
-	var out ActionSignature
+	var out PreparedAction
 	if err := json.Unmarshal([]byte(data), &out); err != nil {
 		return nil, err
 	}
@@ -417,12 +411,13 @@ func (c *Chat) PrepareMessageDelete(params MessageDeleteParams) (*ActionSignatur
 }
 
 // PrepareMarkConversationRead builds the signed action for marking a
-// conversation read, ready to submit alongside the mark-read request.
+// conversation read: the action_signatures of the mark-read request
+// (POST /2/chat/conversations/{id}/read), one entry.
 //
 // A read receipt is a signed plaintext event, not an encrypted message, so
 // no conversation key is involved. The SDK generates the action's message
-// id; read it back from the result.
-func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*ActionSignature, error) {
+// id; read it back from the entry.
+func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*PreparedAction, error) {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)
 	if err != nil {
@@ -432,7 +427,7 @@ func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*
 	if err != nil {
 		return nil, err
 	}
-	var out ActionSignature
+	var out PreparedAction
 	if err := json.Unmarshal([]byte(data), &out); err != nil {
 		return nil, err
 	}
@@ -599,7 +594,6 @@ func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, er
 func (c *Chat) EncryptFile(params EncryptFileParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	params.File = orEmptyBytes(params.File)
-	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -643,7 +637,6 @@ type FileEncryptor struct {
 // which is fed to Push.
 func (c *Chat) FileEncryptor(params FileEncryptorParams) (*FileEncryptor, error) {
 	defer runtime.KeepAlive(c)
-	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err

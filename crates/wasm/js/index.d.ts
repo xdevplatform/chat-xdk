@@ -55,12 +55,12 @@ export interface SendPayload {
    * read the message back.
    */
   eventB64: string;
-  /** Base64-encoded Thrift MessageCreateEvent. */
-  encryptedContent: string;
+  /** Base64-encoded Thrift MessageCreateEvent: the send request's `encoded_message_create_event`. */
+  encodedMessageCreateEvent: string;
   /** Base64-encoded ECDSA signature. */
   signature: string;
-  /** Base64-encoded Thrift MessageEventSignature. */
-  encodedEventSignature: string;
+  /** Base64-encoded Thrift MessageEventSignature: the send request's `encoded_message_event_signature`. */
+  encodedMessageEventSignature: string;
   /** Signature metadata (signing key version + signature protocol version). */
   signatureInfo: { publicKeyVersion: string; signatureVersion: string };
   /** Version of the conversation key used to encrypt the content (a snowflake/timestamp string). */
@@ -72,20 +72,41 @@ export interface SendPayload {
 }
 
 /**
- * An action signature authenticating a conversation key change, member add, or message delete.
+ * A signed action (conversation-key change, group change, message delete or
+ * read receipt), shaped as an entry of a request's `actionSignatures`: the
+ * signature is nested under `messageEventSignature`.
  */
 export interface ActionSignature {
   messageId: string;
   encodedMessageEventDetail: string;
-  signature: string;
-  signatureVersion: string;
-  publicKeyVersion: string;
+  /** The signature over the action, with its versions and the signer's signing public key. */
+  messageEventSignature: MessageEventSignature;
   /**
    * The comma-separated payload string that was signed; populated for group
-   * changes and message deletes. Omitted for conversation-key changes, whose
-   * payload embeds the plaintext conversation key.
+   * changes, message deletes and read receipts. Omitted for conversation-key
+   * changes, whose payload embeds the plaintext conversation key.
    */
   signaturePayload?: string;
+}
+
+/** The signature of an ActionSignature. */
+export interface MessageEventSignature {
+  /** Base64 ECDSA signature of the payload. */
+  signature: string;
+  /** Signature protocol version. */
+  signatureVersion: string;
+  /** Version of the signing public key. */
+  publicKeyVersion: string;
+  /** The signer's base64 signing public key, as getPublicKeys returns it. */
+  signingPublicKey: string;
+}
+
+/**
+ * A signed message delete or read receipt: the `actionSignatures` a request
+ * carries for it, one entry.
+ */
+export interface PreparedAction {
+  actionSignatures: ActionSignature[];
 }
 
 /**
@@ -150,11 +171,14 @@ export interface ImageDimensions {
 }
 
 /**
- * Encrypted conversation key for a single participant.
+ * One participant's copy of a conversation key, encrypted to their identity
+ * key: an entry of the X API's `conversation_participant_keys`. A prepared
+ * change carries these for its request, and a received keyChange event
+ * carries them as delivered.
  */
-export interface EncryptedKeyForRecipient {
+export interface ConversationParticipantKey {
   userId: string;
-  encryptedKey: string;
+  encryptedConversationKey: string;
   publicKeyVersion: string;
 }
 
@@ -190,8 +214,8 @@ export interface PreparedConversationChange {
   conversationKey: Uint8Array;
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;
-  /** Encrypted keys for each participant, ready to POST to the API. */
-  participantKeys: EncryptedKeyForRecipient[];
+  /** Encrypted keys for each participant: the request's `conversation_participant_keys`, ready to POST to the API. */
+  conversationParticipantKeys: ConversationParticipantKey[];
   /** Action signatures authenticating the change, ready to POST to the API. */
   actionSignatures: ActionSignature[];
 }
@@ -244,6 +268,14 @@ export interface QuickReplyOption {
   label?: string | null;
   metadata?: string | null;
   description?: string | null;
+}
+
+/** Params for `setIdentity`. */
+export interface SetIdentityParams {
+  /** Your user ID: the sender of everything this chat signs. */
+  userId: string;
+  /** The `public_key_version` the X API returned when your keys were registered. */
+  signingKeyVersion: string;
 }
 
 /**
@@ -325,13 +357,10 @@ export interface EncryptReplyParams {
   /** The sequenceId of the message being replied to; derived from replyToEvent when omitted. */
   replyToSequenceId?: string | null;
   /**
-   * The sender ID of the message being replied to (for preview); derived
-   * from replyToEvent when omitted.
-   * Prefer a string: snowflake user ids exceed the range where JavaScript
-   * numbers stay exact. Numbers are accepted only while integral and within
-   * `Number.MAX_SAFE_INTEGER`.
+   * The user ID of the message's sender, as digits (for the preview);
+   * derived from replyToEvent when omitted.
    */
-  replyToSenderId?: string | number | null;
+  replyToSenderId?: string | null;
   /** The text of the message being replied to (for preview); derived from replyToEvent when omitted. */
   replyToText?: string | null;
   /** Optional rich-text entities (URLs, mentions, etc.) to embed in the outgoing message. */
@@ -570,10 +599,16 @@ export interface EncryptFileParams {
   file: Uint8Array;
   /** The `eventB64` of the payload that encryptMessage or encryptReply returned for the message carrying the file. */
   eventB64: string;
-  /** The conversation's key map; it must hold the key the message was encrypted under. */
-  conversationKeys: ConversationKeyMap;
   /** The media hash key the file's upload started with, as listed in the message's attachments. */
   mediaHashKey: string;
+  /**
+   * The raw 32-byte conversation key the message was encrypted under; with
+   * conversationKeyVersion omitted too, it resolves from the opt-in key
+   * cache (setCacheKeys), as for encryptMessage.
+   */
+  conversationKey?: Uint8Array | null;
+  /** The version of conversationKey: the message's key version. */
+  conversationKeyVersion?: string | null;
 }
 
 /**
@@ -583,10 +618,16 @@ export interface EncryptFileParams {
 export interface FileEncryptorParams {
   /** The `eventB64` of the payload that encryptMessage or encryptReply returned for the message carrying the file. */
   eventB64: string;
-  /** The conversation's key map; it must hold the key the message was encrypted under. */
-  conversationKeys: ConversationKeyMap;
   /** The media hash key the file's upload started with, as listed in the message's attachments. */
   mediaHashKey: string;
+  /**
+   * The raw 32-byte conversation key the message was encrypted under; with
+   * conversationKeyVersion omitted too, it resolves from the opt-in key
+   * cache (setCacheKeys), as for encryptMessage.
+   */
+  conversationKey?: Uint8Array | null;
+  /** The version of conversationKey: the message's key version. */
+  conversationKeyVersion?: string | null;
 }
 
 /**
@@ -734,9 +775,9 @@ export interface Event {
    * under — decrypt them with the matching key from the conversationKeys
    * map. On keyChange events: the new key version introduced by the change.
    */
-  keyVersion?: string;
+  conversationKeyVersion?: string;
   /** For keyChange events: encrypted conversation keys, one per participant. */
-  participantKeys?: ParticipantKey[];
+  conversationParticipantKeys?: ConversationParticipantKey[];
   /** For failure events: why the message failed to deliver. */
   failure?: FailureType;
   /** For rate-limit upsell failures: the account tier whose limit was reached. */
@@ -782,12 +823,6 @@ export interface MessageContent {
   typeId?: number;
   /** Index signature for additional content-specific fields. */
   [key: string]: any;
-}
-
-export interface ParticipantKey {
-  userId: string;
-  encryptedKey: string;
-  publicKeyVersion: string;
 }
 
 export interface MediaHashReference {
@@ -943,7 +978,7 @@ interface ChatCrypto {
    * used as defaults wherever a params object omits `senderId` /
    * `signingKeyVersion`.
    */
-  setIdentity(userId: string, signingKeyVersion: string): void;
+  setIdentity(params: SetIdentityParams): void;
 
   /**
    * Enable or disable the conversation-key cache (off by default).
@@ -1040,11 +1075,18 @@ interface ChatCrypto {
   /** Encrypt a message edit. */
   encryptEdit(params: EncryptEditParams): SendPayload;
 
-  /** Build the signed action for deleting messages from a conversation. */
-  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
+  /**
+   * Build the signed action for deleting messages from a conversation: the
+   * request's `actionSignatures`, one entry.
+   */
+  prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
 
-  /** Build the signed action for marking a conversation read. */
-  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+  /**
+   * Build the signed action for marking a conversation read: the
+   * `actionSignatures` of the mark-read request
+   * (`POST /2/chat/conversations/{id}/read`), one entry.
+   */
+  prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
 
   /**
    * Encrypt a file of an outgoing message, after the message is built.
@@ -1053,8 +1095,8 @@ interface ChatCrypto {
    * message `params.eventB64` carries, and encrypts the file under that
    * attachment's key. Upload the result under the same media hash key; its
    * size is `encryptedFileSize(file.length)`. Throws, saying what to pass
-   * instead, when the event is not a message with this file or the key map
-   * lacks its key.
+   * instead, when the event is not a message with this file or the
+   * conversation key is not the one the message was encrypted under.
    */
   encryptFile(params: EncryptFileParams): Uint8Array;
 
@@ -1136,7 +1178,7 @@ declare class Chat implements ChatCrypto {
 
   setRejectUnverified(reject: boolean): void;
   generateKeypairs(): PublicKeyRegistrationPayload;
-  setIdentity(userId: string, signingKeyVersion: string): void;
+  setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   /**
@@ -1165,8 +1207,8 @@ declare class Chat implements ChatCrypto {
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
-  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+  prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
+  prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
   encryptFile(params: EncryptFileParams): Uint8Array;
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
@@ -1213,7 +1255,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
 
   setRejectUnverified(reject: boolean): void;
   generateKeypairs(): PublicKeyRegistrationPayload;
-  setIdentity(userId: string, signingKeyVersion: string): void;
+  setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   getPublicKeys(): PublicKeys;
@@ -1234,8 +1276,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
   encryptEdit(params: EncryptEditParams): SendPayload;
-  prepareMessageDelete(params: MessageDeleteParams): ActionSignature;
-  prepareMarkConversationRead(params: MarkConversationReadParams): ActionSignature;
+  prepareMessageDelete(params: MessageDeleteParams): PreparedAction;
+  prepareMarkConversationRead(params: MarkConversationReadParams): PreparedAction;
   encryptFile(params: EncryptFileParams): Uint8Array;
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;

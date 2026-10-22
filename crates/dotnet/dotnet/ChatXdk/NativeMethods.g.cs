@@ -69,12 +69,13 @@ namespace ChatXdk
         internal static extern void chat_xdk_set_reject_unverified(ChatHandle* handle, int reject);
 
         /// <summary>
-        ///  Set the session identity: the owner's user id and signing-key version,
-        ///  used as the defaults wherever a params document omits `sender_id` /
+        ///  Set the session identity from a params JSON document:
+        ///  `{"user_id": "...", "signing_key_version": "..."}`. They become the
+        ///  defaults wherever a params document omits `sender_id` /
         ///  `signing_key_version`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_set_identity", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_set_identity(ChatHandle* handle, byte* user_id, byte* signing_key_version);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_set_identity_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_set_identity_params(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Enable (non-zero) or disable (zero) the conversation-key cache (off by
@@ -218,22 +219,15 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_export_keys(ChatHandle* handle);
 
         /// <summary>
-        ///  Import private key material from a base64 string produced by `chat_xdk_export_keys`.
-        ///
-        ///  Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
+        ///  Import private keys: `keys` / `keys_len` is the blob
+        ///  `chat_xdk_export_keys` returns (32 bytes for the identity key, 64 with the
+        ///  signing key), and `params_json` is `{}` or
+        ///  `{"signing_key_version": "..."}` to record the `public_key_version` the
+        ///  keys were registered under. The key bytes stay out of the JSON so they are
+        ///  never copied into a string; NULL with length 0 is an empty blob.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_import_keys(ChatHandle* handle, byte* keys_b64);
-
-        /// <summary>
-        ///  Like `chat_xdk_import_keys` but takes the raw key bytes and also records
-        ///  the public key version the keys were registered under, so participant-key
-        ///  filtering and the session `signing_key_version` are set in one call.
-        ///
-        ///  Accepts 32 bytes (identity only) or 64 bytes (identity + signing).
-        /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys_with_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_import_keys_with_version(ChatHandle* handle, byte* keys, nuint keys_len, byte* version);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_import_keys_params(ChatHandle* handle, byte* keys, nuint keys_len, byte* params_json);
 
         /// <summary>
         ///  Extract and decrypt conversation keys from raw KeyChange event strings.
@@ -263,7 +257,7 @@ namespace ChatXdk
         ///  `params_json` — single JSON document: `public_keys`
         ///  (`[{"user_id","public_key","key_version"},...]`), plus optional
         ///  `sender_id` / `signing_key_version` (absent resolves from the session
-        ///  identity set via `chat_xdk_set_identity`) and optional `conversation_id`
+        ///  identity set via `chat_xdk_set_identity_params`) and optional `conversation_id`
         ///  (absent or empty derives the one-to-one id).
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_key_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -302,8 +296,9 @@ namespace ChatXdk
         ///  caller's view), plus optional `sender_id` / `signing_key_version` (absent
         ///  resolves from the session identity).
         ///
-        ///  Returns JSON `ActionSignature`; the SDK-generated `message_id` is a field
-        ///  on it.
+        ///  Returns JSON `PreparedAction`: `action_signatures`, one entry with its
+        ///  signature nested under `message_event_signature`. The SDK-generated
+        ///  `message_id` is a field on the entry.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_message_delete", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
@@ -317,8 +312,8 @@ namespace ChatXdk
         ///  epoch; absent takes the current time) and `sender_id` /
         ///  `signing_key_version` (absent resolves from the session identity).
         ///
-        ///  Returns JSON `ActionSignature` to submit alongside the mark-read request;
-        ///  the SDK-generated `message_id` is a field on it.
+        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`
+        ///  returns it: the mark-read request's `action_signatures`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_mark_conversation_read", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_mark_conversation_read(ChatHandle* handle, byte* params_json);
@@ -448,11 +443,12 @@ namespace ChatXdk
         ///  `params_json` — single JSON document: `file` (base64), `event_b64` (the
         ///  `event_b64` of the `SendPayload` that `chat_xdk_encrypt_message` or
         ///  `chat_xdk_encrypt_reply` returned for the message carrying the file),
-        ///  `conversation_keys` (`{"version": "base64 raw 32-byte key"}` holding the
-        ///  key the message was encrypted under), and `media_hash_key` (the media
-        ///  hash key the file's upload started with, as listed in the message's
-        ///  attachments). The SDK finds that attachment and encrypts the file under
-        ///  its key.
+        ///  `media_hash_key` (the media hash key the file's upload started with, as
+        ///  listed in the message's attachments), and optionally `conversation_key`
+        ///  (base64 raw 32-byte key) with `conversation_key_version`: the key the
+        ///  message was encrypted under, resolved from the key cache when both are
+        ///  omitted. The SDK finds that attachment and encrypts the file under its
+        ///  key.
         ///
         ///  Returns the encrypted file, base64.
         /// </summary>

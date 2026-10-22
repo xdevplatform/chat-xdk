@@ -361,8 +361,9 @@ URL card's banner and favicon images share the card's key.
 On send, the message is built before its files are encrypted. Each file of
 the message names the media hash key its upload started with. `encrypt_file`
 and `file_encryptor` take the message's `event_b64` (returned in the
-`SendPayload`), the conversation key map, and the file's media hash key: they
-find the attachment in the message, derive the message key and that
+`SendPayload`), the conversation key the message was encrypted under (passed
+with its version, or resolved from the key cache), and the file's media hash
+key: they find the attachment in the message, derive the message key and that
 attachment's key, and encrypt the file under it, so a file's key always
 matches the message that carries it. They need no session identity: the
 sender, message id and key version come from the event. The SDK writes each
@@ -458,7 +459,8 @@ All ECDSA signatures are raw `r || s` (64 bytes):
 ### Signature Versions
 
 The signature protocol is versioned, and the version travels with each signature
-(`MessageEventSignature.signature_version` / `ActionSignature.signature_version`).
+(`MessageEventSignature.signature_version`, which an `ActionSignature` nests
+as `message_event_signature.signature_version`).
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -571,10 +573,10 @@ or the resulting signature is unverifiable.
 
 Two base64 flavors appear on the wire, and both are frozen for interop with
 other X Chat clients. ECDSA signature values (`MessageEventSignature.signature`,
-`ActionSignature.signature`) and byte values embedded inside signed payloads
+also nested in each `ActionSignature`) and byte values embedded inside signed payloads
 (the ciphertext and plaintext conversation key components above) use standard
 base64 **without** padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
-`encrypted_content`, `encoded_event_signature`, and
+`encoded_message_create_event`, `encoded_message_event_signature`, and
 `ActionSignature.encoded_message_event_detail` — use standard base64 **with**
 padding (`base64_encode` in `protocol/serialization.rs`); decoding accepts
 either form (`DecodePaddingMode::Indifferent`), but producers must not swap
@@ -711,9 +713,9 @@ Complete flow for encrypting a message via `encrypt_message()` (the `encrypt_rep
                           event_b64: base64(MessageEvent { message_id,
                                      sender_id, conversation_id,
                                      detail, signature }),
-                          encrypted_content: base64(event_bytes),
+                          encoded_message_create_event: base64(event_bytes),
                           signature: base64(signature),
-                          encoded_event_signature: base64(sig_thrift),
+                          encoded_message_event_signature: base64(sig_thrift),
                           ...
                         }
 ```
