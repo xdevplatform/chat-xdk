@@ -5,11 +5,11 @@
 //! # Quick Start
 //!
 //! ```python
-//! from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams
+//! from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams, SetIdentityParams
 //!
 //! chat = Chat()
 //! chat.unlock(pin)
-//! chat.set_identity(my_user_id, signing_key_version)
+//! chat.set_identity(SetIdentityParams(my_user_id, signing_key_version))
 //!
 //! # Decrypt an event (returns a dict). `conversation_keys` maps key version
 //! # to the raw 32-byte key (from decrypt_events or extract_conversation_keys);
@@ -1497,7 +1497,7 @@ impl FileDecryptorParams {
 /// ```python
 /// chat = Chat(config_json)  # or Chat() then update_config(...)
 /// chat.unlock(pin)
-/// chat.set_identity(my_user_id, signing_key_version)
+/// chat.set_identity(SetIdentityParams(my_user_id, signing_key_version))
 ///
 /// # Decrypt webhook events
 /// event = chat.decrypt_event(

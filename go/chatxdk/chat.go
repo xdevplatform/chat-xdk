@@ -20,7 +20,7 @@
 //
 //	// Later: unlock with PIN and set the session identity + stores once.
 //	chat.Unlock([]byte("2580"), juiceboxConfigJSON)
-//	chat.SetIdentity(myUserID, mySigningKeyVersion)
+//	chat.SetIdentity(chatxdk.SetIdentityParams{UserID: myUserID, SigningKeyVersion: mySigningKeyVersion})
 //	chat.SetCacheKeys(true)
 //	chat.SetSigningKeys(senderSigningKeys)
 //
