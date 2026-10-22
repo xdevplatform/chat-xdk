@@ -246,17 +246,26 @@ event's own message id, so every event that carries message contents (texts,
 edits, reactions, …) has its own key. An unset, zero, or negative
 `contents_encryption_version` means the conversation key.
 
-The SDK decrypts both forms and sends with message keys: every message,
-reply, reaction, and edit it encrypts carries `contents_encryption_version` 1
-and is signed at signature version 10, whose payload covers that field. The
-sender id must be the sender's numeric user id, the form the key derivation
-and recipients use. The SDK generates the message id and returns it in the
-`SendPayload`: a random one for a message without files, and one derived from
-its files for a message with files (see [Media Keys](#media-keys)).
+The SDK decrypts both forms, and sends each message, reply, reaction, and edit
+in one of two formats:
 
-Readers that predate message keys cannot open these messages: they decrypt
-the contents with the conversation key, and readers that do not know
-signature version 10 reject the signature.
+- **v1** encrypts the contents under the message key, carries
+  `contents_encryption_version` 1, and is signed at signature version 10,
+  whose payload covers that field.
+- **v0** encrypts the contents under the conversation key, leaves
+  `contents_encryption_version` unset, and is signed at signature version 7,
+  as 0.5.x sends.
+
+The language bindings send v1 while the X API's `v1_send` feature switch is
+on, and v0 otherwise; the Rust crate always sends v0. The sender id must be
+the sender's numeric user id, the form the key derivation and recipients use.
+The SDK generates the message id and returns it in the `SendPayload`: one
+derived from its files for a v1 message with files (see
+[Media Keys](#media-keys)), and a random one otherwise.
+
+Readers that predate message keys cannot open v1 messages: they decrypt the
+contents with the conversation key, and readers that do not know signature
+version 10 reject the signature.
 
 ---
 
@@ -453,8 +462,8 @@ The signature protocol is versioned, and the version travels with each signature
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every message the SDK sends: the first version that signs `contents_encryption_version` |
-| `SIGNATURE_VERSION` | `"7"` | Stamped on the action signatures the SDK produces (conversation-key changes, group changes, deletes) |
+| `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every v1 message the SDK sends: the first version that signs `contents_encryption_version` |
+| `SIGNATURE_VERSION` | `"7"` | Stamped on v0 messages and on the action signatures the SDK produces (conversation-key changes, group changes, deletes, read receipts) |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
 | `MAX_SIGNATURE_VERSION` (internal) | `11` | Newest version accepted on verification; a signature labeled with a newer version is rejected, since its payload layout is unknown |
 | `CKEY_PLAINTEXT_SIGNATURE_VERSION` | `6` | First version whose conversation-key-change payload signs the plaintext conversation key (so a recipient can reproduce and verify it) |
@@ -463,9 +472,10 @@ The signature protocol is versioned, and the version travels with each signature
 
 All message-creation methods (`encrypt_message`, `encrypt_reply`,
 `encrypt_add_reaction`, `encrypt_remove_reaction`, `encrypt_edit`) share one
-signing path (`encrypt_and_sign`), which signs at version 10 with the payload
-builder verification uses. The signature is computed over a
-**comma-separated component payload**, not over the raw ciphertext:
+signing path (`encrypt_and_sign`), which signs with the payload builder
+verification uses: at version 10 for a v1 send, at version 7 for a v0 send.
+The signature is computed over a **comma-separated component payload**, not
+over the raw ciphertext. A v1 send signs:
 
 ```
 "MessageCreateEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{contents_b64_no_pad},1,signature_version=10"
@@ -473,7 +483,12 @@ builder verification uses. The signature is computed over a
 
 `conversation_key_version` is signed as an integer, and `1` is the
 `contents_encryption_version`, so the choice of key for the contents is
-covered by the signature.
+covered by the signature. A v0 send signs the version 7 layout, which signs
+the key version as carried and has neither trailing component:
+
+```
+"MessageCreateEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{contents_b64_no_pad}"
+```
 
 `contents_b64_no_pad` is the Base64-without-padding (`STANDARD_NO_PAD`) encoding
 of the XSalsa20-Poly1305 ciphertext. Signing the surrounding metadata (sender,
@@ -528,8 +543,8 @@ the backend validates the pair together.
 #### Verifying newer versions
 
 The action layouts above are the ones the SDK signs, at v7; messages are
-signed at v10. Verification rebuilds each payload in the layout of the
-version its signature carries, 2 through 11:
+signed at v10 (v1 sends) or v7 (v0 sends). Verification rebuilds each payload
+in the layout of the version its signature carries, 2 through 11:
 
 - **v8**: the message payload's conversation-key-version component is the
   version parsed as an integer, `null` when missing or not an integer (v7 and
@@ -620,7 +635,7 @@ output = K_1 || K_2 || ... truncated to key_length
 
 ## 9. Encryption Flow
 
-Complete flow for encrypting a message via `encrypt_message()` (the `encrypt_reply` / `encrypt_add_reaction` / `encrypt_remove_reaction` / `encrypt_edit` methods share the same pipeline):
+Complete flow for encrypting a message via `encrypt_message()` (the `encrypt_reply` / `encrypt_add_reaction` / `encrypt_remove_reaction` / `encrypt_edit` methods share the same pipeline). The diagram shows a v1 send; a v0 send encrypts under the conversation key in step 4, leaves `contents_encryption_version` unset in step 5, and signs the version 7 payload in steps 6 and 7 (see [What Gets Signed](#what-gets-signed)):
 
 ```
                   Text: "Hello!"  +  optional entities
