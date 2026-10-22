@@ -57,19 +57,21 @@ files. There's no code to change: to see which format a send used, read
 
 ## The feature-switch request
 
-Each chat reads the X API's feature switches with one anonymous request,
+Chats read the X API's feature switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, which runs in the background:
 
-- when the chat is created, again once its keys load (with a `bucket` query
-  parameter, 0–9999, derived from the identity public key), and every
-  5 minutes after that;
-- chats in one process that ask for the same bucket at the same time share
-  one request;
+- a chat asks on its first send, never earlier, so a program that never
+  sends makes no request;
+- chats in one process share one request per bucket (a `bucket` query
+  parameter, 0–9999, derived from the identity public key), re-checked every
+  5 minutes while any chat uses it; a chat that asks in the meantime takes
+  the answer without a request;
 - it carries no credentials, and never delays or fails a call;
 - if it fails or is blocked, every switch stays off and sends stay v0; a
-  failed request is retried with a backoff that grows to 5 minutes;
-- the 5-minute re-checks can only turn a switch off: a chat picks up a switch
-  turning on only when it is created again.
+  failed request is retried after 1 second, then after twice the previous
+  delay, up to once every 5 minutes;
+- for a chat that is already sending, a re-check can only turn a switch off:
+  a switch turning on reaches only chats that start sending after it.
 
 **Pending:** the X API doesn't serve this route yet. Until it does, the
 request fails and every send is v0.
@@ -77,10 +79,10 @@ request fails and every send is v0.
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. In a browser the request is a
 cross-origin `GET`, and a failed one keeps sends v0 too. Free each chat when
-you're done with it to stop its requests; a chat that is garbage-collected
-stops them too. The request never keeps a process alive, except in Node
-before 20.16, where one in flight can delay exit by a few seconds unless you
-call `free()`:
+you're done with it, or let it be garbage-collected: the requests stop once
+no chat in the process uses them. The request never keeps a process alive,
+except in Node before 20.16, where one still in flight can delay exit until
+it ends, at most 2 seconds:
 
 ```js
 // 0.6.0
