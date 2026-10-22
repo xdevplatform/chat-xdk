@@ -715,8 +715,11 @@ namespace ChatXdk.Tests
             });
 
             var json = JsonSerializer.SerializeToElement(payload);
+            Assert.Equal(payload.MessageId, json.GetProperty("message_id").GetString());
             Assert.Equal(payload.EncodedMessageCreateEvent, json.GetProperty("encoded_message_create_event").GetString());
             Assert.Equal(payload.EncodedMessageEventSignature, json.GetProperty("encoded_message_event_signature").GetString());
+            Assert.NotEmpty(payload.XdkVersion);
+            Assert.Equal(payload.XdkVersion, json.GetProperty("xdk_version").GetString());
             var roundTrip = json.Deserialize<SendPayload>()!;
             Assert.Equal(payload.EncodedMessageCreateEvent, roundTrip.EncodedMessageCreateEvent);
             Assert.Equal(payload.EncodedMessageEventSignature, roundTrip.EncodedMessageEventSignature);

@@ -1456,8 +1456,11 @@ func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if fields["encoded_message_create_event"] != payload.EncodedMessageCreateEvent ||
-		fields["encoded_message_event_signature"] != payload.EncodedMessageEventSignature {
+	if payload.XdkVersion == "" ||
+		fields["message_id"] != payload.MessageID ||
+		fields["encoded_message_create_event"] != payload.EncodedMessageCreateEvent ||
+		fields["encoded_message_event_signature"] != payload.EncodedMessageEventSignature ||
+		fields["xdk_version"] != payload.XdkVersion {
 		t.Errorf("payload JSON lacks the request field names: %s", data)
 	}
 	var roundTrip SendPayload

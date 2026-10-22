@@ -112,6 +112,7 @@ class ChatCoreTest {
             assertFalse(body.encodedMessageCreateEvent().isEmpty());
             assertFalse(body.encodedMessageEventSignature().isEmpty());
             assertFalse(body.messageId().isEmpty());
+            assertFalse(body.xdkVersion().isEmpty());
         }
     }
 
@@ -205,6 +206,7 @@ class ChatCoreTest {
             assertFalse(body.messageId().isEmpty());
             assertFalse(body.encodedMessageCreateEvent().isEmpty());
             assertFalse(body.encodedMessageEventSignature().isEmpty());
+            assertFalse(body.xdkVersion().isEmpty());
         }
     }
 

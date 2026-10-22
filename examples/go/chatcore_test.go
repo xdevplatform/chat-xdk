@@ -171,6 +171,9 @@ func TestEncryptReplyProducesPayload(t *testing.T) {
 	if body.MessageID == "" {
 		t.Error("empty message_id")
 	}
+	if body.XdkVersion == "" {
+		t.Error("empty xdk_version")
+	}
 }
 
 func TestDecryptBatchEmptyIsSafe(t *testing.T) {
@@ -299,6 +302,9 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 	}
 	if body.EncodedMessageEventSignature == "" {
 		t.Error("empty encoded_message_event_signature")
+	}
+	if body.XdkVersion == "" {
+		t.Error("empty xdk_version")
 	}
 	if _, err := core.EncryptRemoveReaction(v.EventMessageB64, "\U0001f44d", v.conversationKey(t), v.EventConversationKeyVersion); err != nil {
 		t.Fatalf("EncryptRemoveReaction: %v", err)

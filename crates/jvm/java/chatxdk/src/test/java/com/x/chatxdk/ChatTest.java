@@ -341,6 +341,7 @@ class ChatTest {
             assertEquals("1", payload.conversationKeyVersion);
             assertEquals("7", payload.signatureInfo.signatureVersion);
             assertTrue(payload.shouldNotify);
+            assertFalse(payload.xdkVersion.isEmpty());
             // The SDK generates and returns the message id.
             assertFalse(payload.messageId.isEmpty());
         }

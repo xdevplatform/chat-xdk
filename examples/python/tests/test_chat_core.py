@@ -112,6 +112,7 @@ class TestChatCore(unittest.TestCase):
         self.assertTrue(body["encoded_message_create_event"])
         self.assertTrue(body["encoded_message_event_signature"])
         self.assertTrue(body["message_id"])
+        self.assertTrue(body["xdk_version"])
 
     def test_encrypt_reply_threaded_from_raw_event(self):
         # Replying to the fixture's raw encoded event: the SDK derives the
@@ -127,6 +128,7 @@ class TestChatCore(unittest.TestCase):
         )
         self.assertTrue(body["encoded_message_create_event"])
         self.assertTrue(body["message_id"])
+        self.assertTrue(body["xdk_version"])
 
     def test_decrypt_batch_empty_is_safe(self):
         # Drives the real decrypt_events entry point (batch path) — an empty
