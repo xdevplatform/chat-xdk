@@ -76,8 +76,12 @@ final class NativeLoader {
 
     /** RID labels aligned with the .NET / CI matrix: osx-arm64, osx-x64, linux-x64, linux-arm64, win-x64. */
     static String detectRid() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        return detectRid(System.getProperty("os.name", ""), System.getProperty("os.arch", ""));
+    }
+
+    static String detectRid(String osName, String osArch) {
+        String os = osName.toLowerCase(Locale.ROOT);
+        String arch = osArch.toLowerCase(Locale.ROOT);
         boolean arm = arch.equals("aarch64") || arch.equals("arm64");
         boolean x64 = arch.equals("x86_64") || arch.equals("amd64") || arch.equals("x64");
 
@@ -109,6 +113,7 @@ final class NativeLoader {
             case "osx-x64":
                 return "lib" + LIB_BASENAME + ".dylib";
             case "linux-x64":
+            case "linux-arm64":
                 return "lib" + LIB_BASENAME + ".so";
             case "win-x64":
                 return LIB_BASENAME + ".dll";
