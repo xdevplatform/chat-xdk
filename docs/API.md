@@ -26,7 +26,7 @@ The config JSON accepted by the constructor, `update_config`, `setup`, and
 1. **Direct SDK config** — `{"sdk_config": "<json string>", "tokens": {realm_id: token}, "max_guess_count": N}`;
    `sdk_config` goes straight to the Juicebox SDK. Default guesses: 20.
 2. **X API `juicebox_config` object** — the `juicebox_config` field from
-   `GET /2/users/:id/public_keys` (your own user), passed through as-is:
+   `GET /2/users/{id}/public_keys` (your own user), passed through as-is:
    `{"key_store_token_map_json": "...", "max_guess_count": N, "token_map": [...]}`.
    The `key_store_token_map_json` string is used **verbatim** as the SDK
    config — it carries each realm's `public_key` and the server's
@@ -45,7 +45,7 @@ validated there (and a raw realms config is accepted as a fourth shape);
 a config accepted by JS may still be rejected by the native bindings.
 
 `createChat`'s `juiceboxConfig` is optional to support **JS first boot**: the
-account's `juicebox_config` is created by `POST /2/users/:id/public_keys`, so
+account's `juicebox_config` is created by `POST /2/users/{id}/public_keys`, so
 a brand-new user has none yet. Created without a config, the instance runs
 every crypto method (including `generateKeypairs`) but builds no Juicebox
 client; `setup`/`unlock`/`changePin`/`delete` throw a clear error until
@@ -907,7 +907,7 @@ set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
 Send the receipt in the mark-read request,
-`POST /2/chat/conversations/:id/read`: its `action_signatures` take the
+`POST /2/chat/conversations/{id}/read`: its `action_signatures` take the
 `PreparedAction`'s entries as they are.
 
 **Action signatures.** Every prepare method returns its signed actions in
@@ -1238,7 +1238,7 @@ ImageDimensions? dims = ChatXdkUtilities.DetectImageDimensions(imageBytes);
 
 ### JavaScript/WASM
 
-First boot — `juicebox_config` is created by `POST /2/users/:id/public_keys`,
+First boot — `juicebox_config` is created by `POST /2/users/{id}/public_keys`,
 so a brand-new user creates the chat without one:
 
 ```typescript
@@ -1248,7 +1248,7 @@ const chat = await createChat({
   getAuthToken: async (realmId) => await backend.getToken(realmId),
 });
 const payload = chat.generateKeypairs();
-// … POST payload to /2/users/:id/public_keys, GET juicebox_config back …
+// … POST payload to /2/users/{id}/public_keys, GET juicebox_config back …
 chat.updateConfig(configJson);
 await chat.setup("2580");
 ```

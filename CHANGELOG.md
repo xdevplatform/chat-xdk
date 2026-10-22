@@ -488,7 +488,7 @@ prepared = chat.prepare_conversation_key_change(
   (the sequence id of the newest event read) and an optional
   `seen_at_msec`, which defaults to the current time. It returns a
   `PreparedAction` whose `action_signatures` the mark-read request
-  (`POST /2/chat/conversations/:id/read`) takes as they are, nested as the
+  (`POST /2/chat/conversations/{id}/read`) takes as they are, nested as the
   conversation-change requests nest theirs.
   Recipients' `decrypt_event` returns a signed receipt as a verified
   `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.
