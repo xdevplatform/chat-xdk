@@ -408,7 +408,7 @@ prepared = chat.prepare_conversation_key_change(
   Release each chat when you're done with it (`free()` in JS, `close()` in
   Python and the JVM, `Close()` in Go, `Dispose()` in .NET) to stop its
   requests; a garbage-collected chat stops too. In Node 20.16 and later a
-  pending request never keeps the process alive.
+  request in flight never keeps the process alive.
 - Python: `chat_xdk.Chat` is a Python subclass of the native class, and each
   instance runs a daemon thread for that request. The new `Chat.close()`
   stops it.
@@ -436,7 +436,7 @@ prepared = chat.prepare_conversation_key_change(
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
   (the sequence id of the newest event read) and an optional
   `seen_at_msec`, which defaults to the current time. It returns an
-  `ActionSignature` to send with the mark-read request once the X API's
-  route takes it, nested as API.md shows. Recipients' `decrypt_event`
-  returns a signed receipt as a verified `ReadReceipt`. The C ABI adds
-  `chat_xdk_prepare_mark_conversation_read`.
+  `ActionSignature` for the mark-read request's `action_signatures`
+  (`POST /2/chat/conversations/:id/read`), nested as API.md shows.
+  Recipients' `decrypt_event` returns a signed receipt as a verified
+  `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.

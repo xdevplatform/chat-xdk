@@ -139,7 +139,7 @@ class ChatBot:
         # through the batch path so the rotated keys are verified and cached
         # before this loop decrypts the messages that need them. This runs
         # after the signing keys are registered: a key change from a sender
-        # not yet in the store would fail verification and be dropped.
+        # missing from the store would fail verification and be dropped.
         key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
         if key_events_b64:
             rotated = self.core.decrypt_batch(list(key_events_b64))

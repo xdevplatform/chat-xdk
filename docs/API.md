@@ -887,12 +887,12 @@ The signature covers the read point and its time, so a recipient's
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
-The X API's mark-read route does not take the signature yet. Once it does,
-send the signature as an entry of the request's `action_signatures`, nested
-the way the conversation-change requests nest theirs: `ActionSignature`
-returns `signature`, `signature_version` and `public_key_version` flat, and
-the entry carries them under `message_event_signature`, with your signing
-public key. Check the X API reference for the route's other fields.
+Send the signature in the mark-read request,
+`POST /2/chat/conversations/:id/read`, as an entry of its
+`action_signatures`, nested the way the conversation-change requests nest
+theirs: `ActionSignature` returns `signature`, `signature_version` and
+`public_key_version` flat, and the entry carries them under
+`message_event_signature`, with your signing public key.
 
 ```json
 {

@@ -29,7 +29,7 @@ class XChatClient:
         self._token = access_token
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        """POST a chat endpoint not yet covered by the installed XDK release.
+        """POST a chat endpoint that the installed XDK release doesn't cover.
 
         Chat auth is a plain OAuth2 bearer token, so a direct call is
         equivalent to what the XDK sends.
