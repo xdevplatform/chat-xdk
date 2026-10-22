@@ -54,25 +54,36 @@ first`. In 0.5.x, `generate_keypairs` set a local timestamp as the version,
 and signed actions were rejected unless the app called `set_identity` with
 the registered version.
 
+In the snippets, `api.post(path, body)` stands for your HTTP client: it
+POSTs `body` as JSON to `https://api.x.com` + `path` and returns the parsed
+response. The JS one writes keys in snake_case, and in Python `public_key`
+is the `public_key` object you build from `registration.public_key`.
+
 ```js
 // Before
-const payload = chat.generateKeypairs(); // carried version and generateVersion
-await registerPublicKey(userId, payload);
+const registration = chat.generateKeypairs();
+const response = await api.post(`/2/users/${userId}/public_keys`, {
+  public_key: registration.publicKey,
+  version: registration.version,
+  generate_version: registration.generateVersion,
+});
+chat.setIdentity(userId, response.data.public_key_version);
 // After
-const payload = chat.generateKeypairs(); // carries publicKey only
-const publicKeyVersion = await registerPublicKey(userId, payload); // the public_key_version the X API returns
-chat.setIdentity({ userId, signingKeyVersion: publicKeyVersion });
+const registration = chat.generateKeypairs();
+const response = await api.post(`/2/users/${userId}/public_keys`, { public_key: registration.publicKey });
+chat.setIdentity({ userId, signingKeyVersion: response.data.public_key_version });
 ```
 
 ```python
 # After
-payload = chat.generate_keypairs()
-public_key_version = register_public_key(user_id, payload)
-chat.set_identity(SetIdentityParams(user_id, public_key_version))
+registration = chat.generate_keypairs()
+response = api.post(f"/2/users/{user_id}/public_keys", {"public_key": public_key})
+chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_version"]))
 ```
 
 Go, .NET, JVM and Rust call `SetIdentity` / `setIdentity` / `set_identity`
-the same way.
+the same way; each binding's guide in
+[docs/migrating-0.6](docs/migrating-0.6/README.md) shows its request.
 
 #### A message with files is built before its files are encrypted
 
@@ -81,8 +92,9 @@ the message's key and the file's attachment; in v0 every file is under the
 conversation key, as in 0.5.x. Either way the file calls take the key from
 the message, so the message comes first:
 
-1. Start each file's upload and keep its media hash key. The upload's total
-   size is `encrypted_file_size` of the file's size.
+1. Start each file's upload with `POST /2/chat/media/upload/initialize`
+   and keep the `session_id` and `media_hash_key` it returns. The upload's
+   `total_bytes` is `encrypted_file_size` of the file's size.
 2. Encrypt the message (`encrypt_message` / `encrypt_reply`) with
    attachments that name those media hash keys. `SendPayload` gains
    `event_b64`: the message as recipients receive it.
@@ -92,7 +104,9 @@ the message, so the message comes first:
    file calls take the conversation key the message was encrypted under and
    its version (`conversation_key` + `conversation_key_version`, set
    together), or resolve both from the key cache when neither is set.
-4. Finish the uploads and send the message.
+4. Upload each encrypted file with
+   `POST /2/chat/media/upload/{session_id}/append` and finish it with
+   `POST /2/chat/media/upload/{session_id}/finalize`, then send the message.
 
 `encrypt_stream` and `stream_encryptor`, which took only a conversation key,
 are removed. The file calls need no session identity: the sender, message id
@@ -107,26 +121,42 @@ it as a repeat. A message that lists an empty media hash
 key, or one media hash key in two attachments, is rejected, and the file
 calls' errors say what to pass instead.
 
-Migration — `start_upload` / `finish_upload` stand for your media upload
-calls (initialize, then append and finalize):
+Migration — `api.post(path, body)` stands for your HTTP client, as in the
+key registration entry above, and `photo_attachment` for your code that
+builds a photo's attachment descriptor. The `append` and `finalize`
+requests don't change, but they come after `encrypt_file`, which produces
+the bytes they upload:
 
 Rust
 
 ```rust
 // Before
 let encrypted = chat.encrypt_stream(&photo, &conversation_key)?;
-let media_hash_key = upload(&encrypted)?;
+let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
+    "conversation_id": conversation_id, "total_bytes": encrypted.len(),
+}))?;
+let media_hash_key = upload["data"]["media_hash_key"].as_str().ok_or("no media_hash_key")?;
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(photo_attachments(&media_hash_key));
+params.attachments = Some(vec![photo_attachment(media_hash_key)]);
 let payload = chat.encrypt_message(params)?;
 // After
-let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64).unwrap();
-let (session, media_hash_key) = start_upload(size)?;
+let total_bytes = utils::encrypted_file_size(photo.len() as u64).ok_or("file too large")?;
+let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
+    "conversation_id": conversation_id, "total_bytes": total_bytes,
+}))?;
+let session_id = upload["data"]["session_id"].as_str().ok_or("no session_id")?;
+let media_hash_key = upload["data"]["media_hash_key"].as_str().ok_or("no media_hash_key")?;
 let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(photo_attachments(&media_hash_key));
+params.attachments = Some(vec![photo_attachment(media_hash_key)]);
 let payload = chat.encrypt_message(&params)?;
-let encrypted = chat.encrypt_file(&EncryptFileParams::new(photo, &payload.event_b64, &media_hash_key))?;
-finish_upload(session, &encrypted)?;
+let encrypted = chat.encrypt_file(&EncryptFileParams::new(photo, &payload.event_b64, media_hash_key))?;
+api.post(&format!("/2/chat/media/upload/{session_id}/append"), &serde_json::json!({
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key,
+    "segment_index": 0, "media": utils::bytes_to_base64(&encrypted),
+}))?;
+api.post(&format!("/2/chat/media/upload/{session_id}/finalize"), &serde_json::json!({
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key, "num_parts": "1",
+}))?;
 ```
 
 Python
@@ -134,15 +164,27 @@ Python
 ```python
 # Before
 encrypted = chat.encrypt_stream(photo, conversation_key)
-media_hash_key = upload(encrypted)
-payload = chat.encrypt_message(conversation_id, "a photo", attachments=photo_attachments(media_hash_key))
+upload = api.post("/2/chat/media/upload/initialize", {
+    "conversation_id": conversation_id, "total_bytes": len(encrypted),
+})["data"]
+media_hash_key = upload["media_hash_key"]
+payload = chat.encrypt_message(conversation_id, "a photo", attachments=[photo_attachment(media_hash_key)])
 # After
-session, media_hash_key = start_upload(encrypted_file_size(len(photo)))
+upload = api.post("/2/chat/media/upload/initialize", {
+    "conversation_id": conversation_id, "total_bytes": encrypted_file_size(len(photo)),
+})["data"]
+media_hash_key = upload["media_hash_key"]
 payload = chat.encrypt_message(
-    EncryptMessageParams(conversation_id, "a photo", attachments=photo_attachments(media_hash_key))
+    EncryptMessageParams(conversation_id, "a photo", attachments=[photo_attachment(media_hash_key)])
 )
 encrypted = chat.encrypt_file(EncryptFileParams(photo, payload.event_b64, media_hash_key))
-finish_upload(session, encrypted)
+api.post(f"/2/chat/media/upload/{upload['session_id']}/append", {
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key,
+    "segment_index": 0, "media": bytes_to_base64(encrypted),
+})
+api.post(f"/2/chat/media/upload/{upload['session_id']}/finalize", {
+    "conversation_id": conversation_id, "media_hash_key": media_hash_key, "num_parts": "1",
+})
 ```
 
 JS / TypeScript
@@ -150,13 +192,28 @@ JS / TypeScript
 ```js
 // Before
 const encrypted = chat.encryptStream(photo, conversationKey);
-const mediaHashKey = await upload(encrypted);
-const payload = chat.encryptMessage({ conversationId, text: "a photo", attachments: photoAttachments(mediaHashKey) });
+const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
+  conversation_id: conversationId, total_bytes: encrypted.length,
+});
+const payload = chat.encryptMessage({
+  conversationId, text: "a photo", attachments: [photoAttachment(upload.media_hash_key)],
+});
 // After
-const { session, mediaHashKey } = await startUpload(encryptedFileSize(photo.length));
-const payload = chat.encryptMessage({ conversationId, text: "a photo", attachments: photoAttachments(mediaHashKey) });
+const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
+  conversation_id: conversationId, total_bytes: encryptedFileSize(photo.length),
+});
+const mediaHashKey = upload.media_hash_key;
+const payload = chat.encryptMessage({
+  conversationId, text: "a photo", attachments: [photoAttachment(mediaHashKey)],
+});
 const encrypted = chat.encryptFile({ file: photo, eventB64: payload.eventB64, mediaHashKey });
-await finishUpload(session, encrypted);
+await api.post(`/2/chat/media/upload/${upload.session_id}/append`, {
+  conversation_id: conversationId, media_hash_key: mediaHashKey,
+  segment_index: 0, media: bytesToBase64(encrypted),
+});
+await api.post(`/2/chat/media/upload/${upload.session_id}/finalize`, {
+  conversation_id: conversationId, media_hash_key: mediaHashKey, num_parts: "1",
+});
 ```
 
 Go
@@ -164,20 +221,35 @@ Go
 ```go
 // Before
 encrypted, err := chat.EncryptStream(photo, conversationKey)
-mediaHashKey, err := upload(encrypted)
+response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
+    "conversation_id": conversationID, "total_bytes": len(encrypted),
+})
+mediaHashKey := response["data"].(map[string]any)["media_hash_key"].(string)
 payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
-    ConversationID: conversationID, Text: "a photo", Attachments: photoAttachments(mediaHashKey),
+    ConversationID: conversationID, Text: "a photo",
+    Attachments: []chatxdk.AttachmentDescriptor{photoAttachment(mediaHashKey)},
 })
 // After
 size, err := chatxdk.EncryptedFileSize(uint64(len(photo)))
-session, mediaHashKey, err := startUpload(size)
+response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
+    "conversation_id": conversationID, "total_bytes": size,
+})
+upload := response["data"].(map[string]any)
+sessionID, mediaHashKey := upload["session_id"].(string), upload["media_hash_key"].(string)
 payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
-    ConversationID: conversationID, Text: "a photo", Attachments: photoAttachments(mediaHashKey),
+    ConversationID: conversationID, Text: "a photo",
+    Attachments: []chatxdk.AttachmentDescriptor{photoAttachment(mediaHashKey)},
 })
 encrypted, err := chat.EncryptFile(chatxdk.EncryptFileParams{
     File: photo, EventB64: payload.EventB64, MediaHashKey: mediaHashKey,
 })
-err = finishUpload(session, encrypted)
+_, err = api.Post("/2/chat/media/upload/"+sessionID+"/append", map[string]any{
+    "conversation_id": conversationID, "media_hash_key": mediaHashKey,
+    "segment_index": 0, "media": base64.StdEncoding.EncodeToString(encrypted),
+})
+_, err = api.Post("/2/chat/media/upload/"+sessionID+"/finalize", map[string]any{
+    "conversation_id": conversationID, "media_hash_key": mediaHashKey, "num_parts": "1",
+})
 ```
 
 .NET (C#)
@@ -185,13 +257,37 @@ err = finishUpload(session, encrypted)
 ```csharp
 // Before
 var encrypted = chat.EncryptStream(photo, conversationKey);
-var mediaHashKey = await UploadAsync(encrypted);
-var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo") { Attachments = PhotoAttachments(mediaHashKey) });
+var upload = api.Post("/2/chat/media/upload/initialize", new
+{
+    conversation_id = conversationId, total_bytes = encrypted.Length,
+}).GetProperty("data");
+var mediaHashKey = upload.GetProperty("media_hash_key").GetString()!;
+var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo")
+{
+    Attachments = new[] { PhotoAttachment(mediaHashKey) },
+});
 // After
-var (session, mediaHashKey) = await StartUploadAsync(ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length));
-var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo") { Attachments = PhotoAttachments(mediaHashKey) });
+var upload = api.Post("/2/chat/media/upload/initialize", new
+{
+    conversation_id = conversationId,
+    total_bytes = ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length),
+}).GetProperty("data");
+var sessionId = upload.GetProperty("session_id").GetString();
+var mediaHashKey = upload.GetProperty("media_hash_key").GetString()!;
+var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo")
+{
+    Attachments = new[] { PhotoAttachment(mediaHashKey) },
+});
 var encrypted = chat.EncryptFile(new EncryptFileParams(photo, payload.EventB64, mediaHashKey));
-await FinishUploadAsync(session, encrypted);
+api.Post($"/2/chat/media/upload/{sessionId}/append", new
+{
+    conversation_id = conversationId, media_hash_key = mediaHashKey,
+    segment_index = 0, media = Convert.ToBase64String(encrypted),
+});
+api.Post($"/2/chat/media/upload/{sessionId}/finalize", new
+{
+    conversation_id = conversationId, media_hash_key = mediaHashKey, num_parts = "1",
+});
 ```
 
 JVM (Java)
@@ -199,17 +295,27 @@ JVM (Java)
 ```java
 // Before
 byte[] encrypted = chat.encryptStream(photo, conversationKey);
-String mediaHashKey = upload(encrypted);
+JsonNode upload = api.post("/2/chat/media/upload/initialize", Map.of(
+        "conversation_id", conversationId, "total_bytes", encrypted.length)).path("data");
+String mediaHashKey = upload.path("media_hash_key").asText();
 EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo");
-params.attachments = photoAttachments(mediaHashKey);
+params.attachments = List.of(photoAttachment(mediaHashKey));
 SendPayload payload = chat.encryptMessage(params);
 // After
-Upload upload = startUpload(ChatXdkUtilities.encryptedFileSize(photo.length));
+JsonNode upload = api.post("/2/chat/media/upload/initialize", Map.of(
+        "conversation_id", conversationId,
+        "total_bytes", ChatXdkUtilities.encryptedFileSize(photo.length))).path("data");
+String sessionId = upload.path("session_id").asText();
+String mediaHashKey = upload.path("media_hash_key").asText();
 EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo");
-params.attachments = photoAttachments(upload.mediaHashKey());
+params.attachments = List.of(photoAttachment(mediaHashKey));
 SendPayload payload = chat.encryptMessage(params);
-byte[] encrypted = chat.encryptFile(new EncryptFileParams(photo, payload.eventB64, upload.mediaHashKey()));
-finishUpload(upload, encrypted);
+byte[] encrypted = chat.encryptFile(new EncryptFileParams(photo, payload.eventB64, mediaHashKey));
+api.post("/2/chat/media/upload/" + sessionId + "/append", Map.of(
+        "conversation_id", conversationId, "media_hash_key", mediaHashKey,
+        "segment_index", 0, "media", Base64.getEncoder().encodeToString(encrypted)));
+api.post("/2/chat/media/upload/" + sessionId + "/finalize", Map.of(
+        "conversation_id", conversationId, "media_hash_key", mediaHashKey, "num_parts", "1"));
 ```
 
 For a large file, replace `encrypt_file` with
