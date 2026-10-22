@@ -10,7 +10,8 @@ import init, {
   detectMimeType,
   detectImageDimensions,
   encryptedFileSize,
-} from "../../pkg/chat_xdk_wasm.js";
+} from "../pkg/chat_xdk_wasm.js";
+import { enableV1Send, keepOffline } from "./feature_server.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
 const withKey = ({ conversationKeys, ...rest }) => {
@@ -45,9 +46,10 @@ function b64ToBytes(b64) {
 
 async function main() {
   // Feed wasm bytes directly (fetch of file:// URLs breaks in Node).
-  const wasmUrl = new URL("../../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
+  const wasmUrl = new URL("../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
   const wasmBytes = await fs.readFile(wasmUrl);
   await init({ module_or_path: wasmBytes });
+  keepOffline();
 
   const v = await loadVectors();
 
@@ -327,7 +329,7 @@ async function main() {
 
   // A v1 message with files takes the id its files derive: building it again
   // gives the same id, so files already encrypted stay valid.
-  sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
+  await enableV1Send(sender, () => sendPhotos("turn v1 on", ["turn-v1-on"]));
   const v1PhotoPayload = sendPhotos("a photo", [mediaHashKey]);
   assert.equal(sendPhotos("another caption", [mediaHashKey]).messageId, v1PhotoPayload.messageId);
   assert.notEqual(sendPhotos("a photo", ["other"]).messageId, v1PhotoPayload.messageId);
@@ -440,21 +442,23 @@ async function main() {
   assert.equal(replyPayload.signatureInfo.signatureVersion, "7");
   assert.equal(replyPayload.conversationKeyVersion, "1");
 
-  // 4c. With v1_send on, sends switch to v1 (signature version 10). The
-  //     internal methods the JS wrapper's feature fetch drives turn it on.
-  assert.equal(chat.__isEnabled("v1_send"), false);
-  chat.__applyFeatureConfig('{"features":{"v1_send":true}}', chat.__featureBucket(), false);
-  assert.equal(chat.__isEnabled("v1_send"), true);
-  const v1Payload = chat.encryptMessage({
-    senderId: "111",
-    conversationId: "conv-1",
-    conversationKey: convKey,
-    text: "hello v1",
-    conversationKeyVersion: "1",
-    signingKeyVersion: "1",
-  });
-  assert.equal(v1Payload.signatureInfo.signatureVersion, "10");
-  chat.__applyFeatureConfig('{"features":{}}', chat.__featureBucket(), false);
+  // 4c. Once the feature switches turn v1_send on, sends switch to v1
+  //     (signature version 10). A chat of its own, so `chat` keeps sending v0.
+  const v1Chat = new Chat();
+  v1Chat.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
+  const sendHello = () =>
+    v1Chat.encryptMessage({
+      senderId: "111",
+      conversationId: "conv-1",
+      conversationKey: convKey,
+      text: "hello v1",
+      conversationKeyVersion: "1",
+      signingKeyVersion: "1",
+    });
+  assert.equal(sendHello().signatureInfo.signatureVersion, "7");
+  await enableV1Send(v1Chat, sendHello);
+  assert.equal(sendHello().signatureInfo.signatureVersion, "10");
+  v1Chat.free();
 
   // Own sends decrypt through their eventB64, verified against the fixture
   // signing key registered to sender 111.

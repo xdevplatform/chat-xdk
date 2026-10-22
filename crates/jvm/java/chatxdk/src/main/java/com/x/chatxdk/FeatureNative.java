@@ -1,5 +1,6 @@
 package com.x.chatxdk;
 
+import com.sun.jna.Callback;
 import com.sun.jna.Library;
 import com.sun.jna.Pointer;
 
@@ -11,12 +12,19 @@ interface FeatureNative extends Library {
 
     FeatureNative INSTANCE = NativeLoader.load(FeatureNative.class);
 
-    int chat_xdk_internal_feature_bucket(Pointer handle);
+    /** Called by the core, from inside the send that needs one, to start a driver. */
+    interface Waker extends Callback {
+        void invoke();
+    }
 
-    FfiResult.ByValue chat_xdk_internal_apply_feature_config(
-            Pointer handle, Pointer json, int bucket, int downgradeOnly);
+    void chat_xdk_internal_feature_set_waker(Waker waker);
 
-    int chat_xdk_internal_is_enabled(Pointer handle, Pointer name);
+    FfiResult.ByValue chat_xdk_internal_feature_next();
 
-    int chat_xdk_internal_feature_refetch_due(Pointer handle);
+    void chat_xdk_internal_feature_complete(long id, int status, byte[] body, long bodyLen);
+
+    FfiResult.ByValue chat_xdk_internal_feature_configure(
+            Pointer handle, Pointer endpoint, long timeoutMs, long recheckMs, long firstRetryMs);
+
+    FfiResult.ByValue chat_xdk_internal_feature_set_default_endpoint(Pointer endpoint);
 }

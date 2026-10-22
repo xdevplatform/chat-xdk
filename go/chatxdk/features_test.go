@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -17,46 +18,63 @@ import (
 	"time"
 )
 
+// offlineFeatures is an endpoint nothing listens on: a chat no test points at
+// a server of its own fetches from it, fails, and stays on v0.
+const offlineFeatures = "http://127.0.0.1:9/2/chat/features"
+
+const driverHelperEnv = "CHATXDK_FEATURE_DRIVER_HELPER"
+
 func TestMain(m *testing.M) {
-	// Keep every chat's automatic feature fetch off the network unless a
-	// test points it at its own server.
-	if os.Getenv(featuresEndpointEnv) == "" {
-		os.Setenv(featuresEndpointEnv, "http://127.0.0.1:9/2/chat/features")
+	if err := ffiFeatureSetDefaultEndpoint(offlineFeatures); err != nil {
+		panic(err)
 	}
 	os.Exit(m.Run())
 }
 
-// The flag accessors the feature goroutine drives, for tests only.
-
-func (c *Chat) isEnabled(name string) bool {
+// configureFeatures points this chat's feature fetch at endpoint, with these
+// timings; for tests only.
+func (c *Chat) configureFeatures(endpoint string, timeout, recheck, firstRetry time.Duration) error {
 	defer runtime.KeepAlive(c)
-	return ffiIsEnabled(c.h, name) == 1
+	return ffiFeatureConfigure(c.h, endpoint, timeout, recheck, firstRetry)
 }
 
-func (c *Chat) featureBucket() int {
-	defer runtime.KeepAlive(c)
-	return ffiFeatureBucket(c.h)
-}
+var (
+	v1ServerOnce sync.Once
+	v1Server     *httptest.Server
+)
 
-func (c *Chat) applyFeatureConfig(json string, bucket int, downgradeOnly bool) error {
-	defer runtime.KeepAlive(c)
-	return ffiApplyFeatureConfig(c.h, json, bucket, downgradeOnly)
-}
-
-func (c *Chat) featureRefetchDue() bool {
-	defer runtime.KeepAlive(c)
-	return ffiFeatureRefetchDue(c.h) == 1
-}
-
+// enableV1Send turns v1_send on for chat as the X API would: it points the
+// chat's feature fetch at a local server that answers it, then sends until a
+// send is v1.
 func enableV1Send(t *testing.T, chat *Chat) {
 	t.Helper()
-	if err := chat.applyFeatureConfig(`{"features":{"v1_send":true}}`, chat.featureBucket(), false); err != nil {
-		t.Fatalf("applyFeatureConfig failed: %v", err)
+	v1ServerOnce.Do(func() {
+		v1Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
+		}))
+	})
+	if err := chat.configureFeatures(v1Server.URL, 2*time.Second, time.Hour, 50*time.Millisecond); err != nil {
+		t.Fatalf("configureFeatures failed: %v", err)
 	}
+	params := EncryptMessageParams{
+		SenderID:               "1",
+		ConversationID:         "feature-switches",
+		Text:                   "turn v1 on",
+		ConversationKey:        make([]byte, 32),
+		ConversationKeyVersion: "1",
+		SigningKeyVersion:      "1",
+	}
+	waitFor(t, "v1_send on", func() bool {
+		payload, err := chat.EncryptMessage(params)
+		if err != nil {
+			t.Fatalf("EncryptMessage failed: %v", err)
+		}
+		return payload.SignatureInfo.SignatureVersion == "10"
+	})
 }
 
 // featureServer is a local GET /2/chat/features that records each request's
-// bucket ("" when it carried none).
+// bucket.
 type featureServer struct {
 	*httptest.Server
 	mu      sync.Mutex
@@ -113,37 +131,36 @@ func (s *featureServer) seen() []string {
 	return append([]string(nil), s.buckets...)
 }
 
-// testFeatureOptions are shorter timings than New's (2 s, 300 s, 1 s).
-func testFeatureOptions(endpoint string) featureOptions {
-	return featureOptions{
-		endpoint: endpoint,
-		timeout:  500 * time.Millisecond,
-		refresh:  time.Hour,
-		keyPoll:  20 * time.Millisecond,
-	}
+// featureTimings are a chat's request timeout, re-check interval and first
+// retry delay.
+type featureTimings struct {
+	timeout, recheck, firstRetry time.Duration
 }
 
-func featureChat(t *testing.T, opts featureOptions) *Chat {
+var defaultTestTimings = featureTimings{2 * time.Second, time.Hour, 50 * time.Millisecond}
+
+// featureChat is a keyed chat whose feature fetch goes to endpoint.
+func featureChat(t *testing.T, v sdkVectors, endpoint string, timings featureTimings) *Chat {
 	t.Helper()
-	chat := newChat(opts)
+	chat := New()
 	if chat == nil {
-		t.Fatal("newChat returned nil")
+		t.Fatal("New returned nil")
 	}
 	t.Cleanup(chat.Close)
-	return chat
-}
-
-func importFeatureKeys(t *testing.T, chat *Chat, v sdkVectors) {
-	t.Helper()
+	if err := chat.configureFeatures(endpoint, timings.timeout, timings.recheck, timings.firstRetry); err != nil {
+		t.Fatalf("configureFeatures failed: %v", err)
+	}
 	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
+	return chat
 }
 
-func sendVersion(t *testing.T, chat *Chat, v sdkVectors) *SendPayload {
+// sendVersion is the signature version of a send: "7" for v0, "10" for v1.
+func sendVersion(t *testing.T, chat *Chat, v sdkVectors) string {
 	t.Helper()
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
 		ConversationID:         v.EventConversationID,
@@ -154,12 +171,17 @@ func sendVersion(t *testing.T, chat *Chat, v sdkVectors) *SendPayload {
 	if err != nil {
 		t.Fatalf("EncryptMessage failed: %v", err)
 	}
-	return payload
+	return payload.SignatureInfo.SignatureVersion
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	waitForWithin(t, what, 10*time.Second, cond)
+}
+
+func waitForWithin(t *testing.T, what string, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
@@ -169,13 +191,6 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	if !cond() {
 		t.Fatalf("timed out waiting for %s", what)
 	}
-}
-
-// keyedRequest waits for a request carrying the chat's key bucket.
-func keyedRequest(t *testing.T, server *featureServer, chat *Chat) {
-	t.Helper()
-	bucket := strconv.Itoa(chat.featureBucket())
-	waitFor(t, "a request with bucket "+bucket, func() bool { return slices.Contains(server.seen(), bucket) })
 }
 
 func TestFeatureSwitchesAreNotPublicAPI(t *testing.T) {
@@ -207,352 +222,331 @@ func TestFeatureSwitchesAreNotPublicAPI(t *testing.T) {
 			return true
 		})
 	}
-	for _, name := range []string{
-		"FeaturesEndpoint", "FeatureV1Send", "LoadFeatureConfigParams", "LoadFeatureConfig",
-		"IsEnabled", "FeatureBucket", "ApplyFeatureConfig", "FeatureRefetchDue",
-	} {
-		if slices.Contains(declared, name) {
+	for _, name := range declared {
+		if token.IsExported(name) && strings.Contains(strings.ToLower(name), "feature") {
 			t.Errorf("%s is exported", name)
 		}
 	}
 }
 
-func TestCreatingAChatNeverWaitsForTheFetch(t *testing.T) {
+func TestNoRequestIsMadeUntilTheFirstSend(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	time.Sleep(300 * time.Millisecond)
+	if got := server.seen(); len(got) != 0 {
+		t.Fatalf("requests before a send: %v", got)
+	}
+
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("first send is %q, want 7: it does not wait for the answer", got)
+	}
+	waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
+	bucket, err := strconv.Atoi(server.seen()[0])
+	if err != nil || bucket < 0 || bucket >= 10000 {
+		t.Fatalf("bucket %q", server.seen()[0])
+	}
+}
+
+func TestV1StartsOnceTheAnswerTurnsItOn(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("first send is %q, want 7", got)
+	}
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %v", got)
+	}
+}
+
+func TestASendNeverWaitsForTheRequest(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	server.setDelay(2 * time.Second)
-	opts := testFeatureOptions(server.endpoint())
-	opts.timeout = 5 * time.Second
-	start := time.Now()
-	chat := featureChat(t, opts)
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("creating a chat took %v", elapsed)
+	chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	started := time.Now()
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7", got)
 	}
-	importFeatureKeys(t, chat, v)
-	if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "7" {
-		t.Errorf("signature version %q, want 7", got)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("the send took %v", elapsed)
 	}
-
-	// New reads the endpoint from the environment hook.
-	other := newFeatureServer(t)
-	other.setDelay(2 * time.Second)
-	t.Setenv(featuresEndpointEnv, other.endpoint())
-	start = time.Now()
-	created := New()
-	defer created.Close()
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("New took %v", elapsed)
-	}
-	waitFor(t, "New's request", func() bool { return len(other.seen()) == 1 })
 }
 
-func TestEveryFlagIsOffAndSendsAreV0UntilAResponseApplies(t *testing.T) {
+func TestChatsWithOneKeyShareOneRequest(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	server.set(http.StatusServiceUnavailable, ``)
-	chat := featureChat(t, testFeatureOptions(server.endpoint()))
-	importFeatureKeys(t, chat, v)
-	keyedRequest(t, server, chat)
-	if chat.isEnabled("v1_send") {
-		t.Fatal("v1_send on without a response")
+	server.setDelay(300 * time.Millisecond)
+	var chats []*Chat
+	for i := 0; i < 4; i++ {
+		chat := featureChat(t, v, server.endpoint(), defaultTestTimings)
+		if got := sendVersion(t, chat, v); got != "7" {
+			t.Fatalf("send is %q, want 7", got)
+		}
+		chats = append(chats, chat)
 	}
-	payload := sendVersion(t, chat, v)
-	if payload.SignatureInfo.SignatureVersion != "7" {
-		t.Errorf("signature version %q, want 7", payload.SignatureInfo.SignatureVersion)
+	waitFor(t, "v1 everywhere", func() bool {
+		for _, chat := range chats {
+			if sendVersion(t, chat, v) != "10" {
+				return false
+			}
+		}
+		return true
+	})
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %v", got)
 	}
-	if payload.XdkVersion == "" {
-		t.Error("expected xdk_version")
+
+	later := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	if got := sendVersion(t, later, v); got != "10" {
+		t.Fatalf("a later chat sends %q, want 10: it takes the answer at hand", got)
+	}
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %v", got)
 	}
 }
 
-func TestAChatFetchesOnCreationAndAgainWithTheKeyBucket(t *testing.T) {
+func TestChatsWithDifferentKeysAskSeparately(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	chat := featureChat(t, testFeatureOptions(server.endpoint()))
-	if chat.featureBucket() != -1 {
-		t.Fatal("bucket before keys")
+	first := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	second := featureChat(t, v, server.endpoint(), defaultTestTimings)
+	other := New()
+	defer other.Close()
+	if _, err := other.GenerateKeypairs(); err != nil {
+		t.Fatalf("GenerateKeypairs failed: %v", err)
 	}
-	waitFor(t, "the request on creation", func() bool { return len(server.seen()) == 1 })
-	if got := server.seen(); got[0] != "" {
-		t.Fatalf("buckets %v, want one bucketless request", got)
+	keys, err := other.ExportKeys()
+	if err != nil {
+		t.Fatalf("ExportKeys failed: %v", err)
 	}
-
-	importFeatureKeys(t, chat, v)
-	bucket := chat.featureBucket()
-	if bucket < 0 || bucket >= 10000 {
-		t.Fatalf("bucket %d out of range", bucket)
+	if err := second.ImportKeys(ImportKeysParams{Keys: keys}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
 	}
-	keyedRequest(t, server, chat)
-	waitFor(t, "v1_send on", func() bool { return chat.isEnabled("v1_send") })
-	if chat.featureRefetchDue() {
-		t.Fatal("refetch still due")
+	if err := second.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
 	}
-	if got := server.seen(); !slices.Equal(got, []string{"", strconv.Itoa(bucket)}) {
-		t.Fatalf("buckets %v, want [\"\" %d]", got, bucket)
-	}
-	if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "10" {
-		t.Errorf("signature version %q, want 10", got)
+	sendVersion(t, first, v)
+	sendVersion(t, second, v)
+	waitFor(t, "two requests", func() bool { return len(server.seen()) == 2 })
+	if got := server.seen(); got[0] == got[1] {
+		t.Fatalf("both requests carry bucket %s", got[0])
 	}
 }
 
-func TestKeysLoadedBeforeTheFirstAnswerStillGetTheKeyBucket(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	server.setDelay(200 * time.Millisecond)
-	chat := featureChat(t, testFeatureOptions(server.endpoint()))
-	importFeatureKeys(t, chat, v)
-	waitFor(t, "v1_send on", func() bool { return chat.isEnabled("v1_send") })
-	got := server.seen()
-	if want := strconv.Itoa(chat.featureBucket()); got[len(got)-1] != want {
-		t.Fatalf("buckets %v, want the last one %s", got, want)
-	}
-}
-
-func TestTheKeyBucketAnswerReplacesTheIPAnswer(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-
-	// An IP-bucketed "on" reads off once keys load, and the key's own answer
-	// decides.
-	first := featureChat(t, testFeatureOptions(server.endpoint()))
-	waitFor(t, "the IP answer", func() bool { return first.isEnabled("v1_send") })
-	server.set(http.StatusOK, `{"features":{"v1_send":false}}`)
-	importFeatureKeys(t, first, v)
-	if first.isEnabled("v1_send") {
-		t.Fatal("flags must read off until the key-bucketed refetch")
-	}
-	keyedRequest(t, server, first)
-	waitFor(t, "the key answer", func() bool { return !first.featureRefetchDue() })
-	if first.isEnabled("v1_send") {
-		t.Fatal("the key answer was false")
-	}
-
-	// ...and the key's answer can turn a flag on that the IP answer left off.
-	server.set(http.StatusOK, `{"features":{"v1_send":false,"ip_answer":true}}`)
-	second := featureChat(t, testFeatureOptions(server.endpoint()))
-	waitFor(t, "the IP answer", func() bool { return second.isEnabled("ip_answer") })
-	server.set(http.StatusOK, `{"features":{"v1_send":true}}`)
-	importFeatureKeys(t, second, v)
-	waitFor(t, "the key answer", func() bool { return second.isEnabled("v1_send") })
-	if second.isEnabled("ip_answer") {
-		t.Fatal("the key answer did not replace the IP answer")
-	}
-}
-
-func TestUnknownKeysAreReadableAndMissingKeysAreOff(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	server.set(http.StatusOK, `{"features":{"later_flag":true,"v1_send":"yes"},"extra":1}`)
-	chat := featureChat(t, testFeatureOptions(server.endpoint()))
-	importFeatureKeys(t, chat, v)
-	waitFor(t, "later_flag on", func() bool { return chat.isEnabled("later_flag") })
-	if chat.isEnabled("v1_send") || chat.isEnabled("missing") {
-		t.Fatal("unexpected flag values")
-	}
-}
-
-func TestAnyFailureLeavesEveryFlagOff(t *testing.T) {
+func TestAnyFailureLeavesSendsOnV0(t *testing.T) {
 	v := loadVectors(t)
 	cases := []struct {
 		status int
 		body   string
 		delay  time.Duration
 	}{
-		{http.StatusNotFound, `{"features":{"v1_send":true}}`, 0},
-		{http.StatusInternalServerError, `{"features":{"v1_send":true}}`, 0},
-		{http.StatusOK, `not json`, 0},
-		{http.StatusOK, `{"v1_send":true}`, 0},
-		{http.StatusOK, `{"features":{"v1_send":true}}`, 1500 * time.Millisecond},
-		{http.StatusOK, `{"features":{"v1_send":true}}` + strings.Repeat(" ", 64*1024), 0},
+		{404, `{"features":{"v1_send":true}}`, 0},
+		{500, `{"features":{"v1_send":true}}`, 0},
+		{200, "not json", 0},
+		{200, `{"v1_send":true}`, 0},
+		{200, `{"features":{"v1_send":"true"}}`, 0},
+		{200, `{"features":{"v1_send":true}}` + strings.Repeat(" ", 64*1024), 0},
+		{200, `{"features":{"v1_send":true}}`, time.Second},
 	}
-	for _, tc := range cases {
-		server := newFeatureServer(t)
-		server.set(tc.status, tc.body)
-		server.setDelay(tc.delay)
-		chat := featureChat(t, testFeatureOptions(server.endpoint()))
-		importFeatureKeys(t, chat, v)
-		keyedRequest(t, server, chat)
-		if tc.delay > 0 {
-			time.Sleep(600 * time.Millisecond)
-		} else {
-			time.Sleep(100 * time.Millisecond)
-		}
-		if chat.isEnabled("v1_send") {
-			t.Errorf("%d %.40q (%d bytes): v1_send on", tc.status, tc.body, len(tc.body))
-		}
-		if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "7" {
-			t.Errorf("%d %.40q (%d bytes): signature version %q, want 7", tc.status, tc.body, len(tc.body), got)
-		}
+	for _, c := range cases {
+		t.Run(strconv.Itoa(c.status)+"/"+strconv.Itoa(len(c.body))+"/"+c.delay.String(), func(t *testing.T) {
+			// A server of its own: chats share an answer per endpoint and
+			// bucket, and the case before may have left one.
+			server := newFeatureServer(t)
+			server.set(c.status, c.body)
+			server.setDelay(c.delay)
+			chat := featureChat(t, v, server.endpoint(), featureTimings{500 * time.Millisecond, time.Hour, time.Minute})
+			if got := sendVersion(t, chat, v); got != "7" {
+				t.Fatalf("send is %q, want 7", got)
+			}
+			waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
+			if c.delay > 0 {
+				time.Sleep(1200 * time.Millisecond)
+			} else {
+				time.Sleep(200 * time.Millisecond)
+			}
+			if got := sendVersion(t, chat, v); got != "7" {
+				t.Fatalf("send is %q, want 7", got)
+			}
+		})
 	}
 }
 
-func TestAnUnreachableEndpointLeavesEveryFlagOff(t *testing.T) {
+func TestAnUnreachableEndpointLeavesSendsOnV0(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	endpoint := server.endpoint()
 	server.Close()
-	chat := featureChat(t, testFeatureOptions(endpoint))
-	importFeatureKeys(t, chat, v)
-	time.Sleep(300 * time.Millisecond)
-	if chat.isEnabled("v1_send") {
-		t.Fatal("v1_send on")
+	chat := featureChat(t, v, endpoint, featureTimings{500 * time.Millisecond, time.Hour, 50 * time.Millisecond})
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7", got)
 	}
-	if !chat.featureRefetchDue() {
-		t.Fatal("expected the key-bucketed fetch to stay due")
-	}
-	if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "7" {
-		t.Errorf("signature version %q, want 7", got)
+	time.Sleep(500 * time.Millisecond)
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7", got)
 	}
 }
 
-func TestTheRecheckTurnsFlagsOffButNeverOn(t *testing.T) {
+func TestARequestStillOpenAtItsTimeoutFailsAndIsRetried(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	opts := testFeatureOptions(server.endpoint())
-	opts.refresh = 300 * time.Millisecond
-	chat := featureChat(t, opts)
-	importFeatureKeys(t, chat, v)
-	waitFor(t, "v1_send on", func() bool { return chat.isEnabled("v1_send") })
+	server.setDelay(3 * time.Second)
+	chat := featureChat(t, v, server.endpoint(), featureTimings{300 * time.Millisecond, time.Hour, 200 * time.Millisecond})
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7", got)
+	}
+	waitForWithin(t, "a retry", 2500*time.Millisecond, func() bool { return len(server.seen()) >= 2 })
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7", got)
+	}
+}
+
+func TestTheRecheckTurnsV1OffAndNeverBackOn(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	rechecking := featureTimings{2 * time.Second, 300 * time.Millisecond, 50 * time.Millisecond}
+	chat := featureChat(t, v, server.endpoint(), rechecking)
+	sendVersion(t, chat, v)
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
 
 	server.set(http.StatusOK, `{"features":{}}`)
-	waitFor(t, "the re-check to turn v1_send off", func() bool { return !chat.isEnabled("v1_send") })
-	if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "7" {
-		t.Errorf("signature version %q, want 7", got)
-	}
+	waitFor(t, "the re-check to turn v1 off", func() bool { return sendVersion(t, chat, v) == "7" })
 
 	server.set(http.StatusOK, `{"features":{"v1_send":true}}`)
-	n := len(server.seen())
-	waitFor(t, "two more re-checks", func() bool { return len(server.seen()) >= n+2 })
-	if chat.isEnabled("v1_send") {
-		t.Fatal("a re-check turned v1_send back on")
+	seen := len(server.seen())
+	waitFor(t, "two more re-checks", func() bool { return len(server.seen()) >= seen+2 })
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("a running chat sends %q, want 7: it never sees v1 turn on", got)
+	}
+	later := featureChat(t, v, server.endpoint(), rechecking)
+	if got := sendVersion(t, later, v); got != "10" {
+		t.Fatalf("a new chat sends %q, want 10: it takes the latest answer", got)
 	}
 }
 
 func TestAFailedRecheckChangesNothing(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	opts := testFeatureOptions(server.endpoint())
-	opts.refresh = 300 * time.Millisecond
-	chat := featureChat(t, opts)
-	importFeatureKeys(t, chat, v)
-	waitFor(t, "v1_send on", func() bool { return chat.isEnabled("v1_send") })
-	server.set(http.StatusServiceUnavailable, ``)
-	n := len(server.seen())
-	waitFor(t, "two failed re-checks", func() bool { return len(server.seen()) >= n+2 })
-	if !chat.isEnabled("v1_send") {
-		t.Fatal("a failed re-check changed the flags")
+	chat := featureChat(t, v, server.endpoint(), featureTimings{2 * time.Second, 300 * time.Millisecond, 50 * time.Millisecond})
+	sendVersion(t, chat, v)
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+	server.set(http.StatusServiceUnavailable, "")
+	seen := len(server.seen())
+	waitFor(t, "two failed re-checks", func() bool { return len(server.seen()) >= seen+2 })
+	if got := sendVersion(t, chat, v); got != "10" {
+		t.Fatalf("send is %q, want 10", got)
 	}
 }
 
-func TestCloseStopsTheFetches(t *testing.T) {
+func TestCloseStopsTheRequests(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	opts := testFeatureOptions(server.endpoint())
-	opts.refresh = 300 * time.Millisecond
-	opts.timeout = 10 * time.Second
-	chat := newChat(opts)
-	importFeatureKeys(t, chat, v)
-	waitFor(t, "v1_send on", func() bool { return chat.isEnabled("v1_send") })
-	server.setDelay(5 * time.Second)
-	time.Sleep(400 * time.Millisecond)
-	start := time.Now()
+	chat := featureChat(t, v, server.endpoint(), featureTimings{2 * time.Second, 300 * time.Millisecond, 50 * time.Millisecond})
+	sendVersion(t, chat, v)
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
 	chat.Close()
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("Close waited %v for the in-flight fetch", elapsed)
-	}
-	n := len(server.seen())
+	seen := len(server.seen())
 	time.Sleep(time.Second)
-	if len(server.seen()) != n {
-		t.Fatal("fetches continued after Close")
+	if got := len(server.seen()); got != seen {
+		t.Fatalf("%d requests after Close", got-seen)
 	}
 }
 
-func TestTheFetchesEndWithAnUnreferencedChat(t *testing.T) {
+// startUnreferencedChat leaves a re-checking chat that nothing references.
+func startUnreferencedChat(t *testing.T, v sdkVectors, endpoint string) {
+	chat := New()
+	if err := chat.configureFeatures(endpoint, 2*time.Second, 300*time.Millisecond, 50*time.Millisecond); err != nil {
+		t.Fatalf("configureFeatures failed: %v", err)
+	}
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	sendVersion(t, chat, v)
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+}
+
+func TestTheRequestsEndWithAnUnreferencedChat(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	opts := testFeatureOptions(server.endpoint())
-	opts.refresh = 300 * time.Millisecond
-	features := func() *featureSync {
-		chat := newChat(opts)
-		importFeatureKeys(t, chat, v)
-		waitFor(t, "v1_send on", func() bool { return chat.isEnabled("v1_send") })
-		return chat.features
-	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for stopped := false; !stopped; {
+	startUnreferencedChat(t, v, server.endpoint())
+	running := len(server.seen())
+	waitFor(t, "a re-check", func() bool { return len(server.seen()) > running })
+	for i := 0; i < 5; i++ {
 		runtime.GC()
-		select {
-		case <-features.done:
-			stopped = true
-		case <-time.After(50 * time.Millisecond):
-			if time.Now().After(deadline) {
-				t.Fatal("the fetches outlived the chat")
-			}
-		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	n := len(server.seen())
-	time.Sleep(700 * time.Millisecond)
-	if len(server.seen()) != n {
-		t.Fatal("fetches continued after the chat was finalized")
+	time.Sleep(800 * time.Millisecond)
+	seen := len(server.seen())
+	time.Sleep(1200 * time.Millisecond)
+	if got := len(server.seen()); got != seen {
+		t.Fatalf("%d requests once the chat was collected", got-seen)
 	}
 }
 
-func TestAMalformedBodyIsRejectedAndChangesNothing(t *testing.T) {
-	v := loadVectors(t)
-	server := newFeatureServer(t)
-	// The fetch never applies anything, so only the calls below change the
-	// flags.
-	server.set(http.StatusServiceUnavailable, ``)
-	chat := featureChat(t, testFeatureOptions(server.endpoint()))
-	importFeatureKeys(t, chat, v)
-	keyedRequest(t, server, chat)
-	bucket := chat.featureBucket()
-	enableV1Send(t, chat)
-	if err := chat.applyFeatureConfig(`[]`, bucket, true); err == nil {
-		t.Fatal("expected an error")
-	}
-	if !chat.isEnabled("v1_send") {
-		t.Fatal("a malformed body changed the flags")
-	}
-	if err := chat.applyFeatureConfig(`{"features":{}}`, bucket, true); err != nil {
-		t.Fatal(err)
-	}
-	if chat.isEnabled("v1_send") {
-		t.Fatal("the downgrade did not apply")
+// featureDrivers counts the goroutines running featureDriver.
+func featureDrivers() int {
+	buf := make([]byte, 1<<20)
+	return strings.Count(string(buf[:runtime.Stack(buf, true)]), "chatxdk.featureDriver(")
+}
+
+// TestTheDriverEndsWithTheLastChat runs in a process of its own, so no chat of
+// another test keeps the driver running.
+func TestTheDriverEndsWithTheLastChat(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFeatureDriverHelper$", "-test.v")
+	cmd.Env = append(os.Environ(), driverHelperEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "PASS") {
+		t.Fatalf("helper process failed: %v\n%s", err, out)
 	}
 }
 
-func TestChatsAskingAtOnceShareARequest(t *testing.T) {
+func TestFeatureDriverHelper(t *testing.T) {
+	if os.Getenv(driverHelperEnv) != "1" {
+		t.Skip("run by TestTheDriverEndsWithTheLastChat")
+	}
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	server.setDelay(300 * time.Millisecond)
-	chats := make([]*Chat, 4)
-	for i := range chats {
-		chats[i] = featureChat(t, testFeatureOptions(server.endpoint()))
+	if n := featureDrivers(); n != 0 {
+		t.Fatalf("%d drivers before a send", n)
 	}
-	all := func(cond func(*Chat) bool) func() bool {
-		return func() bool {
-			for _, chat := range chats {
-				if !cond(chat) {
-					return false
-				}
-			}
-			return true
+	var chats []*Chat
+	for i := 0; i < 3; i++ {
+		chat := New()
+		if err := chat.configureFeatures(server.endpoint(), 2*time.Second, 300*time.Millisecond, 50*time.Millisecond); err != nil {
+			t.Fatal(err)
 		}
+		if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+			t.Fatal(err)
+		}
+		chats = append(chats, chat)
 	}
-	waitFor(t, "the IP answer", all(func(c *Chat) bool { return c.isEnabled("v1_send") }))
-	if got := server.seen(); !slices.Equal(got, []string{""}) {
-		t.Fatalf("requests %q, want one without a bucket", got)
+	for _, chat := range chats {
+		sendVersion(t, chat, v)
 	}
+	waitFor(t, "v1 everywhere", func() bool {
+		return !slices.ContainsFunc(chats, func(c *Chat) bool { return sendVersion(t, c, v) != "10" })
+	})
+	if n := featureDrivers(); n != 1 {
+		t.Fatalf("%d drivers, want 1", n)
+	}
+	waitFor(t, "re-checks while chats remain", func() bool { return len(server.seen()) >= 3 })
 
 	for _, chat := range chats {
-		if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
-			t.Fatalf("ImportKeys failed: %v", err)
-		}
+		chat.Close()
 	}
-	waitFor(t, "the key answer", all(func(c *Chat) bool { return !c.featureRefetchDue() }))
-	want := []string{"", strconv.Itoa(chats[0].featureBucket())}
-	if got := server.seen(); !slices.Equal(got, want) {
-		t.Fatalf("requests %q, want %q", got, want)
+	waitForWithin(t, "the driver to end", 3*time.Second, func() bool { return featureDrivers() == 0 })
+	seen := len(server.seen())
+	time.Sleep(time.Second)
+	if got := len(server.seen()); got != seen {
+		t.Fatalf("%d requests once no chat remains", got-seen)
 	}
 }

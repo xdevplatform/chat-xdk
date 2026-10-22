@@ -3,6 +3,7 @@ package com.x.chatxdk;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.x.chatxdk.Types.*;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -20,6 +21,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** JVM binding tests (no network). */
 class ChatTest {
+
+    @BeforeAll
+    static void keepFeatureFetchesOffline() {
+        FeatureServer.keepOffline();
+    }
 
     private static Chat createUnlocked() throws Exception {
         Chat chat = new Chat();
@@ -1352,7 +1358,7 @@ class ChatTest {
         p.conversationKey = b64(v, "conversation_key_b64");
         p.conversationKeyVersion = v.get("event_conversation_key_version").asText();
         p.attachments = attachments.length == 0 ? null : List.of(attachments);
-        chat.applyFeatureConfig("{\"features\":{\"v1_send\":true}}", chat.featureBucket());
+        FeatureServer.enableV1Send(chat);
         SendPayload payload = chat.encryptMessage(p);
         assertEquals("10", payload.signatureInfo.signatureVersion);
         assertEquals(text, decryptOwnContent(chat, v, payload).get("text").asText());

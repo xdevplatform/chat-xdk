@@ -5,9 +5,6 @@ import sys
 import unittest
 import uuid
 
-# Keep every chat's automatic feature fetch off the network.
-os.environ.setdefault("CHAT_XDK_FEATURES_ENDPOINT", "http://127.0.0.1:9/2/chat/features")
-
 
 def _repo_root() -> str:
     # .../crates/pyo3/python/tests/test_sdk_vectors.py -> repo root is 4 levels up
@@ -92,6 +89,9 @@ class TestPythonSdkVectors(unittest.TestCase):
             from chat_xdk import Chat  # noqa: F401
         except Exception as e:  # pragma: no cover
             raise unittest.SkipTest(f"chat_xdk extension not importable in this Python: {e!r}")
+        from features_support import keep_offline
+
+        keep_offline()
 
     def test_public_keys_and_signature_match_fixture(self):
         from chat_xdk import Chat, ImportKeysParams
@@ -708,8 +708,9 @@ class TestPythonSdkVectors(unittest.TestCase):
         """Send a v1 message with ``attachments``, check it verifies, and
         return its payload."""
         from chat_xdk import EncryptMessageParams
+        from features_support import enable_v1_send
 
-        chat._apply_feature_config('{"features":{"v1_send":true}}', chat._feature_bucket())
+        enable_v1_send(chat)
         payload = chat.encrypt_message(
             EncryptMessageParams(
                 v["event_conversation_id"],

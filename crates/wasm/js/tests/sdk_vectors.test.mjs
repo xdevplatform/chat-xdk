@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
-import init, { Chat } from "../../pkg/chat_xdk_wasm.js";
+import init, { Chat } from "../pkg/chat_xdk_wasm.js";
+import { enableV1Send, keepOffline } from "./feature_server.mjs";
 import { delivered } from "./frame.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
@@ -51,9 +52,10 @@ const QUICK_REPLY_RESPONSE = {
 async function main() {
   // wasm-bindgen's default init path uses `fetch(new URL(...))`, which breaks in Node
   // for `file://` URLs. Feed the wasm bytes directly instead.
-  const wasmUrl = new URL("../../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
+  const wasmUrl = new URL("../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
   const wasmBytes = await fs.readFile(wasmUrl);
   await init({ module_or_path: wasmBytes });
+  keepOffline();
   const v = await loadVectors();
 
   const chat = new Chat();
@@ -96,7 +98,14 @@ async function main() {
   const sender = new Chat();
   sender.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
   sender.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_signing_key_version });
-  sender.__applyFeatureConfig('{"features":{"v1_send":true}}', sender.__featureBucket(), false);
+  await enableV1Send(sender, () =>
+    sender.encryptMessage({
+      conversationId: v.event_conversation_id,
+      text: "turn v1 on",
+      conversationKey: convKey,
+      conversationKeyVersion: v.event_conversation_key_version,
+    }),
+  );
   const media = (mediaHashKey) => ({
     attachment_type: "media",
     media_hash_key: mediaHashKey,

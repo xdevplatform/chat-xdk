@@ -30,7 +30,7 @@
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use chat_xdk_core::bindings::{FeatureApply, FeatureSwitches};
+use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
@@ -118,6 +118,81 @@ pub fn detect_image_dimensions(bytes: &[u8]) -> JsValue {
         }
         None => JsValue::NULL,
     }
+}
+
+// Feature switches (GET /2/chat/features). The core decides when to fetch and
+// what an answer means; the JS wrapper only steps a driver when the core wakes
+// it and performs each GET it is handed. None of this is API, and all of it is
+// left out of the TypeScript declarations.
+
+thread_local! {
+    static FEATURE_WAKER: std::cell::RefCell<Option<js_sys::Function>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn wake_feature_driver() {
+    let waker = FEATURE_WAKER.with(|waker| waker.borrow().clone());
+    if let Some(waker) = waker {
+        let _ = waker.call0(&JsValue::NULL);
+    }
+}
+
+/// Milliseconds from `performance.now()`, or `Date.now()` without it.
+fn feature_clock() -> u64 {
+    let performance = js_sys::Reflect::get(&js_sys::global(), &"performance".into()).ok();
+    let now = performance.and_then(|performance| {
+        let now: js_sys::Function = js_sys::Reflect::get(&performance, &"now".into())
+            .ok()?
+            .dyn_into()
+            .ok()?;
+        now.call0(&performance).ok()?.as_f64()
+    });
+    now.unwrap_or_else(js_sys::Date::now) as u64
+}
+
+/// Register the function the core calls to start the feature driver, or to
+/// have it poll again, whenever its plan changes.
+#[wasm_bindgen(js_name = __featureSetWaker, skip_typescript)]
+pub fn feature_set_waker(waker: js_sys::Function) {
+    FEATURE_WAKER.with(|slot| *slot.borrow_mut() = Some(waker));
+    bindings::set_clock(feature_clock);
+    bindings::set_polling_waker(wake_feature_driver);
+}
+
+/// The driver's next step: `{ id, url, timeoutMs, maxBytes }` to perform a
+/// GET, `{ waitMs }` to poll again after that long (or when woken), or
+/// `undefined` when no chat needs the switches.
+#[wasm_bindgen(js_name = __featurePoll, skip_typescript)]
+pub fn feature_poll() -> JsValue {
+    let step = js_sys::Object::new();
+    let set = |name: &str, value: JsValue| {
+        js_sys::Reflect::set(&step, &name.into(), &value).ok();
+    };
+    match bindings::poll_fetch() {
+        bindings::Poll::Fetch(fetch) => {
+            set("id", (fetch.id as f64).into());
+            set("url", fetch.url.into());
+            set("timeoutMs", (fetch.timeout_ms as f64).into());
+            set("maxBytes", (fetch.max_bytes as f64).into());
+        }
+        bindings::Poll::Wait(ms) => set("waitMs", (ms as f64).into()),
+        bindings::Poll::Idle => return JsValue::UNDEFINED,
+    }
+    step.into()
+}
+
+/// Report the result of the GET `id`: its HTTP status, 0 when no complete
+/// response arrived, and its body.
+#[wasm_bindgen(js_name = __featureComplete, skip_typescript)]
+pub fn feature_complete(id: f64, status: u16, body: &[u8]) {
+    bindings::complete_fetch(id as u64, status, body);
+}
+
+/// For this repository's tests: the endpoint of every chat that does not set
+/// its own, or the X API's when absent.
+#[wasm_bindgen(js_name = __featureSetDefaultEndpoint, skip_typescript)]
+pub fn feature_set_default_endpoint(endpoint: Option<String>) {
+    bindings::set_default_endpoint(endpoint.as_deref());
 }
 
 /// Initialize panic hook for better error messages in console.
@@ -222,40 +297,22 @@ impl Chat {
         self.inner.set_cache_keys(enabled);
     }
 
-    // Feature switches. Internal: the JS wrapper fetches
-    // `GET /2/chat/features` itself and drives these; they are not API and
-    // are left out of the TypeScript declarations.
-
-    #[wasm_bindgen(js_name = __featureBucket, skip_typescript)]
-    pub fn feature_bucket(&self) -> Option<u16> {
-        self.inner.feature_bucket()
-    }
-
-    #[wasm_bindgen(js_name = __applyFeatureConfig, skip_typescript)]
-    pub fn apply_feature_config(
+    /// For this repository's tests: fetch this chat's feature switches from
+    /// `endpoint`, with these timings in milliseconds. Not API.
+    #[wasm_bindgen(js_name = __configureFeatures, skip_typescript)]
+    pub fn configure_features(
         &self,
-        json: &str,
-        bucket: Option<u16>,
-        downgrade_only: Option<bool>,
-    ) -> Result<(), JsError> {
-        let mode = if downgrade_only.unwrap_or(false) {
-            FeatureApply::DowngradeOnly
-        } else {
-            FeatureApply::Full
-        };
-        self.inner
-            .apply_feature_config(json, mode, bucket)
-            .map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    #[wasm_bindgen(js_name = __isEnabled, skip_typescript)]
-    pub fn is_enabled(&self, name: &str) -> bool {
-        self.inner.is_enabled(name)
-    }
-
-    #[wasm_bindgen(js_name = __featureRefetchDue, skip_typescript)]
-    pub fn feature_refetch_due(&self) -> bool {
-        self.inner.feature_refetch_due()
+        endpoint: &str,
+        timeout_ms: f64,
+        recheck_ms: f64,
+        first_retry_ms: f64,
+    ) {
+        self.inner.configure_features(
+            endpoint,
+            timeout_ms as u64,
+            recheck_ms as u64,
+            first_retry_ms as u64,
+        );
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`

@@ -207,27 +207,11 @@ impl Chat {
     pub fn set_signing_keys(&self, entries: Vec<SigningKeyEntry>) {
         self.inner.set_signing_keys(entries);
     }
-    // Feature switches, for the language bindings (see `crate::bindings`).
+    /// The engine underneath, for the language bindings (see
+    /// `crate::bindings`).
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn feature_bucket(&self) -> Option<u16> {
-        self.inner.feature_bucket()
-    }
-    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn apply_feature_config(
-        &self,
-        json: &str,
-        mode: crate::features::FeatureApply,
-        bucket: Option<u16>,
-    ) -> Result<(), SdkError> {
-        self.inner.apply_feature_config(json, mode, bucket)
-    }
-    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn is_enabled(&self, name: &str) -> bool {
-        self.inner.is_enabled(name)
-    }
-    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn feature_refetch_due(&self) -> bool {
-        self.inner.feature_refetch_due()
+    pub(crate) fn core(&self) -> &crate::core::ChatCore {
+        &self.inner
     }
     /// Replace the Juicebox configuration.
     pub fn update_config(&mut self, config: JuiceboxConfig) {
@@ -1402,16 +1386,7 @@ mod tests {
         assert_eq!(payload.signature_info.signature_version, "7");
         assert!(payload.should_notify);
 
-        let bucket = chat.feature_bucket();
-        assert!(bucket.is_some());
-        chat.apply_feature_config(
-            r#"{"features":{"v1_send":true}}"#,
-            crate::features::FeatureApply::Full,
-            bucket,
-        )
-        .unwrap();
-        assert!(chat.is_enabled(crate::features::V1_SEND));
-        assert!(!chat.feature_refetch_due());
+        chat.inner.force_features(&[crate::features::V1_SEND]);
         let params = EncryptMessageParams::new("conv-1", "Hello again")
             .with_identity("4001", "1")
             .with_conversation_key(ckey.to_bytes(), "1");

@@ -27,16 +27,15 @@ Quick Start:
 
 __version__ = "0.1.0"
 
-import os as _os
 import re as _re
 import threading as _threading
 import time as _time
 import urllib.request as _urllib_request
-import weakref as _weakref
 from typing import Optional, TypedDict
 
-from chat_xdk._native import Chat as _NativeChat
+from chat_xdk import _native
 from chat_xdk._native import (
+    Chat,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -70,179 +69,81 @@ from chat_xdk._native import (
     hex_to_bytes,
 )
 
-# Feature switches (GET /2/chat/features). Internal: every Chat fetches them
-# itself, without blocking or failing, and sends stay v0 unless a response
-# turns v1_send on. Nothing here is API. The module-level settings exist for
-# this repository's tests; CHAT_XDK_FEATURES_ENDPOINT overrides the endpoint.
-_FEATURES_ENDPOINT = "https://api.x.com/2/chat/features"
-_FEATURES_ENDPOINT_ENV = "CHAT_XDK_FEATURES_ENDPOINT"
-_FEATURE_TIMEOUT_SECONDS = 2.0
-_FEATURE_REFRESH_SECONDS = 300.0
-_FEATURE_KEY_POLL_SECONDS = 1.0
-_MAX_FEATURES_BODY = 64 * 1024
+# Feature switches (GET /2/chat/features). The native core decides when to
+# fetch and what an answer means; this module runs a driver thread that polls
+# the core, waits here between steps, and performs each GET it is handed.
+# Nothing here is API.
 
 
-class Chat(_NativeChat):
-    __doc__ = _NativeChat.__doc__
+class _FeatureDriver:
+    """One daemon thread at a time that polls the core for feature GETs.
 
-    def __init__(self, config_json=None):
-        # The native constructor already took config_json; this only starts
-        # the feature-switch thread.
-        self._feature_stop = _start_feature_switches(self)
+    It waits in Python rather than inside the core: a daemon thread that takes
+    the interpreter lock back from native code while the interpreter shuts
+    down is ended in a way native frames cannot unwind."""
 
-    def close(self):
-        """Stop this chat's background work: its fetch of the X API's
-        feature switches. A chat that is garbage-collected stops it too."""
-        self._feature_stop.set()
+    def __init__(self):
+        self._lock = _threading.Lock()
+        self._woken = _threading.Event()
+        self._running = False
+
+    def wake(self):
+        """Start the driver, or have it poll again: the core calls this when
+        its plan changes."""
+        with self._lock:
+            self._woken.set()
+            if self._running:
+                return
+            self._running = True
+        _threading.Thread(target=self._run, name="chat-xdk-features", daemon=True).start()
+
+    def _run(self):
+        while True:
+            self._woken.clear()
+            step = _native._feature_poll()
+            if step is None:
+                with self._lock:
+                    if not self._woken.is_set():
+                        self._running = False
+                        return
+            elif isinstance(step, tuple):
+                _threading.Thread(
+                    target=_perform_feature_fetch,
+                    args=step,
+                    name="chat-xdk-features-request",
+                    daemon=True,
+                ).start()
+            else:
+                self._woken.wait(step)
 
 
-def _start_feature_switches(chat):
-    """Fetch the flags for ``chat`` on a daemon thread that holds it weakly.
-    Returns the event that stops the thread, which ``chat`` being
-    garbage-collected also sets."""
-    stop = _threading.Event()
-    _weakref.finalize(chat, stop.set)
-    settings = (
-        _os.environ.get(_FEATURES_ENDPOINT_ENV) or _FEATURES_ENDPOINT,
-        _FEATURE_TIMEOUT_SECONDS,
-        _FEATURE_REFRESH_SECONDS,
-        _FEATURE_KEY_POLL_SECONDS,
-    )
-    _threading.Thread(
-        target=_feature_loop,
-        args=(_weakref.ref(chat), settings, stop),
-        name="chat-xdk-features",
-        daemon=True,
-    ).start()
-    return stop
-
-
-def _fetch_features(chat, endpoint, timeout, downgrade_only):
-    """Fetch the flags for ``chat``'s bucket and apply them; True on success."""
+def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
     try:
-        bucket = chat._feature_bucket()
-        url = endpoint
-        if bucket is not None:
-            url += ("&" if "?" in endpoint else "?") + "bucket=%d" % bucket
-        body = _shared_features(url, timeout)
-        if body is None:
-            return False
-        chat._apply_feature_config(body, bucket, downgrade_only)
+        status, body = _get_features(url, timeout, max_bytes)
     except Exception:
-        return False
-    return True
+        status, body = 0, b""
+    _native._feature_complete(fetch_id, status, body)
 
 
-# Feature requests in flight, by URL: url -> (done event, [body]).
-_feature_requests = {}
-_feature_requests_lock = _threading.Lock()
-
-
-def _shared_features(url, timeout):
-    """The body for ``url``, from the request another chat has in flight
-    for it or else from a new one, so chats that ask at once share a
-    request."""
-    with _feature_requests_lock:
-        shared = _feature_requests.get(url)
-        owner = shared is None
-        if owner:
-            shared = _feature_requests[url] = (_threading.Event(), [])
-    done, result = shared
-    if owner:
-        try:
-            result.append(_get_features(url, timeout))
-        finally:
-            with _feature_requests_lock:
-                del _feature_requests[url]
-            done.set()
-    else:
-        done.wait(timeout + 1.0)
-    return result[0] if result else None
-
-
-def _get_features(url, timeout):
-    """The body of a 200 response from ``url``, or None on any failure,
-    within ``timeout`` seconds in all. The request runs on its own daemon
-    thread, since urllib's timeout covers neither DNS nor the whole read."""
-    result = []
-    worker = _threading.Thread(
-        target=lambda: result.append(_request_features(url, timeout)),
-        name="chat-xdk-features-request",
-        daemon=True,
-    )
-    worker.start()
-    worker.join(timeout)
-    return result[0] if result else None
-
-
-def _request_features(url, timeout):
+def _get_features(url, timeout, max_bytes):
+    """GET ``url`` within ``timeout`` seconds: the status and the body, read
+    to its end or to one byte past ``max_bytes``. Status 0 when no complete
+    response arrived in time."""
     deadline = _time.monotonic() + timeout
-    try:
-        request = _urllib_request.Request(url, headers={"Accept": "application/json"})
-        with _urllib_request.urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                return None
-            chunks = []
-            size = 0
-            while _time.monotonic() < deadline:
-                chunk = response.read1(16 * 1024)
-                if not chunk:
-                    return b"".join(chunks).decode("utf-8")
-                size += len(chunk)
-                if size > _MAX_FEATURES_BODY:
-                    return None
-                chunks.append(chunk)
-    except Exception:
-        pass
-    return None
+    request = _urllib_request.Request(url, headers={"Accept": "application/json"})
+    with _urllib_request.urlopen(request, timeout=timeout) as response:
+        body = bytearray()
+        while len(body) <= max_bytes:
+            if _time.monotonic() >= deadline:
+                return 0, b""
+            chunk = response.read1(max_bytes + 1 - len(body))
+            if not chunk:
+                break
+            body += chunk
+        return response.status, bytes(body)
 
 
-def _feature_loop(chat_ref, settings, stop):
-    """Fetch once now (retrying once), then again with the key's bucket once
-    keys load, retrying with a backoff that grows to the refresh interval,
-    and re-check every refresh interval with a fetch that can only turn
-    flags off. Ends when ``stop`` is set."""
-    endpoint, timeout, refresh, key_poll = settings
-    max_backoff = max(refresh, 1.0)
-    chat = chat_ref()
-    if chat is None:
-        return
-    _fetch_features(chat, endpoint, timeout, False) or stop.is_set() or _fetch_features(
-        chat, endpoint, timeout, False
-    )
-    del chat
-    next_recheck = _time.monotonic() + refresh
-    retry_at = 0.0
-    backoff = 1.0
-    while not stop.is_set():
-        chat = chat_ref()
-        if chat is None:
-            return
-        keyed = False
-        try:
-            now = _time.monotonic()
-            if chat._feature_refetch_due():
-                if now >= retry_at:
-                    if _fetch_features(chat, endpoint, timeout, False):
-                        backoff = 1.0
-                        next_recheck = now + refresh
-                    else:
-                        retry_at = now + backoff
-                        backoff = min(backoff * 2, max_backoff)
-            elif refresh and now >= next_recheck:
-                _fetch_features(chat, endpoint, timeout, True)
-                next_recheck = now + refresh
-            keyed = chat._feature_bucket() is not None and not chat._feature_refetch_due()
-        except Exception:
-            pass
-        del chat
-        if keyed and not refresh:
-            return
-        # Until a response for the key's bucket applies, watch for keys to
-        # load; afterwards, wake only for the re-check.
-        wait = max(0.0, next_recheck - _time.monotonic()) if keyed else key_poll
-        if stop.wait(wait):
-            return
+_native._feature_set_waker(_FeatureDriver().wake)
 
 
 class QuickReplyOption(TypedDict, total=False):

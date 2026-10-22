@@ -895,7 +895,7 @@ namespace ChatXdk.Tests
         /// verifies, and return its payload.</summary>
         private static SendPayload SendFiles(Chat chat, SdkVectors v, string text, params AttachmentDescriptor[] attachments)
         {
-            chat.ApplyFeatureConfig("{\"features\":{\"v1_send\":true}}", chat.FeatureBucket());
+            FeatureTestEnvironment.EnableV1Send(chat);
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, text)
             {
                 ConversationKey = Convert.FromBase64String(v.ConversationKeyB64),

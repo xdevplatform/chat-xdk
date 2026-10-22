@@ -57,14 +57,6 @@ namespace ChatXdk
         private ChatHandle* _handle;
         private bool _disposed;
 
-        // Orders the feature task's native calls against the calls that take the
-        // handle exclusively (Setup, Unlock, Delete, ChangePin, UpdateConfig,
-        // SetRejectUnverified) and against freeing it.
-        private readonly object _exclusive = new();
-
-        // Stops the task that fetches this instance's feature switches.
-        private CancellationTokenSource? _featureStop;
-
         // Shared JSON options: ignore nulls on write. Property names are
         // snake_case via explicit [JsonPropertyName] attributes on each DTO,
         // not a naming policy here.
@@ -79,19 +71,14 @@ namespace ChatXdk
         /// <exception cref="InvalidOperationException">
         /// Thrown if the native library fails to initialise (e.g. missing shared library).
         /// </exception>
-        public Chat() : this(FeatureSwitches.Options.Default())
-        {
-        }
-
-        // Tests pass their own feature endpoint and shorter timings.
-        internal Chat(FeatureSwitches.Options featureOptions)
+        public Chat()
         {
             _handle = NativeMethods.chat_xdk_new();
             if (_handle == null)
                 throw new InvalidOperationException(
                     "chat_xdk_new() returned NULL — ensure the native library " +
                     "(chat_xdk_dotnet.dylib / .so / .dll) is on the library search path.");
-            _featureStop = FeatureSwitches.Start(this, featureOptions);
+            FeatureDriver.Register();
         }
 
         /// <summary>
@@ -114,24 +101,15 @@ namespace ChatXdk
 
         private void Dispose(bool disposing)
         {
-            // Both the finalizer and Dispose() paths end here: stop the feature task
-            // and free the unmanaged handle. CancelAsync keeps the task's continuation
-            // off the finalizer thread.
-            var featureStop = Interlocked.Exchange(ref _featureStop, null);
-            if (disposing)
-                featureStop?.Cancel();
-            else
-                _ = featureStop?.CancelAsync();
-            lock (_exclusive)
+            // Both the finalizer and Dispose() paths end here.
+            // We only need to free the unmanaged handle; there are no managed resources.
+            if (!_disposed)
             {
-                if (!_disposed)
+                _disposed = true;
+                if (_handle != null)
                 {
-                    _disposed = true;
-                    if (_handle != null)
-                    {
-                        NativeMethods.chat_xdk_free(_handle);
-                        _handle = null;
-                    }
+                    NativeMethods.chat_xdk_free(_handle);
+                    _handle = null;
                 }
             }
         }
@@ -227,7 +205,6 @@ namespace ChatXdk
         public void SetRejectUnverified(bool reject)
         {
             ThrowIfDisposed();
-            lock (_exclusive)
                 NativeMethods.chat_xdk_set_reject_unverified(_handle, reject ? 1 : 0);
             GC.KeepAlive(this);
         }
@@ -284,102 +261,22 @@ namespace ChatXdk
             GC.KeepAlive(this);
         }
 
-        // Feature switches (GET /2/chat/features), fetched by FeatureSwitches. Not API.
-
-        /// <summary>Whether the feature switch <paramref name="name"/> is on.</summary>
-        internal bool IsEnabled(string name)
+        /// <summary>
+        /// For this repository's tests: fetch this chat's feature switches from
+        /// <paramref name="endpoint"/>, with these timings.
+        /// </summary>
+        internal void ConfigureFeatures(string endpoint, TimeSpan timeout, TimeSpan recheck, TimeSpan firstRetry)
         {
             ThrowIfDisposed();
-            var nameBytes = Utf8Z(name);
-            int enabled;
-            fixed (byte* namePtr = nameBytes)
-                enabled = NativeMethods.chat_xdk_internal_is_enabled(_handle, namePtr);
+            var endpointBytes = Utf8Z(endpoint);
+            fixed (byte* endpointPtr = endpointBytes)
+                ConsumeResult(NativeMethods.chat_xdk_internal_feature_configure(
+                    _handle,
+                    endpointPtr,
+                    (ulong)timeout.TotalMilliseconds,
+                    (ulong)recheck.TotalMilliseconds,
+                    (ulong)firstRetry.TotalMilliseconds));
             GC.KeepAlive(this);
-            return enabled == 1;
-        }
-
-        /// <summary>The bucket of the loaded identity key; null until keys load.</summary>
-        internal int? FeatureBucket()
-        {
-            ThrowIfDisposed();
-            var bucket = NativeMethods.chat_xdk_internal_feature_bucket(_handle);
-            GC.KeepAlive(this);
-            return bucket < 0 ? null : bucket;
-        }
-
-        /// <summary>Apply a <c>GET /2/chat/features</c> response body.</summary>
-        /// <exception cref="ChatXdkException">The body is not a JSON object with a
-        /// <c>features</c> object; nothing changes.</exception>
-        internal void ApplyFeatureConfig(string json, int? bucket = null, bool downgradeOnly = false)
-        {
-            ThrowIfDisposed();
-            var jsonBytes = Utf8Z(json);
-            fixed (byte* jsonPtr = jsonBytes)
-                ConsumeResult(NativeMethods.chat_xdk_internal_apply_feature_config(
-                    _handle, jsonPtr, bucket ?? -1, downgradeOnly ? 1 : 0));
-            GC.KeepAlive(this);
-        }
-
-        /// <summary>Whether keys are loaded but no response for their bucket has applied.</summary>
-        internal bool FeatureRefetchDue()
-        {
-            ThrowIfDisposed();
-            var due = NativeMethods.chat_xdk_internal_feature_refetch_due(_handle);
-            GC.KeepAlive(this);
-            return due == 1;
-        }
-
-        // The feature task's entry points: serialized against the exclusive calls and
-        // Dispose, and inert once disposed.
-
-        internal bool Disposed => Volatile.Read(ref _disposed);
-
-        internal bool TryFeatureBucket(out int bucket)
-        {
-            lock (_exclusive)
-            {
-                bucket = -1;
-                if (_disposed) return false;
-                bucket = NativeMethods.chat_xdk_internal_feature_bucket(_handle);
-                return true;
-            }
-        }
-
-        internal bool TryApplyFeatureConfig(string json, int bucket, bool downgradeOnly)
-        {
-            lock (_exclusive)
-            {
-                if (_disposed) return false;
-                var jsonBytes = Utf8Z(json);
-                FfiResult result;
-                fixed (byte* jsonPtr = jsonBytes)
-                    result = NativeMethods.chat_xdk_internal_apply_feature_config(
-                        _handle, jsonPtr, bucket, downgradeOnly ? 1 : 0);
-                try
-                {
-                    ConsumeResult(result);
-                    return true;
-                }
-                catch (ChatXdkException)
-                {
-                    return false;
-                }
-            }
-        }
-
-        internal bool FeatureRefetchDueForTask()
-        {
-            lock (_exclusive)
-                return !_disposed && NativeMethods.chat_xdk_internal_feature_refetch_due(_handle) == 1;
-        }
-
-        /// <summary>Whether a response for the loaded key's bucket has applied.</summary>
-        internal bool FeaturesKeyed()
-        {
-            lock (_exclusive)
-                return !_disposed
-                    && NativeMethods.chat_xdk_internal_feature_bucket(_handle) >= 0
-                    && NativeMethods.chat_xdk_internal_feature_refetch_due(_handle) == 0;
         }
 
         /// <summary>Clear all key material from memory without touching Juicebox.</summary>
@@ -400,7 +297,6 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             var cfg = Utf8Z(configJson);
-            lock (_exclusive)
                 fixed (byte* cfgPtr = cfg)
                     ConsumeResult(NativeMethods.chat_xdk_update_config(_handle, cfgPtr));
             GC.KeepAlive(this);
@@ -420,7 +316,6 @@ namespace ChatXdk
             var pinBytes = Utf8Z(pin);
             var cfgBytes = Utf8Z(configJson);
             string json;
-            lock (_exclusive)
                 fixed (byte* pinPtr = pinBytes)
                 fixed (byte* cfgPtr = cfgBytes)
                     json = ConsumeResult(NativeMethods.chat_xdk_setup(_handle, pinPtr, cfgPtr));
@@ -439,7 +334,6 @@ namespace ChatXdk
             ThrowIfDisposed();
             var pinBytes = Utf8Z(pin);
             var cfgBytes = Utf8Z(configJson);
-            lock (_exclusive)
                 fixed (byte* pinPtr = pinBytes)
                 fixed (byte* cfgPtr = cfgBytes)
                     ConsumeResult(NativeMethods.chat_xdk_unlock(_handle, pinPtr, cfgPtr));
@@ -453,7 +347,6 @@ namespace ChatXdk
         public void Delete()
         {
             ThrowIfDisposed();
-            lock (_exclusive)
                 ConsumeResult(NativeMethods.chat_xdk_delete(_handle));
             GC.KeepAlive(this);
         }
@@ -464,7 +357,6 @@ namespace ChatXdk
             ThrowIfDisposed();
             var oldBytes = Utf8Z(oldPin);
             var newBytes = Utf8Z(newPin);
-            lock (_exclusive)
                 fixed (byte* oldPtr = oldBytes)
                 fixed (byte* newPtr = newBytes)
                     ConsumeResult(NativeMethods.chat_xdk_change_pin(_handle, oldPtr, newPtr));

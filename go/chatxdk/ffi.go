@@ -8,17 +8,26 @@ package chatxdk
 
 // Internal entry points for this package's feature switches. They are left
 // out of chat_xdk.h because they are not part of the C API.
-int32_t chat_xdk_internal_feature_bucket(const struct ChatHandle *handle);
-struct FfiResult chat_xdk_internal_apply_feature_config(const struct ChatHandle *handle,
-                                                        const char *json,
-                                                        int32_t bucket,
-                                                        int32_t downgrade_only);
-int32_t chat_xdk_internal_is_enabled(const struct ChatHandle *handle, const char *name);
-int32_t chat_xdk_internal_feature_refetch_due(const struct ChatHandle *handle);
+void chat_xdk_internal_feature_set_waker(void (*waker)(void));
+struct FfiResult chat_xdk_internal_feature_next(void);
+void chat_xdk_internal_feature_complete(uint64_t id,
+                                        int32_t status,
+                                        const uint8_t *body,
+                                        uintptr_t body_len);
+struct FfiResult chat_xdk_internal_feature_configure(const struct ChatHandle *handle,
+                                                     const char *endpoint,
+                                                     uint64_t timeout_ms,
+                                                     uint64_t recheck_ms,
+                                                     uint64_t first_retry_ms);
+struct FfiResult chat_xdk_internal_feature_set_default_endpoint(const char *endpoint);
+
+// Exported from features.go: starts a feature driver.
+extern void chatxdkFeatureWake(void);
 */
 import "C"
 import (
 	"errors"
+	"time"
 	"unsafe"
 )
 
@@ -135,29 +144,47 @@ func ffiSetCacheKeys(h handle, enabled bool) {
 	C.chat_xdk_set_cache_keys(h, v)
 }
 
-func ffiFeatureBucket(h handle) int {
-	return int(C.chat_xdk_internal_feature_bucket(h))
+func ffiFeatureSetWaker() {
+	C.chat_xdk_internal_feature_set_waker((*[0]byte)(C.chatxdkFeatureWake))
 }
 
-func ffiApplyFeatureConfig(h handle, json string, bucket int, downgradeOnly bool) error {
-	c := C.CString(json)
-	defer C.free(unsafe.Pointer(c))
-	d := C.int32_t(0)
-	if downgradeOnly {
-		d = 1
+// ffiFeatureNext waits until a feature GET is due and returns it as JSON, or
+// "" once no chat needs one.
+func ffiFeatureNext() (string, error) {
+	return ffiResult(C.chat_xdk_internal_feature_next())
+}
+
+func ffiFeatureComplete(id uint64, status int, body []byte) {
+	var p *C.uint8_t
+	if len(body) > 0 {
+		p = (*C.uint8_t)(unsafe.Pointer(&body[0]))
 	}
-	_, err := ffiResult(C.chat_xdk_internal_apply_feature_config(h, c, C.int32_t(bucket), d))
+	C.chat_xdk_internal_feature_complete(C.uint64_t(id), C.int32_t(status), p, C.uintptr_t(len(body)))
+}
+
+func ffiFeatureConfigure(h handle, endpoint string, timeout, recheck, firstRetry time.Duration) error {
+	c := C.CString(endpoint)
+	defer C.free(unsafe.Pointer(c))
+	_, err := ffiResult(C.chat_xdk_internal_feature_configure(
+		h, c,
+		C.uint64_t(timeout.Milliseconds()),
+		C.uint64_t(recheck.Milliseconds()),
+		C.uint64_t(firstRetry.Milliseconds()),
+	))
 	return err
 }
 
-func ffiIsEnabled(h handle, name string) int {
-	c := C.CString(name)
+// ffiFeatureSetDefaultEndpoint sets the endpoint of every chat that does not
+// set its own; "" for the X API's.
+func ffiFeatureSetDefaultEndpoint(endpoint string) error {
+	if endpoint == "" {
+		_, err := ffiResult(C.chat_xdk_internal_feature_set_default_endpoint(nil))
+		return err
+	}
+	c := C.CString(endpoint)
 	defer C.free(unsafe.Pointer(c))
-	return int(C.chat_xdk_internal_is_enabled(h, c))
-}
-
-func ffiFeatureRefetchDue(h handle) int {
-	return int(C.chat_xdk_internal_feature_refetch_due(h))
+	_, err := ffiResult(C.chat_xdk_internal_feature_set_default_endpoint(c))
+	return err
 }
 
 func ffiSetSigningKeys(h handle, signingKeysJSON string) error {

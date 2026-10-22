@@ -73,9 +73,9 @@ pub struct ChatCore {
     /// Populated only by [`Self::set_signing_keys`] — never from event
     /// contents.
     signing_key_cache: std::sync::RwLock<Vec<SigningKeyEntry>>,
-    /// Feature switches from `GET /2/chat/features`; all off until a
-    /// response applies.
-    features: std::sync::RwLock<crate::features::FeatureState>,
+    /// This instance's feature switches from `GET /2/chat/features`; all off
+    /// until an answer turns them on.
+    features: std::sync::Mutex<crate::features::ChatFeatures>,
 }
 
 /// A cached conversation key pinned to its verified version.
@@ -110,7 +110,7 @@ impl ChatCore {
             cache_keys: std::sync::atomic::AtomicBool::new(false),
             conversation_key_cache: std::sync::RwLock::new(HashMap::new()),
             signing_key_cache: std::sync::RwLock::new(Vec::new()),
-            features: std::sync::RwLock::new(Default::default()),
+            features: std::sync::Mutex::new(Default::default()),
         }
     }
 
@@ -462,13 +462,10 @@ impl ChatCore {
         self.keypair_manager.clear();
     }
 
-    // Feature switches. The language bindings fetch `GET /2/chat/features`
-    // and apply it through `crate::bindings`; none of this is public API.
+    // Feature switches (see `crate::features`); none of this is public API.
 
     /// The bucket `GET /2/chat/features` evaluates this instance's flags for,
     /// derived from the loaded identity public key; `None` until keys load.
-    /// It is sent as the request's `bucket` query parameter. Without one the
-    /// server buckets the request by the caller's IP.
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
     pub(crate) fn feature_bucket(&self) -> Option<u16> {
         let identity = self.keypair_manager.get_identity_keypair().ok()?;
@@ -476,55 +473,55 @@ impl ChatCore {
         Some(crate::features::bucket_for_public_key(&spki))
     }
 
-    /// Apply a `GET /2/chat/features` response body.
-    ///
-    /// `bucket` is the bucket the request carried, or `None` when it carried
-    /// none. `FeatureApply::Full` replaces the flags;
-    /// `FeatureApply::DowngradeOnly` can only turn flags off. A body that is
-    /// not a JSON object with a `features` object is an error and changes
-    /// nothing.
-    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn apply_feature_config(
-        &self,
-        json: &str,
-        mode: crate::features::FeatureApply,
-        bucket: Option<u16>,
-    ) -> Result<(), SdkError> {
-        let flags = crate::features::parse_features(json)?;
-        self.features
-            .write()
+    /// Whether the feature switch `name` is on for this instance. Asking is
+    /// what joins the process's feature-switch schedule, so only a send asks.
+    pub(crate) fn feature_enabled(&self, name: &str) -> bool {
+        #[cfg(feature = "bindings")]
+        let bucket = self.feature_bucket();
+        #[cfg(not(feature = "bindings"))]
+        let bucket = None;
+        let (enabled, wake) = self
+            .features
+            .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .apply(flags, mode, bucket.is_some());
-        Ok(())
+            .enabled(bucket, name);
+        crate::features::wake(wake);
+        enabled
     }
 
-    /// Whether the feature switch `name` is on. Off for a name the last
-    /// response did not turn on, before any response applies, and while
-    /// [`Self::feature_refetch_due`] holds.
-    pub(crate) fn is_enabled(&self, name: &str) -> bool {
-        let has_keys = self.keypair_manager.has_keypair();
+    /// Fetch this instance's feature switches from `endpoint`, with `timings`.
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn configure_features(&self, endpoint: &str, timings: crate::features::Timings) {
         self.features
-            .read()
+            .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .is_enabled(name, has_keys)
+            .configure(endpoint, timings);
     }
 
-    /// Whether keys are loaded but no response to a request carrying their
-    /// bucket has applied. The flags must then be fetched with
-    /// [`Self::feature_bucket`] and applied with `FeatureApply::Full`; every
-    /// flag reads off until they are.
+    /// Stop taking part in the feature-switch fetch, keeping the switches'
+    /// current values.
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn feature_refetch_due(&self) -> bool {
-        let has_keys = self.keypair_manager.has_keypair();
-        self.features
-            .read()
+    pub(crate) fn release_features(&self) {
+        let wake = self
+            .features
+            .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .refetch_due(has_keys)
+            .release();
+        crate::features::wake(wake);
+    }
+
+    /// Read exactly `on` as on from now on, without any fetch.
+    #[cfg(test)]
+    pub(crate) fn force_features(&self, on: &[&str]) {
+        self.features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .force(on);
     }
 
     /// The wire format sends use: v1 while `v1_send` is on, else v0.
     fn send_version(&self) -> crate::pipeline::SendVersion {
-        if self.is_enabled(crate::features::V1_SEND) {
+        if self.feature_enabled(crate::features::V1_SEND) {
             crate::pipeline::SendVersion::V1
         } else {
             crate::pipeline::SendVersion::V0

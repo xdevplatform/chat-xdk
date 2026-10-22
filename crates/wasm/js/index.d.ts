@@ -1298,9 +1298,10 @@ export declare class ChatWithJuicebox implements ChatCrypto {
 
   /**
    * Release the WASM-side crypto engine: clears key material (`lock()`),
-   * stops this instance's background feature-switch fetch, and frees the
-   * underlying WASM object. The instance must not be used afterwards. When
-   * reusing the instance, `lock()` alone suffices for key hygiene.
+   * ends this instance's part in the background feature-switch fetch, and
+   * frees the underlying WASM object. The instance must not be used
+   * afterwards. When reusing the instance, `lock()` alone suffices for key
+   * hygiene.
    */
   free(): void;
 }

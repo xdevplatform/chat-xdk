@@ -7,7 +7,6 @@ use super::test_support::{
 };
 use super::*;
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
-use crate::features::FeatureApply;
 use crate::thrift::event::{MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail};
 use crate::thrift::product::{
     MessageAttachment as ThriftAttachment, MessageEntryContents as Contents,
@@ -154,9 +153,99 @@ fn the_v0_signature_covers_the_0_5_payload() {
         .unwrap());
 }
 
+/// A fresh endpoint, so tests running at once never share a schedule.
+#[cfg(feature = "bindings")]
+fn own_endpoint(core: &ChatCore) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let endpoint = format!(
+        "https://features.test/{}/2/chat/features",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    core.configure_features(&endpoint, crate::features::Timings::default());
+    endpoint
+}
+
+#[cfg(feature = "bindings")]
+#[test]
+fn the_first_send_asks_for_its_key_bucket_and_v1_starts_with_the_answer() {
+    use crate::features::shared;
+    let party = author();
+    let endpoint = own_endpoint(&party.core);
+    let bucket = party.core.feature_bucket().unwrap();
+    let ckey = key(3);
+    assert_eq!(
+        shared::subscribers(&endpoint, bucket),
+        0,
+        "keys alone ask for nothing"
+    );
+
+    let first = party
+        .core
+        .encrypt_message(&message_params("first", &ckey))
+        .unwrap();
+    assert_v0(&party, &ckey, "before the answer", &first);
+    assert_eq!(shared::subscribers(&endpoint, bucket), 1);
+
+    assert!(shared::answer(
+        &endpoint,
+        bucket,
+        200,
+        r#"{"features":{"v1_send":true}}"#
+    ));
+    let second = party
+        .core
+        .encrypt_message(&message_params("second", &ckey))
+        .unwrap();
+    assert_v1(&party, &ckey, "after the answer", &second);
+    assert_eq!(shared::subscribers(&endpoint, bucket), 1, "one per chat");
+}
+
+#[cfg(feature = "bindings")]
+#[test]
+fn chats_with_one_key_share_one_answer_and_leave_when_dropped() {
+    use crate::features::shared;
+    let party = author();
+    let endpoint = own_endpoint(&party.core);
+    let twin = ChatCore::new();
+    twin.import_keys(&ImportKeysParams::new(
+        party.core.export_keys().unwrap().to_vec(),
+    ))
+    .unwrap();
+    twin.set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
+    twin.configure_features(&endpoint, crate::features::Timings::default());
+    let bucket = party.core.feature_bucket().unwrap();
+    assert_eq!(twin.feature_bucket(), Some(bucket));
+
+    let ckey = key(3);
+    party
+        .core
+        .encrypt_message(&message_params("ask", &ckey))
+        .unwrap();
+    twin.encrypt_message(&message_params("ask", &ckey)).unwrap();
+    assert_eq!(shared::subscribers(&endpoint, bucket), 2);
+
+    assert!(shared::answer(
+        &endpoint,
+        bucket,
+        200,
+        r#"{"features":{"v1_send":true}}"#
+    ));
+    for core in [&party.core, &twin] {
+        let payload = core
+            .encrypt_message(&message_params("shared", &ckey))
+            .unwrap();
+        assert_eq!(payload.signature_info.signature_version, "10");
+    }
+    drop(twin);
+    assert_eq!(shared::subscribers(&endpoint, bucket), 1);
+}
+
+#[cfg(feature = "bindings")]
 #[test]
 fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
-    let party = author();
+    use crate::features::shared;
     let ckey = key(3);
     for body in [
         r#"{"features":{}}"#,
@@ -165,11 +254,14 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
         r#"{"features":{"v1_send":1}}"#,
         r#"{"features":{"other":true}}"#,
     ] {
+        let party = author();
+        let endpoint = own_endpoint(&party.core);
         party
             .core
-            .apply_feature_config(body, FeatureApply::Full, Some(1))
+            .encrypt_message(&message_params("ask", &ckey))
             .unwrap();
-        assert!(!party.core.is_enabled(crate::features::V1_SEND), "{body}");
+        let bucket = party.core.feature_bucket().unwrap();
+        assert!(shared::answer(&endpoint, bucket, 200, body));
         let payload = party
             .core
             .encrypt_message(&message_params("hi", &ckey))
@@ -178,88 +270,108 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
     }
 }
 
+#[cfg(feature = "bindings")]
 #[test]
-fn an_unparsable_response_changes_nothing() {
+fn a_failed_request_sends_v0() {
+    use crate::features::shared;
     let party = author();
-    enable_v1_send(&party.core);
-    for body in [
-        "",
-        "<html>",
-        r#"{"v1_send":false}"#,
-        r#"{"features":false}"#,
-    ] {
-        assert!(party
-            .core
-            .apply_feature_config(body, FeatureApply::DowngradeOnly, Some(1))
-            .is_err());
-        assert!(party.core.is_enabled(crate::features::V1_SEND), "{body}");
-    }
-}
-
-#[test]
-fn a_recheck_turns_v1_send_off_and_never_back_on() {
-    let party = author();
+    let endpoint = own_endpoint(&party.core);
     let ckey = key(3);
-    enable_v1_send(&party.core);
     party
         .core
-        .apply_feature_config(
-            r#"{"features":{"v1_send":false}}"#,
-            FeatureApply::DowngradeOnly,
-            Some(1),
-        )
+        .encrypt_message(&message_params("ask", &ckey))
         .unwrap();
+    let bucket = party.core.feature_bucket().unwrap();
+    assert!(shared::answer(
+        &endpoint,
+        bucket,
+        503,
+        r#"{"features":{"v1_send":true}}"#
+    ));
     let payload = party
         .core
-        .encrypt_message(&message_params("after the kill switch", &ckey))
+        .encrypt_message(&message_params("hi", &ckey))
         .unwrap();
-    assert_v0(&party, &ckey, "after downgrade", &payload);
-
-    party
-        .core
-        .apply_feature_config(
-            r#"{"features":{"v1_send":true}}"#,
-            FeatureApply::DowngradeOnly,
-            Some(1),
-        )
-        .unwrap();
-    assert!(!party.core.is_enabled(crate::features::V1_SEND));
+    assert_v0(&party, &ckey, "after a 503", &payload);
 }
 
+#[cfg(feature = "bindings")]
 #[test]
-fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
-    let core = ChatCore::new();
-    assert_eq!(core.feature_bucket(), None);
-    core.apply_feature_config(r#"{"features":{"v1_send":true}}"#, FeatureApply::Full, None)
-        .unwrap();
-    assert!(core.is_enabled(crate::features::V1_SEND));
-    assert!(!core.feature_refetch_due());
-
-    core.generate_keypairs().unwrap();
-    core.set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
-        .unwrap();
-    assert!(core.feature_refetch_due());
-    assert!(!core.is_enabled(crate::features::V1_SEND));
+fn a_released_chat_keeps_its_switches_and_never_asks_again() {
+    use crate::features::shared;
+    let party = author();
+    let endpoint = own_endpoint(&party.core);
     let ckey = key(3);
-    let payload = core
-        .encrypt_message(&message_params("pending", &ckey))
+    party
+        .core
+        .encrypt_message(&message_params("ask", &ckey))
         .unwrap();
-    assert_eq!(payload.signature_info.signature_version, "7");
-
-    let bucket = core.feature_bucket();
-    assert!(bucket.is_some());
-    core.apply_feature_config(
-        r#"{"features":{"v1_send":true}}"#,
-        FeatureApply::Full,
+    let bucket = party.core.feature_bucket().unwrap();
+    assert!(shared::answer(
+        &endpoint,
         bucket,
-    )
-    .unwrap();
-    assert!(!core.feature_refetch_due());
-    assert!(core.is_enabled(crate::features::V1_SEND));
-    let payload = core
-        .encrypt_message(&message_params("refetched", &ckey))
+        200,
+        r#"{"features":{"v1_send":true}}"#
+    ));
+
+    party.core.release_features();
+    assert_eq!(shared::subscribers(&endpoint, bucket), 0);
+    let payload = party
+        .core
+        .encrypt_message(&message_params("released", &ckey))
         .unwrap();
-    assert_eq!(payload.signature_info.signature_version, "10");
+    assert_v1(&party, &ckey, "released", &payload);
+    assert_eq!(shared::subscribers(&endpoint, bucket), 0);
+}
+
+#[cfg(feature = "bindings")]
+#[test]
+fn a_chat_whose_key_changes_asks_for_the_new_bucket() {
+    use crate::features::shared;
+    let party = author();
+    let endpoint = own_endpoint(&party.core);
+    let ckey = key(3);
+    party
+        .core
+        .encrypt_message(&message_params("ask", &ckey))
+        .unwrap();
+    let old_bucket = party.core.feature_bucket().unwrap();
+
+    let other = ChatCore::new();
+    other.generate_keypairs().unwrap();
+    party
+        .core
+        .import_keys(&ImportKeysParams::new(
+            other.export_keys().unwrap().to_vec(),
+        ))
+        .unwrap();
+    party
+        .core
+        .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
+        .unwrap();
+    let new_bucket = party.core.feature_bucket().unwrap();
+    party
+        .core
+        .encrypt_message(&message_params("ask again", &ckey))
+        .unwrap();
+    if new_bucket != old_bucket {
+        assert_eq!(shared::subscribers(&endpoint, old_bucket), 0);
+    }
+    assert_eq!(shared::subscribers(&endpoint, new_bucket), 1);
+}
+
+#[cfg(not(feature = "bindings"))]
+#[test]
+fn without_the_bindings_every_send_is_v0() {
+    let party = author();
+    let ckey = key(3);
+    for text in ["first", "second"] {
+        let payload = party
+            .core
+            .encrypt_message(&message_params(text, &ckey))
+            .unwrap();
+        assert_v0(&party, &ckey, text, &payload);
+    }
 }
 
 #[test]

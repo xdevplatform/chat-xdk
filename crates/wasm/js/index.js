@@ -15,6 +15,12 @@
  * calls.
  */
 
+import {
+  __featureComplete,
+  __featurePoll,
+  __featureSetWaker,
+} from './pkg/chat_xdk_wasm.js';
+
 function isNodeRuntime() {
   return (
     typeof process !== "undefined" &&
@@ -319,8 +325,6 @@ export class ChatWithJuicebox {
   // getter. Called before every Juicebox network operation so sequential use
   // of multiple instances presents the right tokens (last-armed wins).
   #armAuthTokenHook;
-  // This instance's feature-switch fetches (see startFeatureSwitches).
-  #features;
 
   constructor(
     wasmChat,
@@ -338,7 +342,7 @@ export class ChatWithJuicebox {
     this.#JuiceboxConfiguration = JuiceboxConfiguration;
     this.#JuiceboxClient = JuiceboxClientCtor;
     this.#armAuthTokenHook = armAuthTokenHook ?? (() => {});
-    this.#features = startFeatureSwitches(wasmChat);
+    registerFeatureDriver();
   }
 
   // Juicebox lifecycle (handled in this JS layer)
@@ -514,150 +518,38 @@ export class ChatWithJuicebox {
    * hygiene.
    */
   free() {
-    stopFeatureSwitches(this.#features);
     this.#inner.lock();
     this.#inner.free();
   }
 }
 
-// Feature switches (GET /2/chat/features). Internal: every ChatWithJuicebox
-// fetches them itself, without blocking or failing, and sends stay v0 unless
-// a response turns v1_send on. Nothing here is API. The environment
-// variables read below exist for this repository's tests.
+// Feature switches (GET /2/chat/features). The wasm core decides when to fetch
+// and what an answer means; this module steps a driver when the core wakes it
+// and performs each GET the driver is handed. Nothing here is API.
 
-const FEATURES_ENDPOINT = "https://api.x.com/2/chat/features";
-const MAX_FEATURES_BODY = 64 * 1024;
+const featureDriver = { registered: false, timer: undefined };
 
-/** A non-empty environment variable in Node; undefined anywhere else. */
-function envVar(name) {
-  try {
-    return globalThis.process?.env?.[name] || undefined;
-  } catch {
-    return undefined;
-  }
+function registerFeatureDriver() {
+  if (featureDriver.registered) return;
+  featureDriver.registered = true;
+  __featureSetWaker(() => queueMicrotask(stepFeatureDriver));
 }
 
-function featureSettings() {
-  const number = (name, fallback) => {
-    const value = Number(envVar(name));
-    return Number.isFinite(value) && value >= 0 ? value : fallback;
-  };
-  return {
-    endpoint: envVar("CHAT_XDK_FEATURES_ENDPOINT") ?? FEATURES_ENDPOINT,
-    timeoutMs: number("CHAT_XDK_FEATURES_TIMEOUT_MS", 2000),
-    refreshMs: number("CHAT_XDK_FEATURES_REFRESH_SECONDS", 300) * 1000,
-    keyPollMs: number("CHAT_XDK_FEATURES_KEY_POLL_MS", 1000),
-  };
-}
-
-/**
- * Fetch the flags for `wasmChat` now (retrying once), again with the key's
- * bucket once keys load (retrying with a backoff that grows to the refresh
- * interval), and re-check them every refresh interval with a fetch that can
- * only turn flags off, until `stopFeatureSwitches`. The chat is held weakly
- * so an instance dropped without `free()` can still be collected; the
- * fetches end with it.
- */
-function startFeatureSwitches(wasmChat) {
-  const run = {
-    chat: weakRef(wasmChat),
-    settings: featureSettings(),
-    stopped: false,
-    timer: null,
-  };
-  featureLoop(run).catch(() => {});
-  return run;
-}
-
-// Its own function: a closure over `target` in startFeatureSwitches would
-// share that function's scope with the loop's catch handler and keep the
-// chat alive for as long as the loop runs.
-function weakRef(target) {
-  return typeof WeakRef === "function" ? new WeakRef(target) : { deref: () => target };
-}
-
-function stopFeatureSwitches(run) {
-  run.stopped = true;
-  clearTimeout(run.timer);
-}
-
-/**
- * `use(chat)`, or `gone` once the chat was freed or collected. The async
- * functions below reach the chat only through this, so they never hold it
- * across an await.
- */
-function withChat(run, use, gone) {
-  const chat = run.stopped ? undefined : run.chat.deref();
-  return chat === undefined ? gone : use(chat);
-}
-
-async function featureLoop(run) {
-  const { refreshMs, keyPollMs } = run.settings;
-  const maxBackoffMs = Math.max(refreshMs, 1000);
-  (await fetchFeatures(run, false)) || (await fetchFeatures(run, false));
-  let nextRecheck = Date.now() + refreshMs;
-  let retryAt = 0;
-  let backoffMs = 1000;
+/** Start every GET that is due, then sleep until the step the core asks for. */
+function stepFeatureDriver() {
+  clearTimeout(featureDriver.timer);
+  featureDriver.timer = undefined;
   for (;;) {
-    let keyed = false;
-    try {
-      const now = Date.now();
-      if (withChat(run, (chat) => chat.__featureRefetchDue(), false)) {
-        if (now >= retryAt) {
-          if (await fetchFeatures(run, false)) {
-            backoffMs = 1000;
-            nextRecheck = Date.now() + refreshMs;
-          } else {
-            retryAt = Date.now() + backoffMs;
-            backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-          }
-        }
-      } else if (refreshMs > 0 && now >= nextRecheck) {
-        await fetchFeatures(run, true);
-        nextRecheck = Date.now() + refreshMs;
-      }
-      keyed = withChat(
-        run,
-        (chat) => chat.__featureBucket() !== undefined && !chat.__featureRefetchDue(),
-        false,
-      );
-    } catch {
-      // A failed step changes nothing; the next one retries.
+    const step = __featurePoll();
+    if (step === undefined) return;
+    if (step.waitMs !== undefined) {
+      featureDriver.timer = unrefTimer(setTimeout(stepFeatureDriver, step.waitMs));
+      return;
     }
-    if (!withChat(run, () => true, false) || (keyed && refreshMs <= 0)) return;
-    // Until a response for the key's bucket applies, watch for keys to load;
-    // afterwards, wake only for the re-check.
-    const waitMs = keyed ? Math.max(0, nextRecheck - Date.now()) : keyPollMs;
-    await new Promise((resolve) => {
-      run.timer = unrefTimer(setTimeout(resolve, waitMs));
-    });
-  }
-}
-
-/** Fetch the flags for the chat's bucket and apply them; true on success. */
-async function fetchFeatures(run, downgradeOnly) {
-  const bucket = withChat(run, (chat) => chat.__featureBucket() ?? null, undefined);
-  if (bucket === undefined) return false;
-  const url = featuresUrl(run.settings.endpoint, bucket);
-  const body = await sharedFeatures(url, run.settings.timeoutMs);
-  if (body === null) return false;
-  try {
-    return withChat(
-      run,
-      (chat) => {
-        chat.__applyFeatureConfig(body, bucket ?? undefined, downgradeOnly);
-        return true;
-      },
-      false,
+    getFeatures(step.url, step.timeoutMs, step.maxBytes).then(({ status, body }) =>
+      __featureComplete(step.id, status, body),
     );
-  } catch {
-    return false;
   }
-}
-
-function featuresUrl(endpoint, bucket) {
-  if (bucket === null) return endpoint;
-  return `${endpoint}${endpoint.includes("?") ? "&" : "?"}bucket=${bucket}`;
 }
 
 /** In Node, keep a pending timer from holding the process open. */
@@ -666,26 +558,15 @@ function unrefTimer(timer) {
   return timer;
 }
 
-/** Feature requests in flight, by URL. */
-const featureRequests = new Map();
+const NO_RESPONSE = { status: 0, body: new Uint8Array(0) };
 
 /**
- * The body for `url`, from the request another chat has in flight for it or
- * else from a new one, so chats that ask at once share a request.
+ * GET `url` within `timeoutMs`: its status and body, read to its end or to
+ * one byte past `maxBytes`. Status 0 when no complete response arrived.
  */
-function sharedFeatures(url, timeoutMs) {
-  let body = featureRequests.get(url);
-  if (!body) {
-    body = getFeatures(url, timeoutMs).finally(() => featureRequests.delete(url));
-    featureRequests.set(url, body);
-  }
-  return body;
-}
-
-/** The body of a 200 response from `url`, or null on any failure. */
-function getFeatures(url, timeoutMs) {
+function getFeatures(url, timeoutMs, maxBytes) {
   const http = nodeHttpModule(url);
-  return http ? getWithNode(http, url, timeoutMs) : getWithFetch(url, timeoutMs);
+  return http ? getWithNode(http, url, timeoutMs, maxBytes) : getWithFetch(url, timeoutMs, maxBytes);
 }
 
 /**
@@ -705,51 +586,47 @@ function nodeHttpModule(url) {
 
 /**
  * GET `url` with Node's http module. Its socket and timer are unref'd, so a
- * pending request never keeps the process alive, and a body is dropped as
- * soon as it grows past the cap.
+ * pending request never keeps the process alive.
  */
-function getWithNode(http, url, timeoutMs) {
+function getWithNode(http, url, timeoutMs, maxBytes) {
   return new Promise((resolve) => {
     let settled = false;
     let req = null;
-    const finish = (body) => {
+    const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       req?.destroy();
-      resolve(body);
+      resolve(result);
     };
-    const timer = unrefTimer(setTimeout(() => finish(null), timeoutMs));
+    const timer = unrefTimer(setTimeout(() => finish(NO_RESPONSE), timeoutMs));
     try {
-      req = http.get(
-        url,
-        { headers: { Accept: "application/json" } },
-        (response) => {
-          if (response.statusCode !== 200) return finish(null);
-          const chunks = [];
-          let size = 0;
-          response.on("data", (chunk) => {
-            size += chunk.length;
-            if (size > MAX_FEATURES_BODY) finish(null);
-            else chunks.push(chunk);
-          });
-          response.on("end", () => finish(globalThis.Buffer.concat(chunks).toString("utf8")));
-          response.on("error", () => finish(null));
-        },
-      );
+      req = http.get(url, { headers: { Accept: "application/json" } }, (response) => {
+        const chunks = [];
+        let size = 0;
+        const done = () =>
+          finish({ status: response.statusCode, body: new Uint8Array(globalThis.Buffer.concat(chunks)) });
+        response.on("data", (chunk) => {
+          chunks.push(chunk.subarray(0, maxBytes + 1 - size));
+          size += chunk.length;
+          if (size > maxBytes) done();
+        });
+        response.on("end", done);
+        response.on("error", () => finish(NO_RESPONSE));
+      });
       req.on("socket", (socket) => socket.unref());
-      req.on("error", () => finish(null));
+      req.on("error", () => finish(NO_RESPONSE));
     } catch {
-      finish(null);
+      finish(NO_RESPONSE);
     }
   });
 }
 
 /**
- * GET `url` with `fetch`, where Node's http module is out of reach. The
- * timeout covers reading the body too.
+ * GET `url` with `fetch`: the browser's, or Node's where its http module is
+ * out of reach. The timeout covers reading the body too.
  */
-async function getWithFetch(url, timeoutMs) {
+async function getWithFetch(url, timeoutMs, maxBytes) {
   const request = new AbortController();
   const timer = unrefTimer(setTimeout(() => request.abort(), timeoutMs));
   try {
@@ -757,41 +634,37 @@ async function getWithFetch(url, timeoutMs) {
       headers: { Accept: "application/json" },
       signal: request.signal,
     });
-    if (response.status !== 200) return null;
-    return await readCappedBody(response);
+    return { status: response.status, body: await readCappedBody(response, maxBytes) };
   } catch {
-    return null;
+    return NO_RESPONSE;
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** The body as text, or null once it grows past the cap. */
-async function readCappedBody(response) {
+/** The body, read to its end or to one byte past `maxBytes`. */
+async function readCappedBody(response, maxBytes) {
   const reader = response.body?.getReader();
   if (!reader) {
-    const body = new Uint8Array(await response.arrayBuffer());
-    return body.byteLength > MAX_FEATURES_BODY ? null : new TextDecoder().decode(body);
+    return new Uint8Array(await response.arrayBuffer()).subarray(0, maxBytes + 1);
   }
   const chunks = [];
   let size = 0;
-  for (;;) {
+  while (size <= maxBytes) {
     const { done, value } = await reader.read();
     if (done) break;
-    size += value.byteLength;
-    if (size > MAX_FEATURES_BODY) {
-      reader.cancel().catch(() => {});
-      return null;
-    }
     chunks.push(value);
+    size += value.byteLength;
   }
-  const body = new Uint8Array(size);
+  if (size > maxBytes) reader.cancel().catch(() => {});
+  const body = new Uint8Array(Math.min(size, maxBytes + 1));
   let offset = 0;
   for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
+    const part = chunk.subarray(0, body.length - offset);
+    body.set(part, offset);
+    offset += part.length;
   }
-  return new TextDecoder().decode(body);
+  return body;
 }
 
 /**

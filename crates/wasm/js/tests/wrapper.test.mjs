@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
 import init, { Chat, bytesToBase64 } from "../pkg/chat_xdk_wasm.js";
+import { keepOffline } from "./feature_server.mjs";
 import {
   ChatWithJuicebox,
   createChat,
@@ -27,9 +28,6 @@ if (typeof globalThis.crypto === "undefined") {
   const { webcrypto } = await import("node:crypto");
   globalThis.crypto = webcrypto;
 }
-
-// Keep every chat's automatic feature fetch off the network.
-process.env.CHAT_XDK_FEATURES_ENDPOINT ??= "http://127.0.0.1:9/2/chat/features";
 
 async function loadVectors() {
   const path = new URL("../../../../tests/fixtures/sdk_vectors.json", import.meta.url);
@@ -85,6 +83,7 @@ class StubJuiceboxClient {
 async function delegationTests() {
   const wasmUrl = new URL("../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
   await init({ module_or_path: await fs.readFile(wasmUrl) });
+  keepOffline();
   const v = await loadVectors();
 
   const stubClient = new StubJuiceboxClient(new StubJuiceboxConfiguration({ realms: [] }), []);

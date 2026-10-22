@@ -11,10 +11,11 @@ include = [
 # Internal entry points for the Go package's feature switches; it declares
 # them itself. Not part of the C API.
 exclude = [
-    "chat_xdk_internal_feature_bucket",
-    "chat_xdk_internal_apply_feature_config",
-    "chat_xdk_internal_is_enabled",
-    "chat_xdk_internal_feature_refetch_due",
+    "chat_xdk_internal_feature_set_waker",
+    "chat_xdk_internal_feature_next",
+    "chat_xdk_internal_feature_complete",
+    "chat_xdk_internal_feature_configure",
+    "chat_xdk_internal_feature_set_default_endpoint",
 ]
 
 [export.rename]
