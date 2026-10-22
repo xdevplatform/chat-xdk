@@ -28,6 +28,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -461,6 +462,14 @@ names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
 `Invalid state:` prefix. If your code looks for that prefix on these errors,
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
+
+## The package bundles the linux-arm64 native library
+
+The package bundles the native library for 64-bit ARM Linux (`linux-arm64`)
+as well, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need
+no copy of their own. There's no code to change. If you shipped a library
+you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
+entry points 0.6.0 calls (see [C ABI](c-abi.md)).
 
 ## Signed read receipts
 
