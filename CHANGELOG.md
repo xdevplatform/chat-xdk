@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-To move code from 0.5.x, follow [docs/MIGRATING-0.6.md](docs/MIGRATING-0.6.md):
-it walks through each binding's changes with before/after code.
+To move code from 0.5.x, follow your binding's guide in
+[docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
+with before/after code.
 
 ### Breaking changes
 

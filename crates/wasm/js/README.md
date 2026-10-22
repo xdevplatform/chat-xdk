@@ -123,6 +123,8 @@ const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: webhookEv
 
 See the **JS** column of the unified tables in [`docs/API.md`](../../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../../docs/API.md#files-media).
 
+Moving code from 0.5.x? [docs/migrating-0.6/javascript.md](../../../docs/migrating-0.6/javascript.md) lists every change with the lines to change.
+
 ## Network access
 
 Each chat makes one kind of request itself: an anonymous
