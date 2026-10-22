@@ -19,7 +19,7 @@ change.
 - [ ] [Pass a `DecryptEventsParams` to `decrypt_events`](#decrypt_events-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass a params class to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-classes)
-- [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
@@ -241,7 +241,8 @@ prepared = chat.prepare_conversation_key_change(
 The two encoded fields carry the names of the fields of the send request,
 `POST /2/chat/conversations/{id}/messages`, so the request takes them as
 they are. Read them under those names wherever your code reads a payload,
-including code that stores payloads:
+including code that stores payloads. The request also takes the payload's
+`xdk_version`, the version of the SDK that built it:
 
 ```python
 # 0.5.x
@@ -256,6 +257,7 @@ body = {
     "message_id": payload.message_id,
     "encoded_message_create_event": payload.encoded_message_create_event,
     "encoded_message_event_signature": payload.encoded_message_event_signature,
+    "xdk_version": payload.xdk_version,
 }
 ```
 
