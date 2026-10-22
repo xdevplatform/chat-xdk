@@ -72,8 +72,7 @@ Each `Chat` reads the X API's feature switches with one anonymous request,
 - the 5-minute re-checks can only turn a switch off: a chat picks up a switch
   turning on only when it is created again.
 
-**Pending:** the X API doesn't serve this route yet. Until it does, the
-request fails and every send is v0.
+Every send is v0 until the X API turns `v1_send` on.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. `chat_xdk.Chat` is a Python subclass of
