@@ -74,8 +74,7 @@ Chats read the X API's feature switches with one anonymous request,
 - for a chat that is already sending, a re-check can only turn a switch off:
   a switch turning on reaches only chats that start sending after it.
 
-**Pending:** the X API doesn't serve this route yet. Until it does, the
-request fails and every send is v0.
+Every send is v0 until the X API turns `v1_send` on.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. Dispose each chat when you're done with
