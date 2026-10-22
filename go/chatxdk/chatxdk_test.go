@@ -305,11 +305,11 @@ func TestECIESConversationKeyRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange failed: %v", err)
 	}
-	if len(prep.ParticipantKeys) != 1 {
-		t.Fatalf("expected 1 participant key, got %d", len(prep.ParticipantKeys))
+	if len(prep.ConversationParticipantKeys) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(prep.ConversationParticipantKeys))
 	}
 
-	decrypted, err := chat.DecryptConversationKey(prep.ParticipantKeys[0].EncryptedKey)
+	decrypted, err := chat.DecryptConversationKey(prep.ConversationParticipantKeys[0].EncryptedConversationKey)
 	if err != nil {
 		t.Fatalf("DecryptConversationKey failed: %v", err)
 	}
@@ -1434,8 +1434,7 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 }
 
 // TestSendPayloadTakesTheRequestFieldNames checks that a payload marshals
-// under the send request's field names, and that one stored by 0.5.x, under
-// encrypted_content and encoded_event_signature, still unmarshals.
+// under the send request's field names and unmarshals unchanged.
 func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 	v := loadVectors(t)
 	chat := mediaSender(t, v)
@@ -1461,30 +1460,12 @@ func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 		fields["encoded_message_event_signature"] != payload.EncodedMessageEventSignature {
 		t.Errorf("payload JSON lacks the request field names: %s", data)
 	}
-	for _, old := range []string{"encrypted_content", "encoded_event_signature"} {
-		if _, present := fields[old]; present {
-			t.Errorf("payload JSON carries %s: %s", old, data)
-		}
-	}
 	var roundTrip SendPayload
 	if err := json.Unmarshal(data, &roundTrip); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !reflect.DeepEqual(roundTrip, *payload) {
 		t.Errorf("round trip changed the payload: %+v", roundTrip)
-	}
-
-	stored := `{"message_id":"mid","encrypted_content":"enc","signature":"sig",
-		"encoded_event_signature":"esig",
-		"signature_info":{"public_key_version":"1","signature_version":"7"},
-		"conversation_key_version":"1","should_notify":false}`
-	var old SendPayload
-	if err := json.Unmarshal([]byte(stored), &old); err != nil {
-		t.Fatalf("unmarshal a stored payload: %v", err)
-	}
-	if old.MessageID != "mid" || old.EncodedMessageCreateEvent != "enc" || old.Signature != "sig" ||
-		old.EncodedMessageEventSignature != "esig" || old.SignatureInfo.SignatureVersion != "7" {
-		t.Errorf("stored payload read as %+v", old)
 	}
 }
 
@@ -1521,11 +1502,26 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	if prepared.ConversationKeyVersion == "" {
 		t.Error("expected non-empty conversation_key_version")
 	}
-	if len(prepared.ParticipantKeys) != 1 {
-		t.Fatalf("expected 1 participant key, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(prepared.ConversationParticipantKeys))
 	}
-	if prepared.ParticipantKeys[0].UserID != "910002" {
-		t.Errorf("expected user_id '910002', got %q", prepared.ParticipantKeys[0].UserID)
+	if prepared.ConversationParticipantKeys[0].UserID != "910002" {
+		t.Errorf("expected user_id '910002', got %q", prepared.ConversationParticipantKeys[0].UserID)
+	}
+	// The participant keys marshal under the request's field names.
+	data, err := json.Marshal(prepared)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields struct {
+		ConversationParticipantKeys []map[string]any `json:"conversation_participant_keys"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(fields.ConversationParticipantKeys) != 1 ||
+		fields.ConversationParticipantKeys[0]["encrypted_conversation_key"] != prepared.ConversationParticipantKeys[0].EncryptedConversationKey {
+		t.Errorf("prepared change JSON lacks the request field names: %s", data)
 	}
 	if len(prepared.ActionSignatures) != 1 {
 		t.Fatalf("expected 1 action signature, got %d", len(prepared.ActionSignatures))
@@ -1536,7 +1532,7 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	}
 
 	// The encrypted key should be decryptable back to the conversation key.
-	decryptedKey, err := chat.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey)
+	decryptedKey, err := chat.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey)
 	if err != nil {
 		t.Fatalf("DecryptConversationKey (prepared) failed: %v", err)
 	}
@@ -1578,8 +1574,8 @@ func TestPrepareConversationKeyChangeDerivesOneToOneID(t *testing.T) {
 	if prepared.ConversationID != "17380288:1491585161162473473" {
 		t.Errorf("unexpected derived conversation_id: %q", prepared.ConversationID)
 	}
-	if len(prepared.ParticipantKeys) != 2 {
-		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 2 {
+		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ConversationParticipantKeys))
 	}
 }
 
@@ -1610,12 +1606,12 @@ func TestConversationKeyChangeParamsDeriveAndDecryptRoundTrip(t *testing.T) {
 	if prepared.ConversationID != "17380288:1491585161162473473" {
 		t.Errorf("unexpected derived conversation_id: %q", prepared.ConversationID)
 	}
-	if len(prepared.ParticipantKeys) != 2 {
-		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 2 {
+		t.Fatalf("expected 2 participant keys, got %d", len(prepared.ConversationParticipantKeys))
 	}
 
-	for _, pk := range prepared.ParticipantKeys {
-		decrypted, err := chat.DecryptConversationKey(pk.EncryptedKey)
+	for _, pk := range prepared.ConversationParticipantKeys {
+		decrypted, err := chat.DecryptConversationKey(pk.EncryptedConversationKey)
 		if err != nil {
 			t.Fatalf("DecryptConversationKey (%s) failed: %v", pk.UserID, err)
 		}

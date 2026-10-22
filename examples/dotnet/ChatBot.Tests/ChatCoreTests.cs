@@ -114,8 +114,8 @@ public class ChatCoreTests
         {
             new PublicKeyInput { UserId = "910002", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
         }, "conv-1");
-        Assert.Single(prepared.ParticipantKeys);
-        var decrypted = core.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey);
+        Assert.Single(prepared.ConversationParticipantKeys);
+        var decrypted = core.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
         Assert.Equal(prepared.ConversationKey, decrypted);
     }
 

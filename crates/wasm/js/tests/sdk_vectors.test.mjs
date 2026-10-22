@@ -83,7 +83,7 @@ async function main() {
     publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
     conversationId: "conv-1",
   });
-  const decryptedKey = chat.decryptConversationKey(prep.participantKeys[0].encryptedKey);
+  const decryptedKey = chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey);
   assert.deepEqual(decryptedKey, prep.conversationKey);
 
   // file fixtures use the deterministic conversation key

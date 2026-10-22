@@ -53,29 +53,6 @@ type SendPayload struct {
 	XdkVersion string `json:"xdk_version"`
 }
 
-// UnmarshalJSON also reads a payload stored by 0.5.x, which carries
-// EncodedMessageCreateEvent as encrypted_content and
-// EncodedMessageEventSignature as encoded_event_signature.
-func (p *SendPayload) UnmarshalJSON(data []byte) error {
-	type plain SendPayload
-	var stored struct {
-		plain
-		EncryptedContent      *string `json:"encrypted_content"`
-		EncodedEventSignature *string `json:"encoded_event_signature"`
-	}
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return err
-	}
-	*p = SendPayload(stored.plain)
-	if stored.EncryptedContent != nil && p.EncodedMessageCreateEvent == "" {
-		p.EncodedMessageCreateEvent = *stored.EncryptedContent
-	}
-	if stored.EncodedEventSignature != nil && p.EncodedMessageEventSignature == "" {
-		p.EncodedMessageEventSignature = *stored.EncodedEventSignature
-	}
-	return nil
-}
-
 // SignatureInfo contains metadata about the signing key used.
 type SignatureInfo struct {
 	PublicKeyVersion string `json:"public_key_version"`
@@ -84,9 +61,9 @@ type SignatureInfo struct {
 
 // EncryptedKeyForRecipient is one participant's encrypted conversation key.
 type EncryptedKeyForRecipient struct {
-	UserID           string `json:"user_id"`
-	EncryptedKey     string `json:"encrypted_key"`
-	PublicKeyVersion string `json:"public_key_version"`
+	UserID                   string `json:"user_id"`
+	EncryptedConversationKey string `json:"encrypted_conversation_key"`
+	PublicKeyVersion         string `json:"public_key_version"`
 }
 
 // SigningKeyEntry is used for signature verification in DecryptEvent and DecryptEvents.
@@ -143,10 +120,10 @@ type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey        []byte                     `json:"conversation_key"`
-	ConversationKeyVersion string                     `json:"conversation_key_version"`
-	ParticipantKeys        []EncryptedKeyForRecipient `json:"participant_keys"`
-	ActionSignatures       []ActionSignature          `json:"action_signatures"`
+	ConversationKey             []byte                     `json:"conversation_key"`
+	ConversationKeyVersion      string                     `json:"conversation_key_version"`
+	ConversationParticipantKeys []EncryptedKeyForRecipient `json:"conversation_participant_keys"`
+	ActionSignatures            []ActionSignature          `json:"action_signatures"`
 }
 
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.

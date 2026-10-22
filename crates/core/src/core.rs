@@ -582,7 +582,7 @@ impl ChatCore {
             .into_iter()
             .map(|e| EncryptedKeyForRecipient {
                 user_id: e.user_id,
-                encrypted_key: base64_encode(&e.encrypted_key),
+                encrypted_conversation_key: base64_encode(&e.encrypted_key),
                 public_key_version: e.public_key_version,
             })
             .collect())
@@ -770,7 +770,7 @@ impl ChatCore {
             conversation_id,
             conversation_key: Some(ckey),
             conversation_key_version: conversation_key_version.to_string(),
-            participant_keys,
+            conversation_participant_keys: participant_keys,
             action_signatures: vec![signature],
         })
     }
@@ -787,7 +787,7 @@ impl ChatCore {
             .iter()
             .map(|pk| crate::thrift::event::ConversationParticipantKey {
                 user_id: Some(pk.user_id.clone()),
-                encrypted_conversation_key: Some(pk.encrypted_key.clone()),
+                encrypted_conversation_key: Some(pk.encrypted_conversation_key.clone()),
                 public_key_version: Some(pk.public_key_version.clone()),
             })
             .collect();
@@ -961,7 +961,7 @@ impl ChatCore {
             conversation_id: params.conversation_id.clone(),
             conversation_key: Some(ckey),
             conversation_key_version: conversation_key_version.to_string(),
-            participant_keys,
+            conversation_participant_keys: participant_keys,
             action_signatures: vec![ckce_sig, create_sig],
         })
     }
@@ -1062,7 +1062,7 @@ impl ChatCore {
             conversation_id: params.conversation_id.clone(),
             conversation_key: Some(ckey),
             conversation_key_version: conversation_key_version.to_string(),
-            participant_keys,
+            conversation_participant_keys: participant_keys,
             action_signatures: vec![ckce_sig, member_add_sig],
         })
     }
@@ -6720,7 +6720,7 @@ mod tests {
             Some(ckey_version.to_string()),
             Some(vec![ConversationParticipantKey::new(
                 Some("910003".to_string()),
-                Some(encrypted[0].encrypted_key.clone()),
+                Some(encrypted[0].encrypted_conversation_key.clone()),
                 Some("pkv-self".to_string()),
             )]),
             None,
@@ -6905,7 +6905,7 @@ mod tests {
             }];
             core.encrypt_conversation_key_for_recipients(ckey, &recipients)
                 .unwrap()[0]
-                .encrypted_key
+                .encrypted_conversation_key
                 .clone()
         };
 
@@ -7156,7 +7156,7 @@ mod tests {
         assert_eq!(encrypted[0].user_id, "self");
 
         let decrypted = core
-            .decrypt_conversation_key(&encrypted[0].encrypted_key)
+            .decrypt_conversation_key(&encrypted[0].encrypted_conversation_key)
             .unwrap();
         assert_eq!(decrypted.encoded(), ckey.encoded());
     }
@@ -7200,8 +7200,11 @@ mod tests {
             crate::ConversationKeyChangeParams::new(input).with_identity("910004", "1");
         params.conversation_id = Some("conv-1".into());
         let result = core.prepare_conversation_key_change(&params).unwrap();
-        assert_eq!(result.participant_keys.len(), 1);
-        assert_eq!(result.participant_keys[0].public_key_version, "200");
+        assert_eq!(result.conversation_participant_keys.len(), 1);
+        assert_eq!(
+            result.conversation_participant_keys[0].public_key_version,
+            "200"
+        );
         assert!(result.conversation_key.is_some());
         assert!(!result.conversation_key_version.is_empty());
         assert_eq!(result.action_signatures.len(), 1);
@@ -8377,7 +8380,7 @@ mod tests {
             Some(ckey_version.to_string()),
             Some(vec![ConversationParticipantKey::new(
                 Some(sender_id.to_string()),
-                Some(encrypted[0].encrypted_key.clone()),
+                Some(encrypted[0].encrypted_conversation_key.clone()),
                 reg_version,
             )]),
             None,
@@ -8511,7 +8514,7 @@ mod tests {
             Some(ckey_version.to_string()),
             Some(vec![ConversationParticipantKey::new(
                 Some(sender_id.to_string()),
-                Some(encrypted[0].encrypted_key.clone()),
+                Some(encrypted[0].encrypted_conversation_key.clone()),
                 reg_version,
             )]),
             None,
@@ -8687,7 +8690,7 @@ mod tests {
                 Some("1001".to_string()),
                 Some(vec![ConversationParticipantKey::new(
                     Some("910003".to_string()),
-                    Some(encrypted[0].encrypted_key.clone()),
+                    Some(encrypted[0].encrypted_conversation_key.clone()),
                     None,
                 )]),
                 None,
@@ -8813,7 +8816,7 @@ mod tests {
             Some(version.to_string()),
             Some(vec![ConversationParticipantKey::new(
                 Some("910003".to_string()),
-                Some(encrypted[0].encrypted_key.clone()),
+                Some(encrypted[0].encrypted_conversation_key.clone()),
                 None,
             )]),
             None,
@@ -9447,7 +9450,7 @@ mod tests {
         let encrypted = core
             .encrypt_conversation_key_for_recipients(&ckey, &recipients)
             .unwrap()[0]
-            .encrypted_key
+            .encrypted_conversation_key
             .clone();
 
         let kce = ThriftCKCE::new(
