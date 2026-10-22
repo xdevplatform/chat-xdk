@@ -149,10 +149,10 @@ public sealed class Bot
 
             if (decrypted.TryGetProperty("type", out var t) && t.GetString() == "KeyChange")
             {
-                var keyVersion = decrypted.GetProperty("key_version").GetString()!;
-                foreach (var pk in decrypted.GetProperty("participant_keys").EnumerateArray())
+                var keyVersion = decrypted.GetProperty("conversation_key_version").GetString()!;
+                foreach (var pk in decrypted.GetProperty("conversation_participant_keys").EnumerateArray())
                 {
-                    var enc = pk.GetProperty("encrypted_key").GetString();
+                    var enc = pk.GetProperty("encrypted_conversation_key").GetString();
                     if (string.IsNullOrEmpty(enc)) continue;
                     try
                     {
@@ -182,7 +182,7 @@ public sealed class Bot
         var text = EventHelpers.MessageText(evt);
         if (string.IsNullOrEmpty(text)) return;
 
-        var keyVersion = evt.TryGetProperty("key_version", out var kv) ? kv.GetString() : st.LatestKeyVersion;
+        var keyVersion = evt.TryGetProperty("conversation_key_version", out var kv) ? kv.GetString() : st.LatestKeyVersion;
         if (keyVersion is null || !st.ConversationKeys.TryGetValue(keyVersion, out var convKey))
         {
             Console.Error.WriteLine($"no_conversation_key conv={conversationId}");

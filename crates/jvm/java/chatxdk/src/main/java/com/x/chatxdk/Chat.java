@@ -823,7 +823,7 @@ public final class Chat implements AutoCloseable {
      * {@link #decryptEvent} for all subsequent messages.
      *
      * @param encryptedKeyB64 Base64-encoded encrypted key from the {@code KeyChange} event
-     *     ({@code participant_keys[].encrypted_key}).
+     *     ({@code conversation_participant_keys[].encrypted_conversation_key}).
      * @return Raw 32-byte decrypted conversation key.
      */
     public byte[] decryptConversationKey(String encryptedKeyB64) {

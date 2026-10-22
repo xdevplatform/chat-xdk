@@ -259,7 +259,7 @@ public final class Types {
 
         /** The conversation key encrypted once per participant. */
         @JsonProperty("conversation_participant_keys")
-        public List<EncryptedKeyForRecipient> conversationParticipantKeys = Collections.emptyList();
+        public List<ConversationParticipantKey> conversationParticipantKeys = Collections.emptyList();
 
         /** Action signatures authenticating the change, ready to POST. */
         @JsonProperty("action_signatures")
@@ -312,17 +312,21 @@ public final class Types {
         public Map<String, String> errors = Collections.emptyMap();
     }
 
-    /** An encrypted conversation key for one recipient. */
-    public static final class EncryptedKeyForRecipient {
-        /** ID of the recipient user. */
+    /**
+     * One participant's copy of a conversation key, encrypted to their identity key: an entry of
+     * the X API's {@code conversation_participant_keys}. A prepared change carries these for its
+     * request, and a received key change carries them in its decrypted JSON.
+     */
+    public static final class ConversationParticipantKey {
+        /** ID of the participant. */
         @JsonProperty("user_id")
         public String userId = "";
 
-        /** Base64-encoded conversation key encrypted to the recipient (ECIES). */
+        /** Base64-encoded conversation key encrypted to the participant (ECIES). */
         @JsonProperty("encrypted_conversation_key")
         public String encryptedConversationKey = "";
 
-        /** Version of the recipient's public key used to encrypt the conversation key. */
+        /** Version of the participant's public key used to encrypt the conversation key. */
         @JsonProperty("public_key_version")
         public String publicKeyVersion = "";
     }

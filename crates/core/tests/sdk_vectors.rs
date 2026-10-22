@@ -221,7 +221,10 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
         .collect();
     assert_eq!(key_changes.len(), 1);
     assert!(key_changes[0].verified);
-    assert_eq!(key_changes[0].key_version, v.event_conversation_key_version);
+    assert_eq!(
+        key_changes[0].conversation_key_version,
+        v.event_conversation_key_version
+    );
 
     // Exactly one verified message with the fixture text.
     let messages: Vec<_> = result

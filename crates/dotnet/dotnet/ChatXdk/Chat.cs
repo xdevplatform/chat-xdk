@@ -892,7 +892,7 @@ namespace ChatXdk
         /// </summary>
         /// <param name="encryptedKeyB64">
         /// Base64-encoded encrypted key from the <c>KeyChange</c> event
-        /// (<c>participant_keys[].encrypted_key</c>).
+        /// (<c>conversation_participant_keys[].encrypted_conversation_key</c>).
         /// </param>
         /// <returns>Raw 32-byte decrypted conversation key.</returns>
         public byte[] DecryptConversationKey(string encryptedKeyB64)
