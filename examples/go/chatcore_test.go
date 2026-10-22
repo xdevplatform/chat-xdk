@@ -140,10 +140,10 @@ func TestConversationKeyRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
 	}
-	if len(prepared.ParticipantKeys) != 1 {
-		t.Fatalf("expected 1 participant key, got %d", len(prepared.ParticipantKeys))
+	if len(prepared.ConversationParticipantKeys) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(prepared.ConversationParticipantKeys))
 	}
-	got, err := core.DecryptConversationKey(prepared.ParticipantKeys[0].EncryptedKey)
+	got, err := core.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey)
 	if err != nil {
 		t.Fatalf("DecryptConversationKey: %v", err)
 	}

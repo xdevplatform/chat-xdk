@@ -73,9 +73,9 @@ test("conversation key prepare -> decrypt round-trip", async () => {
     ],
     conversationId: "conv-1",
   });
-  assert.equal(prepared.participantKeys.length, 1);
+  assert.equal(prepared.conversationParticipantKeys.length, 1);
   assert.equal(prepared.actionSignatures.length, 1);
-  const decrypted = core.decryptConversationKey(prepared.participantKeys[0].encryptedKey);
+  const decrypted = core.decryptConversationKey(prepared.conversationParticipantKeys[0].encryptedConversationKey);
   assert.deepEqual(Array.from(decrypted), Array.from(prepared.conversationKey));
 });
 

@@ -249,7 +249,7 @@ async function delegationTests() {
   });
   assert.equal(prep.conversationKey.length, 32);
   assert.deepEqual(
-    chat.decryptConversationKey(prep.participantKeys[0].encryptedKey),
+    chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey),
     prep.conversationKey,
   );
 

@@ -24,6 +24,7 @@ change.
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -389,9 +390,28 @@ action_signatures = [
 action_signatures = prepared["action_signatures"]
 ```
 
-A prepared change's `participant_keys` keep their shape (`user_id`,
-`encrypted_key`, `public_key_version`): map them to the key-change request's
-`conversation_participant_keys` as you do today.
+## Participant keys take the key requests' names
+
+A prepared change's participant keys carry the names of the requests that
+take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `conversation_participant_keys`, each entry with
+`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
+through as returned:
+
+```python
+# 0.5.x
+conversation_participant_keys = [
+    {
+        "user_id": key["user_id"],
+        "encrypted_conversation_key": key["encrypted_key"],
+        "public_key_version": key["public_key_version"],
+    }
+    for key in prepared["participant_keys"]
+]
+
+# 0.6.0
+conversation_participant_keys = prepared["conversation_participant_keys"]
+```
 
 ## Deletes return a `PreparedAction`
 

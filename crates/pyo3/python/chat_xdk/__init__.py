@@ -25,8 +25,6 @@ Quick Start:
     # payload.message_id, payload.encoded_message_create_event, payload.signature, etc.
 """
 
-__version__ = "0.1.0"
-
 import atexit as _atexit
 import http.client as _http_client
 import re as _re
@@ -37,6 +35,7 @@ import urllib.parse as _urllib_parse
 from typing import Optional, TypedDict
 
 from chat_xdk import _native
+from chat_xdk._native import __version__
 from chat_xdk._native import (
     Chat,
     ConversationKeyChangeParams,

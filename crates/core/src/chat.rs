@@ -972,10 +972,15 @@ mod tests {
         assert_eq!(ckey.encoded().len(), 32);
         let version: u64 = result.conversation_key_version.parse().unwrap();
         assert!(version > 1_000_000_000_000); // should be millis
-        assert_eq!(result.participant_keys.len(), 1);
-        assert_eq!(result.participant_keys[0].user_id, "910002");
-        assert_eq!(result.participant_keys[0].public_key_version, "1");
-        assert!(!result.participant_keys[0].encrypted_key.is_empty());
+        assert_eq!(result.conversation_participant_keys.len(), 1);
+        assert_eq!(result.conversation_participant_keys[0].user_id, "910002");
+        assert_eq!(
+            result.conversation_participant_keys[0].public_key_version,
+            "1"
+        );
+        assert!(!result.conversation_participant_keys[0]
+            .encrypted_conversation_key
+            .is_empty());
 
         // The change is signed.
         assert_eq!(result.action_signatures.len(), 1);
@@ -989,7 +994,9 @@ mod tests {
 
         // The encrypted key should be decryptable back to the raw key.
         let decrypted = chat
-            .decrypt_conversation_key(&result.participant_keys[0].encrypted_key)
+            .decrypt_conversation_key(
+                &result.conversation_participant_keys[0].encrypted_conversation_key,
+            )
             .unwrap();
         assert_eq!(decrypted.encoded(), ckey.encoded());
     }
@@ -1018,8 +1025,11 @@ mod tests {
         let mut params = ConversationKeyChangeParams::new(input).with_identity("910001", "1");
         params.conversation_id = Some("conv-1".into());
         let result = chat.prepare_conversation_key_change(&params).unwrap();
-        assert_eq!(result.participant_keys.len(), 1);
-        assert_eq!(result.participant_keys[0].public_key_version, "2");
+        assert_eq!(result.conversation_participant_keys.len(), 1);
+        assert_eq!(
+            result.conversation_participant_keys[0].public_key_version,
+            "2"
+        );
     }
 
     #[tokio::test]
@@ -1057,24 +1067,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.conversation_id, "17380288:1491585161162473473");
-        assert_eq!(result.participant_keys.len(), 2);
+        assert_eq!(result.conversation_participant_keys.len(), 2);
 
         let alice_entry = result
-            .participant_keys
+            .conversation_participant_keys
             .iter()
             .find(|k| k.user_id == "1491585161162473473")
             .unwrap();
         let bob_entry = result
-            .participant_keys
+            .conversation_participant_keys
             .iter()
             .find(|k| k.user_id == "17380288")
             .unwrap();
 
         let alice_decrypted = alice_chat
-            .decrypt_conversation_key(&alice_entry.encrypted_key)
+            .decrypt_conversation_key(&alice_entry.encrypted_conversation_key)
             .unwrap();
         let bob_decrypted = bob_chat
-            .decrypt_conversation_key(&bob_entry.encrypted_key)
+            .decrypt_conversation_key(&bob_entry.encrypted_conversation_key)
             .unwrap();
 
         let ckey = result.conversation_key.as_ref().unwrap();
@@ -1140,7 +1150,7 @@ mod tests {
         let result = chat.prepare_group_members_change(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g123");
-        assert_eq!(result.participant_keys.len(), 1);
+        assert_eq!(result.conversation_participant_keys.len(), 1);
         // A member add carries two signed actions: the key change and the add.
         assert_eq!(result.action_signatures.len(), 2);
         assert!(result.action_signatures[0].signature_payload.is_empty());
@@ -1180,7 +1190,7 @@ mod tests {
         let result = chat.prepare_group_create(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g123");
-        assert_eq!(result.participant_keys.len(), 1);
+        assert_eq!(result.conversation_participant_keys.len(), 1);
         // A group create carries two signed actions: the key change and create.
         assert_eq!(result.action_signatures.len(), 2);
         assert!(result.action_signatures[0].signature_payload.is_empty());
@@ -1356,7 +1366,7 @@ mod tests {
             .unwrap();
 
         let decrypted = chat
-            .decrypt_conversation_key(&encrypted_keys[0].encrypted_key)
+            .decrypt_conversation_key(&encrypted_keys[0].encrypted_conversation_key)
             .unwrap();
         assert_eq!(ckey.encoded(), decrypted.encoded());
     }

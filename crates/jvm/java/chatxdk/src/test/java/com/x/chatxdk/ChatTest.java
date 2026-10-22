@@ -548,19 +548,9 @@ class ChatTest {
             JsonNode json = ChatJson.MAPPER.valueToTree(payload);
             assertEquals(payload.encodedMessageCreateEvent, json.get("encoded_message_create_event").asText());
             assertEquals(payload.encodedMessageEventSignature, json.get("encoded_message_event_signature").asText());
-            assertFalse(json.has("encrypted_content"), json.toString());
-            assertFalse(json.has("encoded_event_signature"), json.toString());
-
-            // A payload stored by 0.5.x, under the field names it used then.
-            String stored = "{\"message_id\":\"mid\",\"encrypted_content\":\"enc\",\"signature\":\"sig\","
-                    + "\"encoded_event_signature\":\"esig\","
-                    + "\"signature_info\":{\"public_key_version\":\"1\",\"signature_version\":\"7\"},"
-                    + "\"conversation_key_version\":\"1\",\"should_notify\":false}";
-            SendPayload old = ChatJson.MAPPER.readValue(stored, SendPayload.class);
-            assertEquals("mid", old.messageId);
-            assertEquals("enc", old.encodedMessageCreateEvent);
-            assertEquals("esig", old.encodedMessageEventSignature);
-            assertEquals("7", old.signatureInfo.signatureVersion);
+            SendPayload roundTrip = ChatJson.MAPPER.treeToValue(json, SendPayload.class);
+            assertEquals(payload.encodedMessageCreateEvent, roundTrip.encodedMessageCreateEvent);
+            assertEquals(payload.encodedMessageEventSignature, roundTrip.encodedMessageEventSignature);
         }
     }
 
@@ -737,11 +727,16 @@ class ChatTest {
             byte[] convKey = prepared.conversationKey;
             assertNotNull(convKey);
             assertEquals(32, convKey.length);
-            assertEquals(1, prepared.participantKeys.size());
-            assertFalse(prepared.participantKeys.get(0).encryptedKey.isEmpty());
+            assertEquals(1, prepared.conversationParticipantKeys.size());
+            assertFalse(prepared.conversationParticipantKeys.get(0).encryptedConversationKey.isEmpty());
             assertEquals(1, prepared.actionSignatures.size());
             // Empty: the payload embeds the plaintext conversation key and is withheld.
             assertNull(prepared.actionSignatures.get(0).signaturePayload);
+            // The participant keys serialize under the request's field names.
+            JsonNode entry = ChatJson.MAPPER.valueToTree(prepared).get("conversation_participant_keys").get(0);
+            assertEquals(
+                    prepared.conversationParticipantKeys.get(0).encryptedConversationKey,
+                    entry.get("encrypted_conversation_key").asText());
         }
     }
 
@@ -871,11 +866,11 @@ class ChatTest {
             params.signingKeyVersion = "1";
             PreparedConversationChange prepared = chat.prepareConversationKeyChange(params);
             assertEquals("17380288:1491585161162473473", prepared.conversationId);
-            assertEquals(2, prepared.participantKeys.size());
-            for (EncryptedKeyForRecipient pk : prepared.participantKeys) {
+            assertEquals(2, prepared.conversationParticipantKeys.size());
+            for (EncryptedKeyForRecipient pk : prepared.conversationParticipantKeys) {
                 assertArrayEquals(
                         prepared.conversationKey,
-                        chat.decryptConversationKey(pk.encryptedKey));
+                        chat.decryptConversationKey(pk.encryptedConversationKey));
             }
         }
     }

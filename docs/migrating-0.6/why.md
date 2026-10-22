@@ -161,6 +161,21 @@ version of the SDK that built it:
 [.NET](dotnet.md#sendpayload-fields-take-the-send-requests-names),
 [C ABI](c-abi.md#the-send-payload-takes-the-send-requests-field-names).
 
+## Participant keys take the key requests' names
+
+A prepared change's participant keys are `conversation_participant_keys`,
+each entry with `encrypted_conversation_key`, the names of the requests that
+take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`), so apps send the keys as returned, as they send the action
+signatures:
+[Rust](rust.md#participant-keys-take-the-key-requests-names),
+[Python](python.md#participant-keys-take-the-key-requests-names),
+[JavaScript](javascript.md#participant-keys-take-the-key-requests-names),
+[Go](go.md#participant-keys-take-the-key-requests-names),
+[JVM](jvm.md#participant-keys-take-the-key-requests-names),
+[.NET](dotnet.md#participant-keys-take-the-key-requests-names),
+[C ABI](c-abi.md#participant-keys-take-the-key-requests-names).
+
 ## Signatures verify at versions 8 through 11
 
 Each signature carries its version, and each version signs its own payload

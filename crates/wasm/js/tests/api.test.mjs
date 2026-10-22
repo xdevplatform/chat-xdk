@@ -221,14 +221,20 @@ async function main() {
   assert.ok(prep.conversationKey instanceof Uint8Array);
   assert.equal(prep.conversationKey.length, 32);
   assert.equal(prep.conversationId, "conv-1");
-  assert.equal(prep.participantKeys.length, 1);
+  assert.equal(prep.conversationParticipantKeys.length, 1);
+  // The entries take the request's field names.
+  assert.deepEqual(Object.keys(prep.conversationParticipantKeys[0]).sort(), [
+    "encryptedConversationKey",
+    "publicKeyVersion",
+    "userId",
+  ]);
   assert.equal(prep.actionSignatures.length, 1);
   // Omitted: the payload embeds the plaintext conversation key and is withheld.
   assert.equal(prep.actionSignatures[0].signaturePayload, undefined);
   // Nested as the request's actionSignatures carry it.
   assert.equal(prep.actionSignatures[0].messageEventSignature.publicKeyVersion, "1");
   assert.equal(prep.actionSignatures[0].messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
-  const decryptedKey = chat.decryptConversationKey(prep.participantKeys[0].encryptedKey);
+  const decryptedKey = chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey);
   assert.deepEqual(decryptedKey, prep.conversationKey);
   // two prepared changes generate different keys (randomized)
   const prep2 = chat.prepareConversationKeyChange({
@@ -420,8 +426,6 @@ async function main() {
   // The payload's fields take the send request's names.
   assert.ok(payload.encodedMessageCreateEvent.length > 0);
   assert.ok(payload.encodedMessageEventSignature.length > 0);
-  assert.equal(payload.encryptedContent, undefined);
-  assert.equal(payload.encodedEventSignature, undefined);
   assert.equal(typeof payload.signature, "string");
   assert.ok(payload.signatureInfo);
   assert.equal(payload.signatureInfo.signatureVersion, "7");

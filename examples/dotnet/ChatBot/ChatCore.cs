@@ -278,21 +278,14 @@ public static class EventHelpers
     /// (snake_case field names, ready to serialize as the JSON body).
     ///
     /// Works for 1:1 key changes (one signature) and group create / member add
-    /// (two signatures). The action signatures already have the request's
-    /// shape; the participant keys take the request's field names.
+    /// (two signatures). The participant keys and action signatures already
+    /// have the request's shape.
     /// </summary>
     public static Dictionary<string, object?> PrepToRequest(PreparedConversationChange prep) =>
         new()
         {
             ["conversation_key_version"] = prep.ConversationKeyVersion,
-            ["conversation_participant_keys"] = prep.ParticipantKeys
-                .Select(pk => new Dictionary<string, object?>
-                {
-                    ["user_id"] = pk.UserId,
-                    ["encrypted_conversation_key"] = pk.EncryptedKey,
-                    ["public_key_version"] = pk.PublicKeyVersion,
-                })
-                .ToList(),
+            ["conversation_participant_keys"] = prep.ConversationParticipantKeys,
             ["action_signatures"] = prep.ActionSignatures,
         };
 }

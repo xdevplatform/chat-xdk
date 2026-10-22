@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -70,6 +71,15 @@ class TestUtilityFunctions(unittest.TestCase):
         from features_support import keep_offline
 
         keep_offline()
+
+    def test_version_is_the_release_version(self):
+        import chat_xdk
+
+        with open(os.path.join(_repo_root(), "Cargo.toml"), encoding="utf-8") as f:
+            cargo = f.read()
+        workspace = cargo[cargo.index("[workspace.package]"):]
+        version = re.search(r'^version\s*=\s*"([^"]+)"', workspace, re.M).group(1)
+        self.assertEqual(chat_xdk.__version__, version)
 
     def test_base64_roundtrip(self):
         from chat_xdk import base64_to_bytes, bytes_to_base64
@@ -688,12 +698,13 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(len(result["conversation_key"]), 32)
         self.assertIsInstance(result["conversation_key_version"], str)
 
-        self.assertIn("participant_keys", result)
-        self.assertEqual(len(result["participant_keys"]), 1)
-        entry = result["participant_keys"][0]
+        self.assertIn("conversation_participant_keys", result)
+        self.assertEqual(len(result["conversation_participant_keys"]), 1)
+        entry = result["conversation_participant_keys"][0]
+        # The entries take the request's field names.
+        self.assertEqual(set(entry), {"user_id", "encrypted_conversation_key", "public_key_version"})
         self.assertEqual(entry["user_id"], "910002")
-        self.assertTrue(entry["encrypted_key"])
-        self.assertIn("public_key_version", entry)
+        self.assertTrue(entry["encrypted_conversation_key"])
 
         self.assertEqual(len(result["action_signatures"]), 1)
         sig = result["action_signatures"][0]
@@ -733,7 +744,7 @@ class TestApiShapes(unittest.TestCase):
         )
 
         self.assertEqual(result["conversation_id"], "g123")
-        self.assertEqual(len(result["participant_keys"]), 1)
+        self.assertEqual(len(result["conversation_participant_keys"]), 1)
         # A member add emits two signed actions: the key change and the add.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
@@ -800,7 +811,7 @@ class TestApiShapes(unittest.TestCase):
         )
 
         self.assertEqual(result["conversation_id"], "g123")
-        self.assertEqual(len(result["participant_keys"]), 1)
+        self.assertEqual(len(result["conversation_participant_keys"]), 1)
         # A group create emits two signed actions: the key change and the create.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]

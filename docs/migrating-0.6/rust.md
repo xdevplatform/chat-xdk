@@ -23,6 +23,7 @@ change.
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
@@ -244,9 +245,8 @@ it. It isn't part of the send request: keep it to encrypt the message's
 files (see [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
 `SendPayload` is `#[non_exhaustive]`: code outside the SDK reads its fields
-but can't build one with a struct literal. A payload that 0.5.x serialized
-still deserializes into the new fields, with `event_b64` and `xdk_version`
-empty.
+but can't build one with a struct literal. Read payloads under the new
+names wherever your code reads one, including code that stores payloads.
 
 ## Encrypt a file from its message
 
@@ -399,9 +399,31 @@ let action_signatures: Vec<serde_json::Value> = prepared
 let action_signatures = serde_json::to_value(&prepared.action_signatures)?;
 ```
 
-A prepared change's `participant_keys` keep their shape (`user_id`,
-`encrypted_key`, `public_key_version`): map them to the key-change request's
-`conversation_participant_keys` as you do today.
+## Participant keys take the key requests' names
+
+A prepared change's participant keys carry the names of the requests that
+take them (`POST /2/chat/conversations/{id}/keys`, `/group` and
+`/{id}/members`): `conversation_participant_keys`, each entry with
+`user_id`, `encrypted_conversation_key` and `public_key_version`. Pass them
+through as returned:
+
+```rust
+// 0.5.x
+let conversation_participant_keys: Vec<serde_json::Value> = prepared
+    .participant_keys
+    .iter()
+    .map(|key| {
+        serde_json::json!({
+            "user_id": key.user_id,
+            "encrypted_conversation_key": key.encrypted_key,
+            "public_key_version": key.public_key_version,
+        })
+    })
+    .collect();
+
+// 0.6.0
+let conversation_participant_keys = &prepared.conversation_participant_keys;
+```
 
 ## Deletes return a `PreparedAction`
 

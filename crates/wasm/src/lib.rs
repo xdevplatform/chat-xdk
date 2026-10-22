@@ -987,11 +987,15 @@ fn prepared_change_to_js(
     let js_prepared: JsPreparedConversationChange = result.into();
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     let participant_keys_val = js_prepared
-        .participant_keys
+        .conversation_participant_keys
         .serialize(&serializer)
         .map_err(|e| JsError::new(&format!("Serialization failed: {:?}", e)))?;
-    js_sys::Reflect::set(&obj, &"participantKeys".into(), &participant_keys_val)
-        .map_err(|_| JsError::new("Failed to set participantKeys"))?;
+    js_sys::Reflect::set(
+        &obj,
+        &"conversationParticipantKeys".into(),
+        &participant_keys_val,
+    )
+    .map_err(|_| JsError::new("Failed to set conversationParticipantKeys"))?;
     let action_signatures_val = js_prepared
         .action_signatures
         .serialize(&serializer)
