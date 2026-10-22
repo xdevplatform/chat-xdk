@@ -216,3 +216,8 @@ empty key cache. Callers can tell a bad argument from missing setup:
 - Rust's `SendPayload` is `#[non_exhaustive]`, so a field can be added to it
   without breaking code that reads it
   ([Rust](rust.md#sendpayload-fields-take-the-send-requests-names)).
+- The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
+  so apps there need no copy of their own; a library built for 0.5.x doesn't
+  export the entry points 0.6.0 calls
+  ([JVM](jvm.md#the-jar-bundles-the-linux-arm64-native-library),
+  [.NET](dotnet.md#the-package-bundles-the-linux-arm64-native-library)).
