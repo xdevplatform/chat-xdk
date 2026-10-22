@@ -2499,7 +2499,19 @@ impl FileDecryptor {
 
 static FEATURE_WAKER: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
 
+thread_local! {
+    /// Whether this thread is inside one of the driver's own calls, and
+    /// whether that call asked to wake the driver. The driver's threads are
+    /// daemon threads, so they must not run the Python waker inside native
+    /// code: their calls report the wake, and the driver acts on it in Python.
+    static DRIVER_CALL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
 fn wake_feature_driver() {
+    if DRIVER_CALL.with(|call| call.get().is_some()) {
+        DRIVER_CALL.with(|call| call.set(Some(true)));
+        return;
+    }
     Python::attach(|py| {
         if let Some(waker) = FEATURE_WAKER.get(py) {
             let _ = waker.call0(py);
@@ -2507,9 +2519,24 @@ fn wake_feature_driver() {
     });
 }
 
+/// Run `call` as one of the driver's own calls: the result, and whether it
+/// asked to wake the driver.
+fn driver_call<T>(call: impl FnOnce() -> T) -> (T, bool) {
+    struct Leave;
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            DRIVER_CALL.with(|call| call.set(None));
+        }
+    }
+    DRIVER_CALL.with(|call| call.set(Some(false)));
+    let _leave = Leave;
+    let out = call();
+    (out, DRIVER_CALL.with(|call| call.get() == Some(true)))
+}
+
 /// Register the callable the core calls to start the feature driver, or to
-/// have it poll again: from inside a send, a reported result, or a chat
-/// leaving, always with the interpreter lock held.
+/// have it poll again: from inside a send or a chat leaving, always with the
+/// interpreter lock held.
 #[pyfunction]
 #[pyo3(name = "_feature_set_waker")]
 fn feature_set_waker(py: Python<'_>, waker: Py<PyAny>) {
@@ -2523,27 +2550,35 @@ fn feature_set_waker(py: Python<'_>, waker: Py<PyAny>) {
 #[pyfunction]
 #[pyo3(name = "_feature_poll")]
 fn feature_poll(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    Ok(match bindings::poll_fetch() {
-        bindings::Poll::Fetch(fetch) => (
-            fetch.id,
-            fetch.url,
-            fetch.timeout_ms as f64 / 1000.0,
-            fetch.max_bytes,
-        )
-            .into_pyobject(py)?
-            .into_any()
-            .unbind(),
-        bindings::Poll::Wait(ms) => (ms as f64 / 1000.0).into_pyobject(py)?.into_any().unbind(),
-        bindings::Poll::Idle => py.None(),
-    })
+    let (step, woken) = driver_call(|| -> PyResult<Py<PyAny>> {
+        Ok(match bindings::poll_fetch() {
+            bindings::Poll::Fetch(fetch) => (
+                fetch.id,
+                fetch.url,
+                fetch.timeout_ms as f64 / 1000.0,
+                fetch.max_bytes,
+            )
+                .into_pyobject(py)?
+                .into_any()
+                .unbind(),
+            bindings::Poll::Wait(ms) => (ms as f64 / 1000.0).into_pyobject(py)?.into_any().unbind(),
+            bindings::Poll::Idle => py.None(),
+        })
+    });
+    let step = step?;
+    if woken && !step.bind(py).is_instance_of::<pyo3::types::PyTuple>() {
+        return Ok(0.0f64.into_pyobject(py)?.into_any().unbind());
+    }
+    Ok(step)
 }
 
 /// Report the result of the feature GET ``fetch_id``: its HTTP status, 0 when
-/// no complete response arrived, and its body.
+/// no complete response arrived, and its body. True when the driver should
+/// poll again.
 #[pyfunction]
 #[pyo3(name = "_feature_complete")]
-fn feature_complete(fetch_id: u64, status: u16, body: &[u8]) {
-    bindings::complete_fetch(fetch_id, status, body);
+fn feature_complete(fetch_id: u64, status: u16, body: &[u8]) -> bool {
+    driver_call(|| bindings::complete_fetch(fetch_id, status, body)).1
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set

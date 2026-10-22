@@ -27,10 +27,13 @@ Quick Start:
 
 __version__ = "0.1.0"
 
+import atexit as _atexit
+import http.client as _http_client
 import re as _re
+import socket as _socket
 import threading as _threading
 import time as _time
-import urllib.request as _urllib_request
+import urllib.parse as _urllib_parse
 from typing import Optional, TypedDict
 
 from chat_xdk import _native
@@ -78,9 +81,11 @@ from chat_xdk._native import (
 class _FeatureDriver:
     """One daemon thread at a time that polls the core for feature GETs.
 
-    It waits in Python rather than inside the core: a daemon thread that takes
-    the interpreter lock back from native code while the interpreter shuts
-    down is ended in a way native frames cannot unwind."""
+    Its threads run no Python code inside the core, and the core runs none of
+    theirs: a daemon thread that takes the interpreter lock back from native
+    code while the interpreter shuts down is ended in a way native frames
+    cannot unwind. So it waits here, and the native calls it makes report a
+    wake for it to act on once they return."""
 
     def __init__(self):
         self._lock = _threading.Lock()
@@ -95,7 +100,12 @@ class _FeatureDriver:
             if self._running:
                 return
             self._running = True
-        _threading.Thread(target=self._run, name="chat-xdk-features", daemon=True).start()
+        try:
+            _threading.Thread(target=self._run, name="chat-xdk-features", daemon=True).start()
+        except RuntimeError:
+            # The interpreter is shutting down and starts no more threads.
+            with self._lock:
+                self._running = False
 
     def _run(self):
         while True:
@@ -107,14 +117,20 @@ class _FeatureDriver:
                         self._running = False
                         return
             elif isinstance(step, tuple):
-                _threading.Thread(
-                    target=_perform_feature_fetch,
-                    args=step,
-                    name="chat-xdk-features-request",
-                    daemon=True,
-                ).start()
+                try:
+                    _threading.Thread(
+                        target=_perform_feature_fetch,
+                        args=step,
+                        name="chat-xdk-features-request",
+                        daemon=True,
+                    ).start()
+                except RuntimeError:
+                    return
             else:
                 self._woken.wait(step)
+
+
+_driver = _FeatureDriver()
 
 
 def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
@@ -122,16 +138,58 @@ def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
         status, body = _get_features(url, timeout, max_bytes)
     except Exception:
         status, body = 0, b""
-    _native._feature_complete(fetch_id, status, body)
+    if _native._feature_complete(fetch_id, status, body):
+        _driver.wake()
+
+
+# The sockets of the GETs under way, by thread. At exit they are cut short and
+# waited for: a daemon thread still inside OpenSSL when the process exits races
+# OpenSSL's own cleanup, which can crash the process.
+_requests = {}
+_requests_lock = _threading.Lock()
+_exiting = False
+_tls_context = None
 
 
 def _get_features(url, timeout, max_bytes):
     """GET ``url`` within ``timeout`` seconds: the status and the body, read
     to its end or to one byte past ``max_bytes``. Status 0 when no complete
     response arrived in time."""
+    global _tls_context
     deadline = _time.monotonic() + timeout
-    request = _urllib_request.Request(url, headers={"Accept": "application/json"})
-    with _urllib_request.urlopen(request, timeout=timeout) as response:
+    parts = _urllib_parse.urlsplit(url)
+    secure = parts.scheme == "https"
+    port = parts.port or (443 if secure else 80)
+    sock = _socket.create_connection((parts.hostname, port), timeout=timeout)
+    thread = _threading.current_thread()
+    with _requests_lock:
+        if _exiting:
+            sock.close()
+            return 0, b""
+        _requests[thread] = sock
+    try:
+        if secure:
+            if _tls_context is None:
+                import ssl
+
+                _tls_context = ssl.create_default_context()
+            with _requests_lock:
+                if _exiting:
+                    return 0, b""
+                sock = _tls_context.wrap_socket(
+                    sock, server_hostname=parts.hostname, do_handshake_on_connect=False
+                )
+                _requests[thread] = sock
+            sock.do_handshake()
+            connection = _http_client.HTTPSConnection(
+                parts.hostname, port, timeout=timeout, context=_tls_context
+            )
+        else:
+            connection = _http_client.HTTPConnection(parts.hostname, port, timeout=timeout)
+        connection.sock = sock
+        target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+        connection.request("GET", target, headers={"Accept": "application/json"})
+        response = connection.getresponse()
         body = bytearray()
         while len(body) <= max_bytes:
             if _time.monotonic() >= deadline:
@@ -141,9 +199,31 @@ def _get_features(url, timeout, max_bytes):
                 break
             body += chunk
         return response.status, bytes(body)
+    finally:
+        with _requests_lock:
+            _requests.pop(thread, None)
+        sock.close()
 
 
-_native._feature_set_waker(_FeatureDriver().wake)
+@_atexit.register
+def _end_feature_requests():
+    """Start no more GETs, cut short the ones under way, and wait for them to
+    end, at most 2 seconds."""
+    global _exiting
+    with _requests_lock:
+        _exiting = True
+        for sock in _requests.values():
+            try:
+                sock.shutdown(_socket.SHUT_RDWR)
+            except OSError:
+                pass
+        threads = list(_requests)
+    deadline = _time.monotonic() + 2.0
+    for thread in threads:
+        thread.join(max(0.0, deadline - _time.monotonic()))
+
+
+_native._feature_set_waker(_driver.wake)
 
 
 class QuickReplyOption(TypedDict, total=False):

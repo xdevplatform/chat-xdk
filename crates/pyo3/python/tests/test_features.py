@@ -276,6 +276,52 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "ok")
 
+    def test_exit_cuts_short_a_request_under_way(self):
+        # In a process of its own, since the exit hook ends every request.
+        self.server.delay = 30.0
+        script = textwrap.dedent(
+            """
+            import base64, json, sys, time
+            import chat_xdk
+            from chat_xdk import Chat, EncryptMessageParams, ImportKeysParams, SetIdentityParams
+            from features_support import keep_offline, wait_for
+
+            keep_offline()
+            vectors = json.load(open(sys.argv[1]))
+            chat = Chat()
+            chat._configure_features(sys.argv[2], 60.0, 3600.0, 60.0)
+            chat.import_keys(ImportKeysParams(base64.b64decode(vectors["private_keys_concat_b64"])))
+            chat.set_identity(SetIdentityParams("1001", "1"))
+            chat.encrypt_message(EncryptMessageParams(
+                "conv-1", "hello",
+                conversation_key=base64.b64decode(vectors["conversation_key_b64"]),
+                conversation_key_version="1",
+            ))
+            assert wait_for(lambda: len(chat_xdk._requests) == 1), "no request under way"
+            (request,) = list(chat_xdk._requests)
+            started = time.monotonic()
+            chat_xdk._end_feature_requests()
+            assert time.monotonic() - started < 1.0, time.monotonic() - started
+            assert not request.is_alive() and not chat_xdk._requests
+            print("ok")
+            """
+        )
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [os.path.join(_repo_root(), "crates", "pyo3", "python"), tests_dir, env.get("PYTHONPATH", "")]
+        )
+        vectors = os.path.join(_repo_root(), "tests", "fixtures", "sdk_vectors.json")
+        result = subprocess.run(
+            [sys.executable, "-c", script, vectors, self.server.url],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
     def test_a_script_that_never_sends_makes_no_request(self):
         script = textwrap.dedent(
             """

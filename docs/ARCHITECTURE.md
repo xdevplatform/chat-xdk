@@ -226,7 +226,9 @@ status and body back:
   thread in Python and the JVM, a goroutine in Go, a background thread in
   .NET, and timers in JavaScript (unref'd in Node). The first send that needs
   it starts it, and it ends once no chat uses the switches, each one freed,
-  closed, disposed or garbage-collected.
+  closed, disposed or garbage-collected. At exit, Python cuts short a request
+  still under way and waits for it, so no thread is inside OpenSSL while
+  OpenSSL cleans up.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the
