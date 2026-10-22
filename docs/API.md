@@ -16,7 +16,7 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`; `juiceboxConfig` optional) | `Chat(config_json?: str)` | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
+| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`; `juiceboxConfig` optional; free with `free()`) | `Chat(config_json?: str)` (stop its background work with `close()`) | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
 | 2 | **update_config** | `update_config(&mut self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&mut self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 
@@ -173,7 +173,7 @@ unset or empty key fields and fall back to two opt-in session stores:
   default**). While enabled, `decrypt_events` caches, per conversation, the
   key whose key change carried a valid signature at the highest version seen;
   `decrypt_event` falls back to it when its params' `conversation_keys` map is
-  empty; and the `encrypt_*` methods resolve an omitted
+  omitted or empty; and the `encrypt_*` methods resolve an omitted
   `conversation_key` / `conversation_key_version` pair from it. Disabling
   clears the cache; the cached keys zeroize on drop.
 
@@ -201,7 +201,7 @@ errors are collected in the result) and `decrypt_event` throws on failure.
 **Typical flow:**
 1. Once per instance: `setSigningKeys(allParticipantKeys)` and `setCacheKeys(true)`
 2. Use `decryptEvents({ events })` on first load — it extracts conversation keys and returns them (and, with caching on, retains each conversation's latest verified key)
-3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64, conversationKeys: {} })` — the empty key map and the unset signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keys` client-side and pass it as `conversationKeys`.
+3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64 })` — the omitted key map and signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keys` client-side and pass it as `conversationKeys`.
 
 ---
 
@@ -572,7 +572,7 @@ Decrypts a single event using conversation keys you already have — cached from
 | Field | JS | Python | Rust | Go | JVM | .NET | Description |
 |---|---|---|---|---|---|---|---|
 | event_b64 | `eventB64: string` | `event_b64: str` | `event_b64: String` | `EventB64 string` | `String eventB64` | `string EventB64` | One base64-encoded raw event. |
-| conversation_keys | `conversationKeys: ConversationKeyMap` | `conversation_keys: dict[str, bytes]` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` | `IReadOnlyDictionary<string, byte[]> ConversationKeys` | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. An empty map falls back to the opt-in key cache (`setCacheKeys`); non-message events (typing, read receipts) need no keys at all. |
+| conversation_keys | `conversationKeys?: ConversationKeyMap \| null` | `conversation_keys: dict[str, bytes] \| None = None` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` (or the one-argument constructor) | `IReadOnlyDictionary<string, byte[]>? ConversationKeys` (optional constructor argument) | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. Optional everywhere but Rust, where the map may be empty: omitted or empty, the keys come from the opt-in key cache (`setCacheKeys`), and non-message events (typing, read receipts) need no keys at all. |
 | signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **the event's sender**. The SDK matches by `publicKeyVersion` against the version in the event's signature. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails with an error. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
 **Returns: `Event`** directly — or **throws/raises** on failure (unlike `decryptEvents` which collects errors).
@@ -581,7 +581,7 @@ Decrypts a single event using conversation keys you already have — cached from
 // JS — returns Event, throws on error
 interface DecryptEventParams {
   eventB64: string;
-  conversationKeys: ConversationKeyMap;  // {} ⇒ opt-in key cache (setCacheKeys)
+  conversationKeys?: ConversationKeyMap | null;  // omitted ⇒ opt-in key cache (setCacheKeys)
   signingKeys?: SigningKeyEntry[] | null;  // unset ⇒ keys from setSigningKeys; if
                                            // none stored, signed events throw,
                                            // unless setRejectUnverified(false)
@@ -593,8 +593,8 @@ decryptEvent(params: DecryptEventParams): Event
 # Python — returns dict, raises on error
 DecryptEventParams(
     event_b64: str,
-    conversation_keys: dict[str, bytes],  # { version: bytes }; {} ⇒ opt-in
-                                          # key cache (set_cache_keys)
+    conversation_keys: dict[str, bytes] | None = None,  # { version: bytes };
+                                          # None ⇒ opt-in key cache (set_cache_keys)
     *,
     signing_keys: list[dict] | None = None,  # None ⇒ keys from set_signing_keys;
                                              # if none stored, signed events raise,
@@ -759,13 +759,21 @@ below), together with `event_b64`: the message as recipients receive it.
 a media attachment, or a link card's banner or favicon image — names the
 `media_hash_key` its upload started with. Encrypt the message first, then
 encrypt each file from the payload's `event_b64` and its `media_hash_key`
-(see [Files (Media)](#files-media)). The SDK derives the id of a message
-with files from the conversation key and its version, the sender, the
-conversation, and the files' media hash keys in order, so building the same
-message again (same files, sender, conversation and key) gives the same id,
-and the files encrypted for it stay valid. The text does not affect the id. A
-message without files takes a random id. Each file needs its own media hash
-key: an empty one, or one listed in more than one attachment, is rejected.
+(see [Files (Media)](#files-media)). In v1 (see below) the SDK derives the id
+of a message with files from the conversation key and its version, the
+sender, the conversation, and the files' media hash keys in order, so
+building the same message again (same files, sender, conversation and key)
+gives the same id, and the files encrypted for it stay valid. The text does
+not affect the id. v0 messages, and messages without files, take a random
+id, as in 0.5.x. Each file needs its own media hash key: an empty one, or one
+listed in more than one attachment, is rejected.
+
+**Upload each file for one message only.** Because the text does not affect
+a v1 message's id, a second message in the same conversation, from the same
+sender under the same key version, that reuses the first one's uploads gets
+the first one's id, and recipients, who deduplicate on the message id, drop
+it as a repeat. To send the same file again, upload it again: the new upload
+gets its own media hash key.
 
 **The SDK picks each send's format.** An encrypted send (message, reply,
 reaction, edit) is either v0, the 0.5.x format, with contents under the
@@ -778,6 +786,17 @@ their message's format. The sender id must be the sender's numeric user id
 and the conversation key version an integer, as the key-change event carries
 it; anything else is rejected, since v1 recipients derive the key from the
 numeric id and look the key up by the version.
+
+The format follows the X API's `v1_send` feature switch, which the JS,
+Python, Go, .NET and JVM bindings fetch in the background (see
+[ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
+**The Rust crate never fetches it, so `ChatCore` and `Chat` always send
+v0.** They read v1 sends like every binding. The fetch logs nothing; to see
+which format a send used, read the payload's
+`signature_info.signature_version`: `"7"` for v0, `"10"` for v1. A 0.5.x
+reader rejects a v1 send as a signature verification failure, so in its logs
+v1 sends look like forged messages.
+
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
 while **JS, Python, and Go** take positional `[start, end, type]` tuples
@@ -796,8 +815,8 @@ attachments are allowed only when every one is image/gif/video media
 (`media_type` 1/2/3, or omitted, which defaults to image), up to 10 per
 message; everything else — audio, file, svg, or unrecognized media types, URL
 cards, and posts — must be the sole attachment. Disallowed combinations fail
-with an "Invalid state: disallowed attachment combination…" (or "…too many
-attachments…") error in every binding rather than producing a message that
+with a "disallowed attachment combination…" (or "too many attachments…")
+error in every binding rather than producing a message that
 breaks receivers. This mirrors the first-party encrypted-send rules and will
 be relaxed when clients support heterogeneous attachment lists; the wire
 format already carries them.
@@ -867,6 +886,30 @@ The signature covers the read point and its time, so a recipient's
 `decrypt_event` returns the receipt as a `ReadReceipt` event with `verified`
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
+
+Send the signature in the mark-read request,
+`POST /2/chat/conversations/:id/read`, as an entry of its
+`action_signatures`, nested the way the conversation-change requests nest
+theirs: `ActionSignature` returns `signature`, `signature_version` and
+`public_key_version` flat, and the entry carries them under
+`message_event_signature`, with your signing public key.
+
+```json
+{
+  "action_signatures": [
+    {
+      "message_id": "<ActionSignature.message_id>",
+      "encoded_message_event_detail": "<ActionSignature.encoded_message_event_detail>",
+      "message_event_signature": {
+        "signature": "<ActionSignature.signature>",
+        "signature_version": "<ActionSignature.signature_version>",
+        "public_key_version": "<ActionSignature.public_key_version>",
+        "signing_public_key": "<your signing public key>"
+      }
+    }
+  ]
+}
+```
 
 The Rust structs pair a `new(…required…)` constructor with public optional
 fields:
@@ -1211,7 +1254,7 @@ for (const dm of result.messages) {
 // ── New event arrives (webhook / poll): use decryptEvent ──
 // The empty key map and unset signing keys resolve from the key cache and
 // the signing-key store.
-const event = chat.decryptEvent({ eventB64: webhookEventB64, conversationKeys: {} });
+const event = chat.decryptEvent({ eventB64: webhookEventB64 });
 if (event.type === "message") {
   console.log(event.content.text);
 }
@@ -1301,7 +1344,7 @@ for dm in result["messages"]:
 # ── New event arrives: use decrypt_event ──
 # The empty key map and unset signing keys resolve from the key cache and
 # the signing-key store.
-event = chat.decrypt_event(DecryptEventParams(event_b64, {}))
+event = chat.decrypt_event(DecryptEventParams(event_b64))
 if event["type"] == "Message":
     print(event["content"]["text"])
 
@@ -1827,8 +1870,8 @@ For reactions and edits, `targetMessageId` is the message **sequenceId**.
 Returned by `encrypt_message()` and all `encrypt_*()` methods.
 
 The SDK generates the `message_id` (a UUID) and embeds it in the signed
-event: random for a message without files, and derived from its files for a
-message with files (see [Message Encryption](#message-encryption)). Send it as
+event: derived from its files for a v1 message with files (see
+[Message Encryption](#message-encryption)), random otherwise. Send it as
 the message's `message_id`, keep it to dedup and to anchor replies, and reuse
 the same encrypted payload on retries so a message is never sent twice under
 two ids.
@@ -1837,6 +1880,8 @@ two ids.
 receive, without the fields the server adds on delivery. Pass it to
 `encrypt_file` / `file_encryptor` to encrypt the message's files. It is not a
 field of the send request.
+
+`xdk_version` is the version of the SDK that built the payload.
 
 ```rust
 // Rust
@@ -1849,7 +1894,7 @@ pub struct SendPayload {
     pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
-    pub xdk_version: String,             // SDK version; send as the optional xdk_version field
+    pub xdk_version: String,             // SDK version
 }
 
 // Python (SendPayload class attributes)

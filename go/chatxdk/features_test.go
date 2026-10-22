@@ -363,6 +363,7 @@ func TestAnyFailureLeavesEveryFlagOff(t *testing.T) {
 		{http.StatusOK, `not json`, 0},
 		{http.StatusOK, `{"v1_send":true}`, 0},
 		{http.StatusOK, `{"features":{"v1_send":true}}`, 1500 * time.Millisecond},
+		{http.StatusOK, `{"features":{"v1_send":true}}` + strings.Repeat(" ", 64*1024), 0},
 	}
 	for _, tc := range cases {
 		server := newFeatureServer(t)
@@ -377,10 +378,10 @@ func TestAnyFailureLeavesEveryFlagOff(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		if chat.isEnabled("v1_send") {
-			t.Errorf("%d %q: v1_send on", tc.status, tc.body)
+			t.Errorf("%d %.40q (%d bytes): v1_send on", tc.status, tc.body, len(tc.body))
 		}
 		if got := sendVersion(t, chat, v).SignatureInfo.SignatureVersion; got != "7" {
-			t.Errorf("%d %q: signature version %q, want 7", tc.status, tc.body, got)
+			t.Errorf("%d %.40q (%d bytes): signature version %q, want 7", tc.status, tc.body, len(tc.body), got)
 		}
 	}
 }
@@ -518,5 +519,40 @@ func TestAMalformedBodyIsRejectedAndChangesNothing(t *testing.T) {
 	}
 	if chat.isEnabled("v1_send") {
 		t.Fatal("the downgrade did not apply")
+	}
+}
+
+func TestChatsAskingAtOnceShareARequest(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.setDelay(300 * time.Millisecond)
+	chats := make([]*Chat, 4)
+	for i := range chats {
+		chats[i] = featureChat(t, testFeatureOptions(server.endpoint()))
+	}
+	all := func(cond func(*Chat) bool) func() bool {
+		return func() bool {
+			for _, chat := range chats {
+				if !cond(chat) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	waitFor(t, "the IP answer", all(func(c *Chat) bool { return c.isEnabled("v1_send") }))
+	if got := server.seen(); !slices.Equal(got, []string{""}) {
+		t.Fatalf("requests %q, want one without a bucket", got)
+	}
+
+	for _, chat := range chats {
+		if err := chat.ImportKeys(v.privateKeys(t)); err != nil {
+			t.Fatalf("ImportKeys failed: %v", err)
+		}
+	}
+	waitFor(t, "the key answer", all(func(c *Chat) bool { return !c.featureRefetchDue() }))
+	want := []string{"", strconv.Itoa(chats[0].featureBucket())}
+	if got := server.seen(); !slices.Equal(got, want) {
+		t.Fatalf("requests %q, want %q", got, want)
 	}
 }

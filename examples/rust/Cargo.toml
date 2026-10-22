@@ -31,8 +31,8 @@ name = "register"
 path = "src/bin/register.rs"
 required-features = ["http"]
 
-# Mirror the workspace's thrift pin so the example builds standalone (thrift
-# 0.24.0 is not yet on crates.io; this commit carries the Rust fixes the core
-# needs). Drop once thrift 0.24.0 is released on crates.io.
+# Mirror the workspace's thrift pin so the example builds standalone (crates.io
+# has no thrift 0.24.0; this commit carries the Rust fixes the core needs).
+# Drop it when crates.io has thrift 0.24.0.
 [patch.crates-io]
 thrift = { git = "https://github.com/apache/thrift.git", rev = "deb36fa409849de45973b04ffc3ce49d277ca90a" }

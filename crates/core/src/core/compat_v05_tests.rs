@@ -113,11 +113,11 @@ fn sends_from_0_5_decrypt_and_verify() {
     }
 }
 
-/// The same send made here with every feature switch off, or `None` for a
-/// kind compared only by decryption.
-fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> Option<SendPayload> {
+/// The same send made here with every feature switch off.
+fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
     let conversation = text(fixture, "conversation_id").to_string();
     let target = text(fixture, "target_sequence_id").to_string();
+    let target_event = text(fixture, "target_event_b64");
     let key = bytes(fixture, "conversation_key_b64");
     let version = text(fixture, "conversation_key_version");
     let reaction = |emoji: &str| {
@@ -153,12 +153,34 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> Option<SendPayload> 
             params.target_message_sequence_id = Some(target.clone());
             core.encrypt_edit(&params)
         }
-        // Reply previews are derived from the replied-to event since 0.6.0;
-        // the decrypt tests cover replies in both directions.
-        "reply" => return None,
+        "message_with_file" => {
+            let mut params = EncryptMessageParams::new(conversation.clone(), "a file")
+                .with_conversation_key(key.clone(), version);
+            params.attachments = Some(vec![serde_json::from_value(
+                fixture["media_attachment"].clone(),
+            )
+            .unwrap()]);
+            core.encrypt_message(params)
+        }
+        "reply" => {
+            let mut params = EncryptReplyParams::new(conversation.clone(), "a reply", "")
+                .with_conversation_key(key.clone(), version);
+            params.reply_to_sequence_id = Some(target.clone());
+            params.reply_to_sender_id = Some(text(fixture, "sender_id").parse().unwrap());
+            params.reply_to_text = Some("hello from 0.5".to_string());
+            core.encrypt_reply(params)
+        }
+        "reply_from_event" => core.encrypt_reply(
+            EncryptReplyParams::new(conversation.clone(), "a reply to the event", target_event)
+                .with_conversation_key(key.clone(), version),
+        ),
+        "edit_from_event" => core.encrypt_edit(
+            &EncryptEditParams::new(target_event, "edited from the event")
+                .with_conversation_key(key.clone(), version),
+        ),
         other => panic!("unknown fixture kind {other}"),
     };
-    Some(payload.unwrap())
+    payload.unwrap()
 }
 
 #[test]
@@ -179,9 +201,7 @@ fn v0_sends_match_0_5_on_the_wire() {
 
         for send in fixture["sends"].as_array().unwrap() {
             let kind = text(send, "kind");
-            let Some(ours) = v0_send(&core, &fixture, kind) else {
-                continue;
-            };
+            let ours = v0_send(&core, &fixture, kind);
             assert_eq!(
                 ours.signature_info.signature_version,
                 text(send, "signature_version"),

@@ -9,6 +9,9 @@ use super::*;
 use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
 use crate::features::FeatureApply;
 use crate::thrift::event::{MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail};
+use crate::thrift::product::{
+    MessageAttachment as ThriftAttachment, MessageEntryContents as Contents,
+};
 
 const AUTHOR: &str = "1001";
 const KEY_VERSION: &str = "7";
@@ -235,7 +238,7 @@ fn an_ip_bucketed_answer_reads_off_once_keys_load_until_refetched() {
     assert!(!core.is_enabled(crate::features::V1_SEND));
     let ckey = key(3);
     let payload = core
-        .encrypt_message(message_params("pending", &ckey))
+        .encrypt_message(message_params("before refetch", &ckey))
         .unwrap();
     assert_eq!(payload.signature_info.signature_version, "7");
 
@@ -312,4 +315,120 @@ fn every_payload_carries_the_sdk_version() {
         assert_eq!(payload.xdk_version, crate::XDK_VERSION, "{what}");
         assert!(!payload.xdk_version.is_empty(), "{what}");
     }
+}
+
+/// The contents of a send, opened with `key`: the conversation key for v0,
+/// the message key for v1.
+fn opened_contents(payload: &SendPayload, key: &XChatConversationKey) -> Contents {
+    let event = delivered(payload, "300");
+    let plaintext =
+        decrypt_message_bytes(key, create_event(&event).contents.as_ref().unwrap()).unwrap();
+    ChatCore::parse_thrift_entry_contents(&plaintext).unwrap()
+}
+
+fn message_key(payload: &SendPayload, ckey: &XChatConversationKey) -> XChatConversationKey {
+    message_keys::derive_message_key(ckey, AUTHOR, &payload.message_id).unwrap()
+}
+
+fn with_photos(text: &str, ckey: &XChatConversationKey) -> EncryptMessageParams {
+    let photo = |media_hash_key: &str| AttachmentDescriptor::Media {
+        media_hash_key: media_hash_key.to_string(),
+        width: 640,
+        height: 480,
+        filesize_bytes: 4096,
+        filename: format!("{media_hash_key}.jpg"),
+        media_type: Some(1),
+        duration_millis: None,
+    };
+    let mut params = message_params(text, ckey);
+    params.attachments = Some(vec![photo("photo-a"), photo("photo-b")]);
+    params
+}
+
+#[allow(clippy::vec_box)]
+fn attachment_ids(contents: Contents) -> Vec<Option<String>> {
+    let Contents::Message(message) = contents else {
+        panic!("expected message contents, got {:?}", contents);
+    };
+    message
+        .attachments
+        .unwrap_or_default()
+        .iter()
+        .map(|attachment| match attachment.as_ref() {
+            ThriftAttachment::Media(media) => media.attachment_id.clone(),
+            other => panic!("unexpected attachment {:?}", other),
+        })
+        .collect()
+}
+
+#[test]
+fn a_v0_message_with_files_takes_a_random_id_and_unnamed_attachments() {
+    let party = author();
+    let ckey = key(3);
+    let first = party
+        .core
+        .encrypt_message(with_photos("photos", &ckey))
+        .unwrap();
+    let again = party
+        .core
+        .encrypt_message(with_photos("photos", &ckey))
+        .unwrap();
+    assert_v0(&party, &ckey, "message with files", &first);
+    assert_ne!(first.message_id, again.message_id);
+    assert_eq!(attachment_ids(opened_contents(&first, &ckey)), [None, None]);
+}
+
+#[test]
+fn a_v1_message_with_files_derives_its_id_and_names_its_attachments() {
+    let party = author();
+    enable_v1_send(&party.core);
+    let ckey = key(3);
+    let first = party
+        .core
+        .encrypt_message(with_photos("photos", &ckey))
+        .unwrap();
+    let again = party
+        .core
+        .encrypt_message(with_photos("photos", &ckey))
+        .unwrap();
+    assert_v1(&party, &ckey, "message with files", &first);
+    assert_eq!(first.message_id, again.message_id);
+    let second = format!("{}#1", first.message_id);
+    assert_eq!(
+        attachment_ids(opened_contents(&first, &message_key(&first, &ckey))),
+        [Some(first.message_id.clone()), Some(second)]
+    );
+}
+
+#[test]
+fn only_a_v1_edit_names_the_message_it_edits() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(message_params("original", &ckey))
+        .unwrap();
+    let target = frame(&delivered(&original, "100"));
+    let edit = |party: &Party| {
+        let params = EncryptEditParams::new(target.clone(), "edited")
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        party.core.encrypt_edit(&params).unwrap()
+    };
+
+    let v0 = edit(&party);
+    let Contents::MessageEdit(v0_edit) = opened_contents(&v0, &ckey) else {
+        panic!("expected an edit");
+    };
+    assert_eq!(v0_edit.message_sequence_id.as_deref(), Some("100"));
+    assert_eq!(v0_edit.message_id, None);
+
+    enable_v1_send(&party.core);
+    let v1 = edit(&party);
+    let Contents::MessageEdit(v1_edit) = opened_contents(&v1, &message_key(&v1, &ckey)) else {
+        panic!("expected an edit");
+    };
+    assert_eq!(
+        v1_edit.message_id.as_deref(),
+        Some(original.message_id.as_str())
+    );
 }

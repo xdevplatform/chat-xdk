@@ -11,16 +11,21 @@ wire formats, and the SDK picks which:
 
 - **v0**, the 0.5.x format: contents are encrypted under the conversation
   key, `contents_encryption_version` is unset, and the send is signed at
-  signature version 7.
+  signature version 7. Message ids are random, attachments carry no id, and
+  an edit does not name the message it edits, as in 0.5.x.
 - **v1**, per-message keys: contents are encrypted under a key derived from
   the conversation key, the sender id and the message id, the
   `MessageCreateEvent` carries `contents_encryption_version` 1, and the send
-  is signed at signature version 10, which covers that field.
+  is signed at signature version 10, which covers that field. A message with
+  files takes an id derived from them, each attachment carries an id, and an
+  edit names the message it edits.
 
-Sends are v0 unless the X API turns v1 on. Readers need per-message-key
-support for v1 sends, and 0.5.x returns a decryption error for each of them,
-so upgrade readers first. Other signed actions (conversation-key changes,
-group changes and deletes) still sign at version 7.
+Sends are v0 unless the X API turns v1 on, and always v0 from the Rust
+crate, which does not fetch the switch. Readers need per-message-key support
+for v1 sends: 0.5.x rejects each one as a signature verification failure (an
+ECDSA mismatch), so upgrade readers first. Other signed actions
+(conversation-key changes, group changes and deletes) still sign at version
+7.
 
 `sender_id` must be the sender's numeric user id, and
 `conversation_key_version` an integer as its key-change event carries it.
@@ -67,8 +72,10 @@ the same way.
 
 #### A message with files is built before its files are encrypted
 
-Each file of a message is encrypted under its own key, derived from the
-message's key and the file's attachment, so the message comes first:
+In v1 each file of a message is encrypted under its own key, derived from
+the message's key and the file's attachment; in v0 every file is under the
+conversation key, as in 0.5.x. Either way the file calls take the key from
+the message, so the message comes first:
 
 1. Start each file's upload and keep its media hash key. The upload's total
    size is `encrypted_file_size` of the file's size.
@@ -82,11 +89,14 @@ message's key and the file's attachment, so the message comes first:
 
 `encrypt_stream` and `stream_encryptor`, which took only a conversation key,
 are removed. The file calls need no session identity: the sender, message id
-and key version come from `event_b64`. The SDK derives the id of a message
-with files from the conversation key and its version, the sender, the
-conversation and the files' media hash keys, so building the same message
-again gives the same id and its encrypted files stay valid; a message
-without files takes a random id. A message that lists an empty media hash
+and key version come from `event_b64`. In v1 the SDK derives the id of a
+message with files from the conversation key and its version, the sender,
+the conversation and the files' media hash keys, so building the same
+message again gives the same id and its encrypted files stay valid; v0
+messages, and messages without files, take a random id, as in 0.5.x. Upload
+each file for one message only: the text does not affect the id, so a second
+message that reuses the first one's uploads gets its id, and recipients drop
+it as a repeat. A message that lists an empty media hash
 key, or one media hash key in two attachments, is rejected, and the file
 calls' errors say what to pass instead.
 
@@ -271,9 +281,9 @@ FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(eventB64, c
 
 `decrypt_events` takes `DecryptEventsParams` (`events`, optional
 `signing_keys`) and `decrypt_event` takes `DecryptEventParams` (`event_b64`,
-`conversation_keys`, optional `signing_keys`), named the same in every
-binding. The conversation key map is required: pass an empty map to fall
-back to the opt-in key cache. The .NET and JVM `decryptEvent` overloads that
+optional `conversation_keys`, optional `signing_keys`), named the same in
+every binding. Omitted (or, in Rust, empty), the conversation keys come from
+the opt-in key cache. The .NET and JVM `decryptEvent` overloads that
 took a `ConversationKeyBundle` are removed; pass `bundle.Keys` /
 `bundle.keys`. The contracts are as before: `decrypt_events` never throws
 and `decrypt_event` throws on failure.
@@ -291,7 +301,7 @@ let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_sig
 result = chat.decrypt_events(events, signing_keys)  # before
 result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))  # after
 event = chat.decrypt_event(event_b64)  # before
-event = chat.decrypt_event(DecryptEventParams(event_b64, {}))  # after
+event = chat.decrypt_event(DecryptEventParams(event_b64))  # after
 ```
 
 ```js
@@ -339,9 +349,9 @@ JsonNode event = chat.decryptEvent(one);
 `EncryptMessageParams`, `EncryptReplyParams`, `EncryptReactionParams`,
 `EncryptEditParams`, `ConversationKeyChangeParams`,
 `GroupMembersChangeParams`, `GroupCreateParams` and `MessageDeleteParams`.
-Each class takes the required fields positionally and the optional ones as
-keywords, with the names the methods took, and exposes every field as a
-read/write attribute.
+Each class takes the arguments its method took, in the same order and with
+the same names and defaults, and exposes every field as a read/write
+attribute.
 
 ```python
 # Before
@@ -373,21 +383,52 @@ prepared = chat.prepare_conversation_key_change(
   `chat_xdk_encrypted_stream_size`, `chat_xdk_stream_encryptor_*` and
   `chat_xdk_stream_decryptor_*` are `chat_xdk_encrypt_file`,
   `chat_xdk_decrypt_file`, `chat_xdk_encrypted_file_size`,
-  `chat_xdk_file_encryptor_*` and `chat_xdk_file_decryptor_*`. The file calls,
-  `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` take one params JSON
-  document, and `chat_xdk_file_encryptor_new` / `chat_xdk_file_decryptor_new`
-  return a result and write the handle to an out-parameter.
+  `chat_xdk_file_encryptor_*` and `chat_xdk_file_decryptor_*`.
+  `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` are
+  `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params`, so a
+  stale header or library fails to link instead of misreading arguments. They
+  and the file calls take one params JSON document, and
+  `chat_xdk_file_encryptor_new` / `chat_xdk_file_decryptor_new` return a
+  result and write the handle to an out-parameter.
+
+#### Other breaking changes
+
+- Rust: `SendPayload` gains `event_b64` and `xdk_version` and is
+  `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
+  builds it with a struct literal. A payload stored by 0.5.x still
+  deserializes, with both new fields empty.
+- A missing or invalid parameter fails with the message alone, such as
+  `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
+  `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
+  `SdkError::InvalidState` is left for values neither passed nor set on the
+  chat, such as a missing session identity or an empty key cache.
+- Every binding but Rust now makes an outbound HTTPS request from each chat:
+  `GET https://api.x.com/2/chat/features`, in the background (see Added).
+  Allow it through egress filters for v1 sends; blocked, sends stay v0.
+  Release each chat when you're done with it (`free()` in JS, `close()` in
+  Python and the JVM, `Close()` in Go, `Dispose()` in .NET) to stop its
+  requests; a garbage-collected chat stops too. In Node 20.16 and later a
+  request in flight never keeps the process alive.
+- Python: `chat_xdk.Chat` is a Python subclass of the native class, and each
+  instance runs a daemon thread for that request. The new `Chat.close()`
+  stops it.
+- JS typings export only what the module exports. `Chat` and `ChatCrypto`,
+  which the module never exported, no longer import, and `FileEncryptor` /
+  `FileDecryptor`, which it returns but does not export, are interfaces.
 
 ### Added
 
-- Each chat fetches its feature switches from `GET /2/chat/features` in the
-  background, without delaying or failing anything; there is nothing to call.
+- Each chat fetches its feature switches from
+  `GET https://api.x.com/2/chat/features` in the background, without
+  delaying or failing anything; there is nothing to call. The request is
+  anonymous, carries a 0–9999 bucket derived from the identity public key,
+  repeats every 5 minutes, and is shared by chats that ask at once; if it
+  fails or is blocked, sends stay v0. See "Network access" in the README.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
-  (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Forward it as the send
-  request's optional `xdk_version` field once the X API accepts it.
+  (`xdkVersion` in JS, `XdkVersion` in Go and .NET).
 - Messages encrypted under per-message keys (`contents_encryption_version`
   1 or more) decrypt, as do their reply previews, edits and files. A reply
-  to such a message carries the original's key, and an edit names the
+  to such a message carries the original's key, and a v1 edit names the
   message it edits.
 - Signatures verify at versions 8 through 11, in the payload layout of the
   version each carries. Versions above 11 are rejected.
@@ -395,7 +436,7 @@ prepared = chat.prepare_conversation_key_change(
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
   (the sequence id of the newest event read) and an optional
   `seen_at_msec`, which defaults to the current time. It returns an
-  `ActionSignature`; send it with the mark-read request, as you send a
-  message delete's signature. Recipients' `decrypt_event` returns the
-  receipt as a verified `ReadReceipt`. The C ABI adds
-  `chat_xdk_prepare_mark_conversation_read`.
+  `ActionSignature` for the mark-read request's `action_signatures`
+  (`POST /2/chat/conversations/:id/read`), nested as API.md shows.
+  Recipients' `decrypt_event` returns a signed receipt as a verified
+  `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.

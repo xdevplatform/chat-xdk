@@ -315,7 +315,7 @@ fn validate_sender_id(sender_id: &str) -> Result<(), SdkError> {
     if canonical.as_deref() == Some(sender_id) {
         Ok(())
     } else {
-        Err(SdkError::InvalidState(format!(
+        Err(SdkError::InvalidInput(format!(
             "Invalid sender_id '{sender_id}': pass the sender's numeric user id (digits only), \
              which message keys are derived from"
         )))
@@ -329,7 +329,7 @@ fn validate_conversation_key_version(version: &str) -> Result<(), SdkError> {
     if version.parse::<i64>().map(|v| v.to_string()).as_deref() == Ok(version) {
         Ok(())
     } else {
-        Err(SdkError::InvalidState(format!(
+        Err(SdkError::InvalidInput(format!(
             "Invalid conversation_key_version '{version}': pass the key version as the integer \
              its key-change event carries"
         )))
@@ -499,7 +499,7 @@ const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
 /// lists; the wire format already carries them.
 pub fn validate_attachment_descriptors(descs: &[AttachmentDescriptor]) -> Result<(), SdkError> {
     if descs.len() > MAX_ATTACHMENTS_PER_MESSAGE {
-        return Err(SdkError::InvalidState(format!(
+        return Err(SdkError::InvalidInput(format!(
             "too many attachments: at most {MAX_ATTACHMENTS_PER_MESSAGE} per message"
         )));
     }
@@ -516,7 +516,7 @@ pub fn validate_attachment_descriptors(descs: &[AttachmentDescriptor]) -> Result
     if descs.len() <= 1 || descs.iter().all(multiple_supported) {
         Ok(())
     } else {
-        Err(SdkError::InvalidState(
+        Err(SdkError::InvalidInput(
             "disallowed attachment combination: multiple attachments must all be image/gif/video \
              media; any other attachment type must be the message's only attachment"
                 .into(),
@@ -585,10 +585,25 @@ pub fn build_thrift_attachments(
         .collect()
 }
 
-/// Convert an outgoing message's own [`AttachmentDescriptor`]s, giving each
-/// the id its key derives from: the message id for the first attachment and
-/// `<message id>#<index>` for later ones, the ids recipients resolve for an
-/// attachment that carries none.
+/// Convert an outgoing message's own [`AttachmentDescriptor`]s for
+/// `send_version`: v1 names each attachment by the id its key derives from
+/// ([`build_message_attachments`]); v0 sends them without ids, as 0.5.x did.
+#[allow(clippy::vec_box)]
+pub fn build_outgoing_attachments(
+    descs: &[AttachmentDescriptor],
+    message_id: &str,
+    send_version: SendVersion,
+) -> Vec<Box<ThriftMessageAttachment>> {
+    match send_version {
+        SendVersion::V0 => build_thrift_attachments(descs),
+        SendVersion::V1 => build_message_attachments(descs, message_id),
+    }
+}
+
+/// Convert an outgoing v1 message's own [`AttachmentDescriptor`]s, giving
+/// each the id its key derives from: the message id for the first attachment
+/// and `<message id>#<index>` for later ones, the ids recipients resolve for
+/// an attachment that carries none.
 #[allow(clippy::vec_box)]
 pub fn build_message_attachments(
     descs: &[AttachmentDescriptor],
@@ -643,14 +658,14 @@ pub(crate) fn validate_file_media_hash_keys(
         own.dedup();
         for media_hash_key in own {
             if media_hash_key.is_empty() {
-                return Err(SdkError::InvalidState(
+                return Err(SdkError::InvalidInput(
                     "an attachment's media_hash_key is empty: pass the media hash key the \
                      file's upload started with"
                         .into(),
                 ));
             }
             if !seen.insert(media_hash_key) {
-                return Err(SdkError::InvalidState(format!(
+                return Err(SdkError::InvalidInput(format!(
                     "media_hash_key '{media_hash_key}' is in more than one attachment: upload \
                      the file once for each attachment"
                 )));
@@ -1241,7 +1256,7 @@ mod tests {
         for descs in &rejected {
             let err = validate_attachment_descriptors(descs)
                 .expect_err(&format!("expected rejected: {descs:?}"));
-            assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+            assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
             assert!(
                 err.to_string().contains("attachment combination"),
                 "got: {err}"
@@ -1253,7 +1268,7 @@ mod tests {
     fn validate_attachments_rejects_more_than_the_cap() {
         let descs = vec![media_desc(Some(1)); 11];
         let err = validate_attachment_descriptors(&descs).unwrap_err();
-        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
         assert!(
             err.to_string().contains("too many attachments"),
             "got: {err}"
@@ -1585,9 +1600,14 @@ mod tests {
                 "1",
                 "1",
             );
-            let err_msg = encrypt_and_sign(params).unwrap_err().to_string();
+            let err = encrypt_and_sign(params).unwrap_err();
             assert!(
-                err_msg.contains(&format!("Invalid sender_id '{sender_id}'")),
+                matches!(err, SdkError::InvalidInput(_)),
+                "{sender_id}: {err}"
+            );
+            let err_msg = err.to_string();
+            assert!(
+                err_msg.starts_with(&format!("Invalid sender_id '{sender_id}'")),
                 "{sender_id}: {err_msg}"
             );
         }

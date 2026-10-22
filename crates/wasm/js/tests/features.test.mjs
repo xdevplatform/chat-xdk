@@ -4,6 +4,7 @@
 // flags are read through the internal methods of the wasm Chat underneath,
 // which is the real SDK.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { setFlagsFromString } from "node:v8";
@@ -244,9 +245,10 @@ async function anyFailureLeavesEveryFlagOff(v, server) {
     [200, "not json", 0],
     [200, '{"v1_send":true}', 0],
     [200, '{"features":{"v1_send":true}}', 1500],
+    [200, '{"features":{"v1_send":true}}' + " ".repeat(64 * 1024), 0],
   ];
   for (const [status, body, delayMs] of cases) {
-    const label = `${status} ${body} ${delayMs}`;
+    const label = `${status} ${body.slice(0, 40)} (${body.length} bytes) ${delayMs}`;
     Object.assign(server, { status, body, delayMs });
     server.buckets.length = 0;
     const { chat, inner } = await newChat(server.endpoint);
@@ -332,6 +334,57 @@ async function theFetchesEndWithACollectedChat(server) {
   assert.equal(server.buckets.length, seen, "no request once the chat is collected");
 }
 
+async function chatsAskingAtOnceShareARequest(v, server) {
+  server.delayMs = 300;
+  const chats = [];
+  for (let i = 0; i < 4; i++) chats.push(await newChat(server.endpoint));
+  await waitFor("the IP answer", () => chats.every(({ inner }) => inner.__isEnabled("v1_send")));
+  assert.deepEqual(server.buckets, [null]);
+
+  const keys = b64ToBytes(v.private_keys_concat_b64);
+  for (const { inner } of chats) inner.importKeys(keys);
+  await waitFor("the key answer", () => chats.every(({ inner }) => !inner.__featureRefetchDue()));
+  assert.deepEqual(server.buckets, [null, String(chats[0].inner.__featureBucket())]);
+  for (const { chat } of chats) chat.free();
+}
+
+/**
+ * A Node process with a feature request still in flight exits once its own
+ * work is done, rather than when the request ends. Runtimes without
+ * `process.getBuiltinModule` fall back to fetch(), which holds the process.
+ */
+async function aFetchInFlightNeverKeepsNodeRunning(server) {
+  if (typeof process.getBuiltinModule !== "function") return;
+  server.delayMs = 60_000;
+  const url = (path) => JSON.stringify(new URL(path, import.meta.url).href);
+  const script = `
+    const fs = await import("node:fs/promises");
+    const { default: init, Chat } = await import(${url("../pkg/chat_xdk_wasm.js")});
+    const { ChatWithJuicebox } = await import(${url("../index.js")});
+    await init({ module_or_path: await fs.readFile(new URL(${url("../pkg/chat_xdk_wasm_bg.wasm")})) });
+    const chat = new ChatWithJuicebox(new Chat(), null, undefined, null, null, null);
+    chat.generateKeypairs();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  `;
+  const started = Date.now();
+  const code = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      env: {
+        ...process.env,
+        ...HOOKS,
+        CHAT_XDK_FEATURES_ENDPOINT: server.endpoint,
+        CHAT_XDK_FEATURES_TIMEOUT_MS: "10000",
+      },
+      stdio: "inherit",
+    });
+    child.on("exit", resolve);
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(code, 0);
+  assert.ok(server.buckets.length >= 1, "a feature request was in flight");
+  assert.ok(elapsed < 5000, `the process exited after ${elapsed} ms`);
+}
+
 async function aMalformedBodyIsRejectedAndChangesNothing(server) {
   server.status = 503;
   const { chat, inner } = await newChat(server.endpoint);
@@ -366,6 +419,8 @@ async function main() {
     (server) => freeStopsTheFetches(server),
     (server) => theFetchesEndWithACollectedChat(server),
     (server) => aMalformedBodyIsRejectedAndChangesNothing(server),
+    (server) => aFetchInFlightNeverKeepsNodeRunning(server),
+    (server) => chatsAskingAtOnceShareARequest(v, server),
   ];
   for (const test of tests) {
     const server = await featureServer();

@@ -117,8 +117,7 @@ namespace ChatXdk
         public bool ShouldNotify { get; init; }
 
         /// <summary>
-        /// Version of the Chat XDK that built this payload. Send it as the message's
-        /// optional <c>xdk_version</c> field.
+        /// Version of the Chat XDK that built this payload.
         /// </summary>
         [JsonPropertyName("xdk_version")]
         public string XdkVersion { get; init; } = "";
@@ -595,7 +594,9 @@ namespace ChatXdk
         /// <summary>
         /// Optional attachments: posts, links, and files (media, and link-card images). Each
         /// file names the media hash key its upload started with; encrypt the files afterwards
-        /// with <see cref="Chat.EncryptFile"/> or <see cref="Chat.FileEncryptor"/>.
+        /// with <see cref="Chat.EncryptFile"/> or <see cref="Chat.FileEncryptor"/>. Upload each
+        /// file for one message only: reusing another message's uploads can give this message
+        /// that message's id.
         /// </summary>
         public IReadOnlyList<AttachmentDescriptor>? Attachments { get; init; }
         /// <summary>Optional quick reply: a request offering options, or a response selecting one.</summary>
@@ -886,10 +887,10 @@ namespace ChatXdk
         /// <param name="eventB64">The base64 event, as delivered.</param>
         /// <param name="conversationKeys">
         /// Version → raw 32-byte conversation key, from <see cref="Chat.DecryptEvents"/> or
-        /// <see cref="Chat.ExtractConversationKeys"/>. Events without message contents need no
-        /// keys; an empty map also falls back to the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
+        /// <see cref="Chat.ExtractConversationKeys"/>. Leave it null for events without message
+        /// contents, or to take the keys from the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
         /// </param>
-        public DecryptEventParams(string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys)
+        public DecryptEventParams(string eventB64, IReadOnlyDictionary<string, byte[]>? conversationKeys = null)
         {
             EventB64 = eventB64;
             ConversationKeys = conversationKeys;
@@ -897,8 +898,8 @@ namespace ChatXdk
 
         /// <summary>The base64 event, as delivered.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
-        public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
+        /// <summary>Version → raw 32-byte conversation key; null when none were passed.</summary>
+        public IReadOnlyDictionary<string, byte[]>? ConversationKeys { get; }
         /// <summary>
         /// Signing keys to verify the event with; null or empty uses the keys stored via
         /// <see cref="Chat.SetSigningKeys"/>. The SDK picks the sender's key for the version the

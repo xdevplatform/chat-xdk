@@ -209,7 +209,7 @@ class TestParams(unittest.TestCase):
 
         missing_required = [
             lambda: EncryptMessageParams("conv-1"),
-            lambda: EncryptReplyParams("conv-1", "hi"),
+            lambda: EncryptReplyParams("conv-1"),
             lambda: EncryptReactionParams(None),
             lambda: EncryptEditParams(None),
             lambda: ConversationKeyChangeParams(),
@@ -217,7 +217,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
             lambda: MarkConversationReadParams("conv-1"),
-            lambda: DecryptEventParams("event"),
+            lambda: DecryptEventParams(),
             lambda: DecryptEventsParams(),
             lambda: EncryptFileParams(b"file", "event", {}),
             lambda: FileEncryptorParams("event", {}),
@@ -244,6 +244,43 @@ class TestParams(unittest.TestCase):
         for make in optional_positional:
             with self.assertRaises(TypeError):
                 make()
+
+    def test_the_event_a_reply_reaction_or_edit_targets_is_optional(self):
+        from chat_xdk import EncryptEditParams, EncryptReactionParams, EncryptReplyParams
+
+        reply = EncryptReplyParams("conv-1", "hi", reply_to_sequence_id="5", reply_to_sender_id=1001)
+        self.assertIsNone(reply.reply_to_event)
+        self.assertEqual(EncryptReplyParams("conv-1", "hi", "event").reply_to_event, "event")
+        self.assertEqual(
+            EncryptReplyParams("conv-1", "hi", reply_to_event="event").reply_to_event, "event"
+        )
+
+        reaction = EncryptReactionParams(
+            emoji="👍", conversation_id="conv-1", target_message_sequence_id="5"
+        )
+        self.assertIsNone(reaction.target_event)
+        self.assertEqual(EncryptReactionParams("event", "👍").emoji, "👍")
+        edit = EncryptEditParams(
+            updated_text="fixed", conversation_id="conv-1", target_message_sequence_id="5"
+        )
+        self.assertIsNone(edit.target_event)
+        self.assertEqual(EncryptEditParams("event", "fixed").updated_text, "fixed")
+
+        with self.assertRaisesRegex(TypeError, "missing required argument: 'emoji'"):
+            EncryptReactionParams("event")
+        with self.assertRaisesRegex(TypeError, "missing required argument: 'updated_text'"):
+            EncryptEditParams(target_event="event")
+
+    def test_chat_shows_its_constructor_signature(self):
+        import inspect
+
+        from chat_xdk import Chat
+
+        params = inspect.signature(Chat).parameters
+        self.assertEqual(list(params), ["config_json"])
+        self.assertIsNone(params["config_json"].default)
+        with self.assertRaises(TypeError):
+            Chat(None, None)
 
     def test_methods_take_only_their_params_class(self):
         from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams
@@ -1113,7 +1150,7 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             encryptor.finish()
 
-    def test_a_message_with_files_takes_the_id_its_files_derive(self):
+    def _sender_of_files(self):
         from chat_xdk import EncryptMessageParams
 
         chat, v = self._unlocked_chat()
@@ -1130,10 +1167,21 @@ class TestApiShapes(unittest.TestCase):
                 )
             ).message_id
 
+        return chat, send
+
+    def test_a_v1_message_with_files_takes_the_id_its_files_derive(self):
+        chat, send = self._sender_of_files()
+        chat._apply_feature_config('{"features":{"v1_send":true}}', chat._feature_bucket())
+
         first = send("draft", ["photo-a", "photo-b"])
         self.assertEqual(send("final text", ["photo-a", "photo-b"]), first)
         self.assertNotEqual(send("draft", ["photo-b", "photo-a"]), first)
         self.assertNotEqual(send("draft", []), send("draft", []))
+
+    def test_a_v0_message_with_files_takes_a_random_id(self):
+        _, send = self._sender_of_files()
+
+        self.assertNotEqual(send("draft", ["photo-a", "photo-b"]), send("draft", ["photo-a", "photo-b"]))
 
     def test_file_errors_say_what_to_pass(self):
         from chat_xdk import EncryptFileParams, EncryptMessageParams

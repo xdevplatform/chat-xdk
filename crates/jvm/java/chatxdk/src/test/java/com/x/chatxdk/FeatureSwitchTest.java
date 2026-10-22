@@ -281,10 +281,13 @@ class FeatureSwitchTest {
             {200, "not json", 0L},
             {200, "{\"v1_send\":true}", 0L},
             {200, "{\"features\":{\"v1_send\":true}}", 1500L},
+            {200, "{\"features\":{\"v1_send\":true}}" + " ".repeat(64 * 1024), 0L},
         };
         for (Object[] c : cases) {
             long delayMs = (Long) c[2];
-            String what = c[0] + " " + c[1] + " " + delayMs;
+            String body = (String) c[1];
+            String what = c[0] + " " + body.substring(0, Math.min(40, body.length()))
+                    + " (" + body.length() + " bytes) " + delayMs;
             try (FeatureServer server = new FeatureServer()) {
                 server.set((Integer) c[0], (String) c[1], delayMs);
                 try (Chat chat = withKeys(newChat(server.endpoint))) {
@@ -372,6 +375,59 @@ class FeatureSwitchTest {
             int seen = server.buckets().size();
             Thread.sleep(1200);
             assertEquals(seen, server.buckets().size());
+        }
+    }
+
+    private static long featureThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(thread -> thread.getName().equals("chat-xdk-features"))
+                .count();
+    }
+
+    /** Keyed chats that nothing references once this returns, re-checking hourly. */
+    private static void startUnreferencedKeyedChats(String endpoint, int count) throws Exception {
+        for (int i = 0; i < count; i++) {
+            Chat chat = withKeys(newChat(endpoint, 3_600_000, 500));
+            waitFor("the key answer", () -> !chat.featureRefetchDue());
+        }
+    }
+
+    @Test
+    void aCollectedChatStopsItsThreadWithoutWaitingForTheRecheck() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            long baseline = featureThreads();
+            startUnreferencedKeyedChats(server.endpoint, 3);
+            assertEquals(baseline + 3, featureThreads());
+            for (int i = 0; i < 20 && featureThreads() > baseline; i++) {
+                System.gc();
+                Thread.sleep(100);
+            }
+            waitFor("the threads to end", () -> featureThreads() == baseline);
+        }
+    }
+
+    @Test
+    void chatsAskingAtOnceShareARequest() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.set(200, "{\"features\":{\"v1_send\":true}}", 300);
+            List<Chat> chats = new ArrayList<>();
+            try {
+                for (int i = 0; i < 4; i++) {
+                    chats.add(newChat(server.endpoint));
+                }
+                waitFor("the IP answer", () -> chats.stream().allMatch(c -> c.isEnabled("v1_send")));
+                assertEquals(list((String) null), server.buckets());
+
+                chats.get(0).generateKeypairs();
+                byte[] keys = chats.get(0).exportKeys();
+                for (Chat chat : chats.subList(1, chats.size())) {
+                    chat.importKeys(keys);
+                }
+                waitFor("the key answer", () -> chats.stream().noneMatch(Chat::featureRefetchDue));
+                assertEquals(list(null, chats.get(0).featureBucket().toString()), server.buckets());
+            } finally {
+                chats.forEach(Chat::close);
+            }
         }
     }
 

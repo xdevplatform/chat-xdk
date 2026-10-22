@@ -93,6 +93,18 @@ def main(out_path):
             chat.encrypt_remove_reaction(EncryptReactionParams(None, "\U0001f44d", **target, **key)),
         ),
         ("edit", "edited text", chat.encrypt_edit(EncryptEditParams(None, "edited text", **target, **key))),
+        (
+            "edit_from_event",
+            "edited from the event",
+            chat.encrypt_edit(
+                EncryptEditParams(
+                    original.event_b64,
+                    "edited from the event",
+                    target_message_sequence_id=TARGET_SEQUENCE_ID,
+                    **key,
+                )
+            ),
+        ),
     ]
     for kind, _, payload in sends:
         assert payload.signature_info.signature_version == "7", (kind, payload.signature_info.signature_version)

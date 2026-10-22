@@ -1,13 +1,20 @@
 package com.x.chatxdk;
 
+import java.io.ByteArrayOutputStream;
 import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -20,9 +27,11 @@ final class FeatureSwitches {
     private static final String DEFAULT_ENDPOINT = "https://api.x.com/2/chat/features";
     private static final String ENDPOINT_ENV = "CHAT_XDK_FEATURES_ENDPOINT";
     private static final int MAX_BODY = 64 * 1024;
-    private static final long MAX_REFETCH_BACKOFF_MS = 60_000;
     private static final HttpClient HTTP =
             HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+
+    // Feature requests in flight, by URL; guarded by itself.
+    private static final Map<String, CompletableFuture<String>> REQUESTS = new HashMap<>();
 
     private FeatureSwitches() {}
 
@@ -58,8 +67,8 @@ final class FeatureSwitches {
 
     /**
      * Fetch the flags for {@code chat} now (retrying once), again with the key's bucket once keys
-     * load (retrying with backoff), and re-check them every refresh interval with a fetch that can
-     * only turn flags off, until {@link #stop}. The daemon thread holds the chat weakly, so an
+     * load (retrying with a backoff that grows to the refresh interval), and re-check them every
+     * refresh interval with a fetch that can only turn flags off, until {@link #stop}. The daemon thread holds the chat weakly, so an
      * unclosed chat is still cleaned up, and the fetches end with it.
      */
     static Runner start(Chat chat, Options options) {
@@ -124,6 +133,7 @@ final class FeatureSwitches {
             // Every flag stays off; the loop below retries.
         }
         long refreshMs = options.refresh.toMillis();
+        long maxBackoffMs = Math.max(refreshMs, 1000);
         long nextRecheck = now() + refreshMs;
         long retryAt = 0;
         long backoffMs = 1000;
@@ -138,7 +148,7 @@ final class FeatureSwitches {
                             nextRecheck = now() + refreshMs;
                         } else {
                             retryAt = now() + backoffMs;
-                            backoffMs = Math.min(backoffMs * 2, MAX_REFETCH_BACKOFF_MS);
+                            backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
                         }
                     }
                 } else if (refreshMs > 0 && now >= nextRecheck) {
@@ -171,11 +181,53 @@ final class FeatureSwitches {
         }
         String endpoint = options.endpoint;
         String url = bucket < 0 ? endpoint : endpoint + (endpoint.contains("?") ? "&" : "?") + "bucket=" + bucket;
-        String body = get(url, options.timeout);
+        String body = sharedGet(url, options.timeout);
         return body != null && apply(ref, body, bucket, downgradeOnly);
     }
 
-    /** The body of a 200 response from {@code url} within {@code timeout}, or null on any failure. */
+    /**
+     * The body for {@code url}, from the request another chat has in flight for it or else from a
+     * new one, so chats that ask at once share a request. The request runs on the thread of the chat
+     * that started it and ends if that chat stops; the chats waiting on it then see a failure and
+     * retry.
+     */
+    private static String sharedGet(String url, Duration timeout) {
+        CompletableFuture<String> request;
+        boolean owner = false;
+        synchronized (REQUESTS) {
+            request = REQUESTS.get(url);
+            if (request == null) {
+                request = new CompletableFuture<>();
+                REQUESTS.put(url, request);
+                owner = true;
+            }
+        }
+        if (owner) {
+            String body = null;
+            try {
+                body = get(url, timeout);
+            } finally {
+                synchronized (REQUESTS) {
+                    REQUESTS.remove(url);
+                }
+                request.complete(body);
+            }
+            return body;
+        }
+        try {
+            return request.get(timeout.toMillis() + 1000, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * The body of a 200 response from {@code url} within {@code timeout} in all, or null on any
+     * failure.
+     */
     private static String get(String url, Duration timeout) {
         CompletableFuture<HttpResponse<byte[]>> future = null;
         try {
@@ -184,10 +236,10 @@ final class FeatureSwitches {
                     .header("Accept", "application/json")
                     .GET()
                     .build();
-            future = HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
+            future = HTTP.sendAsync(request, info -> new CappedBody());
             HttpResponse<byte[]> response = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             byte[] body = response.body();
-            if (response.statusCode() != 200 || body == null || body.length > MAX_BODY) {
+            if (response.statusCode() != 200 || body == null) {
                 return null;
             }
             return new String(body, StandardCharsets.UTF_8);
@@ -205,5 +257,50 @@ final class FeatureSwitches {
 
     private static long now() {
         return System.nanoTime() / 1_000_000;
+    }
+
+    /** Collects a body of at most {@link #MAX_BODY} bytes; a longer one is cut off as null. */
+    private static final class CappedBody implements HttpResponse.BodySubscriber<byte[]> {
+        private final CompletableFuture<byte[]> result = new CompletableFuture<>();
+        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        private Flow.Subscription subscription;
+
+        @Override
+        public CompletionStage<byte[]> getBody() {
+            return result;
+        }
+
+        @Override
+        public void onSubscribe(Flow.Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(Long.MAX_VALUE);
+        }
+
+        @Override
+        public void onNext(List<ByteBuffer> buffers) {
+            for (ByteBuffer buffer : buffers) {
+                if (result.isDone()) {
+                    return;
+                }
+                if (bytes.size() + buffer.remaining() > MAX_BODY) {
+                    subscription.cancel();
+                    result.complete(null);
+                    return;
+                }
+                byte[] chunk = new byte[buffer.remaining()];
+                buffer.get(chunk);
+                bytes.write(chunk, 0, chunk.length);
+            }
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            result.completeExceptionally(error);
+        }
+
+        @Override
+        public void onComplete() {
+            result.complete(bytes.toByteArray());
+        }
     }
 }

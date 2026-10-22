@@ -93,6 +93,13 @@
 //! - **Signing**: ECDSA signatures
 //! - **Protocol**: Thrift message parsing/serialization
 //!
+//! ## Send format
+//!
+//! Encrypted sends from this crate are always v0, the format 0.5.x sends.
+//! The language bindings move sends to v1 (per-message keys) when the X API's
+//! `v1_send` feature switch turns on, but this crate never fetches the
+//! switches. It reads v1 sends like every binding.
+//!
 //! ## What This SDK Does NOT Do
 //!
 //! - HTTP communication (you handle API calls)
@@ -134,8 +141,12 @@ pub(crate) const XDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod internals;
 
 // Hidden support for this repository's language bindings, which fetch the
-// feature switches internally. Not part of the public API — feature-gated so
-// the default surface doesn't expose it; see the module docs.
+// feature switches internally. Not part of the public API: the feature only
+// compiles in this repository's builds (see build.rs), so no dependent crate
+// can drive the switches.
+#[cfg(all(feature = "bindings", not(chat_xdk_bindings)))]
+compile_error!("the `bindings` feature is internal to the chat-xdk repository's language bindings");
+
 #[cfg(feature = "bindings")]
 #[doc(hidden)]
 pub mod bindings;

@@ -67,7 +67,7 @@ export interface SendPayload {
   conversationKeyVersion: string;
   /** Whether the X API should send a push notification for this message. */
   shouldNotify: boolean;
-  /** Version of the Chat XDK that built this payload. Send it as the message's optional `xdk_version` field. */
+  /** Version of the Chat XDK that built this payload. */
   xdkVersion: string;
 }
 
@@ -272,6 +272,8 @@ export interface EncryptMessageParams {
    * Optional attachments: posts, links, and files (media, and link-card
    * images). Each file names the media hash key its upload started with;
    * encrypt the files afterwards with `encryptFile` or `fileEncryptor`.
+   * Upload each file for one message only: reusing another message's
+   * uploads can give this message that message's id.
    */
   attachments?: AttachmentDescriptor[] | null;
   /** Optional quick reply: a request offering options, or a response selecting one. */
@@ -538,11 +540,11 @@ export interface DecryptEventParams {
   eventB64: string;
   /**
    * The conversation's key map, from decryptEvents or
-   * extractConversationKeys (its `keys`). Events without message contents
-   * need no keys, so pass `{}` for them; an empty map also falls back to the
-   * opt-in key cache (setCacheKeys).
+   * extractConversationKeys (its `keys`). Omit it, or pass `{}`, for events
+   * without message contents, or to take the keys from the opt-in key cache
+   * (setCacheKeys).
    */
-  conversationKeys: ConversationKeyMap;
+  conversationKeys?: ConversationKeyMap | null;
   /** Signing keys to verify the event with; the keys stored via setSigningKeys are used when omitted or empty. */
   signingKeys?: SigningKeyEntry[] | null;
 }
@@ -887,7 +889,7 @@ export interface CreateChatOptions {
  * it (doing so throws). Call `free()` only when abandoning a file without
  * finishing it.
  */
-export declare class FileEncryptor {
+export interface FileEncryptor {
   /** Encrypt a chunk of the file, returning the encrypted bytes available so far. */
   push(plaintext: Uint8Array): Uint8Array;
   /** Emit the final frame; consumes and frees the encryptor. */
@@ -906,7 +908,7 @@ export declare class FileEncryptor {
  * it (doing so throws). Call `free()` only when abandoning a file without
  * finishing it.
  */
-export declare class FileDecryptor {
+export interface FileDecryptor {
   /** Decrypt a chunk of the encrypted file, returning the bytes available so far. */
   push(ciphertext: Uint8Array): Uint8Array;
   /** Decrypt the final frame; consumes and frees the decryptor. */
@@ -1245,10 +1247,10 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
 
   /**
-   * Release the WASM-side crypto engine: clears key material (`lock()`) and
-   * frees the underlying WASM object. The instance must not be used
-   * afterwards. When reusing the instance, `lock()` alone suffices for key
-   * hygiene.
+   * Release the WASM-side crypto engine: clears key material (`lock()`),
+   * stops this instance's background feature-switch fetch, and frees the
+   * underlying WASM object. The instance must not be used afterwards. When
+   * reusing the instance, `lock()` alone suffices for key hygiene.
    */
   free(): void;
 }
@@ -1297,3 +1299,6 @@ export declare function detectMimeType(bytes: Uint8Array): string | undefined;
 
 /** Detect image dimensions from file bytes. Returns { width, height } or null. */
 export declare function detectImageDimensions(bytes: Uint8Array): ImageDimensions | null;
+
+// Only the declarations marked `export` above are part of the module.
+export {};

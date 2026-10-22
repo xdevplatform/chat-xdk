@@ -4,3 +4,9 @@
 # repo uses SSH submodule URLs.
 git-fetch-with-cli = true
 
+[env]
+# Lets this repository's language bindings enable chat-xdk-core's internal
+# `bindings` feature (see crates/core/build.rs). Builds outside the repository
+# never read this file, so the feature fails to compile there.
+CHAT_XDK_BINDINGS = "1"
+

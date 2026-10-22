@@ -50,7 +50,7 @@ bench = false
 # builds the libfuzzer harness.
 [workspace]
 
-# Mirrors the root workspace's pin: thrift 0.24 is not on crates.io yet, and
+# Mirrors the root workspace's pin: crates.io has no thrift 0.24, and
 # this standalone workspace does not inherit the root [patch] section.
 [patch.crates-io]
 thrift = { git = "https://github.com/apache/thrift.git", rev = "deb36fa409849de45973b04ffc3ce49d277ca90a" }

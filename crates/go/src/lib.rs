@@ -486,7 +486,7 @@ pub extern "C" fn chat_xdk_has_identity_key(handle: *const ChatHandle) -> i32 {
 
 /// Enable or disable rejection of unverified events.
 ///
-/// When enabled — the default — `chat_xdk_decrypt_event` returns an error for
+/// When enabled — the default — `chat_xdk_decrypt_event_params` returns an error for
 /// any signed event whose signature cannot be verified (invalid, missing, or
 /// no matching signing key) instead of returning it with `verified: false`.
 #[no_mangle]
@@ -524,7 +524,7 @@ pub extern "C" fn chat_xdk_set_identity(
 /// Enable (non-zero) or disable (0) the conversation-key cache (off by
 /// default).
 ///
-/// While enabled, `chat_xdk_decrypt_events` caches each conversation's
+/// While enabled, `chat_xdk_decrypt_events_params` caches each conversation's
 /// verified latest key and the encrypt functions resolve an omitted
 /// `conversation_key`/`conversation_key_version` pair from it. Disabling
 /// clears the cache.
@@ -630,7 +630,7 @@ pub extern "C" fn chat_xdk_internal_feature_refetch_due(handle: *const ChatHandl
 /// `signing_keys_json`.
 ///
 /// `signing_keys_json` takes the same array shape as
-/// `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
+/// `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this
 /// call populates the store — keys carried inside events are never trusted.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_signing_keys(
@@ -899,7 +899,7 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
 /// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_events(
+pub extern "C" fn chat_xdk_decrypt_events_params(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {
@@ -1129,6 +1129,7 @@ struct FfiGroupCreateParams {
 #[derive(serde::Deserialize)]
 struct FfiDecryptEventParams {
     event_b64: String,
+    #[serde(default)]
     conversation_keys: HashMap<String, String>,
     #[serde(default)]
     signing_keys: Option<Vec<SigningKeyEntry>>,
@@ -1395,17 +1396,17 @@ pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
 ///
 /// `params_json` — single JSON document: `event_b64` (the base64 event),
 /// `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
-/// `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
+/// `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
 /// for events without message contents, which also falls back to the opt-in
 /// key cache), plus optional `signing_keys` (as for
-/// `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
+/// `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
 /// events fail decryption under the default reject-unverified policy
 /// (disable it via `chat_xdk_set_reject_unverified` to have them returned
 /// with `verified: false` instead).
 ///
 /// Returns JSON representation of the decrypted Event.
 #[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_event(
+pub extern "C" fn chat_xdk_decrypt_event_params(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {
@@ -1461,11 +1462,11 @@ fn decode_ckey_bytes(ckey_b64: Option<&str>) -> Result<Option<Vec<u8>>, FfiResul
 /// (`[{"attachment_type",...},...]`), `quick_reply` (the `quick_reply` shape
 /// of decrypted text content), `should_notify`, and `ttl_msec`.
 ///
-/// Returns JSON `SendPayload`, whose `message_id` is the message's id. A
+/// Returns JSON `SendPayload`, whose `message_id` is the message's id. A v1
 /// message with files takes an id derived from its files, so building it
-/// again gives the same id; encrypt each file afterwards with
-/// `chat_xdk_encrypt_file` or a file encryptor and the payload's
-/// `event_b64`.
+/// again gives the same id; other messages take a random id. Encrypt each
+/// file afterwards with `chat_xdk_encrypt_file` or a file encryptor and the
+/// payload's `event_b64`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_encrypt_message(
     handle: *const ChatHandle,

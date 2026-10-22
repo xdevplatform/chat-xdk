@@ -1,7 +1,9 @@
 """Write compatibility fixtures with a released chatxdk 0.5.x.
 
-One send of each kind (message, message with entities, reply, reaction add and
-remove, edit) and a file encrypted with encrypt_stream. The Rust compatibility
+One send of each kind (message, message with entities, message with a file,
+reply, reaction add and remove, edit) and a file encrypted with encrypt_stream.
+The reply and the edit are made twice: from explicit fields, and from the
+event of the first message as the backend relays it. The Rust compatibility
 tests check that the current SDK decrypts and verifies them, and that its v0
 sends match them on the wire.
 
@@ -14,6 +16,7 @@ Run it with the released package installed, never the in-repo one:
 import base64
 import importlib.metadata
 import json
+import struct
 import sys
 
 from chat_xdk import Chat
@@ -24,10 +27,46 @@ KEY_VERSION = "1700000000123"
 SIGNING_KEY_VERSION = "1"
 CONVERSATION_KEY = bytes(range(32))
 TARGET_SEQUENCE_ID = "100"
+MEDIA = {
+    "attachment_type": "media",
+    "media_hash_key": "compat-file-1",
+    "width": 640,
+    "height": 480,
+    "filesize_bytes": 4096,
+    "filename": "compat.jpg",
+    "media_type": 1,
+}
 
 
 def b64(data):
     return base64.b64encode(bytes(data)).decode()
+
+
+def thrift_string(field_id, value):
+    data = value.encode()
+    return struct.pack(">bhi", 11, field_id, len(data)) + data
+
+
+def thrift_struct(field_id, body):
+    return struct.pack(">bh", 12, field_id) + body
+
+
+def relayed_event(payload, sequence_id):
+    """The base64 MessageEvent the backend relays for `payload`: the sent
+    MessageCreateEvent and MessageEventSignature with the sequence id the
+    backend assigns. Thrift binary protocol, field ids from thrift/event.thrift."""
+    create = base64.b64decode(payload.encrypted_content)
+    signature = base64.b64decode(payload.encoded_event_signature)
+    event = (
+        thrift_string(1, sequence_id)
+        + thrift_string(2, payload.message_id)
+        + thrift_string(3, SENDER)
+        + thrift_string(4, CONVERSATION)
+        + thrift_struct(7, thrift_struct(1, create) + b"\x00")
+        + thrift_struct(9, signature)
+        + b"\x00"
+    )
+    return base64.b64encode(event).decode()
 
 
 def send(kind, expected, payload):
@@ -54,8 +93,10 @@ def main(out_path):
         conversation_key_version=KEY_VERSION,
     )
     target = dict(conversation_id=CONVERSATION, target_message_sequence_id=TARGET_SEQUENCE_ID)
+    original = chat.encrypt_message(CONVERSATION, "hello from 0.5", **common)
+    target_event = relayed_event(original, TARGET_SEQUENCE_ID)
     sends = [
-        send("message", "hello from 0.5", chat.encrypt_message(CONVERSATION, "hello from 0.5", **common)),
+        send("message", "hello from 0.5", original),
         send(
             "message_with_entities",
             "see https://x.com",
@@ -76,6 +117,21 @@ def main(out_path):
         send("reaction_add", "\U0001f44d", chat.encrypt_add_reaction(emoji="\U0001f44d", **target, **common)),
         send("reaction_remove", "\U0001f44d", chat.encrypt_remove_reaction(emoji="\U0001f44d", **target, **common)),
         send("edit", "edited text", chat.encrypt_edit(updated_text="edited text", **target, **common)),
+        send(
+            "message_with_file",
+            "a file",
+            chat.encrypt_message(CONVERSATION, "a file", attachments=[MEDIA], **common),
+        ),
+        send(
+            "reply_from_event",
+            "a reply to the event",
+            chat.encrypt_reply(CONVERSATION, "a reply to the event", target_event, **common),
+        ),
+        send(
+            "edit_from_event",
+            "edited from the event",
+            chat.encrypt_edit(target_event, "edited from the event", **common),
+        ),
     ]
     file_plaintext = b"chat-xdk compatibility file\n" * 90
     fixture = {
@@ -86,6 +142,8 @@ def main(out_path):
         "conversation_key_version": KEY_VERSION,
         "signing_key_version": SIGNING_KEY_VERSION,
         "target_sequence_id": TARGET_SEQUENCE_ID,
+        "target_event_b64": target_event,
+        "media_attachment": MEDIA,
         "private_keys_b64": b64(chat.export_keys()),
         "signing_key": {
             "user_id": SENDER,

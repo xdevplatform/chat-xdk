@@ -94,6 +94,9 @@ jobs:
       - name: Test (Rust workspace)
         run: cargo test --workspace
 
+      - name: The bindings feature only compiles in this repository
+        run: ./scripts/check_bindings_gate.sh
+
       - name: Build Python extension (pyo3)
         env:
           PYO3_PYTHON: python

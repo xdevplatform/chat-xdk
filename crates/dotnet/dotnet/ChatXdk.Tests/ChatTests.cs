@@ -1345,6 +1345,10 @@ namespace ChatXdk.Tests
             chat.SetCacheKeys(true);
             chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventKeyChangeB64 }) { SigningKeys = EventSigningKeys(v) });
 
+            // With no conversation keys, DecryptEvent takes the key from the cache.
+            var fromCache = chat.DecryptEvent(new DecryptEventParams(v.EventMessageB64) { SigningKeys = EventSigningKeys(v) });
+            Assert.Equal(v.EventMessageText, fromCache.GetProperty("content").GetProperty("text").GetString());
+
             var payload = chat.EncryptMessage(new EncryptMessageParams(v.EventConversationId, "from the key cache"));
             Assert.Equal(v.EventConversationKeyVersion, payload.ConversationKeyVersion);
             Assert.NotEmpty(payload.EncryptedContent);

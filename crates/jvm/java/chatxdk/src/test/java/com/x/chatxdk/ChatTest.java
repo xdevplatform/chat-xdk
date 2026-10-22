@@ -971,6 +971,12 @@ class ChatTest {
             keyChange.signingKeys = eventSigningKeys(v);
             chat.decryptEvents(keyChange);
 
+            // With no conversation keys, decryptEvent takes the key from the cache.
+            DecryptEventParams fromCache = new DecryptEventParams(v.get("event_message_b64").asText());
+            fromCache.signingKeys = eventSigningKeys(v);
+            assertEquals(v.get("event_message_text").asText(),
+                    chat.decryptEvent(fromCache).get("content").get("text").asText());
+
             SendPayload payload =
                     chat.encryptMessage(new EncryptMessageParams(conversationId, "from the key cache"));
             assertEquals(v.get("event_conversation_key_version").asText(), payload.conversationKeyVersion);
@@ -1339,6 +1345,34 @@ class ChatTest {
                 ChatXdkException e = assertThrows(ChatXdkException.class, truncated::finish);
                 assertTrue(e.getMessage().contains("truncated"), e.getMessage());
             }
+        }
+    }
+
+    /** The file calls throw only the unchecked ChatXdkException, so no throws clause is needed. */
+    private static byte[] roundTripWithoutThrowsClause(
+            Chat chat, SendPayload payload, Map<String, byte[]> keys, String mediaHashKey, byte[] file) {
+        byte[] whole = chat.encryptFile(new EncryptFileParams(file, payload.eventB64, keys, mediaHashKey));
+        byte[] streamed;
+        try (FileEncryptor enc = chat.fileEncryptor(new FileEncryptorParams(payload.eventB64, keys, mediaHashKey))) {
+            byte[] head = enc.push(file);
+            byte[] tail = enc.finish();
+            streamed = java.util.Arrays.copyOf(head, head.length + tail.length);
+            System.arraycopy(tail, 0, streamed, head.length, tail.length);
+        }
+        try (FileDecryptor dec = chat.fileDecryptor(new FileDecryptorParams(payload.eventB64, keys, mediaHashKey))) {
+            dec.push(streamed);
+            dec.finish();
+        }
+        return chat.decryptFile(new DecryptFileParams(whole, payload.eventB64, keys, mediaHashKey));
+    }
+
+    @Test
+    void fileCallsDeclareNoCheckedExceptions() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = quickReplyChat(v)) {
+            SendPayload payload = sendFiles(chat, v, "a photo", photo("only"));
+            byte[] file = "photo bytes".getBytes(StandardCharsets.UTF_8);
+            assertArrayEquals(file, roundTripWithoutThrowsClause(chat, payload, conversationKeys(v), "only", file));
         }
     }
 

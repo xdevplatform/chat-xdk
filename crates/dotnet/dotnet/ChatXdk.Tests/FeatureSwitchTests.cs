@@ -304,6 +304,35 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public Task AnOversizedBody_LeavesEveryFlagOff() =>
+            AnyFailure_LeavesEveryFlagOff(200, "{\"features\":{\"v1_send\":true}}" + new string(' ', 64 * 1024), 0);
+
+        [Fact]
+        public async Task ChatsAskingAtOnce_ShareARequest()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", 300);
+            var chats = Enumerable.Range(0, 4).Select(_ => NewChat(server.Endpoint)).ToList();
+            try
+            {
+                await WaitFor("the IP answer", () => chats.All(c => c.IsEnabled("v1_send")));
+                Assert.Equal(new List<string?> { null }, server.Buckets);
+
+                chats[0].GenerateKeypairs();
+                var keys = chats[0].ExportKeys()!;
+                foreach (var chat in chats.Skip(1))
+                    chat.ImportKeys(keys);
+                await WaitFor("the key answer", () => chats.All(c => !c.FeatureRefetchDue()));
+                Assert.Equal(new List<string?> { null, Bucket(chats[0]) }, server.Buckets);
+            }
+            finally
+            {
+                foreach (var chat in chats)
+                    chat.Dispose();
+            }
+        }
+
+        [Fact]
         public async Task AnUnreachableEndpoint_LeavesEveryFlagOff()
         {
             string endpoint;

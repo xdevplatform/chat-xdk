@@ -209,7 +209,7 @@ class TestPythonSdkVectors(unittest.TestCase):
             )
 
     def test_key_cache_resolves_omitted_conversation_key(self):
-        from chat_xdk import Chat, DecryptEventsParams, EncryptMessageParams
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams, EncryptMessageParams
 
         v = _load_vectors()
         chat = Chat()
@@ -224,6 +224,12 @@ class TestPythonSdkVectors(unittest.TestCase):
             DecryptEventsParams([v["event_key_change_b64"]], signing_keys=_fixture_signing_keys(v))
         )
         self.assertEqual(result["errors"], {})
+
+        # No conversation keys passed: decrypt_event takes the key from the cache.
+        event = chat.decrypt_event(
+            DecryptEventParams(v["event_message_b64"], signing_keys=_fixture_signing_keys(v))
+        )
+        self.assertEqual(event["content"]["text"], v["event_message_text"])
 
         # No key passed: the encrypt resolves the cached verified key.
         payload = chat.encrypt_message(EncryptMessageParams(v["event_conversation_id"], "hi"))

@@ -128,8 +128,7 @@ public final class Types {
         public boolean shouldNotify;
 
         /**
-         * Version of the Chat XDK that built this payload. Send it as the message's optional
-         * {@code xdk_version} field.
+         * Version of the Chat XDK that built this payload.
          */
         @JsonProperty("xdk_version")
         public String xdkVersion = "";
@@ -610,7 +609,9 @@ public final class Types {
         /**
          * Optional attachments: posts, links, and files (media, and link-card images). Each file
          * names the media hash key its upload started with; encrypt the files afterwards with
-         * {@link Chat#encryptFile} or {@link Chat#fileEncryptor}.
+         * {@link Chat#encryptFile} or {@link Chat#fileEncryptor}. Upload each file for one
+         * message only: reusing another message's uploads can give this message that message's
+         * id.
          */
         public List<AttachmentDescriptor> attachments;
 
@@ -976,8 +977,8 @@ public final class Types {
 
         /**
          * Version &#8594; raw 32-byte conversation key, from {@link Chat#decryptEvents} or
-         * {@link Chat#extractConversationKeys}. Events without message contents need no keys; an
-         * empty map also falls back to the opt-in key cache ({@link Chat#setCacheKeys}).
+         * {@link Chat#extractConversationKeys}. Null for events without message contents, or to
+         * take the keys from the opt-in key cache ({@link Chat#setCacheKeys}).
          */
         public final Map<String, byte[]> conversationKeys;
 
@@ -997,6 +998,16 @@ public final class Types {
         public DecryptEventParams(String eventB64, Map<String, byte[]> conversationKeys) {
             this.eventB64 = eventB64;
             this.conversationKeys = conversationKeys;
+        }
+
+        /**
+         * Create params without conversation keys, for events without message contents, or to
+         * take the keys from the opt-in key cache.
+         *
+         * @param eventB64 The base64 event, as delivered.
+         */
+        public DecryptEventParams(String eventB64) {
+            this(eventB64, null);
         }
     }
 

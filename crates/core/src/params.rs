@@ -17,7 +17,9 @@
 //! A message with files is built before its files are encrypted: each file's
 //! attachment names the media hash key its upload started with, and each
 //! file is then encrypted with [`EncryptFileParams`] or
-//! [`FileEncryptorParams`] from the returned payload's `event_b64`.
+//! [`FileEncryptorParams`] from the returned payload's `event_b64`. Upload
+//! each file for one message only: reusing another message's uploads can give
+//! this message that message's id.
 //!
 //! Identity fields (`sender_id`, `signing_key_version`) and key fields
 //! (`conversation_key`, `conversation_key_version`) are optional overrides:
@@ -828,8 +830,9 @@ pub struct DecryptEventParams {
     /// The base64 event, as delivered.
     pub event_b64: String,
     /// The conversation's key map (`key version → key`), from
-    /// `decrypt_events` or `extract_conversation_keys`. Events without
-    /// message contents need no keys, so the map may be empty for them.
+    /// `decrypt_events` or `extract_conversation_keys`. Leave it empty for
+    /// events without message contents, or to take the keys from the opt-in
+    /// key cache.
     pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// Signing keys to verify the event with; the keys stored via
     /// `set_signing_keys` are used when unset or empty.

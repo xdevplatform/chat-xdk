@@ -139,7 +139,7 @@ class EncryptReplyParams:
         self,
         conversation_id: str,
         text: str,
-        reply_to_event: Optional[str],
+        reply_to_event: Optional[str] = None,
         *,
         reply_to_edit_event: Optional[str] = None,
         reply_to_ckces: Optional[list[str]] = None,
@@ -170,8 +170,8 @@ class EncryptReactionParams:
     conversation_key_version: Optional[str]
     def __init__(
         self,
-        target_event: Optional[str],
-        emoji: str,
+        target_event: Optional[str] = None,
+        emoji: str = ...,
         *,
         conversation_id: Optional[str] = None,
         target_message_sequence_id: Optional[str] = None,
@@ -193,8 +193,8 @@ class EncryptEditParams:
     conversation_key_version: Optional[str]
     def __init__(
         self,
-        target_event: Optional[str],
-        updated_text: str,
+        target_event: Optional[str] = None,
+        updated_text: str = ...,
         *,
         entities: Optional[list[tuple[int, int, str]]] = None,
         conversation_id: Optional[str] = None,
@@ -307,12 +307,12 @@ class MarkConversationReadParams:
 
 class DecryptEventParams:
     event_b64: str
-    conversation_keys: dict[str, bytes]
+    conversation_keys: Optional[dict[str, bytes]]
     signing_keys: Optional[list[dict[str, str]]]
     def __init__(
         self,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
+        conversation_keys: Optional[dict[str, bytes]] = None,
         *,
         signing_keys: Optional[list[dict[str, str]]] = None,
     ) -> None: ...
@@ -397,6 +397,10 @@ class Chat:
     ) -> None: ...
     def delete(self) -> None: ...
     def lock(self) -> None: ...
+    def close(self) -> None:
+        """Stop this chat's background work: its fetch of the X API's
+        feature switches. A chat that is garbage-collected stops it too."""
+        ...
     def is_unlocked(self) -> bool: ...
     def has_identity_key(self) -> bool: ...
 

@@ -32,6 +32,7 @@ class _FeatureServer:
         self.status = 200
         self.body = '{"features":{"v1_send":true}}'
         self.delay = 0.0
+        self.drip = 0.0
         self.buckets = []
         server = self
 
@@ -49,7 +50,14 @@ class _FeatureServer:
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
-                    self.wfile.write(body)
+                    if server.drip:
+                        # One byte at a time, each well inside the timeout.
+                        for i in range(len(body)):
+                            self.wfile.write(body[i : i + 1])
+                            self.wfile.flush()
+                            time.sleep(server.drip)
+                    else:
+                        self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -216,9 +224,10 @@ class TestFeatureSwitches(unittest.TestCase):
             (200, "not json", 0.0),
             (200, '{"v1_send":true}', 0.0),
             (200, '{"features":{"v1_send":true}}', 1.5),
+            (200, '{"features":{"v1_send":true}}' + " " * (64 * 1024), 0.0),
         ]
         for status, body, delay in cases:
-            with self.subTest(status=status, body=body, delay=delay):
+            with self.subTest(status=status, body=body[:40], size=len(body), delay=delay):
                 self.server.status, self.server.body, self.server.delay = status, body, delay
                 self.server.buckets.clear()
                 chat = self._chat()
@@ -277,6 +286,52 @@ class TestFeatureSwitches(unittest.TestCase):
         seen = len(self.server.buckets)
         time.sleep(1.2)
         self.assertEqual(len(self.server.buckets), seen)
+
+    def test_chats_asking_at_once_share_a_request(self):
+        self.server.delay = 0.3
+        chats = [self._chat(with_keys=False) for _ in range(4)]
+        self.assertTrue(_wait_for(lambda: all(c._is_enabled("v1_send") for c in chats)))
+        self.assertEqual(self.server.buckets, [None])
+
+        keys = base64.b64decode(self.vectors["private_keys_concat_b64"])
+        for chat in chats:
+            chat.import_keys(keys)
+        self.assertTrue(_wait_for(lambda: not any(c._feature_refetch_due() for c in chats)))
+        self.assertEqual(self.server.buckets, [None, str(chats[0]._feature_bucket())])
+
+    def test_a_body_still_arriving_at_the_timeout_is_dropped(self):
+        import chat_xdk
+
+        self.server.drip = 0.1
+        started = time.monotonic()
+        self.assertIsNone(chat_xdk._get_features(self.server.url, 0.5))
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def _feature_threads(self):
+        return [t for t in threading.enumerate() if t.name == "chat-xdk-features"]
+
+    def test_a_dropped_chat_stops_its_thread_without_waiting_for_the_recheck(self):
+        baseline = len(self._feature_threads())
+        chats = [self._chat() for _ in range(5)]
+        for chat in chats:
+            self.assertTrue(_wait_for(lambda chat=chat: not chat._feature_refetch_due()))
+        self.assertEqual(len(self._feature_threads()), baseline + 5)
+        # With keys answered, each thread sleeps until the hour-long re-check.
+        del chat, chats
+        gc.collect()
+        self.assertTrue(
+            _wait_for(lambda: len(self._feature_threads()) == baseline, timeout=3.0),
+            self._feature_threads(),
+        )
+
+    def test_close_stops_the_thread(self):
+        baseline = len(self._feature_threads())
+        chat = self._chat()
+        self.assertTrue(_wait_for(lambda: not chat._feature_refetch_due()))
+        self.assertEqual(len(self._feature_threads()), baseline + 1)
+        chat.close()
+        self.assertTrue(_wait_for(lambda: len(self._feature_threads()) == baseline, timeout=3.0))
+        self.assertEqual(self._send(chat).signature_info.signature_version, "10")
 
     def test_a_malformed_body_is_rejected_and_changes_nothing(self):
         # The fetch never applies anything, so only the calls below change

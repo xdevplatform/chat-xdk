@@ -199,7 +199,7 @@ fn a_v7_message_signed_over_a_non_integer_key_version_still_verifies() {
         None,
         7,
         &ckey,
-        &build_message_content("legacy", None, None, None).unwrap(),
+        &build_message_content("signed at v7", None, None, None).unwrap(),
     );
     let message = decrypt_message(
         &ChatCore::new(),

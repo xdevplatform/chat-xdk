@@ -60,7 +60,7 @@ namespace ChatXdk
         internal static extern int chat_xdk_has_identity_key(ChatHandle* handle);
 
         /// <summary>
-        ///  When `reject` is non-zero — the default — `chat_xdk_decrypt_event` returns
+        ///  When `reject` is non-zero — the default — `chat_xdk_decrypt_event_params` returns
         ///  an error for any signed event whose signature cannot be verified (invalid,
         ///  missing, or no matching signing key) instead of returning it with
         ///  `verified: false`.
@@ -78,7 +78,7 @@ namespace ChatXdk
 
         /// <summary>
         ///  Enable (non-zero) or disable (zero) the conversation-key cache (off by
-        ///  default). While enabled, `chat_xdk_decrypt_events` caches, per
+        ///  default). While enabled, `chat_xdk_decrypt_events_params` caches, per
         ///  conversation, the key whose key change carried a valid signature at the
         ///  highest version seen, and the encrypt entry points resolve an omitted
         ///  `conversation_key`/`conversation_key_version` pair from it. Disabling
@@ -135,7 +135,7 @@ namespace ChatXdk
         ///  carried inside an event is never trusted for verification. Each call
         ///  replaces the previous set.
         ///
-        ///  `signing_keys_json`: same array shape as `chat_xdk_decrypt_events`.
+        ///  `signing_keys_json`: same array shape as `chat_xdk_decrypt_events_params`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_set_signing_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_set_signing_keys(ChatHandle* handle, byte* signing_keys_json);
@@ -241,7 +241,7 @@ namespace ChatXdk
         ///  `events_json` — JSON array of base64-encoded raw event strings from the webhook.
         ///
         ///  Returns JSON `{"keys":{"version":"base64_bytes",...},"latest_version":"..."|null}`.
-        ///  Pass `keys` serialized as a flat map `{"version":"base64_bytes",...}` to `chat_xdk_decrypt_event`.
+        ///  Pass `keys` serialized as a flat map `{"version":"base64_bytes",...}` to `chat_xdk_decrypt_event_params`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_extract_conversation_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_extract_conversation_keys(ChatHandle* handle, byte* events_json);
@@ -254,8 +254,8 @@ namespace ChatXdk
         ///  "identity_public_key","identity_public_key_signature"},...]`); absent or
         ///  empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_events", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_decrypt_events(ChatHandle* handle, byte* params_json);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_events_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_decrypt_events_params(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Prepare a signed conversation-key change.
@@ -328,18 +328,18 @@ namespace ChatXdk
         ///
         ///  `params_json` — single JSON document: `event_b64` (the base64 event),
         ///  `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
-        ///  `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
+        ///  `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
         ///  for events without message contents, which also falls back to the opt-in
         ///  key cache), plus optional `signing_keys` (as for
-        ///  `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
+        ///  `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
         ///  events fail decryption under the default reject-unverified policy
         ///  (disable it via `chat_xdk_set_reject_unverified` to have them returned
         ///  with `verified: false` instead).
         ///
         ///  Returns JSON representation of the decrypted Event.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_event", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_decrypt_event(ChatHandle* handle, byte* params_json);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_event_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_decrypt_event_params(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Encrypt a message for the X API.
@@ -353,11 +353,11 @@ namespace ChatXdk
         ///  `quick_reply` shape of decrypted text content), `should_notify`, and
         ///  `ttl_msec`.
         ///
-        ///  Returns JSON `SendPayload`, whose `message_id` is the message's id. A
+        ///  Returns JSON `SendPayload`, whose `message_id` is the message's id. A v1
         ///  message with files takes an id derived from its files, so building it
-        ///  again gives the same id; encrypt each file afterwards with
-        ///  `chat_xdk_encrypt_file` or a file encryptor and the payload's
-        ///  `event_b64`.
+        ///  again gives the same id; other messages take a random id. Encrypt each
+        ///  file afterwards with `chat_xdk_encrypt_file` or a file encryptor and the
+        ///  payload's `event_b64`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_message", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_encrypt_message(ChatHandle* handle, byte* params_json);

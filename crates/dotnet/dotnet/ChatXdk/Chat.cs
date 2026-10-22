@@ -114,10 +114,14 @@ namespace ChatXdk
 
         private void Dispose(bool disposing)
         {
-            // Both the finalizer and Dispose() paths end here.
-            // We only need to free the unmanaged handle; there are no managed resources.
+            // Both the finalizer and Dispose() paths end here: stop the feature task
+            // and free the unmanaged handle. CancelAsync keeps the task's continuation
+            // off the finalizer thread.
+            var featureStop = Interlocked.Exchange(ref _featureStop, null);
             if (disposing)
-                Interlocked.Exchange(ref _featureStop, null)?.Cancel();
+                featureStop?.Cancel();
+            else
+                _ = featureStop?.CancelAsync();
             lock (_exclusive)
             {
                 if (!_disposed)
@@ -608,7 +612,7 @@ namespace ChatXdk
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
-                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event(_handle, jsonPtr));
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event_params(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
@@ -642,7 +646,7 @@ namespace ChatXdk
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
-                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events(_handle, jsonPtr));
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events_params(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
@@ -813,10 +817,10 @@ namespace ChatXdk
         /// <summary>
         /// Encrypt a message for the X API.
         /// POST the returned <see cref="SendPayload"/> fields to
-        /// <c>POST /2/chat/conversations/{id}/messages</c>. A message with files takes an id
-        /// derived from its files, so building it again gives the same id; encrypt each file
-        /// afterwards with <see cref="EncryptFile"/> or <see cref="FileEncryptor"/> and the
-        /// payload's <see cref="SendPayload.EventB64"/>.
+        /// <c>POST /2/chat/conversations/{id}/messages</c>. A v1 message with files takes an
+        /// id derived from its files, so building it again gives the same id; other messages
+        /// take a random id. Encrypt each file afterwards with <see cref="EncryptFile"/> or
+        /// <see cref="FileEncryptor"/> and the payload's <see cref="SendPayload.EventB64"/>.
         /// </summary>
         public SendPayload EncryptMessage(EncryptMessageParams parameters)
         {

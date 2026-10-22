@@ -247,6 +247,15 @@ fn public_keys_field(
         .collect()
 }
 
+/// A required argument that follows an optional positional one, as
+/// ``emoji`` follows ``target_event``: missing, it raises the ``TypeError``
+/// Python raises for a missing argument.
+fn required<T>(value: Option<T>, name: &str) -> PyResult<T> {
+    value.ok_or_else(|| {
+        pyo3::exceptions::PyTypeError::new_err(format!("missing required argument: '{name}'"))
+    })
+}
+
 fn to_py_err(e: impl std::error::Error) -> PyErr {
     let mut msg = e.to_string();
     let mut source = e.source();
@@ -419,8 +428,7 @@ pub struct SendPayload {
     /// Whether to send push notification.
     #[pyo3(get)]
     pub should_notify: bool,
-    /// Version of the Chat XDK that built this payload. Send it as the
-    /// message's optional ``xdk_version`` field.
+    /// Version of the Chat XDK that built this payload.
     #[pyo3(get)]
     pub xdk_version: String,
 }
@@ -457,7 +465,9 @@ pub struct EncryptMessageParams {
     /// (a ``"media"`` attachment, or a ``"url"`` card's ``banner_image`` or
     /// ``favicon_image``) names the media hash key its upload started with;
     /// encrypt the files afterwards with ``Chat.encrypt_file`` or
-    /// ``Chat.file_encryptor``.
+    /// ``Chat.file_encryptor``. Upload each file for one message only:
+    /// reusing another message's uploads can give this message that
+    /// message's id.
     attachments: Option<Py<PyAny>>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.
@@ -586,7 +596,7 @@ pub struct EncryptReplyParams {
 impl EncryptReplyParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     fn new(
         conversation_id: String,
         text: String,
@@ -698,27 +708,27 @@ pub struct EncryptReactionParams {
 impl EncryptReactionParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event, emoji, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         target_event: Option<String>,
-        emoji: String,
+        emoji: Option<String>,
         conversation_id: Option<String>,
         target_message_sequence_id: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             target_event,
-            emoji,
+            emoji: required(emoji, "emoji")?,
             conversation_id,
             target_message_sequence_id,
             sender_id,
             signing_key_version,
             conversation_key,
             conversation_key_version,
-        }
+        })
     }
 }
 
@@ -775,10 +785,10 @@ pub struct EncryptEditParams {
 impl EncryptEditParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event, updated_text, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, updated_text=None, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         target_event: Option<String>,
-        updated_text: String,
+        updated_text: Option<String>,
         entities: Option<Py<PyAny>>,
         conversation_id: Option<String>,
         target_message_sequence_id: Option<String>,
@@ -786,10 +796,10 @@ impl EncryptEditParams {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             target_event,
-            updated_text,
+            updated_text: required(updated_text, "updated_text")?,
             entities,
             conversation_id,
             target_message_sequence_id,
@@ -797,7 +807,7 @@ impl EncryptEditParams {
             signing_key_version,
             conversation_key,
             conversation_key_version,
-        }
+        })
     }
 }
 
@@ -1144,9 +1154,9 @@ pub struct DecryptEventParams {
     event_b64: String,
     /// The conversation's key map: key version to raw 32-byte key
     /// (``bytes``), from ``decrypt_events`` or ``extract_conversation_keys``.
-    /// Events without message contents need no keys, so pass ``{}`` for
-    /// them; an empty map also falls back to the opt-in key cache.
-    conversation_keys: Py<PyAny>,
+    /// Leave it ``None``, or pass ``{}``, for events without message
+    /// contents, or to take the keys from the opt-in key cache.
+    conversation_keys: Option<Py<PyAny>>,
     /// Signing-key dicts ``{"user_id", "public_key_version", "public_key",
     /// "identity_public_key", "identity_public_key_signature"}``, straight
     /// from the X API public keys response. ``None`` or empty uses the keys
@@ -1157,10 +1167,10 @@ pub struct DecryptEventParams {
 #[pymethods]
 impl DecryptEventParams {
     #[new]
-    #[pyo3(signature = (event_b64, conversation_keys, *, signing_keys=None))]
+    #[pyo3(signature = (event_b64, conversation_keys=None, *, signing_keys=None))]
     fn new(
         event_b64: String,
-        conversation_keys: Py<PyAny>,
+        conversation_keys: Option<Py<PyAny>>,
         signing_keys: Option<Py<PyAny>>,
     ) -> Self {
         Self {
@@ -1173,10 +1183,12 @@ impl DecryptEventParams {
 
 impl DecryptEventParams {
     fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::DecryptEventParams> {
-        let mut params = chat_xdk_core::DecryptEventParams::new(
-            self.event_b64.as_str(),
-            conversation_keys_field(py, &self.conversation_keys)?,
-        );
+        let conversation_keys = match &self.conversation_keys {
+            Some(keys) => conversation_keys_field(py, keys)?,
+            None => HashMap::new(),
+        };
+        let mut params =
+            chat_xdk_core::DecryptEventParams::new(self.event_b64.as_str(), conversation_keys);
         params.signing_keys = signing_keys_field(py, &self.signing_keys)?;
         Ok(params)
     }
@@ -1780,10 +1792,11 @@ impl Chat {
 
     /// Encrypt a message for the X API.
     ///
-    /// The message id comes back in ``payload.message_id``. A message with
-    /// files takes an id derived from its files, so building it again gives
-    /// the same id; encrypt each file afterwards with ``encrypt_file`` or
-    /// ``file_encryptor`` and ``payload.event_b64``.
+    /// The message id comes back in ``payload.message_id``. A v1 message
+    /// with files takes an id derived from its files, so building it again
+    /// gives the same id; other messages take a random id. Encrypt each file
+    /// afterwards with ``encrypt_file`` or ``file_encryptor`` and
+    /// ``payload.event_b64``.
     ///
     /// Args:
     ///     params: An ``EncryptMessageParams``.

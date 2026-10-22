@@ -1040,6 +1040,7 @@ pub struct EventMeta {
 /// directly to JSON for the API request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct SendPayload {
     /// The message id (UUID) the SDK generated and embedded in the signed
     /// event. Send it as the message's `message_id`, keep it to dedup and to
@@ -1050,7 +1051,9 @@ pub struct SendPayload {
     /// The outgoing message as a base64 event: what recipients receive,
     /// without the fields the server assigns. Pass it to `encrypt_file` or
     /// `file_encryptor` to encrypt the message's files, or to
-    /// `decrypt_event` to read the message back.
+    /// `decrypt_event` to read the message back. Empty in a payload stored
+    /// by 0.5.x.
+    #[serde(default)]
     pub event_b64: String,
 
     /// Base64-encoded encrypted content.
@@ -1075,8 +1078,7 @@ pub struct SendPayload {
     #[serde(default = "default_true")]
     pub should_notify: bool,
 
-    /// Version of the Chat XDK that built this payload. Send it as the
-    /// message's optional `xdk_version` field.
+    /// Version of the Chat XDK that built this payload.
     #[serde(default)]
     pub xdk_version: String,
 }
@@ -1581,6 +1583,21 @@ mod tests {
         let without: SendPayload =
             serde_json::from_str(&json.replace(",\"xdk_version\":\"0.6.0\"", "")).unwrap();
         assert_eq!(without.xdk_version, "");
+    }
+
+    #[test]
+    fn test_send_payload_stored_by_0_5_still_reads() {
+        // A SendPayload as 0.5.x serialized it, before event_b64 and
+        // xdk_version existed.
+        let stored = r#"{"message_id":"mid","encrypted_content":"enc","signature":"sig",
+            "encoded_event_signature":"esig",
+            "signature_info":{"public_key_version":"v1","signature_version":"7"},
+            "conversation_key_version":"v1","should_notify":false}"#;
+        let payload: SendPayload = serde_json::from_str(stored).unwrap();
+        assert_eq!(payload.message_id, "mid");
+        assert_eq!(payload.event_b64, "");
+        assert_eq!(payload.xdk_version, "");
+        assert!(!payload.should_notify);
     }
 
     #[test]

@@ -317,7 +317,7 @@ impl ChatCore {
                 let cached = cache.get(canonical.as_ref()).ok_or_else(no_key)?;
                 Ok((cached.key.clone(), cached.version.to_string()))
             }
-            _ => Err(SdkError::InvalidState(
+            _ => Err(SdkError::InvalidInput(
                 "conversation_key and conversation_key_version must be passed together \
                  (or both omitted to resolve from the key cache)"
                     .into(),
@@ -660,12 +660,15 @@ impl ChatCore {
             .to_string()
     }
 
-    /// The id of an outgoing message or reply. Its files are encrypted after
-    /// the message is built and uploaded under keys derived from this id, so
-    /// a message with files takes an id derived from what identifies it (see
-    /// [`message_keys::derive_media_message_id`]): building the same message
-    /// again keeps its uploaded files valid. Other messages take a random id.
+    /// The id of an outgoing message or reply. In v1 its files are encrypted
+    /// after the message is built and uploaded under keys derived from this
+    /// id, so a message with files takes an id derived from what identifies it
+    /// (see [`message_keys::derive_media_message_id`]): building the same
+    /// message again keeps its uploaded files valid. v0 files use the
+    /// conversation key, so v0 messages, like messages without files, take a
+    /// random id, as 0.5.x did.
     fn outgoing_message_id(
+        send_version: crate::pipeline::SendVersion,
         conversation_key: &XChatConversationKey,
         conversation_key_version: &str,
         sender_id: &str,
@@ -675,7 +678,7 @@ impl ChatCore {
         let media_hash_keys = attachments
             .map(crate::pipeline::file_media_hash_keys)
             .unwrap_or_default();
-        if media_hash_keys.is_empty() {
+        if send_version == crate::pipeline::SendVersion::V0 || media_hash_keys.is_empty() {
             return Ok(Self::generate_message_id());
         }
         let conversation_id =
@@ -1851,7 +1854,9 @@ impl ChatCore {
             crate::pipeline::validate_attachment_descriptors(a)?;
             crate::pipeline::validate_file_media_hash_keys(a)?;
         }
+        let send_version = self.send_version();
         let message_id = Self::outgoing_message_id(
+            send_version,
             &ckey,
             &conversation_key_version,
             &sender_id,
@@ -1861,7 +1866,7 @@ impl ChatCore {
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_message_attachments(&a, &message_id));
+            .map(|a| crate::pipeline::build_outgoing_attachments(&a, &message_id, send_version));
         let thrift_quick_reply = params
             .quick_reply
             .as_ref()
@@ -1883,7 +1888,7 @@ impl ChatCore {
             &conversation_key_version,
             &signing_key_version,
         )
-        .send_version(self.send_version());
+        .send_version(send_version);
         api_params.should_notify = params.should_notify;
         api_params.ttl_msec = params.ttl_msec;
         crate::pipeline::encrypt_and_sign(api_params)
@@ -1916,7 +1921,9 @@ impl ChatCore {
             crate::pipeline::validate_attachment_descriptors(a)?;
             crate::pipeline::validate_file_media_hash_keys(a)?;
         }
+        let send_version = self.send_version();
         let message_id = Self::outgoing_message_id(
+            send_version,
             &ckey,
             &conversation_key_version,
             &sender_id,
@@ -1926,7 +1933,7 @@ impl ChatCore {
         let thrift_attachments = params
             .attachments
             .take()
-            .map(|a| crate::pipeline::build_message_attachments(&a, &message_id));
+            .map(|a| crate::pipeline::build_outgoing_attachments(&a, &message_id, send_version));
 
         let thrift_quick_reply = params
             .quick_reply
@@ -1953,7 +1960,7 @@ impl ChatCore {
             &conversation_key_version,
             &signing_key_version,
         )
-        .send_version(self.send_version());
+        .send_version(send_version);
         api_params.should_notify = params.should_notify;
         api_params.ttl_msec = params.ttl_msec;
         crate::pipeline::encrypt_and_sign(api_params)
@@ -2057,12 +2064,15 @@ impl ChatCore {
             &sender_id,
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        // Read leniently: an unparsable target event already fails above
-        // unless explicit fields made it unnecessary, and then only the
-        // message id is lost.
+        // Only v1 edits name the message they edit; v0 edits are built as
+        // 0.5.x built them. Read leniently: an unparsable target event already
+        // fails above unless explicit fields made it unnecessary, and then
+        // only the message id is lost.
+        let send_version = self.send_version();
         let target_message_id = params
             .target_event
             .as_deref()
+            .filter(|_| send_version == crate::pipeline::SendVersion::V1)
             .filter(|v| !v.is_empty())
             .and_then(|b64| Self::parse_event_b64(b64).ok())
             .and_then(|event| event.message_id);
@@ -2084,7 +2094,7 @@ impl ChatCore {
                 &conversation_key_version,
                 &signing_key_version,
             )
-            .send_version(self.send_version()),
+            .send_version(send_version),
         )
     }
 
@@ -2099,17 +2109,17 @@ impl ChatCore {
         params: &MessageDeleteParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         if params.sequence_ids.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "sequence_ids is empty: pass at least one message to delete".into(),
             ));
         }
         if params.sequence_ids.iter().any(String::is_empty) {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "sequence_ids contains an empty id: every entry must name a message".into(),
             ));
         }
         if params.conversation_id.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "conversation_id is empty: pass the conversation the messages belong to".into(),
             ));
         }
@@ -2170,12 +2180,12 @@ impl ChatCore {
         params: &MarkConversationReadParams,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         if params.conversation_id.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "conversation_id is empty: pass the conversation being marked read".into(),
             ));
         }
         if params.seen_until_sequence_id.is_empty() {
-            return Err(SdkError::InvalidState(
+            return Err(SdkError::InvalidInput(
                 "seen_until_sequence_id is empty: pass the sequence_id of the newest event read"
                     .into(),
             ));
@@ -2256,7 +2266,7 @@ impl ChatCore {
                 .as_ref()
                 .and_then(|p| p.conversation_id.clone())
                 .ok_or_else(|| {
-                    SdkError::InvalidState(
+                    SdkError::InvalidInput(
                         "conversation_id is not set: pass target_event or conversation_id".into(),
                     )
                 })?,
@@ -2267,7 +2277,7 @@ impl ChatCore {
                 .as_ref()
                 .and_then(|p| p.sequence_id.clone())
                 .ok_or_else(|| {
-                    SdkError::InvalidState(
+                    SdkError::InvalidInput(
                         "target_message_sequence_id is not set: pass target_event or \
                          target_message_sequence_id"
                             .into(),
@@ -2488,7 +2498,7 @@ impl ChatCore {
 
         let Some(raw_b64) = params.reply_to_event.take().filter(|v| !v.is_empty()) else {
             let sequence_id = explicit_sequence_id.ok_or_else(|| {
-                SdkError::InvalidState(
+                SdkError::InvalidInput(
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
                 )
             })?;
@@ -3818,7 +3828,7 @@ fn collect_attachments(
                 }));
             }
             ThriftMessageAttachment::Jetfuel(_) => {
-                // This attachment variant is not yet supported; skip.
+                // The SDK doesn't support this attachment variant; skip it.
             }
             ThriftMessageAttachment::PaymentReceipt(_) | ThriftMessageAttachment::BotMessage(_) => {
             }
@@ -9165,7 +9175,7 @@ mod tests {
         let err = core
             .encrypt_message(params_with(vec![media(Some(1)), url()]))
             .unwrap_err();
-        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
         assert!(err.to_string().contains("attachment combination"));
 
         // Two URL cards are rejected.
@@ -9213,7 +9223,7 @@ mod tests {
             },
         ]);
         let err = core.encrypt_reply(params).unwrap_err();
-        assert!(matches!(err, SdkError::InvalidState(_)), "got: {err}");
+        assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
         assert!(err.to_string().contains("attachment combination"));
     }
 

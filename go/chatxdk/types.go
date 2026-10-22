@@ -43,8 +43,7 @@ type SendPayload struct {
 	SignatureInfo          SignatureInfo `json:"signature_info"`
 	ConversationKeyVersion string        `json:"conversation_key_version"`
 	ShouldNotify           bool          `json:"should_notify"`
-	// XdkVersion is the version of the Chat XDK that built the payload. Send
-	// it as the message's optional xdk_version field.
+	// XdkVersion is the version of the Chat XDK that built the payload.
 	XdkVersion string `json:"xdk_version"`
 }
 
@@ -173,7 +172,9 @@ type GroupCreateParams struct {
 // ConversationKey and ConversationKeyVersion travel together — set both or
 // neither. Each file in Attachments names the media hash key its upload
 // started with; encrypt the files afterwards with EncryptFile or
-// FileEncryptor and the returned payload's EventB64.
+// FileEncryptor and the returned payload's EventB64. Upload each file for one
+// message only: reusing another message's uploads can give this message that
+// message's id.
 type EncryptMessageParams struct {
 	ConversationID         string                 `json:"conversation_id"`
 	Text                   string                 `json:"text"`
@@ -401,9 +402,9 @@ type DecryptEventParams struct {
 	// EventB64 is the base64 event, as delivered.
 	EventB64 string `json:"event_b64"`
 	// ConversationKeys maps key version to the raw 32-byte conversation key,
-	// from DecryptEvents or ExtractConversationKeys. Events without message
-	// contents need no keys; an empty map also falls back to the opt-in key
-	// cache (SetCacheKeys).
+	// from DecryptEvents or ExtractConversationKeys. Leave it nil for events
+	// without message contents, or to take the keys from the opt-in key cache
+	// (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// SigningKeys verify the event; nil or empty uses the keys stored via
 	// SetSigningKeys.

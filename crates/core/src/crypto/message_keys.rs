@@ -66,7 +66,7 @@ pub(crate) fn resolve_attachment_id(
     }
 }
 
-/// The id of an outgoing message with files, derived from what identifies
+/// The id of an outgoing v1 message with files, derived from what identifies
 /// the message: the conversation key and its version, the sender, the
 /// conversation, and the media hash keys of its files in order. Every upload
 /// has its own media hash key, so the id is unique to the message; building

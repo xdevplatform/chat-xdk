@@ -15,9 +15,11 @@ namespace ChatXdk
         private const string DefaultEndpoint = "https://api.x.com/2/chat/features";
         private const string EndpointEnv = "CHAT_XDK_FEATURES_ENDPOINT";
         private const int MaxBody = 64 * 1024;
-        private const long MaxRefetchBackoffMs = 60_000;
 
         private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+
+        // Feature requests in flight, by URL.
+        private static readonly Dictionary<string, Task<string?>> Requests = new();
 
         /// <summary>The endpoint and timings of a chat's feature fetches.</summary>
         internal sealed record Options(string Endpoint, TimeSpan Timeout, TimeSpan Refresh, TimeSpan KeyPoll)
@@ -35,9 +37,9 @@ namespace ChatXdk
 
         /// <summary>
         /// Fetch the flags for <paramref name="chat"/> now (retrying once), again with the
-        /// key's bucket once keys load (retrying with backoff), and re-check them every refresh
-        /// interval with a fetch that can only turn flags off, until the returned source is
-        /// cancelled. The task holds the chat weakly, so an undisposed chat is still finalized,
+        /// key's bucket once keys load (retrying with a backoff that grows to the refresh
+        /// interval), and re-check them every refresh interval with a fetch that can only turn
+        /// flags off, until the returned source is cancelled. The task holds the chat weakly, so an undisposed chat is still finalized,
         /// and the fetches end with it.
         /// </summary>
         internal static CancellationTokenSource Start(Chat chat, Options options)
@@ -83,6 +85,7 @@ namespace ChatXdk
             }
 
             var refreshMs = (long)options.Refresh.TotalMilliseconds;
+            var maxBackoffMs = Math.Max(refreshMs, 1000);
             var nextRecheck = Environment.TickCount64 + refreshMs;
             long retryAt = 0;
             long backoffMs = 1000;
@@ -104,7 +107,7 @@ namespace ChatXdk
                             else
                             {
                                 retryAt = Environment.TickCount64 + backoffMs;
-                                backoffMs = Math.Min(backoffMs * 2, MaxRefetchBackoffMs);
+                                backoffMs = Math.Min(backoffMs * 2, maxBackoffMs);
                             }
                         }
                     }
@@ -146,8 +149,33 @@ namespace ChatXdk
                 ? options.Endpoint
                 : options.Endpoint + (options.Endpoint.Contains('?') ? "&" : "?") + "bucket="
                     + bucket.ToString(CultureInfo.InvariantCulture);
-            var body = await GetAsync(url, options.Timeout, stop).ConfigureAwait(false);
+            var body = await SharedGetAsync(url, options.Timeout, stop).ConfigureAwait(false);
             return body != null && TryApply(chatRef, body, bucket, downgradeOnly);
+        }
+
+        /// <summary>
+        /// The body for <paramref name="url"/>, from the request another chat has in flight for
+        /// it or else from a new one, so chats that ask at once share a request. The request ends
+        /// with the chat that started it; the chats waiting on it then see a failure and retry.
+        /// </summary>
+        private static Task<string?> SharedGetAsync(string url, TimeSpan timeout, CancellationToken stop)
+        {
+            lock (Requests)
+            {
+                if (Requests.TryGetValue(url, out var inFlight)) return inFlight.WaitAsync(stop);
+                var request = Task.Run(() => GetAsync(url, timeout, stop));
+                Requests[url] = request;
+                // Runs only once this lock is released, so the entry is in place to remove.
+                request.ContinueWith(
+                    _ =>
+                    {
+                        lock (Requests) Requests.Remove(url);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+                return request;
+            }
         }
 
         /// <summary>The body of a 200 response from <paramref name="url"/>, or null on any failure.</summary>

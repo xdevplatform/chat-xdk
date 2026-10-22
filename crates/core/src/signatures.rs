@@ -8,16 +8,18 @@ use crate::crypto::keys::XChatPrivateKey;
 use crate::error::SdkError;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 
-/// Current signature protocol version, as the integer used in verification.
+/// [`SIGNATURE_VERSION`] as the integer used in verification.
 pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 
-/// Current signature protocol version.
+/// Signature version of v0 sends and of every other signed action:
+/// conversation-key changes, group changes, deletes and read receipts. v1
+/// sends sign at version 10.
 pub const SIGNATURE_VERSION: &str = "7";
 
-/// Signature version of the messages this SDK sends: the first version whose
-/// payload signs `contents_encryption_version`, so the choice of key for the
-/// contents is covered by the signature.
-pub const MESSAGE_SIGNATURE_VERSION: i32 = 10;
+/// Signature version of v1 sends: the first version whose payload signs
+/// `contents_encryption_version`, so the choice of key for the contents is
+/// covered by the signature. v0 sends sign at [`SIGNATURE_VERSION`].
+pub(crate) const MESSAGE_SIGNATURE_VERSION: i32 = 10;
 
 /// Minimum signature version accepted on verification. v1 payloads omit
 /// the event-type discriminant and conversation-key version, so accepting
@@ -287,7 +289,7 @@ pub fn build_message_delete_signature(
 ///
 /// The payload is comma-joined with no escaping, so signing fails with a
 /// parse error if any component contains a comma.
-pub fn build_mark_conversation_read_signature(
+pub(crate) fn build_mark_conversation_read_signature(
     signing_key: &XChatPrivateKey,
     public_key_version: &str,
     message_id: &str,
