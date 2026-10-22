@@ -294,6 +294,7 @@ public final class XChatClient {
         payload.put("message_id", body.messageId());
         payload.put("encoded_message_create_event", body.encodedMessageCreateEvent());
         payload.put("encoded_message_event_signature", body.encodedMessageEventSignature());
+        payload.put("xdk_version", body.xdkVersion());
         post("/2/chat/conversations/" + enc(conversationId.replace(":", "-")) + "/messages", payload);
     }
 

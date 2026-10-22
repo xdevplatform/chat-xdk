@@ -124,6 +124,7 @@ export class XChatClient {
       messageId: body.message_id,
       encodedMessageCreateEvent: body.encoded_message_create_event,
       encodedMessageEventSignature: body.encoded_message_event_signature,
+      xdkVersion: body.xdk_version,
       conversationToken: body.conversation_token,
     });
   }

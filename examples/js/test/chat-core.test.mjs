@@ -195,6 +195,7 @@ test("encryptReaction targeting a raw event produces a sendable payload", async 
     "encoded_message_create_event",
     "encoded_message_event_signature",
     "message_id",
+    "xdk_version",
   ]);
 });
 

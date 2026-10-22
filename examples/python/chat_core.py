@@ -291,6 +291,7 @@ class ChatCore:
             "message_id": payload.message_id,
             "encoded_message_create_event": payload.encoded_message_create_event,
             "encoded_message_event_signature": payload.encoded_message_event_signature,
+            "xdk_version": payload.xdk_version,
             "event_b64": payload.event_b64,
         }
 
@@ -324,6 +325,7 @@ class ChatCore:
             "message_id": payload.message_id,
             "encoded_message_create_event": payload.encoded_message_create_event,
             "encoded_message_event_signature": payload.encoded_message_event_signature,
+            "xdk_version": payload.xdk_version,
         }
 
     # -- Group management -----------------------------------------------------

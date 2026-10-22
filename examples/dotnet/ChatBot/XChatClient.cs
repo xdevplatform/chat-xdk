@@ -239,6 +239,7 @@ public sealed class XChatClient
             ["message_id"] = body.MessageId,
             ["encoded_message_create_event"] = body.EncodedMessageCreateEvent,
             ["encoded_message_event_signature"] = body.EncodedMessageEventSignature,
+            ["xdk_version"] = body.XdkVersion,
         };
         var resp = await _http.PostAsJsonAsync(
             $"{_baseUrl}/2/chat/conversations/{Uri.EscapeDataString(conversationId.Replace(':', '-'))}/messages", payload);

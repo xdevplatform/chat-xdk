@@ -55,6 +55,7 @@ pub struct SendBody {
     pub message_id: String,
     pub encoded_message_create_event: String,
     pub encoded_message_event_signature: String,
+    pub xdk_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_token: Option<String>,
     /// The message as recipients receive it; encrypt the message's files
@@ -239,6 +240,7 @@ impl ChatCore {
             message_id: payload.message_id,
             encoded_message_create_event: payload.encoded_message_create_event,
             encoded_message_event_signature: payload.encoded_message_event_signature,
+            xdk_version: payload.xdk_version,
             conversation_token: None,
             event_b64: payload.event_b64,
         })
@@ -266,6 +268,7 @@ impl ChatCore {
             message_id: payload.message_id,
             encoded_message_create_event: payload.encoded_message_create_event,
             encoded_message_event_signature: payload.encoded_message_event_signature,
+            xdk_version: payload.xdk_version,
             conversation_token: None,
             event_b64: payload.event_b64,
         })

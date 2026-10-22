@@ -205,6 +205,7 @@ async function sendMessage(text) {
       message_id: messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
     }),
   });
   renderMessage({ id: messageId, type: "message", senderId: botUserId, content: { text } });

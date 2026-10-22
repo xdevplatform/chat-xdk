@@ -117,6 +117,7 @@ public final class ChatCore implements AutoCloseable {
             String messageId,
             String encodedMessageCreateEvent,
             String encodedMessageEventSignature,
+            String xdkVersion,
             String eventB64) {}
 
     /**
@@ -195,7 +196,11 @@ public final class ChatCore implements AutoCloseable {
         }
         // The SDK generates the message id and returns it in the payload.
         return new SendBody(
-                payload.messageId, payload.encodedMessageCreateEvent, payload.encodedMessageEventSignature, payload.eventB64);
+                payload.messageId,
+                payload.encodedMessageCreateEvent,
+                payload.encodedMessageEventSignature,
+                payload.xdkVersion,
+                payload.eventB64);
     }
 
     /** Encrypt + sign a reaction add/remove targeting a raw event
@@ -213,7 +218,11 @@ public final class ChatCore implements AutoCloseable {
         SendPayload payload = add ? chat.encryptAddReaction(params) : chat.encryptRemoveReaction(params);
         // The SDK generates the message id and returns it in the payload.
         return new SendBody(
-                payload.messageId, payload.encodedMessageCreateEvent, payload.encodedMessageEventSignature, payload.eventB64);
+                payload.messageId,
+                payload.encodedMessageCreateEvent,
+                payload.encodedMessageEventSignature,
+                payload.xdkVersion,
+                payload.eventB64);
     }
 
     // -- Group management -----------------------------------------------------

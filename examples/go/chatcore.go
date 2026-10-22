@@ -139,6 +139,7 @@ type SendBody struct {
 	MessageID                    string `json:"message_id"`
 	EncodedMessageCreateEvent    string `json:"encoded_message_create_event"`
 	EncodedMessageEventSignature string `json:"encoded_message_event_signature"`
+	XdkVersion                   string `json:"xdk_version"`
 	ConversationToken            string `json:"conversation_token,omitempty"`
 	// EventB64 is the message as recipients receive it; encrypt the
 	// message's files from it with EncryptMedia.
@@ -220,6 +221,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 		MessageID:                    payload.MessageID,
 		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
 		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
+		XdkVersion:                   payload.XdkVersion,
 		EventB64:                     payload.EventB64,
 	}, nil
 }
@@ -257,6 +259,7 @@ func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conve
 		MessageID:                    payload.MessageID,
 		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
 		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
+		XdkVersion:                   payload.XdkVersion,
 		EventB64:                     payload.EventB64,
 	}, nil
 }
