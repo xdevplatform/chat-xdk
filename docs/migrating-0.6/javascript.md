@@ -348,9 +348,10 @@ const actionSignatures = prepared.actionSignatures;
 
 ## Participant keys take the key requests' names
 
-A prepared change's participant keys carry the names of the requests the
-change goes into (`POST /2/chat/conversations/{id}/keys`, `/group` and
-`/{id}/members`), camelCased as everything the package returns is:
+A prepared change's participant keys carry the names the X API gives them in
+every request that takes them (`POST /2/chat/conversations/{id}/keys`,
+`/group` and `/{id}/members`, and `PUT /2/chat/conversations/{id}`),
+camelCased as everything the package returns is:
 `conversationParticipantKeys`, each entry a `ConversationParticipantKey`
 with `userId`, `encryptedConversationKey` and `publicKeyVersion`, the names a
 received keyChange event uses too

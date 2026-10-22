@@ -166,10 +166,11 @@ version of the SDK that built it:
 The SDK names participant keys as the X API and the Thrift events do, in
 both directions. A prepared change's keys are
 `conversation_participant_keys`, each entry with
-`encrypted_conversation_key`, the names of the requests the change goes into
-(`POST /2/chat/conversations/{id}/keys`, `/group` and `/{id}/members`), so
-apps pass them through unchanged, as they pass the action signatures,
-instead of renaming them. A decrypted key change carries its keys under the
+`encrypted_conversation_key`, the names the X API gives them in every
+request that takes them (`POST /2/chat/conversations/{id}/keys`, `/group`
+and `/{id}/members`, and `PUT /2/chat/conversations/{id}`), so apps pass
+them through unchanged, as they pass the action signatures, instead of
+renaming them. A decrypted key change carries its keys under the
 same names, the ones Thrift's `ConversationKeyChangeEvent` uses, and one
 type, `ConversationParticipantKey`, holds them in both directions. Sent keys:
 [Rust](rust.md#participant-keys-take-the-key-requests-names),
