@@ -906,11 +906,9 @@ signature covers the read point and its time, so a recipient's
 set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
 canonical one-to-one id work as for deletes.
 
-**Pending: the mark-read route.** The X API's mark-read route does not take
-`action_signatures` yet. The SDK nests the read receipt's signature the way
-the conversation-change requests nest theirs, but that shape is not
-confirmed for mark-read and may change when the route accepts it; check the
-X API reference before sending it, and for the route's other fields.
+Send the receipt in the mark-read request,
+`POST /2/chat/conversations/:id/read`: its `action_signatures` take the
+`PreparedAction`'s entries as they are.
 
 **Action signatures.** Every prepare method returns its signed actions in
 the shape a request's `action_signatures` carries them, so they serialize
@@ -1921,9 +1919,7 @@ receive, without the fields the server adds on delivery. Pass it to
 `encrypt_file` / `file_encryptor` to encrypt the message's files. It is not a
 field of the send request.
 
-`xdk_version` is the version of the SDK that built the payload. Do not send
-it yet: the send request takes it as an optional `xdk_version` field only
-once the X API documents that field.
+`xdk_version` is the version of the SDK that built the payload.
 
 ```rust
 // Rust
@@ -1936,7 +1932,7 @@ pub struct SendPayload {
     pub signature_info: SignatureInfo,   // { public_key_version, signature_version: "7" (v0) or "10" (v1) }
     pub conversation_key_version: String,
     pub should_notify: bool,
-    pub xdk_version: String,             // SDK version; do not send it yet (see below)
+    pub xdk_version: String,             // SDK version
 }
 
 // Python (SendPayload class attributes)

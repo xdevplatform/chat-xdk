@@ -752,9 +752,9 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Build the signed action for marking a conversation read: the request's
-        /// <c>action_signatures</c>, one entry. The X API's mark-read route does not
-        /// take <c>action_signatures</c> yet, so that request shape is not final.
+        /// Build the signed action for marking a conversation read: the
+        /// <c>action_signatures</c> of the mark-read request
+        /// (<c>POST /2/chat/conversations/{id}/read</c>), one entry.
         /// A read receipt is a signed plaintext event, not an encrypted message,
         /// so no conversation key is involved. The SDK generates the action's
         /// message id; read it back from the entry.

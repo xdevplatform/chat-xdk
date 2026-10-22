@@ -451,9 +451,7 @@ prepared = chat.prepare_conversation_key_change(
   of a single `ActionSignature`; read the action's `message_id` from that
   entry. Go, .NET and the JVM omit an absent `signature_payload` when
   serializing (.NET `SignaturePayload` is `string?` and the JVM field is
-  `null` when absent). The mark-read shape is pending: the X API's mark-read
-  route does not take `action_signatures` yet, so the shape may change when
-  it does.
+  `null` when absent).
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
@@ -465,7 +463,7 @@ prepared = chat.prepare_conversation_key_change(
   Release each chat when you're done with it (`free()` in JS, `close()` in
   Python and the JVM, `Close()` in Go, `Dispose()` in .NET) to stop its
   requests; a garbage-collected chat stops too. In Node 20.16 and later a
-  pending request never keeps the process alive.
+  request in flight never keeps the process alive.
 - Python: `chat_xdk.Chat` is a Python subclass of the native class, and each
   instance runs a daemon thread for that request. The new `Chat.close()`
   stops it.
@@ -482,9 +480,7 @@ prepared = chat.prepare_conversation_key_change(
   repeats every 5 minutes, and is shared by chats that ask at once; if it
   fails or is blocked, sends stay v0. See "Network access" in the README.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
-  (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Do not send it yet: the
-  send request takes it as an optional `xdk_version` field only once the X
-  API documents that field.
+  (`xdkVersion` in JS, `XdkVersion` in Go and .NET).
 - Messages encrypted under per-message keys (`contents_encryption_version`
   1 or more) decrypt, as do their reply previews, edits and files. A reply
   to such a message carries the original's key, and a v1 edit names the
@@ -495,8 +491,8 @@ prepared = chat.prepare_conversation_key_change(
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
   (the sequence id of the newest event read) and an optional
   `seen_at_msec`, which defaults to the current time. It returns a
-  `PreparedAction` whose `action_signatures` are nested as the
-  conversation-change requests nest theirs; the X API's mark-read route
-  does not take them yet, so that shape is pending and may change.
+  `PreparedAction` whose `action_signatures` the mark-read request
+  (`POST /2/chat/conversations/:id/read`) takes as they are, nested as the
+  conversation-change requests nest theirs.
   Recipients' `decrypt_event` returns a signed receipt as a verified
   `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.
