@@ -30,10 +30,19 @@ the browser, or in Node for the bot); REST calls go through the **XDK**
 - Rust + [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) to build the WASM
   package (`crates/wasm/pkg/` is not committed): run `npm run build:wasm` once
   before the offline test or the browser app. The example then imports the
-  chat-xdk WASM wrapper from this repo by relative path; for a standalone
+  chat-xdk WASM package from this repo by relative path; for a standalone
   project, install the package and import from `@xdevplatform/chat-xdk`
   instead. The REST client uses `@xdevplatform/xdk`
   (`npm install @xdevplatform/xdk`).
+
+## Message format
+
+The bot and the browser app import a raw private-key blob, which the
+package's `createChat` (keys kept in Juicebox) doesn't take, so they drive the
+lower-level WASM `Chat` from `crates/wasm/pkg/`. That `Chat` doesn't read the
+X API's feature switches, so their messages go out in the v0 format. A chat
+from `createChat`, as in [`src/register.mjs`](src/register.mjs), reads the
+switches once, when it is created, and sends v1 if `v1_send` was on then.
 
 ## Test it (offline, no credentials)
 

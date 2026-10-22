@@ -100,8 +100,7 @@ const core = await ChatCore.create();
 core.loadKeys(blob, ver);
 const api = new XChatClient(token);
 const myId = await api.getMyUserId();
-// The session identity signs everything sent below; per-call senderId /
-// signingKeyVersion arguments are gone.
+// The session identity signs everything sent below.
 core.setIdentity(myId);
 
 // KeyChange events arrive in meta.conversation_key_events, separate from

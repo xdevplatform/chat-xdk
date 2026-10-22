@@ -25,8 +25,8 @@ type ChatCore struct {
 }
 
 // NewChatCore creates an empty (locked) core with the SDK's conversation-key
-// cache enabled, so encrypt calls resolve the key from previously decrypted
-// key-change events instead of the caller threading it through.
+// cache enabled, so encrypt calls resolve the key from the key-change events
+// it has decrypted instead of the caller threading it through.
 func NewChatCore() *ChatCore {
 	chat := chatxdk.New()
 	chat.SetCacheKeys(true)

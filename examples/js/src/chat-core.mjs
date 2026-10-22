@@ -24,7 +24,9 @@ import init, {
 } from "../../../crates/wasm/pkg/chat_xdk_wasm.js";
 
 // The WASM public API does not expose raw key import/export, so the local-blob
-// example drives the lower-level WASM Chat directly.
+// example drives the lower-level WASM Chat directly. That Chat doesn't read the
+// X API's feature switches, so this example sends v0 messages; a chat from
+// createChat reads them once, when it is created.
 let wasmReady;
 /** Concatenate Uint8Array chunks into one buffer. */
 function concatBytes(parts) {
@@ -250,8 +252,8 @@ export class ChatCore {
   }
 
   /**
-   * Sign a message delete. Returns the delete request's `actionSignatures`,
-   * one entry.
+   * Sign a message delete. Returns a `PreparedAction` whose `actionSignatures`
+   * (one entry) the delete request takes as they are.
    */
   prepareMessageDelete({ conversationId, sequenceIds, deleteForAll }) {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
