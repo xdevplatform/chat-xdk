@@ -27,6 +27,7 @@ the lines to change. The other bindings have their own pages, listed in the
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Know which calls throw `ChatXdkException`](#exceptions)
 - [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
+- [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
 - [ ] [Optional: sign read receipts (pending)](#signed-read-receipts-new-pending)
 
 ## About the snippets
@@ -396,6 +397,14 @@ checked exceptions and throw it too. The methods that declare
 
 `ChatNative`, the JNA interface to the native library, follows the C ABI:
 if your code calls it directly, apply the changes in [C ABI](c-abi.md).
+
+## The jar bundles the linux-arm64 native library
+
+The jar bundles the native library for 64-bit ARM Linux (`linux-arm64`) as
+well, and on ARM64 Linux loads it ahead of any copy on `jna.library.path`.
+There's no code to change. If you built a library to run 0.5.x there,
+remove it: a 0.5.x build doesn't export the entry points 0.6.0 calls (see
+[C ABI](c-abi.md)).
 
 ## Signed read receipts (new, pending)
 
