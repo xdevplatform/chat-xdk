@@ -131,7 +131,7 @@ API's feature switches that pick the format the SDK sends in. It runs when the
 chat is created, again once keys load, and every 5 minutes after that, and
 chats asking for the same thing at once share one request. It carries no
 credentials and never delays or fails a call; if it fails or is blocked,
-sends stay in v0, the format 0.5.x sends. Call `chat.free()` when you're done with a chat to stop its requests; a garbage-collected chat stops too. In Node 20.16 and later, a pending request never keeps the process alive.
+sends stay in v0, the format 0.5.x sends. Call `chat.free()` when you're done with a chat to stop its requests; a garbage-collected chat stops too. In Node 20.16 and later, a request in flight never keeps the process alive.
 In a browser, the request is a simple cross-origin GET.
 
 ## Security limitations

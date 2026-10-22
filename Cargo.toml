@@ -67,7 +67,7 @@ pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
 # TypeScript type generation (for JS/WASM builds)
 ts-rs = { version = "10", features = ["serde-compat"] }
 
-# thrift 0.24.0 is not yet published to crates.io (latest release is 0.23.0), so
+# crates.io has no thrift 0.24.0 (its latest release is 0.23.0), so
 # pin to the apache/thrift master commit that carries the Rust fixes this SDK
 # needs: the `crate_prefix` generator option (for `src/thrift/` submodule
 # output), `list<union>` codegen, and union/length-prefix parsing robustness.

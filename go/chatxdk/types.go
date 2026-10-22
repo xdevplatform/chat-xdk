@@ -49,9 +49,7 @@ type SendPayload struct {
 	SignatureInfo                SignatureInfo `json:"signature_info"`
 	ConversationKeyVersion       string        `json:"conversation_key_version"`
 	ShouldNotify                 bool          `json:"should_notify"`
-	// XdkVersion is the version of the Chat XDK that built the payload. Do
-	// not send it yet: the send request takes it as an optional xdk_version
-	// field only once the X API documents that field.
+	// XdkVersion is the version of the Chat XDK that built the payload.
 	XdkVersion string `json:"xdk_version"`
 }
 

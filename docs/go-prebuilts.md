@@ -64,7 +64,7 @@ Committed archives:
 commit updating either or both `.a` files). Uses `MACOSX_DEPLOYMENT_TARGET=11.0`
 to align with the `Makefile` / local `make prebuilt`.
 
-**Bootstrap:** if `darwin_amd64/` is not yet in the tree, run Actions → go
+**Bootstrap:** if the tree has no `darwin_amd64/`, run Actions → go
 prebuilt (darwin) → Run workflow on your branch once so sync adds both archives.
 
 #### Reproducibility (darwin)

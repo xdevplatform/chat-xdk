@@ -3929,7 +3929,7 @@ fn collect_attachments(
                 }));
             }
             ThriftMessageAttachment::Jetfuel(_) => {
-                // This attachment variant is not yet supported; skip.
+                // The SDK doesn't support this attachment variant; skip it.
             }
             ThriftMessageAttachment::PaymentReceipt(_) | ThriftMessageAttachment::BotMessage(_) => {
             }
