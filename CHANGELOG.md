@@ -458,28 +458,29 @@ prepared = chat.prepare_conversation_key_change(
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
   `SdkError::InvalidState` is left for values neither passed nor set on the
   chat, such as a missing session identity or an empty key cache.
-- Every binding but Rust now makes an outbound HTTPS request from each chat:
-  `GET https://api.x.com/2/chat/features`, in the background (see Added).
-  Allow it through egress filters for v1 sends; blocked, sends stay v0.
-  Release each chat when you're done with it (`free()` in JS, `close()` in
-  Python and the JVM, `Close()` in Go, `Dispose()` in .NET) to stop its
-  requests; a garbage-collected chat stops too. In Node 20.16 and later a
-  pending request never keeps the process alive.
-- Python: `chat_xdk.Chat` is a Python subclass of the native class, and each
-  instance runs a daemon thread for that request. The new `Chat.close()`
-  stops it.
+- Every binding but Rust now makes an outbound HTTPS request once a chat
+  sends: `GET https://api.x.com/2/chat/features`, in the background (see
+  Added). Allow it through egress filters for v1 sends; blocked, sends stay
+  v0. The requests stop once no chat in the process uses them: release each
+  chat when you're done with it (`free()` in JS, `close()` in Python and the
+  JVM, `Close()` in Go, `Dispose()` in .NET), or let it be garbage-collected.
+  A program that never sends makes no request. In Node before 20.16 a request
+  still in flight can delay exit until it ends, at most 2 seconds.
 - JS typings export only what the module exports. `Chat` and `ChatCrypto`,
   which the module never exported, no longer import, and `FileEncryptor` /
   `FileDecryptor`, which it returns but does not export, are interfaces.
 
 ### Added
 
-- Each chat fetches its feature switches from
+- The bindings fetch the feature switches from
   `GET https://api.x.com/2/chat/features` in the background, without
-  delaying or failing anything; there is nothing to call. The request is
-  anonymous, carries a 0–9999 bucket derived from the identity public key,
-  repeats every 5 minutes, and is shared by chats that ask at once; if it
-  fails or is blocked, sends stay v0. See "Network access" in the README.
+  delaying or failing anything; there is nothing to call. A chat asks on its
+  first send, and chats in one process share one request per bucket, a
+  0–9999 number derived from the identity public key, re-checked every 5
+  minutes while any chat uses it. The request is anonymous; if it fails or is
+  blocked, sends stay v0. See "Network access" in the README.
+- Python: `Chat.close()` releases a chat's part in that request. The chat
+  stays usable and keeps the format it sends in.
 - `SendPayload` carries `xdk_version`, the SDK version that built it
   (`xdkVersion` in JS, `XdkVersion` in Go and .NET). Do not send it yet: the
   send request takes it as an optional `xdk_version` field only once the X

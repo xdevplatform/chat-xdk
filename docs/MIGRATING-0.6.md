@@ -30,8 +30,9 @@ them by task and shows the code. The API itself is documented in
    API turns it on, and 0.5.x rejects v1 sends. See
    [Send formats](#send-formats-v0-and-v1).
 2. **Decide about egress.** Every binding except Rust and the raw C ABI now
-   makes an anonymous background request to `api.x.com`. Blocking it keeps
-   your sends v0. See [The feature-switch request](#the-feature-switch-request).
+   makes an anonymous background request to `api.x.com` once a chat sends.
+   Blocking it keeps your sends v0. See
+   [The feature-switch request](#the-feature-switch-request).
 3. **Plan the media change.** A message with files is now built before its
    files are encrypted, and each file is encrypted from that message. This
    reorders your upload code. See [Files](#files).
@@ -51,7 +52,7 @@ them by task and shows the code. The API itself is documented in
 | Files | The message comes first; `encrypt_file` / `decrypt_file` and the `File*` encryptors replace the stream calls | all |
 | Signed actions | Signatures come nested under `message_event_signature`, with your signing public key; deletes return a `PreparedAction` | all |
 | Errors | Invalid input fails with the message alone (`SdkError::InvalidInput` in Rust) | all |
-| Network | Each chat fetches feature switches in the background; release chats when you're done | all but Rust and the C ABI |
+| Network | Chats fetch feature switches in the background from their first send, sharing one request per bucket; release chats when you're done | all but Rust and the C ABI |
 | Platforms | The jar and the NuGet package bundle the native library for 64-bit ARM Linux (`linux-arm64`) too | JVM, .NET |
 | New | Signed read receipts (the X API route is pending), `xdk_version` (don't send it yet) | all |
 
@@ -378,20 +379,22 @@ The method is `prepare_mark_conversation_read` in Rust,
 
 ## The feature-switch request
 
-Each chat in the Python, JS, Go, JVM and .NET bindings makes one kind of
-request: an anonymous `GET https://api.x.com/2/chat/features`, which reads
-the X API's feature switches. Nothing calls it; it runs in the background:
+The Python, JS, Go, JVM and .NET bindings make one kind of request: an
+anonymous `GET https://api.x.com/2/chat/features`, which reads the X API's
+feature switches. Nothing calls it; it runs in the background:
 
-- when a chat is created, again once keys load (with a `bucket` query
-  parameter, 0–9999, derived from the identity public key), and every
-  5 minutes after that;
-- chats in one process that ask for the same bucket at the same time share
-  one request;
+- a chat asks on its first send, never earlier, so a program that never
+  sends makes no request;
+- chats in one process share one request per bucket (a `bucket` query
+  parameter, 0–9999, derived from the identity public key), re-checked every
+  5 minutes while any chat uses it; a chat that asks in the meantime takes
+  the answer without a request;
 - it carries no credentials, and never delays or fails an SDK call;
 - if it fails or is blocked, every switch stays off and sends stay v0; a
-  failed request is retried with a backoff that grows to 5 minutes;
-- the 5-minute re-checks can only turn a switch off: a chat that is already
-  running picks up a switch turning on only when it is created again.
+  failed request is retried after 1 second, then after twice the previous
+  delay, up to once every 5 minutes;
+- for a chat that is already sending, a re-check can only turn a switch off:
+  a switch turning on reaches only chats that start sending after it.
 
 **Pending:** the X API doesn't serve this route yet. Until it does, the
 request fails and every send is v0.
@@ -400,13 +403,13 @@ request fails and every send is v0.
 your sends to follow the switch; block it to keep them v0. In browsers the
 request is a cross-origin `GET`, and a failed one keeps sends v0 too.
 
-**Release each chat when you're done with it** to stop its requests: `free()`
-in JS, `close()` in Python and the JVM, `Close()` in Go, `Dispose()` in .NET.
-A garbage-collected chat stops too. The request never keeps a process alive,
-except in Node before 20.16, where one in flight can delay exit by a few
-seconds unless you call `free()`. In Python, `chat_xdk.Chat` is a Python
-subclass of the native class, and each instance runs a daemon thread for the
-request; the new `Chat.close()` stops it.
+**Release each chat when you're done with it** (`free()` in JS, `close()` in
+Python and the JVM, `Close()` in Go, `Dispose()` in .NET), or let it be
+garbage-collected: the requests stop once no chat in the process uses them.
+The request never keeps a process alive, except in Node before 20.16, where
+one still in flight can delay exit until it ends, at most 2 seconds. In
+Python, the new `Chat.close()` releases a chat's part in the request; the
+chat stays usable and keeps the format it sends in.
 
 The Rust crate and the raw C ABI never make the request, so their sends are
 always v0.

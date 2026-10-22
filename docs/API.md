@@ -806,7 +806,8 @@ integer written without a sign or leading zeros, and anything else fails
 with an error naming the field.
 
 The format follows the X API's `v1_send` feature switch, which the JS,
-Python, Go, .NET and JVM bindings fetch in the background (see
+Python, Go, .NET and JVM bindings fetch in the background from a chat's
+first send on (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
 **The Rust crate never fetches it, so `ChatCore` and `Chat` always send
 v0.** They read v1 sends like every binding. The fetch logs nothing; to see

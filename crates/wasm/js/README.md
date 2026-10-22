@@ -127,12 +127,12 @@ See the **JS** column of the unified tables in [`docs/API.md`](../../../docs/API
 
 Each chat makes one kind of request itself: an anonymous
 `GET https://api.x.com/2/chat/features` in the background, which reads the X
-API's feature switches that pick the format the SDK sends in. It runs when the
-chat is created, again once keys load, and every 5 minutes after that, and
-chats asking for the same thing at once share one request. It carries no
+API's feature switches that pick the format the SDK sends in. A chat asks on
+its first send, never earlier, and chats in one process share the request,
+which is re-checked every 5 minutes while any chat uses it. It carries no
 credentials and never delays or fails a call; if it fails or is blocked,
-sends stay in v0, the format 0.5.x sends. Call `chat.free()` when you're done with a chat to stop its requests; a garbage-collected chat stops too. In Node 20.16 and later, a pending request never keeps the process alive.
-In a browser, the request is a simple cross-origin GET.
+sends stay in v0, the format 0.5.x sends. Call `chat.free()` when you're done with a chat, or let it be garbage-collected: the requests stop once no chat in the process uses them. A Node script that never sends makes no request and exits at once. From Node 20.16 a pending request never keeps the process alive; before it, one can delay exit until it ends, at most 2 seconds.
+In a browser, the request is a simple cross-origin GET made with `fetch`.
 
 ## Security limitations
 

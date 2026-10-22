@@ -197,26 +197,36 @@ crates/
 The X API serves boolean feature switches at `GET /2/chat/features`, for
 example `{"features":{"v1_send":false}}`. `v1_send` picks the send format: v0,
 the format 0.5.x sends, until it is on, and v1 (per-message keys) while it is.
-The core holds each chat's switches and picks each send's format from them.
-Only the language bindings make the request, each with its own HTTP stack:
+The core holds the whole policy: when to fetch, how chats share and cache an
+answer, retries, re-checks, response validation and the fail-closed default.
+It never makes the request itself. Each language binding performs the GETs the
+core hands it, with its own HTTP stack (`fetch` in a browser), and hands the
+status and body back:
 
-- **When:** when a chat is created; again with the identity key's bucket once
-  keys load; then a re-check every 300 s that can only turn switches off, so
-  a chat that is already running picks up a switch turning on only when it
-  is created again, while one turning off reaches it within 300 s. A
-  failed fetch is retried with a backoff that doubles from 1 s up to 300 s.
-  Chats in one process that ask for the same bucket while a request for it is
-  in flight wait for that request instead of making their own.
+- **When:** a chat asks for the switches on its first send, never earlier, so
+  a program that never sends makes no request. Chats in one process share one
+  request and one schedule per bucket: an answer is re-checked every 300 s
+  while any chat uses it, and a chat that asks within 300 s of an answer takes
+  it without a request. A failed fetch is retried after 1 s, then after twice
+  the previous delay, up to 300 s.
+- **What a chat reads:** the latest answer younger than 300 s, taken at its
+  first send that finds one; until then every switch reads off for it. From
+  then on a switch stays on for that chat only while every later answer turns
+  it on, so a switch turning off reaches a running chat within 300 s, and one
+  turning on reaches only chats that ask after it.
 - **What it sends:** no credentials and no user data. The only input is the
   `bucket` query parameter, 0–9999, derived from the identity public key (the
   first 8 bytes of the SHA-256 of its SPKI, top bit cleared, mod 10000).
-  Without keys it sends none, and the server buckets the request by IP.
-- **Fail-closed:** a network error, a timeout (2 s), a status other than 200,
-  a body over 64 KiB, malformed JSON, or a missing or non-boolean key leaves
-  every switch off, so sends stay v0. The request never blocks or fails an
-  SDK call.
-- **Lifetime:** the fetch is tied to the chat and stops when the chat is
-  freed, closed, disposed or garbage-collected.
+- **Fail-closed:** a network error, a request that takes more than 2 s in
+  all, a status other than 200, a body over 64 KiB, malformed JSON, or a
+  missing or non-boolean key leaves every switch off, so sends stay v0. At
+  most four requests are in flight at once, and the request never blocks or
+  fails an SDK call.
+- **Lifetime:** one background driver per process runs the requests: a daemon
+  thread in Python and the JVM, a goroutine in Go, a background thread in
+  .NET, and timers in JavaScript (unref'd in Node). The first send that needs
+  it starts it, and it ends once no chat uses the switches, each one freed,
+  closed, disposed or garbage-collected.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the
