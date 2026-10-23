@@ -114,19 +114,81 @@ Source: https://github.com/juicebox-systems/juicebox-sdk
 
 ### `ring` — Apache-2.0 AND ISC (Juicebox / TLS path only)
 
-Pulled in via Juicebox networking (`reqwest` → `rustls` → `ring`). Upstream ships
+Pulled in via the Juicebox realm transport (`reqwest` → `rustls` → `ring`). Upstream ships
 multiple license texts (`LICENSE`, `LICENSE-BoringSSL`, `LICENSE-other-bits`).
 When redistributing a binary built **with** the Juicebox feature, include those
 upstream license texts (available from the `ring` crate sources on crates.io /
 https://github.com/briansmith/ring).
 
-### `webpki-roots` — MPL-2.0 (Juicebox / TLS path only)
+### `webpki-roots` — CDLA-Permissive-2.0 (Juicebox / TLS path only)
 
-Mozilla CA root bundle used by `reqwest` when Juicebox is enabled.
+Mozilla CA root bundle used by `reqwest` when Juicebox is enabled. Its data is
+shared under the Community Data License Agreement – Permissive 2.0, which
+requires this text to accompany it:
 
-This Source Code Form is subject to the terms of the Mozilla Public License,
-v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain
-one at https://mozilla.org/MPL/2.0/.
+```
+# Community Data License Agreement - Permissive - Version 2.0
+
+This is the Community Data License Agreement - Permissive, Version
+2.0 (the "agreement"). Data Provider(s) and Data Recipient(s) agree
+as follows:
+
+## 1. Provision of the Data
+
+1.1. A Data Recipient may use, modify, and share the Data made
+available by Data Provider(s) under this agreement if that Data
+Recipient follows the terms of this agreement.
+
+1.2. This agreement does not impose any restriction on a Data
+Recipient's use, modification, or sharing of any portions of the
+Data that are in the public domain or that may be used, modified,
+or shared under any other legal exception or limitation.
+
+## 2. Conditions for Sharing Data
+
+2.1. A Data Recipient may share Data, with or without modifications, so
+long as the Data Recipient makes available the text of this agreement
+with the shared Data.
+
+## 3. No Restrictions on Results
+
+3.1. This agreement does not impose any restriction or obligations
+with respect to the use, modification, or sharing of Results.
+
+## 4. No Warranty; Limitation of Liability
+
+4.1. All Data Recipients receive the Data subject to the following
+terms:
+
+THE DATA IS PROVIDED ON AN "AS IS" BASIS, WITHOUT REPRESENTATIONS,
+WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED
+INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE,
+NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+
+NO DATA PROVIDER SHALL HAVE ANY LIABILITY FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING
+WITHOUT LIMITATION LOST PROFITS), HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE DATA OR RESULTS,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+## 5. Definitions
+
+5.1. "Data" means the material received by a Data Recipient under
+this agreement.
+
+5.2. "Data Provider" means any person who is the source of Data
+provided under this agreement and in reliance on a Data Recipient's
+agreement to its terms.
+
+5.3. "Data Recipient" means any person who receives Data directly
+or indirectly from a Data Provider and agrees to the terms of this
+agreement.
+
+5.4. "Results" means any outcome obtained by computational analysis
+of Data, including for example machine learning models and models'
+insights.
+```
 
 ### Unicode data — Unicode License v3 (Juicebox / URL stack; also `unicode-ident`)
 
@@ -175,12 +237,6 @@ not be used in advertising or otherwise to promote the sale, use or other
 dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ```
-
-### `encoding_rs` — (Apache-2.0 OR MIT) AND BSD-3-Clause (Juicebox path)
-
-Encoding detection/conversion via `reqwest`. Dual-licensed Apache-2.0/MIT for
-code; includes WHATWG encoding data under BSD-3-Clause. Copyright Mozilla
-Foundation. See the `encoding_rs` crate for full `LICENSE-*` / `COPYRIGHT` files.
 
 ---
 
@@ -314,7 +370,7 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `ciborium-io@0.2.2`
 - `ciborium-ll@0.2.2`
 - `ciborium@0.2.1`
-- `sync_wrapper@0.1.2`
+- `sync_wrapper@1.0.2`
 
 ### BSD-3-Clause
 
@@ -333,12 +389,12 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `hmac-sha256@1.1.14`
 - `hmac-sha512@1.1.12`
 - `jwt-simple@0.11.7`
-- `rustls-webpki@0.101.7`
+- `rustls-webpki@0.103.16`
 - `untrusted@0.9.0`
 
-### MPL-2.0
+### CDLA-Permissive-2.0
 
-- `webpki-roots@0.25.4`
+- `webpki-roots@1.0.11`
 
 ### Apache-2.0 AND ISC
 
@@ -365,19 +421,17 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `zerovec-derive@0.11.2`
 - `zerovec@0.11.5`
 
-### (Apache-2.0 OR MIT) AND BSD-3-Clause
-
-- `encoding_rs@0.8.35`
-
 ### MIT
 
 - `binstring@0.1.7`
 - `bytes@1.11.1`
 - `ct-codecs@1.1.6`
 - `ed25519-compact@2.2.0`
-- `h2@0.3.27`
-- `http-body@0.4.6`
-- `hyper@0.14.32`
+- `h2@0.4.20`
+- `http-body-util@0.1.5`
+- `http-body@1.1.0`
+- `hyper-util@0.1.21`
+- `hyper@1.12.0`
 - `juicebox_marshalling@0.3.4`
 - `juicebox_networking@0.3.4`
 - `juicebox_noise@0.3.4`
@@ -391,22 +445,26 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `slab@0.4.12`
 - `spin@0.9.8`
 - `synstructure@0.13.2`
-- `tokio-util@0.7.18`
+- `tokio-util@0.7.19`
 - `tokio@1.50.0`
+- `tower-http@0.6.11`
+- `tower-layer@0.3.3`
 - `tower-service@0.3.3`
+- `tower@0.5.3`
 - `tracing-attributes@0.1.31`
 - `tracing-core@0.1.36`
 - `tracing@0.1.44`
 - `try-lock@0.2.5`
-- `want@0.3.1`
+- `want@0.3.2`
 
 ### MIT OR Apache-2.0 (used under MIT)
 
 - `anyhow@1.0.102`
 - `argon2@0.5.3`
 - `async-trait@0.1.89`
-- `base64@0.21.7`
-- `bitflags@1.3.2`
+- `atomic-waker@1.1.2`
+- `base64@0.23.1`
+- `bitflags@2.11.0`
 - `blake2@0.10.6`
 - `chacha20poly1305@0.10.1`
 - `core-foundation-sys@0.8.7`
@@ -430,15 +488,14 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `half@2.7.1`
 - `hashbrown@0.16.1`
 - `http@0.2.12`
+- `http@1.5.0`
 - `httparse@1.10.1`
-- `httpdate@1.0.3`
 - `idna@1.1.0`
 - `idna_adapter@1.2.1`
 - `indexmap@2.13.0`
 - `ipnet@2.12.0`
 - `k256@0.13.4`
 - `lazy_static@1.5.0`
-- `mime@0.3.17`
 - `num-bigint-dig@0.8.6`
 - `num-integer@0.1.46`
 - `num-iter@0.1.45`
@@ -453,20 +510,23 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `regex-automata@0.4.14`
 - `regex-syntax@0.8.10`
 - `regex@1.12.3`
-- `reqwest@0.11.27`
+- `reqwest@0.12.28`
 - `rsa@0.7.2`
+- `rustls-pki-types@1.15.1`
 - `serde_urlencoded@0.7.1`
 - `signature@1.6.4`
 - `smallvec@1.15.1`
-- `socket2@0.5.10`
 - `socket2@0.6.3`
 - `spki@0.6.0`
 - `stable_deref_trait@1.2.1`
-- `system-configuration-sys@0.5.0`
-- `system-configuration@0.5.1`
-- `tokio-rustls@0.24.1`
+- `system-configuration-sys@0.6.0`
+- `system-configuration@0.7.0`
+- `tokio-rustls@0.26.6`
 - `url@2.5.8`
 - `utf8_iter@1.0.4`
+- `windows-registry@0.6.1`
+- `windows-result@0.4.1`
+- `windows-strings@0.5.1`
 
 ### BSD-2-Clause OR Apache-2.0 OR MIT (used under MIT)
 
@@ -478,10 +538,8 @@ Versions are from the repository `Cargo.lock` at generation time.
 
 ### Apache-2.0 OR ISC OR MIT (used under MIT)
 
-- `hyper-rustls@0.24.2`
-- `rustls-pemfile@1.0.4`
-- `rustls@0.21.12`
-- `sct@0.7.1`
+- `hyper-rustls@0.27.10`
+- `rustls@0.23.46`
 
 ### Apache-2.0 OR BSL-1.0 (used under Apache-2.0)
 
