@@ -438,15 +438,11 @@ impl RealmHttpClient {
             .expect("rustls client with bundled roots always builds");
         Self(client)
     }
-}
 
-#[cfg(feature = "juicebox")]
-#[async_trait]
-impl juicebox_sdk::http::Client for RealmHttpClient {
-    async fn send(
+    async fn fetch(
         &self,
         request: juicebox_sdk::http::Request,
-    ) -> Option<juicebox_sdk::http::Response> {
+    ) -> Result<juicebox_sdk::http::Response, reqwest::Error> {
         use juicebox_sdk::http::Method;
         use reqwest::header::{HeaderName, HeaderValue};
 
@@ -471,19 +467,30 @@ impl juicebox_sdk::http::Client for RealmHttpClient {
             builder = builder.timeout(timeout);
         }
 
-        let response = builder.send().await.ok()?;
+        let response = builder.send().await?;
         let status_code = response.status().as_u16();
         let headers = response
             .headers()
             .iter()
             .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
             .collect();
-        let body = response.bytes().await.ok()?.to_vec();
-        Some(juicebox_sdk::http::Response {
+        let body = response.bytes().await?.to_vec();
+        Ok(juicebox_sdk::http::Response {
             status_code,
             headers,
             body,
         })
+    }
+}
+
+#[cfg(feature = "juicebox")]
+#[async_trait]
+impl juicebox_sdk::http::Client for RealmHttpClient {
+    async fn send(
+        &self,
+        request: juicebox_sdk::http::Request,
+    ) -> Option<juicebox_sdk::http::Response> {
+        self.fetch(request).await.ok()
     }
 }
 
@@ -980,5 +987,41 @@ mod tests {
             })
             .await;
         assert!(unreachable.is_none());
+    }
+
+    #[cfg(feature = "juicebox")]
+    #[tokio::test]
+    async fn test_realm_http_client_times_out_on_silent_server() {
+        use juicebox_sdk::http::{Method, Request};
+        use std::time::{Duration, Instant};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            let _ = held.recv();
+        });
+
+        let started = Instant::now();
+        let err = RealmHttpClient::new()
+            .fetch(Request {
+                method: Method::Post,
+                url: format!("http://{addr}/req"),
+                headers: HashMap::new(),
+                body: Some(b"ping".to_vec()),
+                timeout: Some(Duration::from_millis(200)),
+            })
+            .await
+            .expect_err("a server that never answers must time out");
+        let elapsed = started.elapsed();
+        drop(release);
+        server.join().unwrap();
+
+        assert!(err.is_timeout(), "{err:?}");
+        assert!(
+            elapsed >= Duration::from_millis(200) && elapsed < Duration::from_secs(5),
+            "{elapsed:?}"
+        );
     }
 }
