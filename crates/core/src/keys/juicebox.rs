@@ -416,6 +416,84 @@ impl AuthTokenManager for StaticAuthTokenManager {
     }
 }
 
+/// HTTP transport for Juicebox realm requests: rustls with the bundled webpki
+/// roots. Every request carries `X-Juicebox-Version`, which realms check to
+/// answer outdated clients with 426 (`UpgradeRequired`).
+#[cfg(feature = "juicebox")]
+struct RealmHttpClient(reqwest::Client);
+
+#[cfg(feature = "juicebox")]
+impl RealmHttpClient {
+    fn new() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            juicebox_sdk::JUICEBOX_VERSION_HEADER,
+            reqwest::header::HeaderValue::from_static(juicebox_sdk::VERSION),
+        );
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(format!("JuiceboxSdk-Rust/{}", juicebox_sdk::VERSION))
+            .default_headers(headers)
+            .build()
+            .expect("rustls client with bundled roots always builds");
+        Self(client)
+    }
+
+    async fn fetch(
+        &self,
+        request: juicebox_sdk::http::Request,
+    ) -> Result<juicebox_sdk::http::Response, reqwest::Error> {
+        use juicebox_sdk::http::Method;
+        use reqwest::header::{HeaderName, HeaderValue};
+
+        let mut builder = match request.method {
+            Method::Get => self.0.get(request.url),
+            Method::Put => self.0.put(request.url),
+            Method::Post => self.0.post(request.url),
+            Method::Delete => self.0.delete(request.url),
+        };
+        for (name, value) in &request.headers {
+            if let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(value),
+            ) {
+                builder = builder.header(name, value);
+            }
+        }
+        if let Some(body) = request.body {
+            builder = builder.body(body);
+        }
+        if let Some(timeout) = request.timeout {
+            builder = builder.timeout(timeout);
+        }
+
+        let response = builder.send().await?;
+        let status_code = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
+            .collect();
+        let body = response.bytes().await?.to_vec();
+        Ok(juicebox_sdk::http::Response {
+            status_code,
+            headers,
+            body,
+        })
+    }
+}
+
+#[cfg(feature = "juicebox")]
+#[async_trait]
+impl juicebox_sdk::http::Client for RealmHttpClient {
+    async fn send(
+        &self,
+        request: juicebox_sdk::http::Request,
+    ) -> Option<juicebox_sdk::http::Response> {
+        self.fetch(request).await.ok()
+    }
+}
+
 /// Juicebox client for PIN-protected key storage.
 ///
 /// Communicates with Juicebox realms to securely store and recover keys.
@@ -458,7 +536,7 @@ impl JuiceboxApi for JuiceboxClient {
         let client = ClientBuilder::new()
             .configuration(configuration)
             .tokio_sleeper()
-            .reqwest()
+            .http(RealmHttpClient::new())
             .auth_token_manager(auth_manager)
             .build();
 
@@ -509,7 +587,7 @@ impl JuiceboxApi for JuiceboxClient {
         let client = ClientBuilder::new()
             .configuration(configuration)
             .tokio_sleeper()
-            .reqwest()
+            .http(RealmHttpClient::new())
             .auth_token_manager(auth_manager)
             .build();
 
@@ -556,7 +634,7 @@ impl JuiceboxApi for JuiceboxClient {
         let client = ClientBuilder::new()
             .configuration(configuration)
             .tokio_sleeper()
-            .reqwest()
+            .http(RealmHttpClient::new())
             .auth_token_manager(auth_manager)
             .build();
 
@@ -844,5 +922,106 @@ mod tests {
         assert!(RecoverFailureReason::Transient.is_retryable());
         assert!(!RecoverFailureReason::UpgradeRequired.is_retryable());
         assert!(!RecoverFailureReason::Assertion.is_retryable());
+    }
+
+    #[cfg(feature = "juicebox")]
+    #[tokio::test]
+    async fn test_realm_http_client_round_trip() {
+        use juicebox_sdk::http::{Client as _, Method, Request};
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !String::from_utf8_lossy(&raw).ends_with("\r\n\r\nping") {
+                let n = stream.read(&mut buf).unwrap();
+                assert!(n > 0, "connection closed before the full request");
+                raw.extend_from_slice(&buf[..n]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 201 Created\r\nx-reply: yes\r\ncontent-length: 4\r\nconnection: close\r\n\r\npong",
+                )
+                .unwrap();
+            String::from_utf8(raw).unwrap()
+        });
+
+        let response = RealmHttpClient::new()
+            .send(Request {
+                method: Method::Post,
+                url: format!("http://{addr}/req"),
+                headers: HashMap::from([("X-Custom".to_string(), "1".to_string())]),
+                body: Some(b"ping".to_vec()),
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .await
+            .expect("local server answers");
+        let raw = server.join().unwrap().to_ascii_lowercase();
+
+        assert!(raw.starts_with("post /req http/1.1\r\n"), "{raw}");
+        let version = format!("\r\nx-juicebox-version: {}\r\n", juicebox_sdk::VERSION);
+        let agent = format!(
+            "\r\nuser-agent: juiceboxsdk-rust/{}\r\n",
+            juicebox_sdk::VERSION
+        );
+        assert!(raw.contains(&version), "{raw}");
+        assert!(raw.contains(&agent), "{raw}");
+        assert!(raw.contains("\r\nx-custom: 1\r\n"), "{raw}");
+        assert_eq!(response.status_code, 201);
+        assert_eq!(
+            response.headers.get("x-reply").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(response.body, b"pong");
+
+        let unreachable = RealmHttpClient::new()
+            .send(Request {
+                method: Method::Get,
+                url: format!("http://{addr}/gone"),
+                headers: HashMap::new(),
+                body: None,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .await;
+        assert!(unreachable.is_none());
+    }
+
+    #[cfg(feature = "juicebox")]
+    #[tokio::test]
+    async fn test_realm_http_client_times_out_on_silent_server() {
+        use juicebox_sdk::http::{Method, Request};
+        use std::time::{Duration, Instant};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            let _ = held.recv();
+        });
+
+        let started = Instant::now();
+        let err = RealmHttpClient::new()
+            .fetch(Request {
+                method: Method::Post,
+                url: format!("http://{addr}/req"),
+                headers: HashMap::new(),
+                body: Some(b"ping".to_vec()),
+                timeout: Some(Duration::from_millis(200)),
+            })
+            .await
+            .expect_err("a server that never answers must time out");
+        let elapsed = started.elapsed();
+        drop(release);
+        server.join().unwrap();
+
+        assert!(err.is_timeout(), "{err:?}");
+        assert!(
+            elapsed >= Duration::from_millis(200) && elapsed < Duration::from_secs(5),
+            "{elapsed:?}"
+        );
     }
 }

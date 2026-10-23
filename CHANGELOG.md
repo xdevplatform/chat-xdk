@@ -617,3 +617,27 @@ prepared = chat.prepare_conversation_key_change(
 - The JVM jar and the .NET package bundle the native library for 64-bit ARM
   Linux (`linux-arm64`) too, so both bindings run there without a library of
   your own.
+
+### Security
+
+- Juicebox realm requests (setup, unlock and key deletion) are sent by an
+  HTTP client in `chat-xdk-core` built on reqwest 0.12.28, rustls 0.23.46
+  (ring provider), rustls-webpki 0.103.16, webpki-roots 1.0.11 and h2 0.4.20.
+  juicebox-sdk's `reqwest` feature is no longer enabled, so reqwest 0.11.27,
+  rustls 0.21.12, rustls-webpki 0.101.7, webpki-roots 0.25.4 and h2 0.3.27 are
+  no longer built. This fixes CVE-2026-111943
+  ([RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381.html),
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html)),
+  [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346.html),
+  [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html)
+  and [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258.html).
+  The client:
+  - offers HTTP/2 and HTTP/1.1 over TLS (ALPN);
+  - verifies servers against the Mozilla roots bundled in webpki-roots 1.0.11,
+    which no longer include `emSign ECC Root CA - G3`;
+  - takes proxies from `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY`,
+    then from the system proxy settings on macOS and Windows;
+  - sends `X-Juicebox-Version` and `User-Agent: JuiceboxSdk-Rust/<version>`
+    with juicebox-sdk's version on every request;
+  - applies the timeout juicebox-sdk sets on each request, or 30 seconds when
+    it sets none.
