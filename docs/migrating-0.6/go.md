@@ -19,7 +19,7 @@ change.
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
 - [ ] [Pass a `DecryptEventsParams` to `DecryptEvents`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `DecryptEvent`](#decryptevent-takes-decrypteventparams)
-- [ ] [Read `SendPayload` under the send request's field names](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
@@ -216,7 +216,8 @@ must(err)
 
 The two encoded fields carry the names of the fields of the send request,
 `POST /2/chat/conversations/{id}/messages`, so the request takes them as
-they are:
+they are. The request also takes the payload's `XdkVersion`, the version of
+the SDK that built it, as `xdk_version`:
 
 ```go
 // 0.5.x
@@ -231,6 +232,7 @@ body := map[string]string{
 	"message_id":                      payload.MessageID,
 	"encoded_message_create_event":    payload.EncodedMessageCreateEvent,
 	"encoded_message_event_signature": payload.EncodedMessageEventSignature,
+	"xdk_version":                     payload.XdkVersion,
 }
 ```
 

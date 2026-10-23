@@ -120,6 +120,7 @@ fn encrypt_reply_produces_sendable_payload() {
     assert!(!body.encoded_message_create_event.is_empty());
     assert!(!body.encoded_message_event_signature.is_empty());
     assert!(!body.message_id.is_empty());
+    assert!(!body.xdk_version.is_empty());
 }
 
 #[test]
@@ -237,7 +238,8 @@ fn encrypt_reaction_produces_sendable_payload() {
         [
             "encoded_message_create_event",
             "encoded_message_event_signature",
-            "message_id"
+            "message_id",
+            "xdk_version"
         ]
     );
 }

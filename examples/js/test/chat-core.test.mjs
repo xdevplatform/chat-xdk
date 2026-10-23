@@ -90,6 +90,7 @@ test("encryptReply produces a sendable payload", async () => {
   assert.ok(body.encoded_message_create_event);
   assert.ok(body.encoded_message_event_signature);
   assert.ok(body.message_id);
+  assert.ok(body.xdk_version);
 });
 
 test("session cache: decryptBatch feeds the key cache, encryptReply omits the key", async () => {
@@ -106,6 +107,7 @@ test("session cache: decryptBatch feeds the key cache, encryptReply omits the ke
   });
   assert.ok(body.encoded_message_create_event);
   assert.ok(body.message_id);
+  assert.ok(body.xdk_version);
 });
 
 test("decryptBatch on an empty list is safe", async () => {
@@ -195,6 +197,7 @@ test("encryptReaction targeting a raw event produces a sendable payload", async 
     "encoded_message_create_event",
     "encoded_message_event_signature",
     "message_id",
+    "xdk_version",
   ]);
 });
 

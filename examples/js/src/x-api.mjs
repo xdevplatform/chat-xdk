@@ -124,6 +124,7 @@ export class XChatClient {
       messageId: body.message_id,
       encodedMessageCreateEvent: body.encoded_message_create_event,
       encodedMessageEventSignature: body.encoded_message_event_signature,
+      xdkVersion: body.xdk_version,
       conversationToken: body.conversation_token,
     });
   }
@@ -137,7 +138,7 @@ export class XChatClient {
    * (and returns) the canonical conversation ID.
    */
   async addConversationKeys(conversationId, body) {
-    return this.client.chat.initializeConversationKeys(
+    return this.client.chat.addConversationKeys(
       conversationId.replaceAll(":", "-"),
       body,
     );

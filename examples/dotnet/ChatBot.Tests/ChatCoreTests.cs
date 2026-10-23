@@ -130,6 +130,7 @@ public class ChatCoreTests
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageCreateEvent));
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageEventSignature));
         Assert.False(string.IsNullOrEmpty(body.MessageId));
+        Assert.False(string.IsNullOrEmpty(body.XdkVersion));
     }
 
     [Fact]
@@ -218,6 +219,7 @@ public class ChatCoreTests
         Assert.False(string.IsNullOrEmpty(body.MessageId));
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageCreateEvent));
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageEventSignature));
+        Assert.False(string.IsNullOrEmpty(body.XdkVersion));
     }
 
     [Fact]

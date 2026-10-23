@@ -15,6 +15,6 @@
     "@xdevplatform/chat-xdk": "file:../../crates/wasm/js"
   },
   "optionalDependencies": {
-    "@xdevplatform/xdk": "^1.0.0"
+    "@xdevplatform/xdk": "^0.6.6"
   }
 }

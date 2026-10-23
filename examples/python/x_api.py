@@ -247,7 +247,12 @@ class XChatClient:
 
     # -- Sending ------------------------------------------------------------
 
-    SEND_FIELDS = ("message_id", "encoded_message_create_event", "encoded_message_event_signature")
+    SEND_FIELDS = (
+        "message_id",
+        "encoded_message_create_event",
+        "encoded_message_event_signature",
+        "xdk_version",
+    )
 
     def send_message(self, conversation_id: str, body: dict[str, str]) -> Any:
         """POST an encrypted message produced by ``ChatCore.encrypt_reply``.

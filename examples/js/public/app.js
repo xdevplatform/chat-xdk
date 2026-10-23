@@ -41,6 +41,8 @@ async function api(path, opts) {
 (async () => {
   try {
     await init();
+    // The lower-level WASM Chat takes a raw key blob but doesn't read the X
+    // API's feature switches, so this app sends v0 messages.
     chat = new Chat();
     log("WASM binding loaded.");
   } catch (e) {
@@ -205,6 +207,7 @@ async function sendMessage(text) {
       message_id: messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
     }),
   });
   renderMessage({ id: messageId, type: "message", senderId: botUserId, content: { text } });

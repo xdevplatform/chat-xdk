@@ -24,7 +24,9 @@ import init, {
 } from "../../../crates/wasm/pkg/chat_xdk_wasm.js";
 
 // The WASM public API does not expose raw key import/export, so the local-blob
-// example drives the lower-level WASM Chat directly.
+// example drives the lower-level WASM Chat directly. That Chat doesn't read the
+// X API's feature switches, so this example sends v0 messages; a chat from
+// createChat reads them once, when it is created.
 let wasmReady;
 /** Concatenate Uint8Array chunks into one buffer. */
 function concatBytes(parts) {
@@ -203,6 +205,7 @@ export class ChatCore {
       message_id: payload.messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
       event_b64: payload.eventB64,
     };
   }
@@ -222,6 +225,7 @@ export class ChatCore {
       message_id: payload.messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
     };
   }
 
@@ -243,12 +247,13 @@ export class ChatCore {
       message_id: payload.messageId,
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
     };
   }
 
   /**
-   * Sign a message delete. Returns the delete request's `actionSignatures`,
-   * one entry.
+   * Sign a message delete. Returns a `PreparedAction` whose `actionSignatures`
+   * (one entry) the delete request takes as they are.
    */
   prepareMessageDelete({ conversationId, sequenceIds, deleteForAll }) {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
