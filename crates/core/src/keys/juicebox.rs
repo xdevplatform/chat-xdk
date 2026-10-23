@@ -916,4 +916,69 @@ mod tests {
         assert!(!RecoverFailureReason::UpgradeRequired.is_retryable());
         assert!(!RecoverFailureReason::Assertion.is_retryable());
     }
+
+    #[cfg(feature = "juicebox")]
+    #[tokio::test]
+    async fn test_realm_http_client_round_trip() {
+        use juicebox_sdk::http::{Client as _, Method, Request};
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !String::from_utf8_lossy(&raw).ends_with("\r\n\r\nping") {
+                let n = stream.read(&mut buf).unwrap();
+                assert!(n > 0, "connection closed before the full request");
+                raw.extend_from_slice(&buf[..n]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 201 Created\r\nx-reply: yes\r\ncontent-length: 4\r\nconnection: close\r\n\r\npong",
+                )
+                .unwrap();
+            String::from_utf8(raw).unwrap()
+        });
+
+        let response = RealmHttpClient::new()
+            .send(Request {
+                method: Method::Post,
+                url: format!("http://{addr}/req"),
+                headers: HashMap::from([("X-Custom".to_string(), "1".to_string())]),
+                body: Some(b"ping".to_vec()),
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .await
+            .expect("local server answers");
+        let raw = server.join().unwrap().to_ascii_lowercase();
+
+        assert!(raw.starts_with("post /req http/1.1\r\n"), "{raw}");
+        let version = format!("\r\nx-juicebox-version: {}\r\n", juicebox_sdk::VERSION);
+        let agent = format!(
+            "\r\nuser-agent: juiceboxsdk-rust/{}\r\n",
+            juicebox_sdk::VERSION
+        );
+        assert!(raw.contains(&version), "{raw}");
+        assert!(raw.contains(&agent), "{raw}");
+        assert!(raw.contains("\r\nx-custom: 1\r\n"), "{raw}");
+        assert_eq!(response.status_code, 201);
+        assert_eq!(
+            response.headers.get("x-reply").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(response.body, b"pong");
+
+        let unreachable = RealmHttpClient::new()
+            .send(Request {
+                method: Method::Get,
+                url: format!("http://{addr}/gone"),
+                headers: HashMap::new(),
+                body: None,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .await;
+        assert!(unreachable.is_none());
+    }
 }
