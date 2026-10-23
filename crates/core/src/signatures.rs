@@ -12,10 +12,17 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 /// [`SIGNATURE_VERSION`] as the integer used in verification.
 pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 
-/// Signature version of v0 sends and of every other signed action:
-/// conversation-key changes, group changes, deletes and read receipts. v1
-/// sends sign at version 10.
+/// Signature version of v0 sends and of signed actions other than a group
+/// member remove: conversation-key changes, the other group changes, deletes,
+/// and read receipts. A member remove signs at
+/// [`MEMBER_REMOVE_SIGNATURE_VERSION`] so the conversation-key version is part
+/// of the payload. v1 sends sign at version 10.
 pub const SIGNATURE_VERSION: &str = "7";
+
+/// Signature version of a group member remove. From this version the signed
+/// payload includes the conversation-key version (`null` when the remove does
+/// not name one).
+pub(crate) const MEMBER_REMOVE_SIGNATURE_VERSION: i32 = 11;
 
 /// Signature version of v1 sends: the first version whose payload signs
 /// `contents_encryption_version`, so the choice of key for the contents is
@@ -82,6 +89,16 @@ impl MessageEventSignature {
         public_key_version: &str,
         payload: &[u8],
     ) -> Result<Self, SdkError> {
+        Self::sign_at(signing_key, public_key_version, payload, SIGNATURE_VERSION)
+    }
+
+    /// Sign `payload` at `signature_version`.
+    fn sign_at(
+        signing_key: &XChatPrivateKey,
+        public_key_version: &str,
+        payload: &[u8],
+        signature_version: &str,
+    ) -> Result<Self, SdkError> {
         let signature = KeyFactory::sign(signing_key, payload).map_err(SdkError::Crypto)?;
         let signing_keypair = KeyFactory::get_keypair_from_private_key_bytes(
             signing_key.encoded(),
@@ -90,7 +107,7 @@ impl MessageEventSignature {
         .map_err(SdkError::Crypto)?;
         Ok(Self {
             signature: STANDARD_NO_PAD.encode(&signature),
-            signature_version: SIGNATURE_VERSION.to_string(),
+            signature_version: signature_version.to_string(),
             public_key_version: public_key_version.to_string(),
             signing_public_key: base64_encode(signing_keypair.public.encoded()),
         })
@@ -352,7 +369,8 @@ pub(crate) fn build_mark_conversation_read_signature(
     )
 }
 
-/// Sign a comma-joined payload and return an [`ActionSignature`].
+/// Sign a comma-joined payload at [`CURRENT_SIGNATURE_VERSION`] and return an
+/// [`ActionSignature`].
 ///
 /// Rejects any component containing `,`: the payload has no escaping, so an
 /// embedded comma would both make the signature unverifiable and let one
@@ -363,20 +381,45 @@ fn sign_payload(
     message_id: &str,
     components: &[&str],
 ) -> Result<ActionSignature, SdkError> {
+    sign_action(
+        signing_key,
+        public_key_version,
+        message_id,
+        CURRENT_SIGNATURE_VERSION,
+        components,
+    )
+}
+
+/// Sign a comma-joined payload at `signature_version`.
+///
+/// Versions 9 and above append `,signature_version={n}` to the signed bytes.
+/// The same comma rule as [`sign_payload`] applies to `components`; the
+/// version suffix is added after that check.
+pub(crate) fn sign_action(
+    signing_key: &XChatPrivateKey,
+    public_key_version: &str,
+    message_id: &str,
+    signature_version: i32,
+    components: &[&str],
+) -> Result<ActionSignature, SdkError> {
     if components.iter().any(|c| c.contains(',')) {
         return Err(SdkError::Parse(
             "Signature payload contains comma-separated component".into(),
         ));
     }
-    let payload = components.join(",");
+    let mut payload = components.join(",");
+    if signature_version >= 9 {
+        payload.push_str(&format!(",signature_version={signature_version}"));
+    }
 
     Ok(ActionSignature {
         message_id: message_id.to_string(),
         encoded_message_event_detail: String::new(),
-        message_event_signature: MessageEventSignature::sign(
+        message_event_signature: MessageEventSignature::sign_at(
             signing_key,
             public_key_version,
             payload.as_bytes(),
+            &signature_version.to_string(),
         )?,
         signature_payload: payload,
     })

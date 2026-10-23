@@ -1,5 +1,6 @@
 """Type stubs for chat-xdk Python bindings."""
 
+from enum import Enum
 from typing import Optional, TypedDict, Union
 
 __version__: str
@@ -273,6 +274,224 @@ class GroupCreateParams:
         ttl_msec: Optional[int] = None,
     ) -> None: ...
 
+class ScreenCaptureChange(str, Enum):
+    """A screen-capture setting signed by prepare_screen_capture."""
+
+    BlockingEnabled = "BlockingEnabled"
+    BlockingDisabled = "BlockingDisabled"
+    DetectionEnabled = "DetectionEnabled"
+    DetectionDisabled = "DetectionDisabled"
+
+class GroupMembersRemoveParams:
+    conversation_id: str
+    user_ids: list[str]
+    public_keys: Optional[list[dict[str, str]]]
+    conversation_key_version: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        user_ids: list[str],
+        *,
+        public_keys: Optional[list[dict[str, str]]] = None,
+        conversation_key_version: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupLeaveParams:
+    conversation_id: str
+    promote_admin_id: Optional[str]
+    conversation_key_version: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        *,
+        promote_admin_id: Optional[str] = None,
+        conversation_key_version: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupTitleChangeParams:
+    conversation_id: str
+    conversation_key_version: str
+    custom_title: str
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        conversation_key_version: str,
+        custom_title: str,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupAvatarChangeParams:
+    conversation_id: str
+    conversation_key_version: str
+    custom_avatar_url: str
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        conversation_key_version: str,
+        custom_avatar_url: str,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupDescriptionChangeParams:
+    conversation_id: str
+    conversation_key_version: str
+    custom_description: str
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        conversation_key_version: str,
+        custom_description: str,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupAdminsAddParams:
+    conversation_id: str
+    user_ids: list[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        user_ids: list[str],
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupAdminsRemoveParams:
+    conversation_id: str
+    user_ids: list[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        user_ids: list[str],
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupInviteEnableParams:
+    conversation_id: str
+    invite_url: str
+    expires_at_msec: Optional[int]
+    affiliate_id: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        invite_url: str,
+        *,
+        expires_at_msec: Optional[int] = None,
+        affiliate_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupInviteDisableParams:
+    conversation_id: str
+    disabled_by: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        *,
+        disabled_by: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupJoinRequestParams:
+    conversation_id: str
+    requesting_user_id: Optional[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        *,
+        requesting_user_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class GroupJoinRejectParams:
+    conversation_id: str
+    user_ids: list[str]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        user_ids: list[str],
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class MessageTtlChangeParams:
+    conversation_id: str
+    ttl_msec: int
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        ttl_msec: int,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class MessageTtlRemoveParams:
+    conversation_id: str
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class ScreenCaptureParams:
+    conversation_id: str
+    change: ScreenCaptureChange
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        change: ScreenCaptureChange,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
 class MessageDeleteParams:
     conversation_id: str
     sequence_ids: list[str]
@@ -437,6 +656,20 @@ class Chat:
     def prepare_group_create(self, params: GroupCreateParams) -> dict: ...
     def prepare_message_delete(self, params: MessageDeleteParams) -> dict: ...
     def prepare_mark_conversation_read(self, params: MarkConversationReadParams) -> dict: ...
+    def prepare_group_members_remove(self, params: GroupMembersRemoveParams) -> dict: ...
+    def prepare_group_leave(self, params: GroupLeaveParams) -> dict: ...
+    def prepare_group_title_change(self, params: GroupTitleChangeParams) -> dict: ...
+    def prepare_group_avatar_change(self, params: GroupAvatarChangeParams) -> dict: ...
+    def prepare_group_description_change(self, params: GroupDescriptionChangeParams) -> dict: ...
+    def prepare_group_admins_add(self, params: GroupAdminsAddParams) -> dict: ...
+    def prepare_group_admins_remove(self, params: GroupAdminsRemoveParams) -> dict: ...
+    def prepare_group_invite_enable(self, params: GroupInviteEnableParams) -> dict: ...
+    def prepare_group_invite_disable(self, params: GroupInviteDisableParams) -> dict: ...
+    def prepare_group_join_request(self, params: GroupJoinRequestParams) -> dict: ...
+    def prepare_group_join_reject(self, params: GroupJoinRejectParams) -> dict: ...
+    def prepare_message_ttl_change(self, params: MessageTtlChangeParams) -> dict: ...
+    def prepare_message_ttl_remove(self, params: MessageTtlRemoveParams) -> dict: ...
+    def prepare_screen_capture(self, params: ScreenCaptureParams) -> dict: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> dict: ...

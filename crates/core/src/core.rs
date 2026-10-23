@@ -3646,8 +3646,19 @@ pub fn build_event_signature_payload(
                 }
                 // Not part of the signed payload.
                 GenGC::GroupAdminSettingsChange(_) => None,
-                // Not surfaced by the SDK, so left unverifiable.
-                GenGC::GroupDescriptionChange(_) => None,
+                // Key version, then the description. An absent description
+                // signs as empty, the same way a title change signs its title.
+                GenGC::GroupDescriptionChange(c) => {
+                    let ckey_ver = c.conversation_key_version.as_deref()?;
+                    let description = c.custom_description.as_deref().unwrap_or("");
+                    build_component_payload(
+                        "GroupChangeEvent.GroupDescriptionChange",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &[ckey_ver, description],
+                    )
+                }
             }
         }
         MessageEventDetail::ConversationMetadataChangeEvent(meta_event) => {
@@ -4424,6 +4435,7 @@ pub(crate) fn convert_settings_change(
     }
 }
 
+mod group_actions;
 mod media;
 
 // Tests

@@ -33,7 +33,8 @@ use zeroize::Zeroize;
 
 use crate::crypto::keys::XChatConversationKey;
 use crate::types::{
-    AttachmentDescriptor, EntityDescriptor, PublicKeyInput, QuickReply, SigningKeyEntry,
+    AttachmentDescriptor, EntityDescriptor, PublicKeyInput, QuickReply, ScreenCaptureChange,
+    SigningKeyEntry,
 };
 
 /// Convert an override string into storage form: an empty string means
@@ -874,6 +875,606 @@ impl GroupCreateParams {
             title: None,
             avatar_url: None,
             ttl_msec: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_members_remove`].
+///
+/// `public_keys` are the identity keys of the members who stay. When they
+/// are set, the call rotates the conversation key for those members and
+/// returns the new key alongside the signatures. When they are absent, the
+/// call signs only the removal. An empty list is the same as absent.
+///
+/// `conversation_key_version` is the version bound into the removal
+/// signature when the call does not rotate. An empty string is absent, and
+/// an absent version signs the literal `null`. A rotation ignores this
+/// field and binds the new version instead.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupMembersRemoveParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User IDs being removed.
+    pub user_ids: Vec<String>,
+    /// Identity public keys of the members who remain. Set to rotate the
+    /// conversation key in this same call.
+    pub public_keys: Option<Vec<PublicKeyInput>>,
+    /// Conversation-key version bound into the removal when not rotating.
+    pub conversation_key_version: Option<String>,
+    /// User ID of the sender signing the removal; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the removal; resolves from
+    /// the session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupMembersRemoveParams {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, user_ids: Vec<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            user_ids,
+            public_keys: None,
+            conversation_key_version: None,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_leave`].
+///
+/// Leaving is a removal of the sender that does not rotate the conversation
+/// key. The result also signs a conversation delete, and a group-admin add
+/// when `promote_admin_id` names the member who becomes an admin.
+///
+/// `conversation_key_version` is bound into the removal signature. An empty
+/// string is absent, and an absent version signs the literal `null`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupLeaveParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User ID promoted to admin with this leave, when the sender is the
+    /// only admin. The caller chooses whom to promote.
+    pub promote_admin_id: Option<String>,
+    /// Conversation-key version bound into the removal signature.
+    pub conversation_key_version: Option<String>,
+    /// User ID of the member leaving; resolves from the session identity
+    /// when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the leave; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupLeaveParams {
+    /// Create params for leaving `conversation_id`.
+    pub fn new(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            promote_admin_id: None,
+            conversation_key_version: None,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_title_change`].
+///
+/// `custom_title` is the title ciphertext the request sends, not plaintext.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupTitleChangeParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// Conversation-key version the title is encrypted under.
+    pub conversation_key_version: String,
+    /// Encrypted title, the value the request sends as the group name.
+    pub custom_title: String,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupTitleChangeParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(
+        conversation_id: impl Into<String>,
+        conversation_key_version: impl Into<String>,
+        custom_title: impl Into<String>,
+    ) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            conversation_key_version: conversation_key_version.into(),
+            custom_title: custom_title.into(),
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_avatar_change`].
+///
+/// `custom_avatar_url` is the avatar value the request sends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupAvatarChangeParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// Conversation-key version the avatar is associated with.
+    pub conversation_key_version: String,
+    /// Avatar URL the request sends.
+    pub custom_avatar_url: String,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupAvatarChangeParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(
+        conversation_id: impl Into<String>,
+        conversation_key_version: impl Into<String>,
+        custom_avatar_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            conversation_key_version: conversation_key_version.into(),
+            custom_avatar_url: custom_avatar_url.into(),
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_description_change`].
+///
+/// `custom_description` is the description ciphertext the request sends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupDescriptionChangeParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// Conversation-key version the description is encrypted under.
+    pub conversation_key_version: String,
+    /// Encrypted description the request sends.
+    pub custom_description: String,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupDescriptionChangeParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(
+        conversation_id: impl Into<String>,
+        conversation_key_version: impl Into<String>,
+        custom_description: impl Into<String>,
+    ) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            conversation_key_version: conversation_key_version.into(),
+            custom_description: custom_description.into(),
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_admins_add`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupAdminsAddParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User IDs gaining admin.
+    pub user_ids: Vec<String>,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupAdminsAddParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, user_ids: Vec<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            user_ids,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_admins_remove`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupAdminsRemoveParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User IDs losing admin.
+    pub user_ids: Vec<String>,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupAdminsRemoveParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, user_ids: Vec<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            user_ids,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_invite_enable`].
+///
+/// An empty `affiliate_id` and a negative `expires_at_msec` are treated as
+/// unset, and an unset value signs the literal `null`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupInviteEnableParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// Invite URL the request enables.
+    pub invite_url: String,
+    /// When the invite expires, in milliseconds since the Unix epoch.
+    pub expires_at_msec: Option<i64>,
+    /// Affiliate id carried with the invite.
+    pub affiliate_id: Option<String>,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupInviteEnableParams {
+    /// Create params with required fields; optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, invite_url: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            invite_url: invite_url.into(),
+            expires_at_msec: None,
+            affiliate_id: None,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_invite_disable`].
+///
+/// `disabled_by` defaults to the sender when unset or empty.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupInviteDisableParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User ID of the member disabling the invite. The sender when unset.
+    pub disabled_by: Option<String>,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupInviteDisableParams {
+    /// Create params for disabling the invite on `conversation_id`.
+    pub fn new(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            disabled_by: None,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_join_request`].
+///
+/// `requesting_user_id` defaults to the sender when unset or empty. The
+/// invite token a request carries is not part of the signature.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupJoinRequestParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User ID asking to join. The sender when unset.
+    pub requesting_user_id: Option<String>,
+    /// User ID of the sender signing the request; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the request; resolves from
+    /// the session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupJoinRequestParams {
+    /// Create params for a join request on `conversation_id`.
+    pub fn new(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            requesting_user_id: None,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_group_join_reject`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupJoinRejectParams {
+    /// ID of the group conversation.
+    pub conversation_id: String,
+    /// User IDs whose join request is rejected.
+    pub user_ids: Vec<String>,
+    /// User ID of the sender signing the rejection; resolves from the
+    /// session identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the rejection; resolves from
+    /// the session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl GroupJoinRejectParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, user_ids: Vec<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            user_ids,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_message_ttl_change`].
+///
+/// The signature covers `ttl_msec` only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MessageTtlChangeParams {
+    /// ID of the conversation whose message TTL is changing.
+    pub conversation_id: String,
+    /// New message TTL, in milliseconds.
+    pub ttl_msec: i64,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl MessageTtlChangeParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, ttl_msec: i64) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            ttl_msec,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_message_ttl_remove`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MessageTtlRemoveParams {
+    /// ID of the conversation whose message TTL is being cleared.
+    pub conversation_id: String,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl MessageTtlRemoveParams {
+    /// Create params for clearing the TTL on `conversation_id`.
+    pub fn new(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_screen_capture`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreenCaptureParams {
+    /// ID of the conversation whose screen-capture setting is changing.
+    pub conversation_id: String,
+    /// The setting being signed.
+    pub change: ScreenCaptureChange,
+    /// User ID of the sender signing the change; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the change; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl ScreenCaptureParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, change: ScreenCaptureChange) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            change,
+            sender_id: None,
+            signing_key_version: None,
         }
     }
 
