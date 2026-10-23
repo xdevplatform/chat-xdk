@@ -238,7 +238,8 @@ fn encrypt_reaction_produces_sendable_payload() {
         [
             "encoded_message_create_event",
             "encoded_message_event_signature",
-            "message_id"
+            "message_id",
+            "xdk_version"
         ]
     );
 }
