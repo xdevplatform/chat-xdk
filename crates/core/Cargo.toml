@@ -47,6 +47,7 @@ hex.workspace = true
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 juicebox_sdk = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
@@ -59,7 +60,7 @@ required-features = ["internals"]
 [features]
 default = ["juicebox"]
 # Enable Juicebox key storage (requires networking, not WASM-compatible)
-juicebox = ["dep:tokio", "dep:async-trait", "dep:juicebox_sdk"]
+juicebox = ["dep:tokio", "dep:async-trait", "dep:juicebox_sdk", "dep:reqwest"]
 # Generate camelCase JS wrapper types (for WASM builds)
 js = ["dep:chat-xdk-macros"]
 # Expose the doc-hidden internals module (vector generator + fuzz targets only)

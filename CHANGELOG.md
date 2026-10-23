@@ -617,3 +617,15 @@ prepared = chat.prepare_conversation_key_change(
 - The JVM jar and the .NET package bundle the native library for 64-bit ARM
   Linux (`linux-arm64`) too, so both bindings run there without a library of
   your own.
+
+### Security
+
+- Juicebox realm requests run on reqwest 0.12 with rustls 0.23.46,
+  rustls-webpki 0.103.16 and webpki-roots 1.0.11, replacing the reqwest 0.11
+  stack that juicebox-sdk's `reqwest` feature brings in (rustls 0.21,
+  rustls-webpki 0.101, webpki-roots 0.25). This fixes CVE-2026-111943
+  ([RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381.html),
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html))
+  and [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346.html) /
+  [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html).
+  Requests carry the same headers and timeout as before.

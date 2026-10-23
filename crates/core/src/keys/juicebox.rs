@@ -416,6 +416,77 @@ impl AuthTokenManager for StaticAuthTokenManager {
     }
 }
 
+/// HTTP transport for Juicebox realm requests: rustls with the bundled webpki
+/// roots. Every request carries `X-Juicebox-Version`, which realms check to
+/// answer outdated clients with 426 (`UpgradeRequired`).
+#[cfg(feature = "juicebox")]
+struct RealmHttpClient(reqwest::Client);
+
+#[cfg(feature = "juicebox")]
+impl RealmHttpClient {
+    fn new() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            juicebox_sdk::JUICEBOX_VERSION_HEADER,
+            reqwest::header::HeaderValue::from_static(juicebox_sdk::VERSION),
+        );
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(format!("JuiceboxSdk-Rust/{}", juicebox_sdk::VERSION))
+            .default_headers(headers)
+            .build()
+            .expect("rustls client with bundled roots always builds");
+        Self(client)
+    }
+}
+
+#[cfg(feature = "juicebox")]
+#[async_trait]
+impl juicebox_sdk::http::Client for RealmHttpClient {
+    async fn send(
+        &self,
+        request: juicebox_sdk::http::Request,
+    ) -> Option<juicebox_sdk::http::Response> {
+        use juicebox_sdk::http::Method;
+        use reqwest::header::{HeaderName, HeaderValue};
+
+        let mut builder = match request.method {
+            Method::Get => self.0.get(request.url),
+            Method::Put => self.0.put(request.url),
+            Method::Post => self.0.post(request.url),
+            Method::Delete => self.0.delete(request.url),
+        };
+        for (name, value) in &request.headers {
+            if let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(value),
+            ) {
+                builder = builder.header(name, value);
+            }
+        }
+        if let Some(body) = request.body {
+            builder = builder.body(body);
+        }
+        if let Some(timeout) = request.timeout {
+            builder = builder.timeout(timeout);
+        }
+
+        let response = builder.send().await.ok()?;
+        let status_code = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
+            .collect();
+        let body = response.bytes().await.ok()?.to_vec();
+        Some(juicebox_sdk::http::Response {
+            status_code,
+            headers,
+            body,
+        })
+    }
+}
+
 /// Juicebox client for PIN-protected key storage.
 ///
 /// Communicates with Juicebox realms to securely store and recover keys.
@@ -458,7 +529,7 @@ impl JuiceboxApi for JuiceboxClient {
         let client = ClientBuilder::new()
             .configuration(configuration)
             .tokio_sleeper()
-            .reqwest()
+            .http(RealmHttpClient::new())
             .auth_token_manager(auth_manager)
             .build();
 
@@ -509,7 +580,7 @@ impl JuiceboxApi for JuiceboxClient {
         let client = ClientBuilder::new()
             .configuration(configuration)
             .tokio_sleeper()
-            .reqwest()
+            .http(RealmHttpClient::new())
             .auth_token_manager(auth_manager)
             .build();
 
@@ -556,7 +627,7 @@ impl JuiceboxApi for JuiceboxClient {
         let client = ClientBuilder::new()
             .configuration(configuration)
             .tokio_sleeper()
-            .reqwest()
+            .http(RealmHttpClient::new())
             .auth_token_manager(auth_manager)
             .build();
 

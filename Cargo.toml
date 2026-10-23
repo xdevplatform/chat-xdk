@@ -55,7 +55,12 @@ getrandom = "0.2"
 # which breaks Cargo git dependencies in CI environments without SSH keys.
 #
 # CI checks out `juicebox-systems/juicebox-sdk` as a sibling directory at `../juicebox-sdk`.
-juicebox_sdk = { path = "../juicebox-sdk/rust/sdk", features = ["tokio", "reqwest"] }
+#
+# Its `reqwest` feature is left off: juicebox-sdk (through 0.3.7) pins reqwest 0.11,
+# whose rustls 0.21 / rustls-webpki 0.101 / webpki-roots 0.25 stack is unpatched.
+# chat-xdk-core supplies its own `http::Client` on the reqwest below instead.
+juicebox_sdk = { path = "../juicebox-sdk/rust/sdk", features = ["tokio"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 
 # Misc
 hex = "0.4"
