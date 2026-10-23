@@ -22,9 +22,13 @@ use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
     DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
     EncryptReactionParams, EncryptReplyParams, EntityDescriptor, FileDecryptorParams,
-    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, ImportKeysParams,
-    MarkConversationReadParams, MessageDeleteParams, PublicKeyInput, QuickReply, SetIdentityParams,
-    SigningKeyEntry,
+    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
+    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, PublicKeyInput, QuickReply, ScreenCaptureChange, ScreenCaptureParams,
+    SetIdentityParams, SigningKeyEntry,
 };
 
 // FFI result type
@@ -1054,6 +1058,161 @@ struct FfiMessageDeleteParams {
 }
 
 #[derive(serde::Deserialize)]
+struct FfiGroupMembersRemoveParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    #[serde(default)]
+    public_keys: Option<Vec<PublicKeyInput>>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupLeaveParams {
+    conversation_id: String,
+    #[serde(default)]
+    promote_admin_id: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupTitleChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_title: String,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupAvatarChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_avatar_url: String,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupDescriptionChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_description: String,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupAdminsAddParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupAdminsRemoveParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupInviteEnableParams {
+    conversation_id: String,
+    invite_url: String,
+    #[serde(default)]
+    expires_at_msec: Option<i64>,
+    #[serde(default)]
+    affiliate_id: Option<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupInviteDisableParams {
+    conversation_id: String,
+    #[serde(default)]
+    disabled_by: Option<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupJoinRequestParams {
+    conversation_id: String,
+    #[serde(default)]
+    requesting_user_id: Option<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiGroupJoinRejectParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiMessageTtlChangeParams {
+    conversation_id: String,
+    ttl_msec: i64,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiMessageTtlRemoveParams {
+    conversation_id: String,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FfiScreenCaptureParams {
+    conversation_id: String,
+    change: String,
+    #[serde(default)]
+    sender_id: Option<String>,
+    #[serde(default)]
+    signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct FfiMarkConversationReadParams {
     conversation_id: String,
     seen_until_sequence_id: String,
@@ -1359,6 +1518,437 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
             },
             Err(e) => err_from(e),
         }
+    })
+}
+
+fn ffi_prepared_action(
+    prepared: Result<chat_xdk_core::PreparedAction, chat_xdk_core::error::SdkError>,
+) -> FfiResult {
+    match prepared {
+        Ok(prepared) => match serde_json::to_string(&prepared) {
+            Ok(json) => ok_data(&json),
+            Err(e) => err_result(&e.to_string()),
+        },
+        Err(e) => err_from(e),
+    }
+}
+
+fn ffi_prepared_change(
+    prepared: Result<chat_xdk_core::PreparedConversationChange, chat_xdk_core::error::SdkError>,
+) -> FfiResult {
+    match prepared {
+        Ok(res) => match json_prepared_change(&res) {
+            Ok(s) => ok_data(&s),
+            Err(e) => err_result(&e.to_string()),
+        },
+        Err(e) => err_from(e),
+    }
+}
+
+/// Sign a group member removal.
+///
+/// `params_json` — `conversation_id`, `user_ids`, plus optional `public_keys`
+/// (the members who stay; set them to rotate the conversation key),
+/// `conversation_key_version` (bound into a removal that does not rotate;
+/// absent signs `null`), and `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedConversationChange`. With `public_keys`,
+/// `action_signatures` is the removal and then the key change, and
+/// `conversation_key` is the new raw key base64. Without them,
+/// `conversation_key` is absent and `action_signatures` is the removal only.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_members_remove(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupMembersRemoveParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupMembersRemoveParams::new(p.conversation_id, p.user_ids);
+        params.public_keys = p.public_keys;
+        params.conversation_key_version = p.conversation_key_version;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_change(h.inner.prepare_group_members_remove(&params))
+    })
+}
+
+/// Sign leaving a group.
+///
+/// `params_json` — `conversation_id`, plus optional `promote_admin_id`,
+/// `conversation_key_version` (absent signs `null` on the removal), and
+/// `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`: the removal of the sender, a conversation
+/// delete, and an admin add when `promote_admin_id` is set. Leave does not
+/// rotate the conversation key.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_leave(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupLeaveParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupLeaveParams::new(p.conversation_id);
+        params.promote_admin_id = p.promote_admin_id;
+        params.conversation_key_version = p.conversation_key_version;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_leave(&params))
+    })
+}
+
+/// Sign a group title change.
+///
+/// `params_json` — `conversation_id`, `conversation_key_version`,
+/// `custom_title` (the ciphertext the request sends), plus optional
+/// `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_title_change(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupTitleChangeParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupTitleChangeParams::new(
+            p.conversation_id,
+            p.conversation_key_version,
+            p.custom_title,
+        );
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_title_change(&params))
+    })
+}
+
+/// Sign a group avatar change.
+///
+/// `params_json` — `conversation_id`, `conversation_key_version`,
+/// `custom_avatar_url`, plus optional `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_avatar_change(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupAvatarChangeParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupAvatarChangeParams::new(
+            p.conversation_id,
+            p.conversation_key_version,
+            p.custom_avatar_url,
+        );
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_avatar_change(&params))
+    })
+}
+
+/// Sign a group description change.
+///
+/// `params_json` — `conversation_id`, `conversation_key_version`,
+/// `custom_description` (the ciphertext the request sends), plus optional
+/// `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_description_change(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupDescriptionChangeParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupDescriptionChangeParams::new(
+            p.conversation_id,
+            p.conversation_key_version,
+            p.custom_description,
+        );
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_description_change(&params))
+    })
+}
+
+/// Sign adding group admins.
+///
+/// `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+/// `signing_key_version`. Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_admins_add(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupAdminsAddParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupAdminsAddParams::new(p.conversation_id, p.user_ids);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_admins_add(&params))
+    })
+}
+
+/// Sign removing group admins.
+///
+/// `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+/// `signing_key_version`. Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_admins_remove(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupAdminsRemoveParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupAdminsRemoveParams::new(p.conversation_id, p.user_ids);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_admins_remove(&params))
+    })
+}
+
+/// Sign enabling a group invite.
+///
+/// `params_json` — `conversation_id`, `invite_url`, plus optional
+/// `expires_at_msec` and `affiliate_id` (absent or a negative expiry signs
+/// `null`) and `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_invite_enable(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupInviteEnableParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupInviteEnableParams::new(p.conversation_id, p.invite_url);
+        params.expires_at_msec = p.expires_at_msec;
+        params.affiliate_id = p.affiliate_id;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_invite_enable(&params))
+    })
+}
+
+/// Sign disabling a group invite.
+///
+/// `params_json` — `conversation_id`, plus optional `disabled_by` (the sender
+/// when absent) and `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_invite_disable(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupInviteDisableParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupInviteDisableParams::new(p.conversation_id);
+        params.disabled_by = p.disabled_by;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_invite_disable(&params))
+    })
+}
+
+/// Sign a request to join a group.
+///
+/// `params_json` — `conversation_id`, plus optional `requesting_user_id` (the
+/// sender when absent) and `sender_id` / `signing_key_version`. An invite
+/// token is not part of the signature.
+///
+/// Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_join_request(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupJoinRequestParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupJoinRequestParams::new(p.conversation_id);
+        params.requesting_user_id = p.requesting_user_id;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_join_request(&params))
+    })
+}
+
+/// Sign rejecting group join requests.
+///
+/// `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+/// `signing_key_version`. Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_group_join_reject(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiGroupJoinRejectParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = GroupJoinRejectParams::new(p.conversation_id, p.user_ids);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_group_join_reject(&params))
+    })
+}
+
+/// Sign a message-TTL change.
+///
+/// `params_json` — `conversation_id`, `ttl_msec`, plus optional `sender_id` /
+/// `signing_key_version`. The signature covers `ttl_msec` only.
+///
+/// Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_message_ttl_change(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiMessageTtlChangeParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = MessageTtlChangeParams::new(p.conversation_id, p.ttl_msec);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_message_ttl_change(&params))
+    })
+}
+
+/// Sign clearing a conversation's message TTL.
+///
+/// `params_json` — `conversation_id`, plus optional `sender_id` /
+/// `signing_key_version`. Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_message_ttl_remove(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiMessageTtlRemoveParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = MessageTtlRemoveParams::new(p.conversation_id);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_message_ttl_remove(&params))
+    })
+}
+
+/// Sign one screen-capture setting change.
+///
+/// `params_json` — `conversation_id`, `change` (`BlockingEnabled`,
+/// `BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`; camelCase
+/// spellings are accepted), plus optional `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_screen_capture(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiScreenCaptureParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let change = match ScreenCaptureChange::parse(&p.change) {
+            Ok(change) => change,
+            Err(e) => return err_from(e),
+        };
+        let mut params = ScreenCaptureParams::new(p.conversation_id, change);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_screen_capture(&params))
     })
 }
 

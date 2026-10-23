@@ -373,6 +373,124 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 	return &out, nil
 }
 
+// PrepareGroupMembersRemove signs a group member removal.
+//
+// Set PublicKeys to the identity keys of the members who stay to rotate the
+// conversation key in this call. The result then carries the new key, those
+// members' participant keys, and two action signatures: the removal (bound to
+// the new key version) and the key change. Without PublicKeys the same result
+// has no new key and only the removal signature.
+func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {
+	defer runtime.KeepAlive(c)
+	params.UserIDs = orEmpty(params.UserIDs)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiPrepareGroupMembersRemove(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out PreparedConversationChange
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PrepareGroupLeave signs leaving a group: a removal of the sender, a
+// conversation delete, and an admin add when PromoteAdminID is set. Leave
+// does not rotate the conversation key.
+func (c *Chat) PrepareGroupLeave(params GroupLeaveParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupLeave)
+}
+
+// PrepareGroupTitleChange signs a group title change. CustomTitle is the
+// ciphertext the request sends.
+func (c *Chat) PrepareGroupTitleChange(params GroupTitleChangeParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupTitleChange)
+}
+
+// PrepareGroupAvatarChange signs a group avatar change.
+func (c *Chat) PrepareGroupAvatarChange(params GroupAvatarChangeParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupAvatarChange)
+}
+
+// PrepareGroupDescriptionChange signs a group description change.
+// CustomDescription is the ciphertext the request sends.
+func (c *Chat) PrepareGroupDescriptionChange(params GroupDescriptionChangeParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupDescriptionChange)
+}
+
+// PrepareGroupAdminsAdd signs adding group admins.
+func (c *Chat) PrepareGroupAdminsAdd(params GroupAdminsAddParams) (*PreparedAction, error) {
+	params.UserIDs = orEmpty(params.UserIDs)
+	return c.prepareAction(params, ffiPrepareGroupAdminsAdd)
+}
+
+// PrepareGroupAdminsRemove signs removing group admins.
+func (c *Chat) PrepareGroupAdminsRemove(params GroupAdminsRemoveParams) (*PreparedAction, error) {
+	params.UserIDs = orEmpty(params.UserIDs)
+	return c.prepareAction(params, ffiPrepareGroupAdminsRemove)
+}
+
+// PrepareGroupInviteEnable signs enabling a group invite. A nil expiry and an
+// empty affiliate id sign null.
+func (c *Chat) PrepareGroupInviteEnable(params GroupInviteEnableParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupInviteEnable)
+}
+
+// PrepareGroupInviteDisable signs disabling a group invite. An empty
+// DisabledBy uses the sender.
+func (c *Chat) PrepareGroupInviteDisable(params GroupInviteDisableParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupInviteDisable)
+}
+
+// PrepareGroupJoinRequest signs a request to join a group. An empty
+// RequestingUserID uses the sender.
+func (c *Chat) PrepareGroupJoinRequest(params GroupJoinRequestParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupJoinRequest)
+}
+
+// PrepareGroupJoinReject signs rejecting group join requests.
+func (c *Chat) PrepareGroupJoinReject(params GroupJoinRejectParams) (*PreparedAction, error) {
+	params.UserIDs = orEmpty(params.UserIDs)
+	return c.prepareAction(params, ffiPrepareGroupJoinReject)
+}
+
+// PrepareMessageTtlChange signs a message-TTL change. The signature covers
+// the TTL only.
+func (c *Chat) PrepareMessageTtlChange(params MessageTtlChangeParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareMessageTtlChange)
+}
+
+// PrepareMessageTtlRemove signs clearing a conversation's message TTL.
+func (c *Chat) PrepareMessageTtlRemove(params MessageTtlRemoveParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareMessageTtlRemove)
+}
+
+// PrepareScreenCapture signs one screen-capture setting change.
+func (c *Chat) PrepareScreenCapture(params ScreenCaptureParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareScreenCapture)
+}
+
+func (c *Chat) prepareAction(params any, call func(handle, string) (string, error)) (*PreparedAction, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := call(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out PreparedAction
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PrepareMessageDelete builds the signed action for deleting messages from a
 // conversation: the request's action_signatures, one entry.
 //

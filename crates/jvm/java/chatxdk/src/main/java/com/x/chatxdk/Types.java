@@ -1328,4 +1328,215 @@ public final class Types {
             this.seenUntilSequenceId = seenUntilSequenceId;
         }
     }
+
+    /**
+     * A screen-capture setting signed by {@link Chat#prepareScreenCapture}.
+     *
+     * <p>Blocking names are the events X clients sign. Detection names are the
+     * events this SDK's verifier reconstructs.
+     */
+    public enum ScreenCaptureChange {
+        BlockingEnabled,
+        BlockingDisabled,
+        DetectionEnabled,
+        DetectionDisabled
+    }
+
+    /** Parameters for {@link Chat#prepareGroupMembersRemove}. */
+    public static final class GroupMembersRemoveParams {
+        /** ID of the group conversation. */
+        public final String conversationId;
+        /** User IDs being removed. */
+        public final List<String> userIds;
+        /** Identity public keys of the members who remain. Null does not rotate. */
+        public List<PublicKeyInput> publicKeys;
+        /** Version bound into a removal that does not rotate. Null signs {@code null}. */
+        public String conversationKeyVersion;
+        /** User ID of the sender; resolves from the session identity when null. */
+        public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        public GroupMembersRemoveParams(String conversationId, List<String> userIds) {
+            this.conversationId = conversationId;
+            this.userIds = userIds;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupLeave}. Leave does not rotate the key. */
+    public static final class GroupLeaveParams {
+        public final String conversationId;
+        /** User promoted to admin when the sender is the only admin. */
+        public String promoteAdminId;
+        /** Version bound into the removal. Null signs {@code null}. */
+        public String conversationKeyVersion;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupLeaveParams(String conversationId) {
+            this.conversationId = conversationId;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupTitleChange}. {@code customTitle} is ciphertext. */
+    public static final class GroupTitleChangeParams {
+        public final String conversationId;
+        public final String conversationKeyVersion;
+        public final String customTitle;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupTitleChangeParams(String conversationId, String conversationKeyVersion, String customTitle) {
+            this.conversationId = conversationId;
+            this.conversationKeyVersion = conversationKeyVersion;
+            this.customTitle = customTitle;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupAvatarChange}. */
+    public static final class GroupAvatarChangeParams {
+        public final String conversationId;
+        public final String conversationKeyVersion;
+        public final String customAvatarUrl;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupAvatarChangeParams(
+                String conversationId, String conversationKeyVersion, String customAvatarUrl) {
+            this.conversationId = conversationId;
+            this.conversationKeyVersion = conversationKeyVersion;
+            this.customAvatarUrl = customAvatarUrl;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupDescriptionChange}. {@code customDescription} is ciphertext. */
+    public static final class GroupDescriptionChangeParams {
+        public final String conversationId;
+        public final String conversationKeyVersion;
+        public final String customDescription;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupDescriptionChangeParams(
+                String conversationId, String conversationKeyVersion, String customDescription) {
+            this.conversationId = conversationId;
+            this.conversationKeyVersion = conversationKeyVersion;
+            this.customDescription = customDescription;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupAdminsAdd}. */
+    public static final class GroupAdminsAddParams {
+        public final String conversationId;
+        public final List<String> userIds;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupAdminsAddParams(String conversationId, List<String> userIds) {
+            this.conversationId = conversationId;
+            this.userIds = userIds;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupAdminsRemove}. */
+    public static final class GroupAdminsRemoveParams {
+        public final String conversationId;
+        public final List<String> userIds;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupAdminsRemoveParams(String conversationId, List<String> userIds) {
+            this.conversationId = conversationId;
+            this.userIds = userIds;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupInviteEnable}. A null expiry or affiliate signs {@code null}. */
+    public static final class GroupInviteEnableParams {
+        public final String conversationId;
+        public final String inviteUrl;
+        public Long expiresAtMsec;
+        public String affiliateId;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupInviteEnableParams(String conversationId, String inviteUrl) {
+            this.conversationId = conversationId;
+            this.inviteUrl = inviteUrl;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupInviteDisable}. A null {@code disabledBy} uses the sender. */
+    public static final class GroupInviteDisableParams {
+        public final String conversationId;
+        public String disabledBy;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupInviteDisableParams(String conversationId) {
+            this.conversationId = conversationId;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupJoinRequest}. A null requester uses the sender. */
+    public static final class GroupJoinRequestParams {
+        public final String conversationId;
+        public String requestingUserId;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupJoinRequestParams(String conversationId) {
+            this.conversationId = conversationId;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareGroupJoinReject}. */
+    public static final class GroupJoinRejectParams {
+        public final String conversationId;
+        public final List<String> userIds;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public GroupJoinRejectParams(String conversationId, List<String> userIds) {
+            this.conversationId = conversationId;
+            this.userIds = userIds;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareMessageTtlChange}. */
+    public static final class MessageTtlChangeParams {
+        public final String conversationId;
+        public final long ttlMsec;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public MessageTtlChangeParams(String conversationId, long ttlMsec) {
+            this.conversationId = conversationId;
+            this.ttlMsec = ttlMsec;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareMessageTtlRemove}. */
+    public static final class MessageTtlRemoveParams {
+        public final String conversationId;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public MessageTtlRemoveParams(String conversationId) {
+            this.conversationId = conversationId;
+        }
+    }
+
+    /** Parameters for {@link Chat#prepareScreenCapture}. */
+    public static final class ScreenCaptureParams {
+        public final String conversationId;
+        public final ScreenCaptureChange change;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public ScreenCaptureParams(String conversationId, ScreenCaptureChange change) {
+            this.conversationId = conversationId;
+            this.change = change;
+        }
+    }
 }
