@@ -427,6 +427,7 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `bytes@1.11.1`
 - `ct-codecs@1.1.6`
 - `ed25519-compact@2.2.0`
+- `h2@0.4.20`
 - `http-body-util@0.1.5`
 - `http-body@1.1.0`
 - `hyper-util@0.1.21`
@@ -444,6 +445,7 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `slab@0.4.12`
 - `spin@0.9.8`
 - `synstructure@0.13.2`
+- `tokio-util@0.7.19`
 - `tokio@1.50.0`
 - `tower-http@0.6.11`
 - `tower-layer@0.3.3`
@@ -465,9 +467,12 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `bitflags@2.11.0`
 - `blake2@0.10.6`
 - `chacha20poly1305@0.10.1`
+- `core-foundation-sys@0.8.7`
+- `core-foundation@0.9.4`
 - `der@0.6.1`
 - `displaydoc@0.2.5`
 - `ed25519@2.2.3`
+- `equivalent@1.0.2`
 - `fnv@1.0.7`
 - `form_urlencoded@1.2.2`
 - `futures-channel@0.3.32`
@@ -481,11 +486,13 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `futures@0.3.32`
 - `getrandom@0.3.4`
 - `half@2.7.1`
+- `hashbrown@0.16.1`
 - `http@0.2.12`
 - `http@1.5.0`
 - `httparse@1.10.1`
 - `idna@1.1.0`
 - `idna_adapter@1.2.1`
+- `indexmap@2.13.0`
 - `ipnet@2.12.0`
 - `k256@0.13.4`
 - `lazy_static@1.5.0`
@@ -512,9 +519,14 @@ Versions are from the repository `Cargo.lock` at generation time.
 - `socket2@0.6.3`
 - `spki@0.6.0`
 - `stable_deref_trait@1.2.1`
+- `system-configuration-sys@0.6.0`
+- `system-configuration@0.7.0`
 - `tokio-rustls@0.26.6`
 - `url@2.5.8`
 - `utf8_iter@1.0.4`
+- `windows-registry@0.6.1`
+- `windows-result@0.4.1`
+- `windows-strings@0.5.1`
 
 ### BSD-2-Clause OR Apache-2.0 OR MIT (used under MIT)
 
