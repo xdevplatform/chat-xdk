@@ -20,7 +20,9 @@
 //!                         the upload, then downloads and decrypts it back to
 //!                         the original bytes
 //!   CHATXDK_E2E_GROUPS=1  also creates a group (two-signature create), sends
-//!                         a group message, and adds the 1:1 partner as a member
+//!                         a group message, adds the 1:1 partner as a member,
+//!                         then removes that partner and rotates the key for
+//!                         who stays
 
 #![cfg(feature = "http")]
 
@@ -32,7 +34,9 @@ use chat_xdk_core::{
     AttachmentDescriptor, EntityDescriptor, Event, MessageAttachment, MessageContent,
     PublicKeyInput, SigningKeyEntry,
 };
-use chatbot_rs::chat_core::{message_text, prep_to_request, ChatCore, ReplyOptions};
+use chatbot_rs::chat_core::{
+    message_text, prep_to_request, removal_to_request, ChatCore, ReplyOptions,
+};
 use chatbot_rs::x_api::{ChatApi, HttpChatApi};
 use serde_json::json;
 
@@ -439,14 +443,7 @@ fn e2e_live() {
 
     // -- 6. Optional: group create + message + member add --------------------
     if env("CHATXDK_E2E_GROUPS").as_deref() == Some("1") {
-        groups_flow(
-            &api,
-            &core,
-            &my_id,
-            &partner_id,
-            &both_keys,
-            &signing,
-        );
+        groups_flow(&api, &core, &my_id, &partner_id, &both_keys, &signing);
     }
 
     eprintln!("E2E RUST: PASS");
@@ -550,4 +547,15 @@ fn groups_flow(
             prep.conversation_key_version
         );
     }
+
+    let prep = core
+        .prepare_group_members_remove(&my_keys, &group_id, &[partner_id.to_string()])
+        .expect("prepare_group_members_remove");
+    let body = removal_to_request(&[partner_id.to_string()], &prep);
+    api.remove_group_members(&group_id, &body)
+        .expect("remove_group_members");
+    eprintln!(
+        "group member remove: {partner_id} removed (key rotated to {})",
+        prep.conversation_key_version
+    );
 }

@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput};
-use chatbot_rs::chat_core::{prep_to_request, ChatCore, ReplyOptions};
-use serde_json::Value;
+use chatbot_rs::chat_core::{prep_to_request, removal_to_request, ChatCore, ReplyOptions};
+use serde_json::{json, Value};
 
 fn load_vectors() -> Value {
     // examples/rust -> repo root is two directories up.
@@ -202,6 +202,42 @@ fn prep_to_request_maps_the_rest_shape() {
     assert!(!inner["public_key_version"].as_str().unwrap().is_empty());
     // CKCE signature payloads are withheld (they embed the plaintext key).
     assert!(sig.get("signature_payload").is_none());
+}
+
+#[test]
+fn removal_to_request_rotates_for_members_who_stay() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let keys = fixture_public_keys(&v);
+    let removed = "2000".to_string();
+    let prep = core
+        .prepare_group_members_remove(&keys, "g123", &[removed.clone()])
+        .expect("prepare_group_members_remove");
+    let body = removal_to_request(&[removed.clone()], &prep);
+
+    assert_eq!(body["user_ids"], json!([removed]));
+    let sigs = body["action_signatures"].as_array().unwrap();
+    assert_eq!(sigs.len(), 2);
+    let rotation = &body["group_key_rotation_data"];
+    assert_eq!(
+        rotation["conversation_key_version"].as_str().unwrap(),
+        prep.conversation_key_version
+    );
+    let pks = rotation["conversation_participant_keys"]
+        .as_array()
+        .unwrap();
+    assert_eq!(pks.len(), 1);
+    assert_eq!(pks[0]["user_id"].as_str().unwrap(), "1000");
+    assert_eq!(
+        sorted_keys(&pks[0]),
+        [
+            "encrypted_conversation_key",
+            "public_key_version",
+            "user_id"
+        ]
+    );
+    assert!(body.get("conversation_key_version").is_none());
+    assert!(body.get("conversation_participant_keys").is_none());
 }
 
 #[test]

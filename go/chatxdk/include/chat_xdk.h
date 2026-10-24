@@ -316,6 +316,165 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
                                                  const char *params_json);
 
 /**
+ * Sign a group member removal.
+ *
+ * `params_json` — `conversation_id`, `user_ids`, plus optional `public_keys`
+ * (the members who stay; set them to rotate the conversation key),
+ * `conversation_key_version` (bound into a removal that does not rotate;
+ * absent signs `null`), and `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedConversationChange`. With `public_keys`,
+ * `action_signatures` is the removal and then the key change, and
+ * `conversation_key` is the new raw key base64. Without them,
+ * `conversation_key` is absent and `action_signatures` is the removal only.
+ */
+struct FfiResult chat_xdk_prepare_group_members_remove(const struct ChatHandle *handle,
+                                                       const char *params_json);
+
+/**
+ * Sign leaving a group.
+ *
+ * `params_json` — `conversation_id`, plus optional `promote_admin_id`,
+ * `conversation_key_version` (absent signs `null` on the removal), and
+ * `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`: the removal of the sender, an admin add
+ * when `promote_admin_id` is set, and a conversation delete. Leave does not
+ * rotate the conversation key.
+ */
+struct FfiResult chat_xdk_prepare_group_leave(const struct ChatHandle *handle,
+                                              const char *params_json);
+
+/**
+ * Sign a group title change.
+ *
+ * `params_json` — `conversation_id`, `conversation_key_version`,
+ * `custom_title` (the ciphertext the request sends), plus optional
+ * `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+ */
+struct FfiResult chat_xdk_prepare_group_title_change(const struct ChatHandle *handle,
+                                                     const char *params_json);
+
+/**
+ * Sign a group avatar change.
+ *
+ * `params_json` — `conversation_id`, `conversation_key_version`,
+ * `custom_avatar_url`, plus optional `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+ */
+struct FfiResult chat_xdk_prepare_group_avatar_change(const struct ChatHandle *handle,
+                                                      const char *params_json);
+
+/**
+ * Sign a group description change.
+ *
+ * `params_json` — `conversation_id`, `conversation_key_version`,
+ * `custom_description` (the ciphertext the request sends), plus optional
+ * `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+ */
+struct FfiResult chat_xdk_prepare_group_description_change(const struct ChatHandle *handle,
+                                                           const char *params_json);
+
+/**
+ * Sign adding group admins.
+ *
+ * `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+ * `signing_key_version`. Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_group_admins_add(const struct ChatHandle *handle,
+                                                   const char *params_json);
+
+/**
+ * Sign removing group admins.
+ *
+ * `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+ * `signing_key_version`. Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_group_admins_remove(const struct ChatHandle *handle,
+                                                      const char *params_json);
+
+/**
+ * Sign enabling a group invite.
+ *
+ * `params_json` — `conversation_id`, `invite_url`, plus optional
+ * `expires_at_msec` and `affiliate_id` (absent or a negative expiry signs
+ * `null`) and `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_group_invite_enable(const struct ChatHandle *handle,
+                                                      const char *params_json);
+
+/**
+ * Sign disabling a group invite.
+ *
+ * `params_json` — `conversation_id`, plus optional `disabled_by` (the sender
+ * when absent) and `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_group_invite_disable(const struct ChatHandle *handle,
+                                                       const char *params_json);
+
+/**
+ * Sign a request to join a group.
+ *
+ * `params_json` — `conversation_id`, plus optional `requesting_user_id` (the
+ * sender when absent) and `sender_id` / `signing_key_version`. An invite
+ * token is not part of the signature.
+ *
+ * Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_group_join_request(const struct ChatHandle *handle,
+                                                     const char *params_json);
+
+/**
+ * Sign rejecting group join requests.
+ *
+ * `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+ * `signing_key_version`. Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_group_join_reject(const struct ChatHandle *handle,
+                                                    const char *params_json);
+
+/**
+ * Sign a message-TTL change.
+ *
+ * `params_json` — `conversation_id`, `ttl_msec`, plus optional `sender_id` /
+ * `signing_key_version`. The signature covers `ttl_msec` only.
+ *
+ * Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_message_ttl_change(const struct ChatHandle *handle,
+                                                     const char *params_json);
+
+/**
+ * Sign clearing a conversation's message TTL.
+ *
+ * `params_json` — `conversation_id`, plus optional `sender_id` /
+ * `signing_key_version`. Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_message_ttl_remove(const struct ChatHandle *handle,
+                                                     const char *params_json);
+
+/**
+ * Sign one screen-capture setting change.
+ *
+ * `params_json` — `conversation_id`, `change` (`BlockingEnabled`,
+ * `BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`; camelCase
+ * spellings are accepted), plus optional `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`.
+ */
+struct FfiResult chat_xdk_prepare_screen_capture(const struct ChatHandle *handle,
+                                                 const char *params_json);
+
+/**
  * Build the signed action for marking a conversation read.
  *
  * `params_json` — single JSON document: `conversation_id`,

@@ -1354,12 +1354,64 @@ pub struct PublicKeyInput {
     pub key_version: String,
 }
 
+/// Which screen-capture setting a [`crate::ScreenCaptureParams`] signs.
+///
+/// Blocking names are the ones X clients sign. Detection names are the event
+/// names this SDK's verifier reconstructs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+pub enum ScreenCaptureChange {
+    /// `ConversationMetadataChangeEvent.EnableScreenCaptureBlocking`.
+    BlockingEnabled,
+    /// `ConversationMetadataChangeEvent.DisableScreenCaptureBlocking`.
+    BlockingDisabled,
+    /// `ConversationMetadataChangeEvent.EnableScreenCaptureDetection`.
+    DetectionEnabled,
+    /// `ConversationMetadataChangeEvent.DisableScreenCaptureDetection`.
+    DetectionDisabled,
+}
+
+impl ScreenCaptureChange {
+    /// Parse a binding's spelling of this change.
+    ///
+    /// Accepts the Rust/Python/Go/JVM/.NET variant name (`BlockingEnabled`)
+    /// and the JS camelCase tag (`blockingEnabled`).
+    pub fn parse(value: &str) -> Result<Self, crate::error::SdkError> {
+        match value {
+            "BlockingEnabled" | "blockingEnabled" => Ok(Self::BlockingEnabled),
+            "BlockingDisabled" | "blockingDisabled" => Ok(Self::BlockingDisabled),
+            "DetectionEnabled" | "detectionEnabled" => Ok(Self::DetectionEnabled),
+            "DetectionDisabled" | "detectionDisabled" => Ok(Self::DetectionDisabled),
+            other => Err(crate::error::SdkError::InvalidInput(format!(
+                "Invalid screen capture change: '{other}'"
+            ))),
+        }
+    }
+
+    pub(crate) fn event_name(self) -> &'static str {
+        match self {
+            Self::BlockingEnabled => "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking",
+            Self::BlockingDisabled => {
+                "ConversationMetadataChangeEvent.DisableScreenCaptureBlocking"
+            }
+            Self::DetectionEnabled => {
+                "ConversationMetadataChangeEvent.EnableScreenCaptureDetection"
+            }
+            Self::DetectionDisabled => {
+                "ConversationMetadataChangeEvent.DisableScreenCaptureDetection"
+            }
+        }
+    }
+}
+
 /// A signed conversation-key change, ready to send to the X API.
 ///
-/// Returned by both `prepare_conversation_key_change` and
-/// `prepare_group_members_change`. Carries the new key (to keep locally), the
-/// per-participant encrypted copies, and the action signature that lets
-/// recipients verify the change.
+/// Returned by `prepare_conversation_key_change`, `prepare_group_create`,
+/// `prepare_group_members_change`, and `prepare_group_members_remove`.
+/// Carries the new key (to keep locally), the per-participant encrypted
+/// copies, and the action signatures that let recipients verify the change.
+/// `prepare_group_members_remove` leaves `conversation_key` unset and
+/// `conversation_participant_keys` empty when it does not rotate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct PreparedConversationChange {
@@ -1387,11 +1439,11 @@ pub struct PreparedConversationChange {
     pub action_signatures: Vec<ActionSignature>,
 }
 
-/// A signed message delete or read receipt: the `action_signatures` a
-/// request carries for it.
+/// Signed actions for a request that does not rotate a conversation key.
 ///
-/// Returned by `prepare_message_delete` and `prepare_mark_conversation_read`,
-/// each with one entry.
+/// Returned by `prepare_message_delete`, `prepare_mark_conversation_read`,
+/// and the group-action prepares other than `prepare_group_members_remove`.
+/// `prepare_group_leave` returns one entry per signed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct PreparedAction {
@@ -1822,6 +1874,26 @@ mod tests {
         message.conversation_key_version = Some("7".to_string());
         let json = serde_json::to_value(JsEvent::from(Event::Message(Box::new(message)))).unwrap();
         assert_eq!(json["conversationKeyVersion"], "7");
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_screen_capture_change_is_camel_case() {
+        let enabled = serde_json::to_value(JsScreenCaptureChange::from(
+            ScreenCaptureChange::BlockingEnabled,
+        ))
+        .unwrap();
+        assert_eq!(enabled, "blockingEnabled");
+        let detection = serde_json::to_value(JsScreenCaptureChange::from(
+            ScreenCaptureChange::DetectionDisabled,
+        ))
+        .unwrap();
+        assert_eq!(detection, "detectionDisabled");
+        let snake = serde_json::to_string(&detection).unwrap();
+        assert!(
+            !snake.contains('_'),
+            "JS screen-capture tag must be camelCase, got: {snake}"
+        );
     }
 
     #[cfg(feature = "js")]

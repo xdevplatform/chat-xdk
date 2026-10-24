@@ -31,6 +31,7 @@ from chat_xdk import (
     FileEncryptorParams,
     GroupCreateParams,
     GroupMembersChangeParams,
+    GroupMembersRemoveParams,
     QuickReply,
     ImportKeysParams,
     SetIdentityParams,
@@ -368,6 +369,21 @@ class ChatCore:
             )
         )
 
+    def prepare_group_members_remove(
+        self,
+        public_keys: list[dict[str, str]],
+        conversation_id: str,
+        user_ids: list[str],
+    ) -> dict[str, Any]:
+        """Prepare a member removal that rotates the key for who stays.
+
+        ``public_keys`` are the identity keys of the members who remain.
+        Signed with the ``set_identity`` session identity.
+        """
+        return self.chat.prepare_group_members_remove(
+            GroupMembersRemoveParams(conversation_id, user_ids, public_keys=public_keys)
+        )
+
     # -- Media files ----------------------------------------------------------
 
     MEDIA_CHUNK = 1024 * 1024
@@ -458,4 +474,20 @@ def prep_to_request(prep: dict[str, Any]) -> dict[str, Any]:
         "conversation_key_version": prep["conversation_key_version"],
         "conversation_participant_keys": prep["conversation_participant_keys"],
         "action_signatures": prep["action_signatures"],
+    }
+
+
+def removal_to_request(user_ids: list[str], prep: dict[str, Any]) -> dict[str, Any]:
+    """Map a rotating member removal into the members/remove request.
+
+    Both signatures go in ``action_signatures``. The new key version and the
+    participant keys for the members who stay go in ``group_key_rotation_data``.
+    """
+    return {
+        "user_ids": user_ids,
+        "action_signatures": prep["action_signatures"],
+        "group_key_rotation_data": {
+            "conversation_key_version": prep["conversation_key_version"],
+            "conversation_participant_keys": prep["conversation_participant_keys"],
+        },
     }

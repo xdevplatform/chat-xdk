@@ -9,6 +9,21 @@ import { Client } from "@xdevplatform/xdk";
 
 const BASE_URL = "https://api.x.com";
 
+/** CamelCase object keys to the snake_case the X API reads. */
+function toSnake(value) {
+  if (Array.isArray(value)) return value.map(toSnake);
+  if (value instanceof Uint8Array) return value;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`),
+        toSnake(item),
+      ]),
+    );
+  }
+  return value;
+}
+
 export class XChatClient {
   constructor(accessToken) {
     this.client = new Client({ accessToken });
@@ -165,6 +180,40 @@ export class XChatClient {
    */
   async addGroupMembers(conversationId, body) {
     return this.client.chat.addGroupMembers(conversationId, body);
+  }
+
+  /**
+   * Remove members from a group. `body` is the camelCase shape from
+   * `removalToRequest`: `userIds`, both `actionSignatures`, and
+   * `groupKeyRotationData`. The published XDK client has no method for
+   * `POST /2/chat/conversations/{id}/members/remove`, so this posts the
+   * snake_case wire body directly.
+   */
+  async removeGroupMembers(conversationId, body) {
+    const wire = {
+      user_ids: body.userIds,
+      action_signatures: toSnake(body.actionSignatures),
+      group_key_rotation_data: {
+        conversation_key_version: body.groupKeyRotationData.conversationKeyVersion,
+        conversation_participant_keys: toSnake(body.groupKeyRotationData.conversationParticipantKeys),
+      },
+    };
+    const resp = await fetch(
+      `${BASE_URL}/2/chat/conversations/${encodeURIComponent(conversationId)}/members/remove`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(wire),
+      },
+    );
+    if (!resp.ok) {
+      throw new Error(`remove group members failed: HTTP ${resp.status} ${await resp.text()}`);
+    }
+    const text = await resp.text();
+    return text ? JSON.parse(text) : {};
   }
 
   // -- Media (encrypted files) ------------------------------------------------

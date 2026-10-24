@@ -483,6 +483,164 @@ export interface MarkConversationReadParams {
 }
 
 /**
+ * A screen-capture setting signed by prepareScreenCapture.
+ *
+ * Blocking names are the events X clients sign. Detection names are the
+ * events this SDK's verifier reconstructs.
+ */
+export type ScreenCaptureChange =
+  | "blockingEnabled"
+  | "blockingDisabled"
+  | "detectionEnabled"
+  | "detectionDisabled";
+
+/** Parameters for prepareGroupMembersRemove. */
+export interface GroupMembersRemoveParams {
+  /** ID of the group conversation. */
+  conversationId: string;
+  /** User IDs being removed. */
+  userIds: string[];
+  /**
+   * Identity public keys of the members who remain. Set to rotate the
+   * conversation key in this same call.
+   */
+  publicKeys?: PublicKeyInput[] | null;
+  /**
+   * Conversation-key version bound into a removal that does not rotate.
+   * Omit it to sign the literal `null`. Ignored when `publicKeys` is set.
+   */
+  conversationKeyVersion?: string | null;
+  /** User ID of the sender; resolves from the session identity when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupLeave. Leave does not rotate the conversation key. */
+export interface GroupLeaveParams {
+  /** ID of the group conversation. */
+  conversationId: string;
+  /** User ID promoted to admin when the sender is the only admin. */
+  promoteAdminId?: string | null;
+  /** Conversation-key version bound into the removal. Omit it to sign `null`. */
+  conversationKeyVersion?: string | null;
+  /** User ID of the member leaving; resolves from the session identity when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupTitleChange. `customTitle` is ciphertext. */
+export interface GroupTitleChangeParams {
+  conversationId: string;
+  /** Conversation-key version the title is encrypted under. */
+  conversationKeyVersion: string;
+  /** Encrypted title, the value the request sends as the group name. */
+  customTitle: string;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupAvatarChange. */
+export interface GroupAvatarChangeParams {
+  conversationId: string;
+  conversationKeyVersion: string;
+  /** Avatar URL the request sends. */
+  customAvatarUrl: string;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupDescriptionChange. `customDescription` is ciphertext. */
+export interface GroupDescriptionChangeParams {
+  conversationId: string;
+  conversationKeyVersion: string;
+  /** Encrypted description the request sends. */
+  customDescription: string;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupAdminsAdd. */
+export interface GroupAdminsAddParams {
+  conversationId: string;
+  /** User IDs gaining admin. */
+  userIds: string[];
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupAdminsRemove. */
+export interface GroupAdminsRemoveParams {
+  conversationId: string;
+  /** User IDs losing admin. */
+  userIds: string[];
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupInviteEnable. An omitted expiry or affiliate signs `null`. */
+export interface GroupInviteEnableParams {
+  conversationId: string;
+  inviteUrl: string;
+  /** Expiry in milliseconds since the Unix epoch. Omit it to sign `null`. */
+  expiresAtMsec?: number | null;
+  /** Affiliate id. Omit it to sign `null`. */
+  affiliateId?: string | null;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupInviteDisable. `disabledBy` defaults to the sender. */
+export interface GroupInviteDisableParams {
+  conversationId: string;
+  disabledBy?: string | null;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupJoinRequest. `requestingUserId` defaults to the sender. */
+export interface GroupJoinRequestParams {
+  conversationId: string;
+  requestingUserId?: string | null;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareGroupJoinReject. */
+export interface GroupJoinRejectParams {
+  conversationId: string;
+  /** User IDs whose join request is rejected. */
+  userIds: string[];
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareMessageTtlChange. The signature covers `ttlMsec` only. */
+export interface MessageTtlChangeParams {
+  conversationId: string;
+  /** New message TTL, in milliseconds. */
+  ttlMsec: number;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareMessageTtlRemove. */
+export interface MessageTtlRemoveParams {
+  conversationId: string;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/** Parameters for prepareScreenCapture. */
+export interface ScreenCaptureParams {
+  conversationId: string;
+  change: ScreenCaptureChange;
+  senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/**
  * Parameters for prepareConversationKeyChange.
  */
 export interface ConversationKeyChangeParams {
@@ -1170,6 +1328,52 @@ interface ChatCrypto {
    * conversation-key change and the group create
    */
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
+
+  /**
+   * Sign a group member removal. When `publicKeys` names the members who
+   * stay, also rotates the conversation key and returns it. Otherwise the
+   * result has no new key and one removal signature.
+   */
+  prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
+
+  /** Sign leaving a group. Does not rotate the conversation key. */
+  prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
+
+  /** Sign a group title change. */
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+
+  /** Sign a group avatar change. */
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
+
+  /** Sign a group description change. */
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+
+  /** Sign adding group admins. */
+  prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
+
+  /** Sign removing group admins. */
+  prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
+
+  /** Sign enabling a group invite. */
+  prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;
+
+  /** Sign disabling a group invite. */
+  prepareGroupInviteDisable(params: GroupInviteDisableParams): PreparedAction;
+
+  /** Sign a request to join a group. */
+  prepareGroupJoinRequest(params: GroupJoinRequestParams): PreparedAction;
+
+  /** Sign rejecting group join requests. */
+  prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
+
+  /** Sign a message-TTL change. */
+  prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
+
+  /** Sign clearing a conversation's message TTL. */
+  prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+
+  /** Sign one screen-capture setting change. */
+  prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
 }
 
 /** Internal crypto engine wrapped by ChatWithJuicebox. Not part of the public API. */
@@ -1218,6 +1422,20 @@ declare class Chat implements ChatCrypto {
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
+  prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
+  prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
+  prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
+  prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;
+  prepareGroupInviteDisable(params: GroupInviteDisableParams): PreparedAction;
+  prepareGroupJoinRequest(params: GroupJoinRequestParams): PreparedAction;
+  prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
+  prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
+  prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+  prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
 }
 
 /**
@@ -1287,6 +1505,20 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
+  prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
+  prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
+  prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
+  prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;
+  prepareGroupInviteDisable(params: GroupInviteDisableParams): PreparedAction;
+  prepareGroupJoinRequest(params: GroupJoinRequestParams): PreparedAction;
+  prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
+  prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
+  prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+  prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
 
   /**
    * Release the WASM-side crypto engine: clears key material (`lock()`) and

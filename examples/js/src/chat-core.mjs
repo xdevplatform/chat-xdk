@@ -289,6 +289,18 @@ export class ChatCore {
     });
   }
 
+  /**
+   * Prepare a member removal that rotates the key for who stays.
+   * `publicKeys` are the identity keys of the members who remain.
+   */
+  prepareGroupMembersRemove({ publicKeys, conversationId, userIds }) {
+    return this.#chat.prepareGroupMembersRemove({
+      publicKeys,
+      conversationId,
+      userIds,
+    });
+  }
+
   // -- Media files ------------------------------------------------------------
 
   static MEDIA_CHUNK = 1024 * 1024;
@@ -379,5 +391,23 @@ export function prepToRequest(prep) {
     conversationKeyVersion: prep.conversationKeyVersion,
     conversationParticipantKeys: prep.conversationParticipantKeys,
     actionSignatures: prep.actionSignatures,
+  };
+}
+
+/**
+ * Map a rotating member removal into the members/remove request.
+ *
+ * Both signatures go in `actionSignatures`. The new key version and the
+ * participant keys for the members who stay go in `groupKeyRotationData`
+ * (`group_key_rotation_data` on the wire).
+ */
+export function removalToRequest(userIds, prep) {
+  return {
+    userIds,
+    actionSignatures: prep.actionSignatures,
+    groupKeyRotationData: {
+      conversationKeyVersion: prep.conversationKeyVersion,
+      conversationParticipantKeys: prep.conversationParticipantKeys,
+    },
   };
 }

@@ -540,7 +540,27 @@ comma-separated payloads (`signatures.rs`):
 
 Both `prepare_group_create` and `prepare_group_members_change` emit **two**
 action signatures — a `ConversationKeyChangeEvent` plus the group change — since
-the backend validates the pair together.
+the backend validates the pair together. `prepare_group_members_remove` emits
+the removal at signature version 11, and a `ConversationKeyChangeEvent` after
+it when the caller supplies the remaining members' public keys:
+
+```
+"GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version|null},signature_version=11"
+```
+
+`prepare_group_leave` signs that same removal of the sender, then a
+`GroupAdminAddChange` when a member is promoted, then
+`ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`. The other group and
+metadata prepares sign one version-7 payload: title
+(`GroupTitleChange`, key version then ciphertext), avatar
+(`GroupAvatarUrlChange`), description (`GroupDescriptionChange`), admin add
+and remove, invite enable (`url`, expiry or `null`, affiliate or `null`),
+invite disable, join request, join reject, message TTL
+(`MessageDurationChange` with the millisecond count, or
+`MessageDurationRemove` with no further fields), and one screen-capture
+event (`EnableScreenCaptureBlocking`, `DisableScreenCaptureBlocking`,
+`EnableScreenCaptureDetection`, or `DisableScreenCaptureDetection`) with no
+further fields.
 
 #### Verifying newer versions
 

@@ -675,6 +675,70 @@ namespace ChatXdk
             return JsonSerializer.Deserialize<PreparedAction>(resultJson, JsonOpts)!;
         }
 
+        /// <summary>
+        /// Sign a group member removal. When <c>PublicKeys</c> names the members
+        /// who stay, also rotates the conversation key and returns it.
+        /// </summary>
+        public PreparedConversationChange PrepareGroupMembersRemove(GroupMembersRemoveParams parameters)
+        {
+            ThrowIfDisposed();
+            return CallPrepareEndpoint(
+                BuildPrepareGroupMembersRemoveJson(parameters),
+                NativeMethods.chat_xdk_prepare_group_members_remove);
+        }
+
+        /// <summary>Sign leaving a group. Does not rotate the conversation key.</summary>
+        public PreparedAction PrepareGroupLeave(GroupLeaveParams parameters)
+            => CallAction(BuildPrepareGroupLeaveJson(parameters), NativeMethods.chat_xdk_prepare_group_leave);
+
+        /// <summary>Sign a group title change. CustomTitle is ciphertext.</summary>
+        public PreparedAction PrepareGroupTitleChange(GroupTitleChangeParams parameters)
+            => CallAction(BuildPrepareGroupTitleChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_title_change);
+
+        /// <summary>Sign a group avatar change.</summary>
+        public PreparedAction PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
+            => CallAction(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
+
+        /// <summary>Sign a group description change. CustomDescription is ciphertext.</summary>
+        public PreparedAction PrepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
+            => CallAction(BuildPrepareGroupDescriptionChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_description_change);
+
+        /// <summary>Sign adding group admins.</summary>
+        public PreparedAction PrepareGroupAdminsAdd(GroupAdminsAddParams parameters)
+            => CallAction(BuildPrepareGroupAdminsAddJson(parameters), NativeMethods.chat_xdk_prepare_group_admins_add);
+
+        /// <summary>Sign removing group admins.</summary>
+        public PreparedAction PrepareGroupAdminsRemove(GroupAdminsRemoveParams parameters)
+            => CallAction(BuildPrepareGroupAdminsRemoveJson(parameters), NativeMethods.chat_xdk_prepare_group_admins_remove);
+
+        /// <summary>Sign enabling a group invite.</summary>
+        public PreparedAction PrepareGroupInviteEnable(GroupInviteEnableParams parameters)
+            => CallAction(BuildPrepareGroupInviteEnableJson(parameters), NativeMethods.chat_xdk_prepare_group_invite_enable);
+
+        /// <summary>Sign disabling a group invite.</summary>
+        public PreparedAction PrepareGroupInviteDisable(GroupInviteDisableParams parameters)
+            => CallAction(BuildPrepareGroupInviteDisableJson(parameters), NativeMethods.chat_xdk_prepare_group_invite_disable);
+
+        /// <summary>Sign a request to join a group.</summary>
+        public PreparedAction PrepareGroupJoinRequest(GroupJoinRequestParams parameters)
+            => CallAction(BuildPrepareGroupJoinRequestJson(parameters), NativeMethods.chat_xdk_prepare_group_join_request);
+
+        /// <summary>Sign rejecting group join requests.</summary>
+        public PreparedAction PrepareGroupJoinReject(GroupJoinRejectParams parameters)
+            => CallAction(BuildPrepareGroupJoinRejectJson(parameters), NativeMethods.chat_xdk_prepare_group_join_reject);
+
+        /// <summary>Sign a message-TTL change.</summary>
+        public PreparedAction PrepareMessageTtlChange(MessageTtlChangeParams parameters)
+            => CallAction(BuildPrepareMessageTtlChangeJson(parameters), NativeMethods.chat_xdk_prepare_message_ttl_change);
+
+        /// <summary>Sign clearing a conversation's message TTL.</summary>
+        public PreparedAction PrepareMessageTtlRemove(MessageTtlRemoveParams parameters)
+            => CallAction(BuildPrepareMessageTtlRemoveJson(parameters), NativeMethods.chat_xdk_prepare_message_ttl_remove);
+
+        /// <summary>Sign one screen-capture setting change.</summary>
+        public PreparedAction PrepareScreenCapture(ScreenCaptureParams parameters)
+            => CallAction(BuildPrepareScreenCaptureJson(parameters), NativeMethods.chat_xdk_prepare_screen_capture);
+
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
         private PreparedConversationChange CallPrepareEndpoint(string paramsJson, ParamsJsonDelegate fn)
@@ -685,6 +749,17 @@ namespace ChatXdk
                 resultJson = ConsumeResult(fn(_handle, jsonPtr));
             GC.KeepAlive(this);
             return JsonSerializer.Deserialize<PreparedConversationChange>(resultJson, JsonOpts)!;
+        }
+
+        private PreparedAction CallAction(string paramsJson, ParamsJsonDelegate fn)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(paramsJson);
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(fn(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<PreparedAction>(resultJson, JsonOpts)!;
         }
 
         /// <summary>
@@ -1140,6 +1215,146 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
             };
             return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string IdentityJson(Dictionary<string, object?> dict, string? senderId, string? signingKeyVersion)
+        {
+            dict["sender_id"] = senderId;
+            dict["signing_key_version"] = signingKeyVersion;
+            return JsonSerializer.Serialize(dict, JsonOpts);
+        }
+
+        private static string BuildPrepareGroupMembersRemoveJson(GroupMembersRemoveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["user_ids"] = p.UserIds,
+                ["public_keys"] = p.PublicKeys,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupLeaveJson(GroupLeaveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["promote_admin_id"] = p.PromoteAdminId,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupTitleChangeJson(GroupTitleChangeParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["custom_title"] = p.CustomTitle,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupAvatarChangeJson(GroupAvatarChangeParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["custom_avatar_url"] = p.CustomAvatarUrl,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupDescriptionChangeJson(GroupDescriptionChangeParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["custom_description"] = p.CustomDescription,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupAdminsAddJson(GroupAdminsAddParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["user_ids"] = p.UserIds,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupAdminsRemoveJson(GroupAdminsRemoveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["user_ids"] = p.UserIds,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupInviteEnableJson(GroupInviteEnableParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["invite_url"] = p.InviteUrl,
+                ["expires_at_msec"] = p.ExpiresAtMsec,
+                ["affiliate_id"] = p.AffiliateId,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupInviteDisableJson(GroupInviteDisableParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["disabled_by"] = p.DisabledBy,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupJoinRequestJson(GroupJoinRequestParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["requesting_user_id"] = p.RequestingUserId,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareGroupJoinRejectJson(GroupJoinRejectParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["user_ids"] = p.UserIds,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareMessageTtlChangeJson(MessageTtlChangeParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["ttl_msec"] = p.TtlMsec,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareMessageTtlRemoveJson(MessageTtlRemoveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareScreenCaptureJson(ScreenCaptureParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["change"] = p.Change.ToString(),
+            }, p.SenderId, p.SigningKeyVersion);
         }
 
         private static string BuildPrepareMarkConversationReadJson(MarkConversationReadParams p)

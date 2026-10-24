@@ -302,6 +302,165 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Sign a group member removal.
+        ///
+        ///  `params_json` — `conversation_id`, `user_ids`, plus optional `public_keys`
+        ///  (the members who stay; set them to rotate the conversation key),
+        ///  `conversation_key_version` (bound into a removal that does not rotate;
+        ///  absent signs `null`), and `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedConversationChange`. With `public_keys`,
+        ///  `action_signatures` is the removal and then the key change, and
+        ///  `conversation_key` is the new raw key base64. Without them,
+        ///  `conversation_key` is absent and `action_signatures` is the removal only.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_members_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_members_remove(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign leaving a group.
+        ///
+        ///  `params_json` — `conversation_id`, plus optional `promote_admin_id`,
+        ///  `conversation_key_version` (absent signs `null` on the removal), and
+        ///  `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`: the removal of the sender, an admin add
+        ///  when `promote_admin_id` is set, and a conversation delete. Leave does not
+        ///  rotate the conversation key.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_leave", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_leave(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign a group title change.
+        ///
+        ///  `params_json` — `conversation_id`, `conversation_key_version`,
+        ///  `custom_title` (the ciphertext the request sends), plus optional
+        ///  `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_title_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_title_change(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign a group avatar change.
+        ///
+        ///  `params_json` — `conversation_id`, `conversation_key_version`,
+        ///  `custom_avatar_url`, plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_avatar_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_avatar_change(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign a group description change.
+        ///
+        ///  `params_json` — `conversation_id`, `conversation_key_version`,
+        ///  `custom_description` (the ciphertext the request sends), plus optional
+        ///  `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_description_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_description_change(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign adding group admins.
+        ///
+        ///  `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+        ///  `signing_key_version`. Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_admins_add", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_admins_add(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign removing group admins.
+        ///
+        ///  `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+        ///  `signing_key_version`. Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_admins_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_admins_remove(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign enabling a group invite.
+        ///
+        ///  `params_json` — `conversation_id`, `invite_url`, plus optional
+        ///  `expires_at_msec` and `affiliate_id` (absent or a negative expiry signs
+        ///  `null`) and `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_invite_enable", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_invite_enable(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign disabling a group invite.
+        ///
+        ///  `params_json` — `conversation_id`, plus optional `disabled_by` (the sender
+        ///  when absent) and `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_invite_disable", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_invite_disable(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign a request to join a group.
+        ///
+        ///  `params_json` — `conversation_id`, plus optional `requesting_user_id` (the
+        ///  sender when absent) and `sender_id` / `signing_key_version`. An invite
+        ///  token is not part of the signature.
+        ///
+        ///  Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_join_request", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_join_request(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign rejecting group join requests.
+        ///
+        ///  `params_json` — `conversation_id`, `user_ids`, plus optional `sender_id` /
+        ///  `signing_key_version`. Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_join_reject", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_group_join_reject(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign a message-TTL change.
+        ///
+        ///  `params_json` — `conversation_id`, `ttl_msec`, plus optional `sender_id` /
+        ///  `signing_key_version`. The signature covers `ttl_msec` only.
+        ///
+        ///  Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_message_ttl_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_message_ttl_change(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign clearing a conversation's message TTL.
+        ///
+        ///  `params_json` — `conversation_id`, plus optional `sender_id` /
+        ///  `signing_key_version`. Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_message_ttl_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_message_ttl_remove(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign one screen-capture setting change.
+        ///
+        ///  `params_json` — `conversation_id`, `change` (`BlockingEnabled`,
+        ///  `BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`; camelCase
+        ///  spellings are accepted), plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_screen_capture", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_screen_capture(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Build the signed action for marking a conversation read.
         ///
         ///  `params_json` — single JSON document: `conversation_id`,

@@ -697,6 +697,131 @@ impl Chat {
         to_js_value(&js_prepared)
     }
 
+    /// Sign a group member removal.
+    ///
+    /// `publicKeys` are the identity keys of the members who stay. When set,
+    /// the call rotates the conversation key for them and returns it with
+    /// two action signatures: the removal, bound to the new key version, and
+    /// the key change. Without them the same result has no new key and only
+    /// the removal signature. `conversationKeyVersion` on the params is the
+    /// version bound into a removal that does not rotate; omit it to sign
+    /// `null`.
+    #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
+    pub fn prepare_group_members_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupMembersRemoveParams = from_js_params("prepareGroupMembersRemove", params)?;
+        let prepared = self
+            .inner
+            .prepare_group_members_remove_with_version(&p.into_core(), &now_millis())
+            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        prepared_change_to_js(prepared)
+    }
+
+    /// Sign leaving a group: a removal of the sender, an admin add when
+    /// `promoteAdminId` is set, and a conversation delete. Does not rotate
+    /// the key.
+    #[wasm_bindgen(js_name = prepareGroupLeave)]
+    pub fn prepare_group_leave(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupLeaveParams = from_js_params("prepareGroupLeave", params)?;
+        self.prepare_action(self.inner.prepare_group_leave(&p.into_core()))
+    }
+
+    /// Sign a group title change. `customTitle` is the ciphertext to send.
+    #[wasm_bindgen(js_name = prepareGroupTitleChange)]
+    pub fn prepare_group_title_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupTitleChangeParams = from_js_params("prepareGroupTitleChange", params)?;
+        self.prepare_action(self.inner.prepare_group_title_change(&p.into_core()))
+    }
+
+    /// Sign a group avatar change. `customAvatarUrl` is the value to send.
+    #[wasm_bindgen(js_name = prepareGroupAvatarChange)]
+    pub fn prepare_group_avatar_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupAvatarChangeParams = from_js_params("prepareGroupAvatarChange", params)?;
+        self.prepare_action(self.inner.prepare_group_avatar_change(&p.into_core()))
+    }
+
+    /// Sign a group description change. `customDescription` is the ciphertext
+    /// to send.
+    #[wasm_bindgen(js_name = prepareGroupDescriptionChange)]
+    pub fn prepare_group_description_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupDescriptionChangeParams =
+            from_js_params("prepareGroupDescriptionChange", params)?;
+        self.prepare_action(self.inner.prepare_group_description_change(&p.into_core()))
+    }
+
+    /// Sign adding group admins.
+    #[wasm_bindgen(js_name = prepareGroupAdminsAdd)]
+    pub fn prepare_group_admins_add(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupAdminsAddParams = from_js_params("prepareGroupAdminsAdd", params)?;
+        self.prepare_action(self.inner.prepare_group_admins_add(&p.into_core()))
+    }
+
+    /// Sign removing group admins.
+    #[wasm_bindgen(js_name = prepareGroupAdminsRemove)]
+    pub fn prepare_group_admins_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupAdminsRemoveParams = from_js_params("prepareGroupAdminsRemove", params)?;
+        self.prepare_action(self.inner.prepare_group_admins_remove(&p.into_core()))
+    }
+
+    /// Sign enabling a group invite. An omitted expiry or affiliate signs `null`.
+    #[wasm_bindgen(js_name = prepareGroupInviteEnable)]
+    pub fn prepare_group_invite_enable(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupInviteEnableParams = from_js_params("prepareGroupInviteEnable", params)?;
+        self.prepare_action(self.inner.prepare_group_invite_enable(&p.into_core()))
+    }
+
+    /// Sign disabling a group invite. `disabledBy` defaults to the sender.
+    #[wasm_bindgen(js_name = prepareGroupInviteDisable)]
+    pub fn prepare_group_invite_disable(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupInviteDisableParams = from_js_params("prepareGroupInviteDisable", params)?;
+        self.prepare_action(self.inner.prepare_group_invite_disable(&p.into_core()))
+    }
+
+    /// Sign a request to join a group. `requestingUserId` defaults to the sender.
+    #[wasm_bindgen(js_name = prepareGroupJoinRequest)]
+    pub fn prepare_group_join_request(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupJoinRequestParams = from_js_params("prepareGroupJoinRequest", params)?;
+        self.prepare_action(self.inner.prepare_group_join_request(&p.into_core()))
+    }
+
+    /// Sign rejecting group join requests.
+    #[wasm_bindgen(js_name = prepareGroupJoinReject)]
+    pub fn prepare_group_join_reject(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsGroupJoinRejectParams = from_js_params("prepareGroupJoinReject", params)?;
+        self.prepare_action(self.inner.prepare_group_join_reject(&p.into_core()))
+    }
+
+    /// Sign a message-TTL change. The signature covers `ttlMsec` only.
+    #[wasm_bindgen(js_name = prepareMessageTtlChange)]
+    pub fn prepare_message_ttl_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsMessageTtlChangeParams = from_js_params("prepareMessageTtlChange", params)?;
+        self.prepare_action(self.inner.prepare_message_ttl_change(&p.into_core()))
+    }
+
+    /// Sign clearing a conversation's message TTL.
+    #[wasm_bindgen(js_name = prepareMessageTtlRemove)]
+    pub fn prepare_message_ttl_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsMessageTtlRemoveParams = from_js_params("prepareMessageTtlRemove", params)?;
+        self.prepare_action(self.inner.prepare_message_ttl_remove(&p.into_core()))
+    }
+
+    /// Sign one screen-capture setting. `change` is `blockingEnabled`,
+    /// `blockingDisabled`, `detectionEnabled`, or `detectionDisabled`.
+    #[wasm_bindgen(js_name = prepareScreenCapture)]
+    pub fn prepare_screen_capture(&self, params: JsValue) -> Result<JsValue, JsError> {
+        let p: JsScreenCaptureParams = from_js_params("prepareScreenCapture", params)?;
+        let core = p.into_core().map_err(|e| JsError::new(&format!("{}", e)))?;
+        self.prepare_action(self.inner.prepare_screen_capture(&core))
+    }
+
+    fn prepare_action(
+        &self,
+        prepared: Result<chat_xdk_core::PreparedAction, chat_xdk_core::error::SdkError>,
+    ) -> Result<JsValue, JsError> {
+        let prepared = prepared.map_err(|e| JsError::new(&format!("{}", e)))?;
+        let js_prepared: JsPreparedAction = prepared.into();
+        to_js_value(&js_prepared)
+    }
+
     /// Encrypt a file of an outgoing message, after the message is built.
     ///
     /// Takes a single params object: `file` (Uint8Array); `eventB64`, the
@@ -1343,6 +1468,298 @@ impl JsMarkConversationReadParams {
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupMembersRemoveParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    public_keys: Option<Vec<JsPublicKeyInput>>,
+    conversation_key_version: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupMembersRemoveParams {
+    fn into_core(self) -> chat_xdk_core::GroupMembersRemoveParams {
+        let mut params =
+            chat_xdk_core::GroupMembersRemoveParams::new(self.conversation_id, self.user_ids);
+        params.public_keys = self
+            .public_keys
+            .map(|keys| keys.into_iter().map(Into::into).collect());
+        params.conversation_key_version = self.conversation_key_version;
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupLeaveParams {
+    conversation_id: String,
+    promote_admin_id: Option<String>,
+    conversation_key_version: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupLeaveParams {
+    fn into_core(self) -> chat_xdk_core::GroupLeaveParams {
+        let mut params = chat_xdk_core::GroupLeaveParams::new(self.conversation_id);
+        params.promote_admin_id = self.promote_admin_id;
+        params.conversation_key_version = self.conversation_key_version;
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupTitleChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_title: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupTitleChangeParams {
+    fn into_core(self) -> chat_xdk_core::GroupTitleChangeParams {
+        let mut params = chat_xdk_core::GroupTitleChangeParams::new(
+            self.conversation_id,
+            self.conversation_key_version,
+            self.custom_title,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupAvatarChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_avatar_url: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupAvatarChangeParams {
+    fn into_core(self) -> chat_xdk_core::GroupAvatarChangeParams {
+        let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
+            self.conversation_id,
+            self.conversation_key_version,
+            self.custom_avatar_url,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupDescriptionChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_description: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupDescriptionChangeParams {
+    fn into_core(self) -> chat_xdk_core::GroupDescriptionChangeParams {
+        let mut params = chat_xdk_core::GroupDescriptionChangeParams::new(
+            self.conversation_id,
+            self.conversation_key_version,
+            self.custom_description,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupAdminsAddParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupAdminsAddParams {
+    fn into_core(self) -> chat_xdk_core::GroupAdminsAddParams {
+        let mut params =
+            chat_xdk_core::GroupAdminsAddParams::new(self.conversation_id, self.user_ids);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupAdminsRemoveParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupAdminsRemoveParams {
+    fn into_core(self) -> chat_xdk_core::GroupAdminsRemoveParams {
+        let mut params =
+            chat_xdk_core::GroupAdminsRemoveParams::new(self.conversation_id, self.user_ids);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupInviteEnableParams {
+    conversation_id: String,
+    invite_url: String,
+    expires_at_msec: Option<f64>,
+    affiliate_id: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupInviteEnableParams {
+    fn into_core(self) -> chat_xdk_core::GroupInviteEnableParams {
+        let mut params =
+            chat_xdk_core::GroupInviteEnableParams::new(self.conversation_id, self.invite_url);
+        params.expires_at_msec = self.expires_at_msec.map(|msec| msec as i64);
+        params.affiliate_id = self.affiliate_id;
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupInviteDisableParams {
+    conversation_id: String,
+    disabled_by: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupInviteDisableParams {
+    fn into_core(self) -> chat_xdk_core::GroupInviteDisableParams {
+        let mut params = chat_xdk_core::GroupInviteDisableParams::new(self.conversation_id);
+        params.disabled_by = self.disabled_by;
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupJoinRequestParams {
+    conversation_id: String,
+    requesting_user_id: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupJoinRequestParams {
+    fn into_core(self) -> chat_xdk_core::GroupJoinRequestParams {
+        let mut params = chat_xdk_core::GroupJoinRequestParams::new(self.conversation_id);
+        params.requesting_user_id = self.requesting_user_id;
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsGroupJoinRejectParams {
+    conversation_id: String,
+    user_ids: Vec<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsGroupJoinRejectParams {
+    fn into_core(self) -> chat_xdk_core::GroupJoinRejectParams {
+        let mut params =
+            chat_xdk_core::GroupJoinRejectParams::new(self.conversation_id, self.user_ids);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsMessageTtlChangeParams {
+    conversation_id: String,
+    ttl_msec: f64,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsMessageTtlChangeParams {
+    fn into_core(self) -> chat_xdk_core::MessageTtlChangeParams {
+        let mut params =
+            chat_xdk_core::MessageTtlChangeParams::new(self.conversation_id, self.ttl_msec as i64);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsMessageTtlRemoveParams {
+    conversation_id: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsMessageTtlRemoveParams {
+    fn into_core(self) -> chat_xdk_core::MessageTtlRemoveParams {
+        let mut params = chat_xdk_core::MessageTtlRemoveParams::new(self.conversation_id);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsScreenCaptureParams {
+    conversation_id: String,
+    change: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsScreenCaptureParams {
+    fn into_core(
+        self,
+    ) -> Result<chat_xdk_core::ScreenCaptureParams, chat_xdk_core::error::SdkError> {
+        let mut params = chat_xdk_core::ScreenCaptureParams::new(
+            self.conversation_id,
+            chat_xdk_core::ScreenCaptureChange::parse(&self.change)?,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        Ok(params)
     }
 }
 

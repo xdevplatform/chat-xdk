@@ -197,6 +197,31 @@ class TestPreparedChanges(unittest.TestCase):
         # CKCE signature payloads are withheld (they embed the plaintext key).
         self.assertNotIn("signature_payload", sig)
 
+    def test_removal_to_request_rotates_for_members_who_stay(self):
+        from chat_core import removal_to_request
+
+        core, keys = self._core_and_keys()
+        prep = core.prepare_group_members_remove(keys, "g123", ["2000"])
+        body = removal_to_request(["2000"], prep)
+
+        self.assertEqual(body["user_ids"], ["2000"])
+        self.assertEqual(len(body["action_signatures"]), 2)
+        self.assertEqual(
+            body["action_signatures"],
+            prep["action_signatures"],
+        )
+        rotation = body["group_key_rotation_data"]
+        self.assertEqual(
+            rotation["conversation_key_version"], prep["conversation_key_version"]
+        )
+        (pk,) = rotation["conversation_participant_keys"]
+        self.assertEqual(pk["user_id"], "1000")
+        self.assertEqual(
+            sorted(pk), ["encrypted_conversation_key", "public_key_version", "user_id"]
+        )
+        self.assertNotIn("conversation_key_version", body)
+        self.assertNotIn("conversation_participant_keys", body)
+
     def test_prepare_group_create_yields_two_signatures(self):
         core, keys = self._core_and_keys()
         prep = core.prepare_group_create(keys, "g123", ["1000"], ["1000"])

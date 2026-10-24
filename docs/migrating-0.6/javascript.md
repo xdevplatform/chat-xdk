@@ -28,6 +28,7 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -463,6 +464,169 @@ let encryptor: StreamEncryptor;
 import type { ChatWithJuicebox, FileEncryptor } from "@xdevplatform/chat-xdk";
 let session: ChatWithJuicebox;
 let encryptor: FileEncryptor;
+```
+
+## Group actions should be signed
+
+Apps should sign each group update below. The sender comes from
+`setIdentity`. Each returns `actionSignatures` shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+those entries on the update's request, in snake_case, as this page's other
+`api.post` calls do.
+
+### Removing members
+
+`prepareGroupMembersRemove` removes `userIds` and rotates the conversation
+key for the members who stay. Pass their identity keys as `publicKeys`.
+The result is a `PreparedConversationChange`: the new conversation key,
+`conversationParticipantKeys` for those members, and `actionSignatures` in
+this order — the removal, then the conversation-key change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```js
+// 0.6.0
+const prepared = chat.prepareGroupMembersRemove({
+  conversationId,
+  userIds,
+  publicKeys: remainingPublicKeys,
+});
+await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
+  user_ids: userIds,
+  action_signatures: prepared.actionSignatures,
+  group_key_rotation_data: {
+    conversation_key_version: prepared.conversationKeyVersion,
+    conversation_participant_keys: prepared.conversationParticipantKeys,
+  },
+});
+```
+
+### Leaving a group
+
+`prepareGroupLeave` signs the sender's removal and does not rotate the
+conversation key. `actionSignatures` are the removal, then a
+`GroupAdminAddChange` when `promoteAdminId` is set, then a
+`ConversationDeleteEvent`. It returns a `PreparedAction`.
+
+```js
+// 0.6.0
+const left = chat.prepareGroupLeave({ conversationId, promoteAdminId });
+// left.actionSignatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`customTitle` is the ciphertext the request sends. The result is a
+`PreparedAction`; send its `actionSignatures` on the request.
+
+```js
+// 0.6.0
+const title = chat.prepareGroupTitleChange({
+  conversationId,
+  conversationKeyVersion,
+  customTitle,
+});
+```
+
+### Changing the avatar
+
+```js
+// 0.6.0
+const avatar = chat.prepareGroupAvatarChange({
+  conversationId,
+  conversationKeyVersion,
+  customAvatarUrl,
+});
+```
+
+### Changing the description
+
+`customDescription` is the ciphertext the request sends.
+
+```js
+// 0.6.0
+const description = chat.prepareGroupDescriptionChange({
+  conversationId,
+  conversationKeyVersion,
+  customDescription,
+});
+```
+
+### Adding admins
+
+```js
+// 0.6.0
+const added = chat.prepareGroupAdminsAdd({ conversationId, userIds });
+```
+
+### Removing admins
+
+```js
+// 0.6.0
+const removed = chat.prepareGroupAdminsRemove({ conversationId, userIds });
+```
+
+### Enabling an invite
+
+An omitted `expiresAtMsec` or `affiliateId` signs `null`.
+
+```js
+// 0.6.0
+const invite = chat.prepareGroupInviteEnable({ conversationId, inviteUrl, expiresAtMsec });
+```
+
+### Disabling an invite
+
+`disabledBy` defaults to the sender.
+
+```js
+// 0.6.0
+const disabled = chat.prepareGroupInviteDisable({ conversationId });
+```
+
+### Requesting to join
+
+`requestingUserId` defaults to the sender. An invite token is not part of
+the signature.
+
+```js
+// 0.6.0
+const request = chat.prepareGroupJoinRequest({ conversationId });
+```
+
+### Rejecting join requests
+
+```js
+// 0.6.0
+const rejected = chat.prepareGroupJoinReject({ conversationId, userIds });
+```
+
+### Changing the message TTL
+
+The signature covers `ttlMsec` only.
+
+```js
+// 0.6.0
+const ttl = chat.prepareMessageTtlChange({ conversationId, ttlMsec });
+```
+
+### Removing the message TTL
+
+```js
+// 0.6.0
+const cleared = chat.prepareMessageTtlRemove({ conversationId });
+```
+
+### Changing screen capture
+
+`change` is a `ScreenCaptureChange`: `"blockingEnabled"`,
+`"blockingDisabled"`, `"detectionEnabled"`, or `"detectionDisabled"`.
+
+```js
+// 0.6.0
+const capture = chat.prepareScreenCapture({ conversationId, change: "blockingEnabled" });
 ```
 
 ## Read receipts should be signed

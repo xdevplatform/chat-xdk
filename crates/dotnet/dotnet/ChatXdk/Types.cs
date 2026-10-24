@@ -1212,4 +1212,217 @@ namespace ChatXdk
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
     }
+
+    /// <summary>
+    /// A screen-capture setting signed by <see cref="Chat.PrepareScreenCapture"/>.
+    /// Blocking names are the events X clients sign. Detection names are the
+    /// events this SDK's verifier reconstructs.
+    /// </summary>
+    public enum ScreenCaptureChange
+    {
+        BlockingEnabled,
+        BlockingDisabled,
+        DetectionEnabled,
+        DetectionDisabled,
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupMembersRemove"/>.</summary>
+    public sealed class GroupMembersRemoveParams
+    {
+        public GroupMembersRemoveParams(string conversationId, IReadOnlyList<string> userIds)
+        {
+            ConversationId = conversationId;
+            UserIds = userIds;
+        }
+
+        public string ConversationId { get; }
+        public IReadOnlyList<string> UserIds { get; }
+        public IReadOnlyList<PublicKeyInput>? PublicKeys { get; init; }
+        public string? ConversationKeyVersion { get; init; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupLeave"/>. Leave does not rotate the key.</summary>
+    public sealed class GroupLeaveParams
+    {
+        public GroupLeaveParams(string conversationId) => ConversationId = conversationId;
+        public string ConversationId { get; }
+        public string? PromoteAdminId { get; init; }
+        public string? ConversationKeyVersion { get; init; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupTitleChange"/>. CustomTitle is ciphertext.</summary>
+    public sealed class GroupTitleChangeParams
+    {
+        public GroupTitleChangeParams(string conversationId, string conversationKeyVersion, string customTitle)
+        {
+            ConversationId = conversationId;
+            ConversationKeyVersion = conversationKeyVersion;
+            CustomTitle = customTitle;
+        }
+
+        public string ConversationId { get; }
+        public string ConversationKeyVersion { get; }
+        public string CustomTitle { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>.</summary>
+    public sealed class GroupAvatarChangeParams
+    {
+        public GroupAvatarChangeParams(string conversationId, string conversationKeyVersion, string customAvatarUrl)
+        {
+            ConversationId = conversationId;
+            ConversationKeyVersion = conversationKeyVersion;
+            CustomAvatarUrl = customAvatarUrl;
+        }
+
+        public string ConversationId { get; }
+        public string ConversationKeyVersion { get; }
+        public string CustomAvatarUrl { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupDescriptionChange"/>. CustomDescription is ciphertext.</summary>
+    public sealed class GroupDescriptionChangeParams
+    {
+        public GroupDescriptionChangeParams(string conversationId, string conversationKeyVersion, string customDescription)
+        {
+            ConversationId = conversationId;
+            ConversationKeyVersion = conversationKeyVersion;
+            CustomDescription = customDescription;
+        }
+
+        public string ConversationId { get; }
+        public string ConversationKeyVersion { get; }
+        public string CustomDescription { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupAdminsAdd"/>.</summary>
+    public sealed class GroupAdminsAddParams
+    {
+        public GroupAdminsAddParams(string conversationId, IReadOnlyList<string> userIds)
+        {
+            ConversationId = conversationId;
+            UserIds = userIds;
+        }
+
+        public string ConversationId { get; }
+        public IReadOnlyList<string> UserIds { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupAdminsRemove"/>.</summary>
+    public sealed class GroupAdminsRemoveParams
+    {
+        public GroupAdminsRemoveParams(string conversationId, IReadOnlyList<string> userIds)
+        {
+            ConversationId = conversationId;
+            UserIds = userIds;
+        }
+
+        public string ConversationId { get; }
+        public IReadOnlyList<string> UserIds { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupInviteEnable"/>.</summary>
+    public sealed class GroupInviteEnableParams
+    {
+        public GroupInviteEnableParams(string conversationId, string inviteUrl)
+        {
+            ConversationId = conversationId;
+            InviteUrl = inviteUrl;
+        }
+
+        public string ConversationId { get; }
+        public string InviteUrl { get; }
+        public long? ExpiresAtMsec { get; init; }
+        public string? AffiliateId { get; init; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupInviteDisable"/>.</summary>
+    public sealed class GroupInviteDisableParams
+    {
+        public GroupInviteDisableParams(string conversationId) => ConversationId = conversationId;
+        public string ConversationId { get; }
+        public string? DisabledBy { get; init; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupJoinRequest"/>.</summary>
+    public sealed class GroupJoinRequestParams
+    {
+        public GroupJoinRequestParams(string conversationId) => ConversationId = conversationId;
+        public string ConversationId { get; }
+        public string? RequestingUserId { get; init; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareGroupJoinReject"/>.</summary>
+    public sealed class GroupJoinRejectParams
+    {
+        public GroupJoinRejectParams(string conversationId, IReadOnlyList<string> userIds)
+        {
+            ConversationId = conversationId;
+            UserIds = userIds;
+        }
+
+        public string ConversationId { get; }
+        public IReadOnlyList<string> UserIds { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareMessageTtlChange"/>.</summary>
+    public sealed class MessageTtlChangeParams
+    {
+        public MessageTtlChangeParams(string conversationId, long ttlMsec)
+        {
+            ConversationId = conversationId;
+            TtlMsec = ttlMsec;
+        }
+
+        public string ConversationId { get; }
+        public long TtlMsec { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareMessageTtlRemove"/>.</summary>
+    public sealed class MessageTtlRemoveParams
+    {
+        public MessageTtlRemoveParams(string conversationId) => ConversationId = conversationId;
+        public string ConversationId { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
+
+    /// <summary>Parameters for <see cref="Chat.PrepareScreenCapture"/>.</summary>
+    public sealed class ScreenCaptureParams
+    {
+        public ScreenCaptureParams(string conversationId, ScreenCaptureChange change)
+        {
+            ConversationId = conversationId;
+            Change = change;
+        }
+
+        public string ConversationId { get; }
+        public ScreenCaptureChange Change { get; }
+        public string? SenderId { get; init; }
+        public string? SigningKeyVersion { get; init; }
+    }
 }

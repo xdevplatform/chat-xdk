@@ -391,6 +391,156 @@ type EncryptEditParams struct {
 	ConversationKeyVersion  string        `json:"conversation_key_version,omitempty"`   // empty = key cache
 }
 
+// ScreenCaptureChange is the setting signed by PrepareScreenCapture.
+//
+// Blocking names are the events X clients sign. Detection names are the
+// events this SDK's verifier reconstructs.
+type ScreenCaptureChange string
+
+const (
+	BlockingEnabled   ScreenCaptureChange = "BlockingEnabled"
+	BlockingDisabled  ScreenCaptureChange = "BlockingDisabled"
+	DetectionEnabled  ScreenCaptureChange = "DetectionEnabled"
+	DetectionDisabled ScreenCaptureChange = "DetectionDisabled"
+)
+
+// GroupMembersRemoveParams are the parameters for PrepareGroupMembersRemove.
+//
+// PublicKeys are the identity keys of the members who stay. When set, the
+// call rotates the conversation key for them. An empty slice does not rotate.
+// ConversationKeyVersion is bound into a removal that does not rotate; empty
+// signs the literal null.
+type GroupMembersRemoveParams struct {
+	ConversationID string `json:"conversation_id"`
+	// UserIDs are the user ids being removed.
+	UserIDs []string `json:"user_ids"`
+	// PublicKeys are the identity keys of the members who remain.
+	PublicKeys []PublicKeyInput `json:"public_keys,omitempty"`
+	// ConversationKeyVersion is bound into a removal that does not rotate.
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
+	SenderID               string `json:"sender_id,omitempty"`
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+}
+
+// GroupLeaveParams are the parameters for PrepareGroupLeave.
+//
+// Leave removes the sender and does not rotate the conversation key.
+// PromoteAdminID adds an admin-promotion signature.
+type GroupLeaveParams struct {
+	ConversationID string `json:"conversation_id"`
+	// PromoteAdminID is the user promoted to admin, when the sender is the only admin.
+	PromoteAdminID string `json:"promote_admin_id,omitempty"`
+	// ConversationKeyVersion is bound into the removal. Empty signs null.
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
+	SenderID               string `json:"sender_id,omitempty"`
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+}
+
+// GroupTitleChangeParams are the parameters for PrepareGroupTitleChange.
+// CustomTitle is the ciphertext the request sends.
+type GroupTitleChangeParams struct {
+	ConversationID         string `json:"conversation_id"`
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	CustomTitle            string `json:"custom_title"`
+	SenderID               string `json:"sender_id,omitempty"`
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+}
+
+// GroupAvatarChangeParams are the parameters for PrepareGroupAvatarChange.
+type GroupAvatarChangeParams struct {
+	ConversationID         string `json:"conversation_id"`
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	CustomAvatarURL        string `json:"custom_avatar_url"`
+	SenderID               string `json:"sender_id,omitempty"`
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+}
+
+// GroupDescriptionChangeParams are the parameters for PrepareGroupDescriptionChange.
+// CustomDescription is the ciphertext the request sends.
+type GroupDescriptionChangeParams struct {
+	ConversationID         string `json:"conversation_id"`
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	CustomDescription      string `json:"custom_description"`
+	SenderID               string `json:"sender_id,omitempty"`
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+}
+
+// GroupAdminsAddParams are the parameters for PrepareGroupAdminsAdd.
+type GroupAdminsAddParams struct {
+	ConversationID    string   `json:"conversation_id"`
+	UserIDs           []string `json:"user_ids"`
+	SenderID          string   `json:"sender_id,omitempty"`
+	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
+}
+
+// GroupAdminsRemoveParams are the parameters for PrepareGroupAdminsRemove.
+type GroupAdminsRemoveParams struct {
+	ConversationID    string   `json:"conversation_id"`
+	UserIDs           []string `json:"user_ids"`
+	SenderID          string   `json:"sender_id,omitempty"`
+	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
+}
+
+// GroupInviteEnableParams are the parameters for PrepareGroupInviteEnable.
+// A nil ExpiresAtMsec and an empty AffiliateID sign null.
+type GroupInviteEnableParams struct {
+	ConversationID    string `json:"conversation_id"`
+	InviteURL         string `json:"invite_url"`
+	ExpiresAtMsec     *int64 `json:"expires_at_msec,omitempty"`
+	AffiliateID       string `json:"affiliate_id,omitempty"`
+	SenderID          string `json:"sender_id,omitempty"`
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
+}
+
+// GroupInviteDisableParams are the parameters for PrepareGroupInviteDisable.
+// An empty DisabledBy uses the sender.
+type GroupInviteDisableParams struct {
+	ConversationID    string `json:"conversation_id"`
+	DisabledBy        string `json:"disabled_by,omitempty"`
+	SenderID          string `json:"sender_id,omitempty"`
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
+}
+
+// GroupJoinRequestParams are the parameters for PrepareGroupJoinRequest.
+// An empty RequestingUserID uses the sender. An invite token is not signed.
+type GroupJoinRequestParams struct {
+	ConversationID    string `json:"conversation_id"`
+	RequestingUserID  string `json:"requesting_user_id,omitempty"`
+	SenderID          string `json:"sender_id,omitempty"`
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
+}
+
+// GroupJoinRejectParams are the parameters for PrepareGroupJoinReject.
+type GroupJoinRejectParams struct {
+	ConversationID    string   `json:"conversation_id"`
+	UserIDs           []string `json:"user_ids"`
+	SenderID          string   `json:"sender_id,omitempty"`
+	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
+}
+
+// MessageTtlChangeParams are the parameters for PrepareMessageTtlChange.
+type MessageTtlChangeParams struct {
+	ConversationID    string `json:"conversation_id"`
+	TTLMsec           int64  `json:"ttl_msec"`
+	SenderID          string `json:"sender_id,omitempty"`
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
+}
+
+// MessageTtlRemoveParams are the parameters for PrepareMessageTtlRemove.
+type MessageTtlRemoveParams struct {
+	ConversationID    string `json:"conversation_id"`
+	SenderID          string `json:"sender_id,omitempty"`
+	SigningKeyVersion string `json:"signing_key_version,omitempty"`
+}
+
+// ScreenCaptureParams are the parameters for PrepareScreenCapture.
+type ScreenCaptureParams struct {
+	ConversationID    string              `json:"conversation_id"`
+	Change            ScreenCaptureChange `json:"change"`
+	SenderID          string              `json:"sender_id,omitempty"`
+	SigningKeyVersion string              `json:"signing_key_version,omitempty"`
+}
+
 // MessageDeleteParams are the parameters for PrepareMessageDelete.
 //
 // A delete is a signed plaintext event, not an encrypted message, so no

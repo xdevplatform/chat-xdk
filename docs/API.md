@@ -142,6 +142,20 @@ wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 | 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(&ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change(ConversationKeyChangeParams) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
 | 19 | **prepare_group_members_change** | `prepare_group_members_change(&GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change(GroupMembersChangeParams) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
 | 20 | **prepare_group_create** | `prepare_group_create(&GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create(GroupCreateParams) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
+| 50 | **prepare_group_members_remove** | `prepare_group_members_remove(&GroupMembersRemoveParams) → PreparedConversationChange` | `prepareGroupMembersRemove(params) → PreparedConversationChange` | `prepare_group_members_remove(GroupMembersRemoveParams) → dict` | `PrepareGroupMembersRemove(GroupMembersRemoveParams) (*PreparedConversationChange, error)` | `prepareGroupMembersRemove(GroupMembersRemoveParams)` | `PrepareGroupMembersRemove(GroupMembersRemoveParams)` |
+| 51 | **prepare_group_leave** | `prepare_group_leave(&GroupLeaveParams) → PreparedAction` | `prepareGroupLeave(params) → PreparedAction` | `prepare_group_leave(GroupLeaveParams) → dict` | `PrepareGroupLeave(GroupLeaveParams) (*PreparedAction, error)` | `prepareGroupLeave(GroupLeaveParams)` → `PreparedAction` | `PrepareGroupLeave(GroupLeaveParams)` → `PreparedAction` |
+| 52 | **prepare_group_title_change** | `prepare_group_title_change(&GroupTitleChangeParams) → PreparedAction` | `prepareGroupTitleChange(params) → PreparedAction` | `prepare_group_title_change(GroupTitleChangeParams) → dict` | `PrepareGroupTitleChange(GroupTitleChangeParams) (*PreparedAction, error)` | `prepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedAction` | `PrepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedAction` |
+| 53 | **prepare_group_avatar_change** | `prepare_group_avatar_change(&GroupAvatarChangeParams) → PreparedAction` | `prepareGroupAvatarChange(params) → PreparedAction` | `prepare_group_avatar_change(GroupAvatarChangeParams) → dict` | `PrepareGroupAvatarChange(GroupAvatarChangeParams) (*PreparedAction, error)` | `prepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedAction` | `PrepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedAction` |
+| 54 | **prepare_group_description_change** | `prepare_group_description_change(&GroupDescriptionChangeParams) → PreparedAction` | `prepareGroupDescriptionChange(params) → PreparedAction` | `prepare_group_description_change(GroupDescriptionChangeParams) → dict` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams) (*PreparedAction, error)` | `prepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedAction` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedAction` |
+| 55 | **prepare_group_admins_add** | `prepare_group_admins_add(&GroupAdminsAddParams) → PreparedAction` | `prepareGroupAdminsAdd(params) → PreparedAction` | `prepare_group_admins_add(GroupAdminsAddParams) → dict` | `PrepareGroupAdminsAdd(GroupAdminsAddParams) (*PreparedAction, error)` | `prepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` | `PrepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` |
+| 56 | **prepare_group_admins_remove** | `prepare_group_admins_remove(&GroupAdminsRemoveParams) → PreparedAction` | `prepareGroupAdminsRemove(params) → PreparedAction` | `prepare_group_admins_remove(GroupAdminsRemoveParams) → dict` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams) (*PreparedAction, error)` | `prepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` |
+| 57 | **prepare_group_invite_enable** | `prepare_group_invite_enable(&GroupInviteEnableParams) → PreparedAction` | `prepareGroupInviteEnable(params) → PreparedAction` | `prepare_group_invite_enable(GroupInviteEnableParams) → dict` | `PrepareGroupInviteEnable(GroupInviteEnableParams) (*PreparedAction, error)` | `prepareGroupInviteEnable(GroupInviteEnableParams)` → `PreparedAction` | `PrepareGroupInviteEnable(GroupInviteEnableParams)` → `PreparedAction` |
+| 58 | **prepare_group_invite_disable** | `prepare_group_invite_disable(&GroupInviteDisableParams) → PreparedAction` | `prepareGroupInviteDisable(params) → PreparedAction` | `prepare_group_invite_disable(GroupInviteDisableParams) → dict` | `PrepareGroupInviteDisable(GroupInviteDisableParams) (*PreparedAction, error)` | `prepareGroupInviteDisable(GroupInviteDisableParams)` → `PreparedAction` | `PrepareGroupInviteDisable(GroupInviteDisableParams)` → `PreparedAction` |
+| 59 | **prepare_group_join_request** | `prepare_group_join_request(&GroupJoinRequestParams) → PreparedAction` | `prepareGroupJoinRequest(params) → PreparedAction` | `prepare_group_join_request(GroupJoinRequestParams) → dict` | `PrepareGroupJoinRequest(GroupJoinRequestParams) (*PreparedAction, error)` | `prepareGroupJoinRequest(GroupJoinRequestParams)` → `PreparedAction` | `PrepareGroupJoinRequest(GroupJoinRequestParams)` → `PreparedAction` |
+| 60 | **prepare_group_join_reject** | `prepare_group_join_reject(&GroupJoinRejectParams) → PreparedAction` | `prepareGroupJoinReject(params) → PreparedAction` | `prepare_group_join_reject(GroupJoinRejectParams) → dict` | `PrepareGroupJoinReject(GroupJoinRejectParams) (*PreparedAction, error)` | `prepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` | `PrepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` |
+| 61 | **prepare_message_ttl_change** | `prepare_message_ttl_change(&MessageTtlChangeParams) → PreparedAction` | `prepareMessageTtlChange(params) → PreparedAction` | `prepare_message_ttl_change(MessageTtlChangeParams) → dict` | `PrepareMessageTtlChange(MessageTtlChangeParams) (*PreparedAction, error)` | `prepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` | `PrepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` |
+| 62 | **prepare_message_ttl_remove** | `prepare_message_ttl_remove(&MessageTtlRemoveParams) → PreparedAction` | `prepareMessageTtlRemove(params) → PreparedAction` | `prepare_message_ttl_remove(MessageTtlRemoveParams) → dict` | `PrepareMessageTtlRemove(MessageTtlRemoveParams) (*PreparedAction, error)` | `prepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` | `PrepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` |
+| 63 | **prepare_screen_capture** | `prepare_screen_capture(&ScreenCaptureParams) → PreparedAction` | `prepareScreenCapture(params) → PreparedAction` | `prepare_screen_capture(ScreenCaptureParams) → dict` | `PrepareScreenCapture(ScreenCaptureParams) (*PreparedAction, error)` | `prepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` | `PrepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
 single params value, named the same in every language: Rust
@@ -211,9 +225,9 @@ errors are collected in the result) and `decrypt_event` throws on failure.
 
 #### Conversation lifecycle — when to use which prepare method
 
-All three `prepare*` methods return the same `PreparedConversationChange` shape
-(fresh conversation key + encrypted participant keys + action signatures,
-POST-ready). They differ in which lifecycle action they sign:
+These methods return a `PreparedConversationChange` (a conversation key,
+encrypted participant keys, and action signatures). They differ in which
+lifecycle action they sign:
 
 | Scenario | Use | Then POST to |
 |---|---|---|
@@ -221,15 +235,22 @@ POST-ready). They differ in which lifecycle action they sign:
 | Rotate an existing conversation's key (one-to-one or group) | `prepareConversationKeyChange` — pass the conversation id | `/2/chat/conversations/{id}/keys` |
 | Create a group | `prepareGroupCreate` | `/2/chat/conversations/group/initialize` (mints the `g…` id), then `/2/chat/conversations/group` |
 | Add members to a group | `prepareGroupMembersChange` | `/2/chat/conversations/{id}/members` |
+| Remove members from a group | `prepareGroupMembersRemove` — pass the public keys of the members who stay | `/2/chat/conversations/{id}/members/remove` |
 
 The group methods are separate because they sign different events: a group
 create must carry a `GroupChangeEvent.GroupCreate` signature and a member add a
 `GroupChangeEvent.GroupMemberAddChange` signature — each **in addition to** the
 conversation-key change signature, so both return two `actionSignatures`.
+A member removal given the public keys of the members who stay does the same:
+`GroupChangeEvent.GroupMemberRemoveChange`, then the conversation-key change.
 A key rotation signs only the key change, so `prepareConversationKeyChange`
 returns one.
 
-After any of the three, store the returned `conversationKey` locally and use it
+A member removal posts both signatures on `/members/remove` together with
+`group_key_rotation_data`: the new `conversation_key_version` and the
+`conversation_participant_keys` for the members who stay.
+
+After any of these, store the returned `conversationKey` locally and use it
 with `encryptMessage` until the next key change.
 
 Two hygiene notes:
@@ -373,6 +394,254 @@ conversation-key change (`ConversationKeyChangeEvent`) and the member add
 (`GroupChangeEvent.GroupMemberAddChange`), each with its
 `encodedMessageEventDetail` populated. As with group create, the `title` and
 `avatar_url` fields must not contain a comma.
+
+---
+
+#### prepare_group_members_remove
+
+Sign a group member removal. `user_ids` are the members being removed.
+
+`public_keys` are the identity keys of the members who stay, in the same
+shape as `prepare_group_members_change`. When they are set, the call
+generates a new conversation key, encrypts it for those members, and returns
+a `PreparedConversationChange`: the new key and version, the participant
+keys, and `action_signatures` in this order — the removal, then the
+conversation-key change. The removal is bound to the new key version. A
+`public_keys` entry for someone being removed is rejected.
+
+Send that result as `POST /2/chat/conversations/{id}/members/remove`.
+`user_ids` are the members being removed. `action_signatures` is both
+signatures, the removal and then the key change. `group_key_rotation_data`
+carries the new `conversation_key_version` and
+`conversation_participant_keys` (JS: `groupKeyRotationData`,
+`conversationKeyVersion`, `conversationParticipantKeys`).
+
+```python
+prepared = chat.prepare_group_members_remove(
+    GroupMembersRemoveParams(conversation_id, ["222"], public_keys=remaining_public_keys)
+)
+api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
+    "user_ids": ["222"],
+    "action_signatures": prepared["action_signatures"],
+    "group_key_rotation_data": {
+        "conversation_key_version": prepared["conversation_key_version"],
+        "conversation_participant_keys": prepared["conversation_participant_keys"],
+    },
+})
+```
+
+```typescript
+const prepared = chat.prepareGroupMembersRemove({
+  conversationId,
+  userIds: ["222"],
+  publicKeys: remainingPublicKeys,
+});
+await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
+  userIds: ["222"],
+  actionSignatures: prepared.actionSignatures,
+  groupKeyRotationData: {
+    conversationKeyVersion: prepared.conversationKeyVersion,
+    conversationParticipantKeys: prepared.conversationParticipantKeys,
+  },
+});
+```
+
+Without `public_keys`, the same return type comes back with no new key,
+empty participant keys, and only the removal signature.
+`conversation_key_version` on that result is the version bound into the
+removal, or empty when the signature carries the literal `null`. Pass
+`conversation_key_version` on the params to bind a version without rotating;
+an empty or omitted version signs `null`. A rotation ignores that field and
+binds the new version.
+
+The removal is signed at signature version 11:
+
+```text
+GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version|null},signature_version=11
+```
+
+The key change is the same `ConversationKeyChangeEvent` payload
+`prepare_conversation_key_change` signs, at signature version 7. Its
+`signature_payload` is omitted because the payload contains the plaintext
+conversation key.
+
+The result does not carry a ratchet tree (`base64_encoded_key_rotation`) or
+a rewrapped pin-key bundle (`rotated_pmk_bundle`). It also does not
+re-encrypt a title, avatar, or description. Sign those with
+`prepare_group_title_change`, `prepare_group_avatar_change`, and
+`prepare_group_description_change` under the new key, and place those
+signatures between the removal and the key change.
+
+---
+
+#### prepare_group_leave
+
+Sign leaving a group. Leave is a removal of the sender and does not rotate
+the conversation key. `promote_admin_id`, when set, is the member who becomes
+an admin — the caller chooses whom to promote.
+
+`action_signatures` are the removal (version 11, with `conversation_key_version`
+or `null`), then a `GroupAdminAddChange` when `promote_admin_id` is set, then
+a `ConversationDeleteEvent` with no further fields. Returns a
+`PreparedAction`.
+
+```text
+GroupChangeEvent.GroupAdminAddChange,{message_id},{sender_id},{conversation_id},{promote_admin_id}
+ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}
+```
+
+---
+
+#### prepare_group_title_change
+
+Sign a group title change. `custom_title` is the ciphertext the request
+sends, and `conversation_key_version` is the key it is encrypted under.
+Returns one `PreparedAction` signature at version 7:
+
+```text
+GroupChangeEvent.GroupTitleChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{custom_title}
+```
+
+A comma in `custom_title` is rejected.
+
+---
+
+#### prepare_group_avatar_change
+
+Sign a group avatar change. `custom_avatar_url` is the value the request
+sends. Returns one `PreparedAction` signature at version 7:
+
+```text
+GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{custom_avatar_url}
+```
+
+---
+
+#### prepare_group_description_change
+
+Sign a group description change. `custom_description` is the ciphertext the
+request sends. Returns one `PreparedAction` signature at version 7:
+
+```text
+GroupChangeEvent.GroupDescriptionChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{custom_description}
+```
+
+---
+
+#### prepare_group_admins_add
+
+Sign adding group admins. `user_ids` are the admins being added, in the
+order they are signed. Returns one `PreparedAction` signature at version 7:
+
+```text
+GroupChangeEvent.GroupAdminAddChange,{message_id},{sender_id},{conversation_id},{user_ids...}
+```
+
+---
+
+#### prepare_group_admins_remove
+
+Sign removing group admins. Same shape as `prepare_group_admins_add`:
+
+```text
+GroupChangeEvent.GroupAdminRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...}
+```
+
+---
+
+#### prepare_group_invite_enable
+
+Sign enabling a group invite. `invite_url` is required. An omitted
+`expires_at_msec` or `affiliate_id` — and a negative expiry or an empty
+affiliate id — signs the literal `null`. Returns one `PreparedAction`
+signature at version 7:
+
+```text
+GroupChangeEvent.GroupInviteEnable,{message_id},{sender_id},{conversation_id},{invite_url},{expires_at_msec|null},{affiliate_id|null}
+```
+
+---
+
+#### prepare_group_invite_disable
+
+Sign disabling a group invite. `disabled_by` is the member turning it off
+and defaults to the sender. Returns one `PreparedAction` signature at
+version 7:
+
+```text
+GroupChangeEvent.GroupInviteDisable,{message_id},{sender_id},{conversation_id},{disabled_by}
+```
+
+---
+
+#### prepare_group_join_request
+
+Sign a request to join a group. `requesting_user_id` defaults to the sender.
+An invite token the request also carries is not part of the signature.
+Returns one `PreparedAction` signature at version 7:
+
+```text
+GroupChangeEvent.GroupJoinRequest,{message_id},{sender_id},{conversation_id},{requesting_user_id}
+```
+
+---
+
+#### prepare_group_join_reject
+
+Sign rejecting join requests. `user_ids` are the rejected users, in the
+order they are signed. Returns one `PreparedAction` signature at version 7:
+
+```text
+GroupChangeEvent.GroupJoinReject,{message_id},{sender_id},{conversation_id},{user_ids...}
+```
+
+---
+
+#### prepare_message_ttl_change
+
+Sign a message-TTL change. The signature covers `ttl_msec` only. A negative
+TTL is rejected. Returns one `PreparedAction` signature at version 7:
+
+```text
+ConversationMetadataChangeEvent.MessageDurationChange,{message_id},{sender_id},{conversation_id},{ttl_msec}
+```
+
+---
+
+#### prepare_message_ttl_remove
+
+Sign clearing a conversation's message TTL. The signature has no fields
+after the conversation id. Returns one `PreparedAction` signature at
+version 7:
+
+```text
+ConversationMetadataChangeEvent.MessageDurationRemove,{message_id},{sender_id},{conversation_id}
+```
+
+---
+
+#### prepare_screen_capture
+
+Sign one screen-capture setting. `change` is a `ScreenCaptureChange`:
+
+| Value | Signed event |
+|---|---|
+| `BlockingEnabled` (`blockingEnabled` in JS) | `ConversationMetadataChangeEvent.EnableScreenCaptureBlocking` |
+| `BlockingDisabled` | `ConversationMetadataChangeEvent.DisableScreenCaptureBlocking` |
+| `DetectionEnabled` | `ConversationMetadataChangeEvent.EnableScreenCaptureDetection` |
+| `DetectionDisabled` | `ConversationMetadataChangeEvent.DisableScreenCaptureDetection` |
+
+Blocking names are the events X clients sign. Detection names are the event
+names this SDK's verifier reconstructs. Each signature has no fields after
+the conversation id and is signed at version 7. Returns one `PreparedAction`.
+
+```text
+ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{message_id},{sender_id},{conversation_id}
+```
+
+Every new params type takes optional `sender_id` and `signing_key_version`,
+resolved from `set_identity` when omitted. A one-to-one id is signed in its
+canonical colon form. Any signed component that contains a comma is rejected.
 
 ---
 

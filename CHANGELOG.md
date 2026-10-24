@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added
+
+Group and conversation-metadata actions should be signed before they are sent.
+Each call takes one params object and returns `action_signatures` for the
+request.
+
+`prepare_group_members_remove` signs a member removal at signature version
+11, binding the conversation-key version (or the literal `null` when the
+call does not name one). Pass the remaining members' public keys to rotate
+the conversation key in the same call. The result is a
+`PreparedConversationChange`: the new key, the remaining members'
+participant keys, and signatures for the removal and then the key change.
+Without those keys the same type comes back with only the removal signature.
+
+`prepare_group_leave` signs leaving a group: a removal of the sender, an
+admin add when `promote_admin_id` names the member to promote, and a
+conversation delete. Leave does not rotate the conversation key.
+
+Title, avatar, description, admin, invite, and join changes, message-TTL
+changes, and screen-capture setting changes each return a `PreparedAction`
+signed at signature version 7. Screen-capture blocking signs
+`EnableScreenCaptureBlocking` and `DisableScreenCaptureBlocking`. Detection
+signs `EnableScreenCaptureDetection` and `DisableScreenCaptureDetection`.
+
+A member-removal result that rotates a key carries the new conversation key
+and the remaining members' participant keys. It carries no ratchet tree and
+no rewrapped pin-key bundle. Sign a title, avatar, or description under the
+new key with that action's prepare call, and place the signature between the
+removal and the key change.
+
 To move code from 0.5.x, follow your binding's guide in
 [docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
 with before/after code, and [Why 0.6.0 changes](docs/migrating-0.6/why.md)
