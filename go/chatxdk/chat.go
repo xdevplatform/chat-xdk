@@ -398,9 +398,9 @@ func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*Prep
 	return &out, nil
 }
 
-// PrepareGroupLeave signs leaving a group: a removal of the sender, a
-// conversation delete, and an admin add when PromoteAdminID is set. Leave
-// does not rotate the conversation key.
+// PrepareGroupLeave signs leaving a group: a removal of the sender, an admin
+// add when PromoteAdminID is set, and a conversation delete. Leave does not
+// rotate the conversation key.
 func (c *Chat) PrepareGroupLeave(params GroupLeaveParams) (*PreparedAction, error) {
 	return c.prepareAction(params, ffiPrepareGroupLeave)
 }

@@ -940,10 +940,10 @@ class TestApiShapes(unittest.TestCase):
             GroupLeaveParams("g100", promote_admin_id="910008", conversation_key_version="7", **ident)
         )
         self.assertEqual(len(left["action_signatures"]), 3)
+        self.assertTrue(left["action_signatures"][1]["signature_payload"].endswith(",910008"))
         self.assertTrue(
-            left["action_signatures"][1]["signature_payload"].startswith("ConversationDeleteEvent,")
+            left["action_signatures"][2]["signature_payload"].startswith("ConversationDeleteEvent,")
         )
-        self.assertTrue(left["action_signatures"][2]["signature_payload"].endswith(",910008"))
 
         title = chat.prepare_group_title_change(
             GroupTitleChangeParams("g100", "4", "enc-title", **ident)

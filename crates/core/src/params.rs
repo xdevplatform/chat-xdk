@@ -948,8 +948,8 @@ impl GroupMembersRemoveParams {
 /// Parameters for [`crate::ChatCore::prepare_group_leave`].
 ///
 /// Leaving is a removal of the sender that does not rotate the conversation
-/// key. The result also signs a conversation delete, and a group-admin add
-/// when `promote_admin_id` names the member who becomes an admin.
+/// key. The result then signs a group-admin add when `promote_admin_id`
+/// names the member who becomes an admin, and a conversation delete.
 ///
 /// `conversation_key_version` is bound into the removal signature. An empty
 /// string is absent, and an absent version signs the literal `null`.

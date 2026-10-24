@@ -2921,9 +2921,9 @@ impl Chat {
 
     /// Sign leaving a group.
     ///
-    /// The signatures are a removal of the sender, a conversation delete,
-    /// and an admin add when ``promote_admin_id`` is set. Leave does not
-    /// rotate the conversation key.
+    /// The signatures are a removal of the sender, an admin add when
+    /// ``promote_admin_id`` is set, and a conversation delete. Leave does
+    /// not rotate the conversation key.
     fn prepare_group_leave(
         &self,
         py: Python<'_>,

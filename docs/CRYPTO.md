@@ -548,9 +548,9 @@ it when the caller supplies the remaining members' public keys:
 "GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version|null},signature_version=11"
 ```
 
-`prepare_group_leave` signs that same removal of the sender, then
-`ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`, then a
-`GroupAdminAddChange` when a member is promoted. The other group and
+`prepare_group_leave` signs that same removal of the sender, then a
+`GroupAdminAddChange` when a member is promoted, then
+`ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`. The other group and
 metadata prepares sign one version-7 payload: title
 (`GroupTitleChange`, key version then ciphertext), avatar
 (`GroupAvatarUrlChange`), description (`GroupDescriptionChange`), admin add

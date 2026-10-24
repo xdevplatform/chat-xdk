@@ -16,9 +16,9 @@ the conversation key in the same call. The result is a
 participant keys, and signatures for the removal and then the key change.
 Without those keys the same type comes back with only the removal signature.
 
-`prepare_group_leave` signs leaving a group: a removal of the sender, a
-conversation delete, and an admin add when `promote_admin_id` names the
-member to promote. Leave does not rotate the conversation key.
+`prepare_group_leave` signs leaving a group: a removal of the sender, an
+admin add when `promote_admin_id` names the member to promote, and a
+conversation delete. Leave does not rotate the conversation key.
 
 Title, avatar, description, admin, invite, and join changes, message-TTL
 changes, and screen-capture setting changes each return a `PreparedAction`

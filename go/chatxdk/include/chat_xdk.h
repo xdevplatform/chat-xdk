@@ -338,8 +338,8 @@ struct FfiResult chat_xdk_prepare_group_members_remove(const struct ChatHandle *
  * `conversation_key_version` (absent signs `null` on the removal), and
  * `sender_id` / `signing_key_version`.
  *
- * Returns JSON `PreparedAction`: the removal of the sender, a conversation
- * delete, and an admin add when `promote_admin_id` is set. Leave does not
+ * Returns JSON `PreparedAction`: the removal of the sender, an admin add
+ * when `promote_admin_id` is set, and a conversation delete. Leave does not
  * rotate the conversation key.
  */
 struct FfiResult chat_xdk_prepare_group_leave(const struct ChatHandle *handle,

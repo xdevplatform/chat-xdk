@@ -1409,7 +1409,9 @@ func TestGroupActionSignatures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leave: %v", err)
 	}
-	if len(left.ActionSignatures) != 3 || !strings.HasPrefix(left.ActionSignatures[1].SignaturePayload, "ConversationDeleteEvent,") {
+	if len(left.ActionSignatures) != 3 ||
+		!strings.HasSuffix(left.ActionSignatures[1].SignaturePayload, ",910008") ||
+		!strings.HasPrefix(left.ActionSignatures[2].SignaturePayload, "ConversationDeleteEvent,") {
 		t.Fatalf("leave signatures: %+v", left.ActionSignatures)
 	}
 

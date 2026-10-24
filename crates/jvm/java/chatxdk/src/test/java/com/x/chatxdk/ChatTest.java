@@ -630,7 +630,8 @@ class ChatTest {
             leave.conversationKeyVersion = "7";
             PreparedAction left = chat.prepareGroupLeave(leave);
             assertEquals(3, left.actionSignatures.size());
-            assertTrue(left.actionSignatures.get(1).signaturePayload.startsWith("ConversationDeleteEvent,"));
+            assertTrue(left.actionSignatures.get(1).signaturePayload.endsWith(",910008"));
+            assertTrue(left.actionSignatures.get(2).signaturePayload.startsWith("ConversationDeleteEvent,"));
 
             GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "4", "enc-title");
             titleParams.senderId = "111";

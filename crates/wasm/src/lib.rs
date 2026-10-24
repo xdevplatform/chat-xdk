@@ -716,8 +716,9 @@ impl Chat {
         prepared_change_to_js(prepared)
     }
 
-    /// Sign leaving a group: a removal of the sender, a conversation delete,
-    /// and an admin add when `promoteAdminId` is set. Does not rotate the key.
+    /// Sign leaving a group: a removal of the sender, an admin add when
+    /// `promoteAdminId` is set, and a conversation delete. Does not rotate
+    /// the key.
     #[wasm_bindgen(js_name = prepareGroupLeave)]
     pub fn prepare_group_leave(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupLeaveParams = from_js_params("prepareGroupLeave", params)?;

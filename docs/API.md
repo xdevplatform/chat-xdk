@@ -437,13 +437,13 @@ the conversation key. `promote_admin_id`, when set, is the member who becomes
 an admin — the caller chooses whom to promote.
 
 `action_signatures` are the removal (version 11, with `conversation_key_version`
-or `null`), then a `ConversationDeleteEvent` with no further fields, then a
-`GroupAdminAddChange` when `promote_admin_id` is set. Returns a
+or `null`), then a `GroupAdminAddChange` when `promote_admin_id` is set, then
+a `ConversationDeleteEvent` with no further fields. Returns a
 `PreparedAction`.
 
 ```text
-ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}
 GroupChangeEvent.GroupAdminAddChange,{message_id},{sender_id},{conversation_id},{promote_admin_id}
+ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}
 ```
 
 ---

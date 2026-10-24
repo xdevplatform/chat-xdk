@@ -650,8 +650,8 @@ async function main() {
     conversationKeyVersion: "7",
   });
   assert.equal(left.actionSignatures.length, 3);
-  assert.ok(left.actionSignatures[1].signaturePayload.startsWith("ConversationDeleteEvent,"));
-  assert.ok(left.actionSignatures[2].signaturePayload.endsWith(",910008"));
+  assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
+  assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
 
   const title = chat.prepareGroupTitleChange({
     senderId: "111",

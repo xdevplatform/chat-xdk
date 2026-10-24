@@ -143,8 +143,8 @@ impl ChatCore {
     ///
     /// Leave is a member removal of the sender and does not rotate the
     /// conversation key. The result's `action_signatures` are that removal,
-    /// then a `ConversationDeleteEvent` with no further fields, then a
-    /// `GroupAdminAddChange` when `promote_admin_id` is set.
+    /// then a `GroupAdminAddChange` when `promote_admin_id` is set, then a
+    /// `ConversationDeleteEvent` with no further fields.
     pub fn prepare_group_leave(
         &self,
         params: &GroupLeaveParams,
@@ -168,21 +168,7 @@ impl ChatCore {
         };
 
         let self_ids = vec![ctx.sender_id.clone()];
-        let mut signatures = vec![
-            sign_member_remove(&ctx, &self_ids, bound.as_deref())?,
-            sign_named(
-                &ctx,
-                "ConversationDeleteEvent",
-                &[],
-                CURRENT_SIGNATURE_VERSION,
-                encode_detail(MessageEventDetail::ConversationDeleteEvent(
-                    ConversationDeleteEvent {
-                        conversation_id: Some(ctx.conversation_id.clone()),
-                        clear_conversation_options: None,
-                    },
-                ))?,
-            )?,
-        ];
+        let mut signatures = vec![sign_member_remove(&ctx, &self_ids, bound.as_deref())?];
         if let Some(admin_id) = promote {
             let detail = group_detail(GroupChange::GroupAdminAdd(GroupAdminAddChange {
                 admin_ids: Some(vec![admin_id.clone()]),
@@ -195,6 +181,18 @@ impl ChatCore {
                 detail,
             )?);
         }
+        signatures.push(sign_named(
+            &ctx,
+            "ConversationDeleteEvent",
+            &[],
+            CURRENT_SIGNATURE_VERSION,
+            encode_detail(MessageEventDetail::ConversationDeleteEvent(
+                ConversationDeleteEvent {
+                    conversation_id: Some(ctx.conversation_id.clone()),
+                    clear_conversation_options: None,
+                },
+            ))?,
+        )?);
         Ok(PreparedAction {
             action_signatures: signatures,
         })
@@ -936,22 +934,22 @@ mod tests {
         assert!(prepared.action_signatures[0]
             .signature_payload
             .contains(&format!(",{sender},g100,{sender},7,signature_version=11")));
-        let delete = &prepared.action_signatures[1];
+        assert!(prepared.action_signatures[1]
+            .signature_payload
+            .ends_with(",910008"));
+        assert_eq!(
+            prepared.action_signatures[1]
+                .message_event_signature
+                .signature_version,
+            "7"
+        );
+        let delete = &prepared.action_signatures[2];
         assert_eq!(
             delete.signature_payload,
             format!(
                 "ConversationDeleteEvent,{},{sender},g100",
                 delete.message_id
             )
-        );
-        assert!(prepared.action_signatures[2]
-            .signature_payload
-            .ends_with(",910008"));
-        assert_eq!(
-            prepared.action_signatures[2]
-                .message_event_signature
-                .signature_version,
-            "7"
         );
         assert_actions(&core, &prepared.action_signatures, &sender, "g100", None);
 

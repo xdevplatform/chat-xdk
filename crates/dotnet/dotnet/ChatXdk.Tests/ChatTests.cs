@@ -794,7 +794,8 @@ namespace ChatXdk.Tests
                 ConversationKeyVersion = "7",
             });
             Assert.Equal(3, left.ActionSignatures.Count);
-            Assert.StartsWith("ConversationDeleteEvent,", left.ActionSignatures[1].SignaturePayload);
+            Assert.EndsWith(",910008", left.ActionSignatures[1].SignaturePayload);
+            Assert.StartsWith("ConversationDeleteEvent,", left.ActionSignatures[2].SignaturePayload);
 
             var title = OnlyAction(chat.PrepareGroupTitleChange(new GroupTitleChangeParams("g100", "4", "enc-title")
             {
