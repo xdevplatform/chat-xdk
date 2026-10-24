@@ -28,6 +28,7 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read `conversation_key_version` in decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Sign group actions](#group-actions-can-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -328,6 +329,168 @@ only)` or `too many attachments: at most 10 per message`, without an
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
+## Group actions can be signed
+
+Each call below signs one group update. The sender comes from
+`chat_xdk_set_identity_params`. Each returns JSON whose
+`action_signatures` are shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+those entries on the update's request.
+
+### Removing members
+
+`chat_xdk_prepare_group_members_remove` removes `user_ids` and rotates the
+conversation key for the members who stay. Pass their identity keys as
+`public_keys`. The result is a `PreparedConversationChange`: the new
+conversation key (base64), `conversation_participant_keys` for those
+members, and `action_signatures` in this order — the removal, then the
+conversation-key change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","user_ids":["222"],
+//  "public_keys":[{"user_id":"111","public_key":"...","key_version":"1"}]}
+char *prepared = take(chat_xdk_prepare_group_members_remove(chat, remove_json));
+// POST /2/chat/conversations/g1/members/remove
+// {"user_ids":["222"],
+//  "action_signatures": <prepared.action_signatures>,
+//  "group_key_rotation_data": {
+//    "conversation_key_version": <prepared.conversation_key_version>,
+//    "conversation_participant_keys": <prepared.conversation_participant_keys>}}
+```
+
+### Leaving a group
+
+`chat_xdk_prepare_group_leave` signs the sender's removal and does not
+rotate the conversation key. `action_signatures` are the removal, then a
+`GroupAdminAddChange` when `promote_admin_id` is set, then a
+`ConversationDeleteEvent`. It returns a `PreparedAction`.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","promote_admin_id":"333"}
+char *left = take(chat_xdk_prepare_group_leave(chat, leave_json));
+// action_signatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`custom_title` is the ciphertext the request sends. The result is a
+`PreparedAction`; send its `action_signatures` on the request.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","conversation_key_version":"...","custom_title":"..."}
+char *title = take(chat_xdk_prepare_group_title_change(chat, title_json));
+```
+
+### Changing the avatar
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","conversation_key_version":"...","custom_avatar_url":"..."}
+char *avatar = take(chat_xdk_prepare_group_avatar_change(chat, avatar_json));
+```
+
+### Changing the description
+
+`custom_description` is the ciphertext the request sends.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","conversation_key_version":"...","custom_description":"..."}
+char *description = take(chat_xdk_prepare_group_description_change(chat, description_json));
+```
+
+### Adding admins
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","user_ids":["333"]}
+char *added = take(chat_xdk_prepare_group_admins_add(chat, admins_json));
+```
+
+### Removing admins
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","user_ids":["333"]}
+char *removed = take(chat_xdk_prepare_group_admins_remove(chat, admins_json));
+```
+
+### Enabling an invite
+
+An omitted `expires_at_msec` or `affiliate_id` signs `null`. A negative
+`expires_at_msec` signs `null` too.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","invite_url":"https://example/invite","expires_at_msec":1700000000000}
+char *invite = take(chat_xdk_prepare_group_invite_enable(chat, invite_json));
+```
+
+### Disabling an invite
+
+An omitted `disabled_by` uses the sender.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1"}
+char *disabled = take(chat_xdk_prepare_group_invite_disable(chat, invite_json));
+```
+
+### Requesting to join
+
+An omitted `requesting_user_id` uses the sender. An invite token is not
+part of the signature.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1"}
+char *request = take(chat_xdk_prepare_group_join_request(chat, join_json));
+```
+
+### Rejecting join requests
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","user_ids":["444"]}
+char *rejected = take(chat_xdk_prepare_group_join_reject(chat, join_json));
+```
+
+### Changing the message TTL
+
+The signature covers `ttl_msec` only.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","ttl_msec":86400000}
+char *ttl = take(chat_xdk_prepare_message_ttl_change(chat, ttl_json));
+```
+
+### Removing the message TTL
+
+```c
+// 0.6.0
+// {"conversation_id":"g1"}
+char *cleared = take(chat_xdk_prepare_message_ttl_remove(chat, ttl_json));
+```
+
+### Changing screen capture
+
+`change` is `BlockingEnabled`, `BlockingDisabled`, `DetectionEnabled`, or
+`DetectionDisabled`.
+
+```c
+// 0.6.0
+// {"conversation_id":"g1","change":"BlockingEnabled"}
+char *capture = take(chat_xdk_prepare_screen_capture(chat, capture_json));
+```
+
 ## Signed read receipts
 
 `chat_xdk_prepare_mark_conversation_read` signs a read receipt for the
@@ -343,31 +506,4 @@ signed receipt as a verified `ReadReceipt` event.
 // 0.6.0
 // {"conversation_id":"...","seen_until_sequence_id":"..."}
 char *receipt = take(chat_xdk_prepare_mark_conversation_read(chat, mark_read_json));
-```
-
-## Removing members rotates the key for who stays
-
-`chat_xdk_prepare_group_members_remove` signs a member removal. Pass
-`public_keys`, the identity keys of the members who stay. The result is a
-`PreparedConversationChange`: `action_signatures` is the removal and then
-the conversation-key change, and `conversation_participant_keys` is the new
-key encrypted for those members.
-
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
-signatures, and `group_key_rotation_data` holding the new
-`conversation_key_version` and `conversation_participant_keys`.
-
-```c
-// {"conversation_id":"g1","user_ids":["222"],
-//  "public_keys":[{"user_id":"111","public_key":"...","key_version":"1"}]}
-char *prepared = take(chat_xdk_prepare_group_members_remove(chat, remove_json));
-// POST /2/chat/conversations/g1/members/remove
-// {
-//   "user_ids": ["222"],
-//   "action_signatures": <prepared.action_signatures, both of them>,
-//   "group_key_rotation_data": {
-//     "conversation_key_version": <prepared.conversation_key_version>,
-//     "conversation_participant_keys": <prepared.conversation_participant_keys>
-//   }
-// }
 ```

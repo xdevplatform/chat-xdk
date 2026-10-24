@@ -28,6 +28,7 @@ change.
 - [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
+- [ ] [Sign group actions](#group-actions-can-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -500,6 +501,181 @@ let invalid_input = matches!(err, SdkError::InvalidState(_));
 
 // 0.6.0
 let invalid_input = matches!(err, SdkError::InvalidInput(_));
+```
+
+## Group actions can be signed
+
+Each call below signs one group update. The sender comes from
+`set_identity`. Each returns `action_signatures` shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+those entries on the update's request.
+
+### Removing members
+
+`prepare_group_members_remove` removes `user_ids` and rotates the
+conversation key for the members who stay. Pass their identity keys as
+`public_keys`. The result is a `PreparedConversationChange`: the new
+conversation key, `conversation_participant_keys` for those members, and
+`action_signatures` in this order — the removal, then the conversation-key
+change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```rust
+// 0.6.0
+let mut removal = GroupMembersRemoveParams::new(conversation_id, user_ids);
+removal.public_keys = Some(remaining_public_keys);
+let prepared = chat.prepare_group_members_remove(&removal)?;
+let path = format!("/2/chat/conversations/{conversation_id}/members/remove");
+api.post(&path, &serde_json::json!({
+    "user_ids": user_ids,
+    "action_signatures": prepared.action_signatures,
+    "group_key_rotation_data": {
+        "conversation_key_version": prepared.conversation_key_version,
+        "conversation_participant_keys": prepared.conversation_participant_keys,
+    },
+}))?;
+```
+
+### Leaving a group
+
+`prepare_group_leave` signs the sender's removal and does not rotate the
+conversation key. `action_signatures` are the removal, then a
+`GroupAdminAddChange` when `promote_admin_id` is set, then a
+`ConversationDeleteEvent`. It returns a `PreparedAction`.
+
+```rust
+// 0.6.0
+let mut leave = GroupLeaveParams::new(conversation_id);
+leave.promote_admin_id = Some(promote_admin_id.into());
+let left = chat.prepare_group_leave(&leave)?;
+// left.action_signatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`custom_title` is the ciphertext the request sends. The result is a
+`PreparedAction`; send its `action_signatures` on the request.
+
+```rust
+// 0.6.0
+let title = chat.prepare_group_title_change(&GroupTitleChangeParams::new(
+    conversation_id,
+    conversation_key_version,
+    custom_title,
+))?;
+```
+
+### Changing the avatar
+
+```rust
+// 0.6.0
+let avatar = chat.prepare_group_avatar_change(&GroupAvatarChangeParams::new(
+    conversation_id,
+    conversation_key_version,
+    custom_avatar_url,
+))?;
+```
+
+### Changing the description
+
+`custom_description` is the ciphertext the request sends.
+
+```rust
+// 0.6.0
+let description = chat.prepare_group_description_change(&GroupDescriptionChangeParams::new(
+    conversation_id,
+    conversation_key_version,
+    custom_description,
+))?;
+```
+
+### Adding admins
+
+```rust
+// 0.6.0
+let added = chat.prepare_group_admins_add(&GroupAdminsAddParams::new(conversation_id, user_ids))?;
+```
+
+### Removing admins
+
+```rust
+// 0.6.0
+let removed = chat.prepare_group_admins_remove(
+    &GroupAdminsRemoveParams::new(conversation_id, user_ids),
+)?;
+```
+
+### Enabling an invite
+
+An omitted `expires_at_msec` or `affiliate_id` signs `null`.
+
+```rust
+// 0.6.0
+let invite = chat.prepare_group_invite_enable(
+    &GroupInviteEnableParams::new(conversation_id, invite_url),
+)?;
+```
+
+### Disabling an invite
+
+`disabled_by` defaults to the sender.
+
+```rust
+// 0.6.0
+let disabled = chat.prepare_group_invite_disable(&GroupInviteDisableParams::new(conversation_id))?;
+```
+
+### Requesting to join
+
+`requesting_user_id` defaults to the sender. An invite token is not part of
+the signature.
+
+```rust
+// 0.6.0
+let request = chat.prepare_group_join_request(&GroupJoinRequestParams::new(conversation_id))?;
+```
+
+### Rejecting join requests
+
+```rust
+// 0.6.0
+let rejected = chat.prepare_group_join_reject(
+    &GroupJoinRejectParams::new(conversation_id, user_ids),
+)?;
+```
+
+### Changing the message TTL
+
+The signature covers `ttl_msec` only.
+
+```rust
+// 0.6.0
+let ttl = chat.prepare_message_ttl_change(
+    &MessageTtlChangeParams::new(conversation_id, ttl_msec),
+)?;
+```
+
+### Removing the message TTL
+
+```rust
+// 0.6.0
+let cleared = chat.prepare_message_ttl_remove(&MessageTtlRemoveParams::new(conversation_id))?;
+```
+
+### Changing screen capture
+
+`change` is a `ScreenCaptureChange`: `BlockingEnabled`,
+`BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`.
+
+```rust
+// 0.6.0
+let capture = chat.prepare_screen_capture(&ScreenCaptureParams::new(
+    conversation_id,
+    ScreenCaptureChange::BlockingEnabled,
+))?;
 ```
 
 ## Signed read receipts

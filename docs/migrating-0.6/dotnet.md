@@ -29,6 +29,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
+- [ ] [Sign group actions](#group-actions-can-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -465,6 +466,164 @@ as well, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need
 no copy of their own. There's no code to change. If you shipped a library
 you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
 entry points 0.6.0 calls (see [C ABI](c-abi.md)).
+
+## Group actions can be signed
+
+Each call below signs one group update. The sender comes from
+`SetIdentity`. Each returns `ActionSignatures` shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+those entries on the update's request.
+
+### Removing members
+
+`PrepareGroupMembersRemove` removes `UserIds` and rotates the conversation
+key for the members who stay. Pass their identity keys as `PublicKeys`.
+The result is a `PreparedConversationChange`: the new conversation key,
+`ConversationParticipantKeys` for those members, and `ActionSignatures` in
+this order — the removal, then the conversation-key change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```csharp
+// 0.6.0
+var prepared = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(conversationId, userIds)
+{
+    PublicKeys = remainingPublicKeys,
+});
+api.Post($"/2/chat/conversations/{conversationId}/members/remove", new
+{
+    user_ids = userIds,
+    action_signatures = prepared.ActionSignatures,
+    group_key_rotation_data = new
+    {
+        conversation_key_version = prepared.ConversationKeyVersion,
+        conversation_participant_keys = prepared.ConversationParticipantKeys,
+    },
+});
+```
+
+### Leaving a group
+
+`PrepareGroupLeave` signs the sender's removal and does not rotate the
+conversation key. `ActionSignatures` are the removal, then a
+`GroupAdminAddChange` when `PromoteAdminId` is set, then a
+`ConversationDeleteEvent`. It returns a `PreparedAction`.
+
+```csharp
+// 0.6.0
+var left = chat.PrepareGroupLeave(new GroupLeaveParams(conversationId)
+{
+    PromoteAdminId = promoteAdminId,
+});
+// left.ActionSignatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`CustomTitle` is the ciphertext the request sends. The result is a
+`PreparedAction`; send its `ActionSignatures` on the request.
+
+```csharp
+// 0.6.0
+var title = chat.PrepareGroupTitleChange(
+    new GroupTitleChangeParams(conversationId, conversationKeyVersion, customTitle));
+```
+
+### Changing the avatar
+
+```csharp
+// 0.6.0
+var avatar = chat.PrepareGroupAvatarChange(
+    new GroupAvatarChangeParams(conversationId, conversationKeyVersion, customAvatarUrl));
+```
+
+### Changing the description
+
+`CustomDescription` is the ciphertext the request sends.
+
+```csharp
+// 0.6.0
+var description = chat.PrepareGroupDescriptionChange(
+    new GroupDescriptionChangeParams(conversationId, conversationKeyVersion, customDescription));
+```
+
+### Adding admins
+
+```csharp
+// 0.6.0
+var added = chat.PrepareGroupAdminsAdd(new GroupAdminsAddParams(conversationId, userIds));
+```
+
+### Removing admins
+
+```csharp
+// 0.6.0
+var removed = chat.PrepareGroupAdminsRemove(new GroupAdminsRemoveParams(conversationId, userIds));
+```
+
+### Enabling an invite
+
+A null `ExpiresAtMsec` or `AffiliateId` signs `null`.
+
+```csharp
+// 0.6.0
+var invite = chat.PrepareGroupInviteEnable(new GroupInviteEnableParams(conversationId, inviteUrl));
+```
+
+### Disabling an invite
+
+A null `DisabledBy` uses the sender.
+
+```csharp
+// 0.6.0
+var disabled = chat.PrepareGroupInviteDisable(new GroupInviteDisableParams(conversationId));
+```
+
+### Requesting to join
+
+A null `RequestingUserId` uses the sender. An invite token is not part of
+the signature.
+
+```csharp
+// 0.6.0
+var request = chat.PrepareGroupJoinRequest(new GroupJoinRequestParams(conversationId));
+```
+
+### Rejecting join requests
+
+```csharp
+// 0.6.0
+var rejected = chat.PrepareGroupJoinReject(new GroupJoinRejectParams(conversationId, userIds));
+```
+
+### Changing the message TTL
+
+The signature covers `TtlMsec` only.
+
+```csharp
+// 0.6.0
+var ttl = chat.PrepareMessageTtlChange(new MessageTtlChangeParams(conversationId, ttlMsec));
+```
+
+### Removing the message TTL
+
+```csharp
+// 0.6.0
+var cleared = chat.PrepareMessageTtlRemove(new MessageTtlRemoveParams(conversationId));
+```
+
+### Changing screen capture
+
+`Change` is a `ScreenCaptureChange`: `BlockingEnabled`,
+`BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`.
+
+```csharp
+// 0.6.0
+var capture = chat.PrepareScreenCapture(
+    new ScreenCaptureParams(conversationId, ScreenCaptureChange.BlockingEnabled));
+```
 
 ## Signed read receipts
 
