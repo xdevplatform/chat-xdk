@@ -28,7 +28,7 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read `conversation_key_version` in decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -328,15 +328,16 @@ only)` or `too many attachments: at most 10 per message`, without an
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Signed read receipts
+## Read receipts should be signed
 
-`chat_xdk_prepare_mark_conversation_read` signs a read receipt for the
-newest event you read. It takes a document with `conversation_id`,
-`seen_until_sequence_id` (that event's sequence id) and an optional
-`seen_at_msec` that defaults to now, and returns `action_signatures` as a
-delete does. Send them as the `action_signatures` of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
-in its hyphen form. A recipient's `chat_xdk_decrypt_event_params` returns a
+Apps should sign a read receipt with
+`chat_xdk_prepare_mark_conversation_read` and send the `PreparedAction`'s
+`action_signatures` on `POST /2/chat/conversations/{id}/read`. Recipients on
+the default policy reject an unsigned receipt. The call takes a document
+with `conversation_id`, `seen_until_sequence_id` (the sequence id of the
+newest event read) and a `seen_at_msec` that defaults to now, and returns
+`action_signatures` as a delete does. The path takes the conversation id in
+its hyphen form. A recipient's `chat_xdk_decrypt_event_params` returns a
 signed receipt as a verified `ReadReceipt` event.
 
 ```c
