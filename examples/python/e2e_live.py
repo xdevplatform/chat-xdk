@@ -19,7 +19,8 @@ Optional extras:
                         upload, then downloads and decrypts it back to the
                         original bytes
   CHATXDK_E2E_GROUPS=1  also creates a group (two-signature create), sends a
-                        group message, and adds the 1:1 partner as a member
+                        group message, adds the 1:1 partner as a member, then
+                        removes that partner and rotates the key for who stays
   CHAT_PIN=...          also unlocks keys via live Juicebox and checks they
                         match the blob-loaded ones
 """
@@ -31,7 +32,7 @@ import time
 
 from chat_xdk import encrypted_file_size
 
-from chat_core import ChatCore, message_text, prep_to_request
+from chat_core import ChatCore, message_text, prep_to_request, removal_to_request
 from x_api import XChatClient
 
 
@@ -371,6 +372,13 @@ def _groups_flow(
             {"user_ids": [partner_id], **prep_to_request(prep)},
         )
         print(f"group member add: {partner_id} added (key rotated to {prep['conversation_key_version']})")
+
+    prep = core.prepare_group_members_remove(my_keys, group_id, [partner_id])
+    api.remove_group_members(group_id, removal_to_request([partner_id], prep))
+    print(
+        f"group member remove: {partner_id} removed "
+        f"(key rotated to {prep['conversation_key_version']})"
+    )
 
 
 if __name__ == "__main__":

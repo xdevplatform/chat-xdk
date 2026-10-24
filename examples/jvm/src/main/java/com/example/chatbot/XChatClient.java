@@ -209,6 +209,16 @@ public final class XChatClient {
         return post("/2/chat/conversations/" + enc(conversationId) + "/members", body);
     }
 
+    /**
+     * POST /2/chat/conversations/{id}/members/remove.
+     *
+     * <p>{@code body} carries {@code user_ids}, both signatures, and
+     * {@code group_key_rotation_data} from {@link ChatCore#removalToRequest}.
+     */
+    public JsonNode removeGroupMembers(String conversationId, JsonNode body) throws Exception {
+        return post("/2/chat/conversations/" + enc(conversationId) + "/members/remove", body);
+    }
+
     // -- Media (encrypted blobs) -----------------------------------------------
 
     private static final int UPLOAD_CHUNK = 3 * 1024 * 1024;

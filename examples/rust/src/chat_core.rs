@@ -20,8 +20,9 @@ use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventParams,
     DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
-    GroupCreateParams, GroupMembersChangeParams, PreparedConversationChange, PublicKeyInput,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
+    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams,
+    PreparedConversationChange, PublicKeyInput, PublicKeyRegistrationPayload, PublicKeys,
+    QuickReply, SigningKeyEntry,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -312,6 +313,20 @@ impl ChatCore {
             ))
     }
 
+    /// Prepare a member removal that rotates the key for who stays.
+    ///
+    /// `public_keys` are the identity keys of the members who remain.
+    pub fn prepare_group_members_remove(
+        &self,
+        public_keys: &[PublicKeyInput],
+        conversation_id: &str,
+        user_ids: &[String],
+    ) -> Result<PreparedConversationChange, SdkError> {
+        let mut params = GroupMembersRemoveParams::new(conversation_id, user_ids.to_vec());
+        params.public_keys = Some(public_keys.to_vec());
+        self.inner.prepare_group_members_remove(&params)
+    }
+
     // -- Media files -----------------------------------------------------------
 
     /// Chunk size fed through the incremental file encryptor/decryptor.
@@ -419,5 +434,20 @@ pub fn prep_to_request(prep: &PreparedConversationChange) -> Value {
         "conversation_key_version": prep.conversation_key_version,
         "conversation_participant_keys": prep.conversation_participant_keys,
         "action_signatures": prep.action_signatures,
+    })
+}
+
+/// Map a rotating member removal into the members/remove request.
+///
+/// Both signatures go in `action_signatures`. The new key version and the
+/// participant keys for the members who stay go in `group_key_rotation_data`.
+pub fn removal_to_request(user_ids: &[String], prep: &PreparedConversationChange) -> Value {
+    json!({
+        "user_ids": user_ids,
+        "action_signatures": prep.action_signatures,
+        "group_key_rotation_data": {
+            "conversation_key_version": prep.conversation_key_version,
+            "conversation_participant_keys": prep.conversation_participant_keys,
+        },
     })
 }

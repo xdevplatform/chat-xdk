@@ -344,3 +344,30 @@ signed receipt as a verified `ReadReceipt` event.
 // {"conversation_id":"...","seen_until_sequence_id":"..."}
 char *receipt = take(chat_xdk_prepare_mark_conversation_read(chat, mark_read_json));
 ```
+
+## Removing members rotates the key for who stays
+
+`chat_xdk_prepare_group_members_remove` signs a member removal. Pass
+`public_keys`, the identity keys of the members who stay. The result is a
+`PreparedConversationChange`: `action_signatures` is the removal and then
+the conversation-key change, and `conversation_participant_keys` is the new
+key encrypted for those members.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```c
+// {"conversation_id":"g1","user_ids":["222"],
+//  "public_keys":[{"user_id":"111","public_key":"...","key_version":"1"}]}
+char *prepared = take(chat_xdk_prepare_group_members_remove(chat, remove_json));
+// POST /2/chat/conversations/g1/members/remove
+// {
+//   "user_ids": ["222"],
+//   "action_signatures": <prepared.action_signatures, both of them>,
+//   "group_key_rotation_data": {
+//     "conversation_key_version": <prepared.conversation_key_version>,
+//     "conversation_participant_keys": <prepared.conversation_participant_keys>
+//   }
+// }
+```

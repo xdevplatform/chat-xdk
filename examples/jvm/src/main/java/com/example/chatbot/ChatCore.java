@@ -250,6 +250,19 @@ public final class ChatCore implements AutoCloseable {
                 publicKeys, conversationId, newMemberIds, currentMemberIds, currentAdminIds, List.of()));
     }
 
+    /**
+     * Prepare a member removal that rotates the key for who stays.
+     *
+     * <p>{@code publicKeys} are the identity keys of the members who remain.
+     */
+    public PreparedConversationChange prepareGroupMembersRemove(
+            List<PublicKeyInput> publicKeys, String conversationId, List<String> userIds)
+            throws Exception {
+        GroupMembersRemoveParams params = new GroupMembersRemoveParams(conversationId, userIds);
+        params.publicKeys = publicKeys;
+        return chat.prepareGroupMembersRemove(params);
+    }
+
     // -- Media files ----------------------------------------------------------
 
     private static final int MEDIA_CHUNK = 1024 * 1024;
@@ -344,6 +357,24 @@ public final class ChatCore implements AutoCloseable {
         body.put("conversation_key_version", prep.conversationKeyVersion);
         body.set("conversation_participant_keys", MAPPER.valueToTree(prep.conversationParticipantKeys));
         body.set("action_signatures", MAPPER.valueToTree(prep.actionSignatures));
+        return body;
+    }
+
+    /**
+     * Map a rotating member removal into the members/remove request.
+     *
+     * <p>Both signatures go in {@code action_signatures}. The new key version and the
+     * participant keys for the members who stay go in {@code group_key_rotation_data}.
+     */
+    public static ObjectNode removalToRequest(List<String> userIds, PreparedConversationChange prep) {
+        ObjectNode body = MAPPER.createObjectNode();
+        var ids = body.putArray("user_ids");
+        userIds.forEach(ids::add);
+        body.set("action_signatures", MAPPER.valueToTree(prep.actionSignatures));
+        ObjectNode rotation = body.putObject("group_key_rotation_data");
+        rotation.put("conversation_key_version", prep.conversationKeyVersion);
+        rotation.set(
+                "conversation_participant_keys", MAPPER.valueToTree(prep.conversationParticipantKeys));
         return body;
     }
 

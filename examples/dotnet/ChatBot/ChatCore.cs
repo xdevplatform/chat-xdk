@@ -194,6 +194,19 @@ public sealed class ChatCore : IDisposable
             currentAdminIds,
             Array.Empty<string>()));
 
+    /// <summary>
+    /// Prepare a member removal that rotates the key for who stays.
+    /// <paramref name="publicKeys"/> are the identity keys of the members who remain.
+    /// </summary>
+    public PreparedConversationChange PrepareGroupMembersRemove(
+        IReadOnlyList<PublicKeyInput> publicKeys,
+        string conversationId,
+        IReadOnlyList<string> userIds)
+        => _chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(conversationId, userIds)
+        {
+            PublicKeys = publicKeys,
+        });
+
     // -- Media files ----------------------------------------------------------
 
     private const int MediaChunk = 1024 * 1024;
@@ -301,5 +314,23 @@ public static class EventHelpers
             ["conversation_key_version"] = prep.ConversationKeyVersion,
             ["conversation_participant_keys"] = prep.ConversationParticipantKeys,
             ["action_signatures"] = prep.ActionSignatures,
+        };
+
+    /// <summary>
+    /// Map a rotating member removal into the members/remove request.
+    /// Both signatures go in <c>action_signatures</c>. The new key version and
+    /// the participant keys for the members who stay go in <c>group_key_rotation_data</c>.
+    /// </summary>
+    public static Dictionary<string, object?> RemovalToRequest(
+        IReadOnlyList<string> userIds, PreparedConversationChange prep) =>
+        new()
+        {
+            ["user_ids"] = userIds,
+            ["action_signatures"] = prep.ActionSignatures,
+            ["group_key_rotation_data"] = new Dictionary<string, object?>
+            {
+                ["conversation_key_version"] = prep.ConversationKeyVersion,
+                ["conversation_participant_keys"] = prep.ConversationParticipantKeys,
+            },
         };
 }

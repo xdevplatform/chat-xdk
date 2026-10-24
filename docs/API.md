@@ -225,9 +225,9 @@ errors are collected in the result) and `decrypt_event` throws on failure.
 
 #### Conversation lifecycle — when to use which prepare method
 
-All three `prepare*` methods return the same `PreparedConversationChange` shape
-(fresh conversation key + encrypted participant keys + action signatures,
-POST-ready). They differ in which lifecycle action they sign:
+These methods return a `PreparedConversationChange` (a conversation key,
+encrypted participant keys, and action signatures). They differ in which
+lifecycle action they sign:
 
 | Scenario | Use | Then POST to |
 |---|---|---|
@@ -235,15 +235,22 @@ POST-ready). They differ in which lifecycle action they sign:
 | Rotate an existing conversation's key (one-to-one or group) | `prepareConversationKeyChange` — pass the conversation id | `/2/chat/conversations/{id}/keys` |
 | Create a group | `prepareGroupCreate` | `/2/chat/conversations/group/initialize` (mints the `g…` id), then `/2/chat/conversations/group` |
 | Add members to a group | `prepareGroupMembersChange` | `/2/chat/conversations/{id}/members` |
+| Remove members from a group | `prepareGroupMembersRemove` — pass the public keys of the members who stay | `/2/chat/conversations/{id}/members/remove` |
 
 The group methods are separate because they sign different events: a group
 create must carry a `GroupChangeEvent.GroupCreate` signature and a member add a
 `GroupChangeEvent.GroupMemberAddChange` signature — each **in addition to** the
 conversation-key change signature, so both return two `actionSignatures`.
+A member removal given the public keys of the members who stay does the same:
+`GroupChangeEvent.GroupMemberRemoveChange`, then the conversation-key change.
 A key rotation signs only the key change, so `prepareConversationKeyChange`
 returns one.
 
-After any of the three, store the returned `conversationKey` locally and use it
+A member removal posts both signatures on `/members/remove` together with
+`group_key_rotation_data`: the new `conversation_key_version` and the
+`conversation_participant_keys` for the members who stay.
+
+After any of these, store the returned `conversationKey` locally and use it
 with `encryptMessage` until the next key change.
 
 Two hygiene notes:
@@ -401,6 +408,43 @@ a `PreparedConversationChange`: the new key and version, the participant
 keys, and `action_signatures` in this order — the removal, then the
 conversation-key change. The removal is bound to the new key version. A
 `public_keys` entry for someone being removed is rejected.
+
+Send that result as `POST /2/chat/conversations/{id}/members/remove`.
+`user_ids` are the members being removed. `action_signatures` is both
+signatures, the removal and then the key change. `group_key_rotation_data`
+carries the new `conversation_key_version` and
+`conversation_participant_keys` (JS: `groupKeyRotationData`,
+`conversationKeyVersion`, `conversationParticipantKeys`).
+
+```python
+prepared = chat.prepare_group_members_remove(
+    GroupMembersRemoveParams(conversation_id, ["222"], public_keys=remaining_public_keys)
+)
+api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
+    "user_ids": ["222"],
+    "action_signatures": prepared["action_signatures"],
+    "group_key_rotation_data": {
+        "conversation_key_version": prepared["conversation_key_version"],
+        "conversation_participant_keys": prepared["conversation_participant_keys"],
+    },
+})
+```
+
+```typescript
+const prepared = chat.prepareGroupMembersRemove({
+  conversationId,
+  userIds: ["222"],
+  publicKeys: remainingPublicKeys,
+});
+await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
+  userIds: ["222"],
+  actionSignatures: prepared.actionSignatures,
+  groupKeyRotationData: {
+    conversationKeyVersion: prepared.conversationKeyVersion,
+    conversationParticipantKeys: prepared.conversationParticipantKeys,
+  },
+});
+```
 
 Without `public_keys`, the same return type comes back with no new key,
 empty participant keys, and only the removal signature.

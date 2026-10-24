@@ -50,7 +50,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *       it, encrypts the file from that message, finishes the upload, then
  *       downloads and decrypts it back to the original bytes</li>
  *   <li>CHATXDK_E2E_GROUPS=1 also creates a group (two-signature create),
- *       sends a group message, and adds the 1:1 partner as a member</li>
+ *       sends a group message, adds the 1:1 partner as a member, then removes
+ *       that partner and rotates the key for who stays</li>
  * </ul>
  */
 class E2ELiveTest {
@@ -473,6 +474,12 @@ class E2ELiveTest {
             System.out.println("group member add: " + partnerId
                     + " added (key rotated to " + mPrep.conversationKeyVersion + ")");
         }
+
+        PreparedConversationChange rPrep =
+                core.prepareGroupMembersRemove(myKeys, groupId, List.of(partnerId));
+        api.removeGroupMembers(groupId, ChatCore.removalToRequest(List.of(partnerId), rPrep));
+        System.out.println("group member remove: " + partnerId
+                + " removed (key rotated to " + rPrep.conversationKeyVersion + ")");
     }
 
     private static ObjectNode groupCreateBody(

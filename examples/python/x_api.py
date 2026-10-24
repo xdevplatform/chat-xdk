@@ -176,6 +176,15 @@ class XChatClient:
         path = f"/2/chat/conversations/{conversation_id}/members"
         return self._post(path, body)
 
+    def remove_group_members(self, conversation_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """POST /2/chat/conversations/{id}/members/remove.
+
+        ``body`` carries ``user_ids``, both signatures, and
+        ``group_key_rotation_data`` from ``chat_core.removal_to_request``.
+        """
+        path = f"/2/chat/conversations/{conversation_id}/members/remove"
+        return self._post(path, body)
+
     # -- Media (encrypted files) ---------------------------------------------
 
     UPLOAD_CHUNK = 3 * 1024 * 1024
