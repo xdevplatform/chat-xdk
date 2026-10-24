@@ -230,10 +230,11 @@ returns the receipt as a verified `ReadReceipt`:
 [.NET](dotnet.md#signed-read-receipts),
 [C ABI](c-abi.md#signed-read-receipts).
 
-## Group actions can be signed
+## Group actions should be signed
 
-A group update carries the signatures of the actions it performs. Removing
-members also rotates the conversation key for the members who stay:
+Apps should sign a group update with the signatures of the actions it
+performs. Removing members also rotates the conversation key for the
+members who stay:
 `prepare_group_members_remove` takes their public keys and returns a
 `PreparedConversationChange`, and
 `POST /2/chat/conversations/{id}/members/remove` sends
@@ -242,13 +243,13 @@ removal, then an admin add when `promote_admin_id` is set, then a
 conversation delete, and does not rotate the key. Title, avatar,
 description, admin, invite, and join changes, message-TTL changes, and
 screen-capture changes each return a `PreparedAction`:
-[Rust](rust.md#group-actions-can-be-signed),
-[Python](python.md#group-actions-can-be-signed),
-[JavaScript](javascript.md#group-actions-can-be-signed),
-[Go](go.md#group-actions-can-be-signed),
-[JVM](jvm.md#group-actions-can-be-signed),
-[.NET](dotnet.md#group-actions-can-be-signed),
-[C ABI](c-abi.md#group-actions-can-be-signed).
+[Rust](rust.md#group-actions-should-be-signed),
+[Python](python.md#group-actions-should-be-signed),
+[JavaScript](javascript.md#group-actions-should-be-signed),
+[Go](go.md#group-actions-should-be-signed),
+[JVM](jvm.md#group-actions-should-be-signed),
+[.NET](dotnet.md#group-actions-should-be-signed),
+[C ABI](c-abi.md#group-actions-should-be-signed).
 
 ## Invalid input has its own error
 

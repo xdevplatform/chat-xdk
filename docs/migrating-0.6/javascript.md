@@ -28,7 +28,7 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
-- [ ] [Sign group actions](#group-actions-can-be-signed)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -466,9 +466,9 @@ let session: ChatWithJuicebox;
 let encryptor: FileEncryptor;
 ```
 
-## Group actions can be signed
+## Group actions should be signed
 
-Each call below signs one group update. The sender comes from
+Apps should sign each group update below. The sender comes from
 `setIdentity`. Each returns `actionSignatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request, in snake_case, as this page's other

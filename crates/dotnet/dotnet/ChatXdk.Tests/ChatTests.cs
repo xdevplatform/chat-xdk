@@ -782,6 +782,7 @@ namespace ChatXdk.Tests
                     new PublicKeyInput { UserId = "111", PublicKey = keys.Identity, KeyVersion = "1" },
                 },
             });
+            Assert.NotNull(rotated.ConversationKey);
             Assert.Equal(32, rotated.ConversationKey.Length);
             Assert.Equal(2, rotated.ActionSignatures.Count);
             Assert.True(string.IsNullOrEmpty(rotated.ActionSignatures[1].SignaturePayload));

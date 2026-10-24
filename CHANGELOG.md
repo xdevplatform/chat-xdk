@@ -4,7 +4,7 @@
 
 ### Added
 
-Group and conversation-metadata actions can be signed before they are sent.
+Group and conversation-metadata actions should be signed before they are sent.
 Each call takes one params object and returns `action_signatures` for the
 request.
 

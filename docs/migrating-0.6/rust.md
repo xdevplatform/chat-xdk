@@ -28,7 +28,7 @@ change.
 - [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
-- [ ] [Sign group actions](#group-actions-can-be-signed)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -503,9 +503,9 @@ let invalid_input = matches!(err, SdkError::InvalidState(_));
 let invalid_input = matches!(err, SdkError::InvalidInput(_));
 ```
 
-## Group actions can be signed
+## Group actions should be signed
 
-Each call below signs one group update. The sender comes from
+Apps should sign each group update below. The sender comes from
 `set_identity`. Each returns `action_signatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.

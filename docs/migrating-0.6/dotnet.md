@@ -29,7 +29,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
-- [ ] [Sign group actions](#group-actions-can-be-signed)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -467,9 +467,9 @@ no copy of their own. There's no code to change. If you shipped a library
 you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
 entry points 0.6.0 calls (see [C ABI](c-abi.md)).
 
-## Group actions can be signed
+## Group actions should be signed
 
-Each call below signs one group update. The sender comes from
+Apps should sign each group update below. The sender comes from
 `SetIdentity`. Each returns `ActionSignatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.

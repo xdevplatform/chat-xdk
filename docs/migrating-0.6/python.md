@@ -29,7 +29,7 @@ change.
 - [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Sign group actions](#group-actions-can-be-signed)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Optional: sign read receipts](#signed-read-receipts)
 
 ## About the snippets
@@ -479,9 +479,9 @@ the value, such as `Invalid sender_id 'user-1': pass a numeric user id
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Group actions can be signed
+## Group actions should be signed
 
-Each call below signs one group update. The sender comes from
+Apps should sign each group update below. The sender comes from
 `set_identity`. Each returns `action_signatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
