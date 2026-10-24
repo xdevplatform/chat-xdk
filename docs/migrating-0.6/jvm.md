@@ -31,7 +31,7 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Know which calls throw `ChatXdkException`](#exceptions)
 - [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -470,17 +470,18 @@ There's no code to change. If you built a library to run 0.5.x there,
 remove it: a 0.5.x build doesn't export the entry points 0.6.0 calls (see
 [C ABI](c-abi.md)).
 
-## Signed read receipts
+## Read receipts should be signed
 
-`prepareMarkConversationRead` signs a read receipt for the newest event you
-read. It takes a `MarkConversationReadParams` (the conversation id, that
-event's sequence id, and an optional `seenAtMsec` that defaults to now) and
-returns a `PreparedAction`, one entry shaped as
-[Action signatures come nested](#action-signatures-come-nested) shows. Send
-its `actionSignatures` as the `action_signatures` of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
-in its hyphen form. A recipient's `decryptEvent` returns a signed receipt as
-a verified `ReadReceipt` event.
+Apps should sign a read receipt with `prepareMarkConversationRead` and send
+the `PreparedAction`'s `actionSignatures` as the `action_signatures` of
+`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
+reject an unsigned receipt. The call takes a `MarkConversationReadParams`
+(the conversation id, the sequence id of the newest event read, and a
+`seenAtMsec` that defaults to now) and returns a `PreparedAction`, one entry
+shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. The
+path takes the conversation id in its hyphen form. A recipient's
+`decryptEvent` returns a signed receipt as a verified `ReadReceipt` event.
 
 ```java
 // 0.6.0

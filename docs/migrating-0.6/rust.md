@@ -28,7 +28,7 @@ change.
 - [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -502,17 +502,18 @@ let invalid_input = matches!(err, SdkError::InvalidState(_));
 let invalid_input = matches!(err, SdkError::InvalidInput(_));
 ```
 
-## Signed read receipts
+## Read receipts should be signed
 
-`prepare_mark_conversation_read` signs a read receipt for the newest event
-you read. It takes a `MarkConversationReadParams` (the conversation id, that
-event's sequence id, and an optional `seen_at_msec` that defaults to now)
-and returns a `PreparedAction`, one entry shaped as
-[Action signatures come nested](#action-signatures-come-nested) shows. Send
-its `action_signatures` as those of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
-in its hyphen form. A recipient's `decrypt_event` returns a signed receipt
-as a verified `ReadReceipt` event.
+Apps should sign a read receipt with `prepare_mark_conversation_read` and
+send the `PreparedAction`'s `action_signatures` on
+`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
+reject an unsigned receipt. The call takes a `MarkConversationReadParams`
+(the conversation id, the sequence id of the newest event read, and a
+`seen_at_msec` that defaults to now) and returns a `PreparedAction`, one
+entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. The
+path takes the conversation id in its hyphen form. A recipient's
+`decrypt_event` returns a signed receipt as a verified `ReadReceipt` event.
 
 ```rust
 // 0.6.0
