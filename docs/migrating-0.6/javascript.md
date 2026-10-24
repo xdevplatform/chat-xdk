@@ -29,7 +29,7 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -629,17 +629,17 @@ const cleared = chat.prepareMessageTtlRemove({ conversationId });
 const capture = chat.prepareScreenCapture({ conversationId, change: "blockingEnabled" });
 ```
 
-## Signed read receipts
+## Read receipts should be signed
 
-`prepareMarkConversationRead` signs a read receipt for the newest event you
-read. It takes `{ conversationId, seenUntilSequenceId }` (that event's
-sequence id) and an optional `seenAtMsec` that defaults to now, and returns
-a `PreparedAction`, one entry shaped as
-[Action signatures come nested](#action-signatures-come-nested) shows. Send
-its `actionSignatures` as the `action_signatures` of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
-in its hyphen form. A recipient's `decryptEvent` returns a signed receipt as
-a verified `ReadReceipt` event.
+Apps should sign a read receipt with `prepareMarkConversationRead` and send
+the `PreparedAction`'s `actionSignatures` as the `action_signatures` of
+`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
+reject an unsigned receipt. It takes `{ conversationId, seenUntilSequenceId }`
+(the sequence id of the newest event read) and a `seenAtMsec` that defaults
+to now, and returns a `PreparedAction`, one entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. The
+path takes the conversation id in its hyphen form. A recipient's
+`decryptEvent` returns a signed receipt as a verified `ReadReceipt` event.
 
 ```js
 // 0.6.0

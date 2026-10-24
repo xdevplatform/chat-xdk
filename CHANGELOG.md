@@ -635,15 +635,16 @@ prepared = chat.prepare_conversation_key_change(
   message it edits.
 - Signatures verify at versions 8 through 11, in the payload layout of the
   version each carries. Versions above 11 are rejected.
-- Read receipts can be signed. `prepare_mark_conversation_read` takes
+- Read receipts should be signed. `prepare_mark_conversation_read` takes
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
-  (the sequence id of the newest event read) and an optional
-  `seen_at_msec`, which defaults to the current time. It returns a
-  `PreparedAction` whose `action_signatures` the mark-read request
-  (`POST /2/chat/conversations/{id}/read`) takes as they are, nested as the
-  conversation-change requests nest theirs.
-  Recipients' `decrypt_event` returns a signed receipt as a verified
-  `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.
+  (the sequence id of the newest event read) and a `seen_at_msec`, which
+  defaults to the current time. It returns a `PreparedAction`. Apps should
+  send its `action_signatures` on the mark-read request
+  (`POST /2/chat/conversations/{id}/read`) as they are, nested as the
+  conversation-change requests nest theirs. Recipients on the default policy
+  reject an unsigned receipt; `decrypt_event` returns a signed receipt as a
+  verified `ReadReceipt`. The C ABI adds
+  `chat_xdk_prepare_mark_conversation_read`.
 - The JVM jar and the .NET package bundle the native library for 64-bit ARM
   Linux (`linux-arm64`) too, so both bindings run there without a library of
   your own.

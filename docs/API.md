@@ -1166,19 +1166,18 @@ everywhere.
 
 **Read receipts are signed, not encrypted.** `MarkConversationReadParams`
 requires `conversation_id` and `seen_until_sequence_id` — the `sequence_id`
-of the newest event read. The optional `seen_at_msec` (milliseconds since the
-Unix epoch) records when it was read and defaults to the current time; the JS
-binding reads the JavaScript clock. `prepare_mark_conversation_read` returns a
-`PreparedAction` shaped as for deletes, whose entry's
+of the newest event read. A `seen_at_msec` (milliseconds since the Unix
+epoch) records when it was read and defaults to the current time when unset;
+the JS binding reads the JavaScript clock. Apps should sign a receipt with
+`prepare_mark_conversation_read` and send the `PreparedAction`'s
+`action_signatures` on `POST /2/chat/conversations/{id}/read` as they are:
+recipients on the default policy reject an unsigned receipt. The call returns
+a `PreparedAction` shaped as for deletes, whose entry's
 `encodedMessageEventDetail` carries the `MarkConversationReadEvent`. The
 signature covers the read point and its time, so a recipient's
-`decrypt_event` returns the receipt as a `ReadReceipt` event with `verified`
-set, `seen_until_id`, and `seen_at_msec`. The identity overrides and the
-canonical one-to-one id work as for deletes.
-
-Send the receipt in the mark-read request,
-`POST /2/chat/conversations/{id}/read`: its `action_signatures` take the
-`PreparedAction`'s entries as they are.
+`decrypt_event` returns a signed receipt as a `ReadReceipt` event with
+`verified` set, `seen_until_id`, and `seen_at_msec`. The identity overrides
+and the canonical one-to-one id work as for deletes.
 
 **Action signatures.** Every prepare method returns its signed actions in
 the shape a request's `action_signatures` carries them, so they serialize
