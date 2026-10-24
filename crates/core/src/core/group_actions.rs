@@ -538,6 +538,7 @@ impl ChatCore {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare_text_change(
         &self,
         conversation_id: &str,
@@ -562,6 +563,7 @@ impl ChatCore {
         Ok(one_action(signature))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare_id_list(
         &self,
         conversation_id: &str,

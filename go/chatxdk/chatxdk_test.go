@@ -1352,6 +1352,85 @@ func TestPrepareMessageDelete(t *testing.T) {
 	}
 }
 
+func TestGroupActionSignatures(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	keys, err := chat.GetPublicKeys()
+	if err != nil {
+		t.Fatalf("GetPublicKeys: %v", err)
+	}
+
+	plain, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g100",
+		UserIDs:           []string{"910007"},
+	})
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if len(plain.ConversationKey) != 0 || len(plain.ConversationParticipantKeys) != 0 {
+		t.Fatalf("removal without keys rotated: %+v", plain)
+	}
+	if len(plain.ActionSignatures) != 1 || !strings.HasSuffix(plain.ActionSignatures[0].SignaturePayload, ",910007,null,signature_version=11") {
+		t.Fatalf("removal payload: %+v", plain.ActionSignatures)
+	}
+
+	rotated, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g100",
+		UserIDs:           []string{"910007"},
+		PublicKeys: []PublicKeyInput{{
+			UserID: "111", PublicKey: keys.Identity, KeyVersion: "1",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("rotating remove: %v", err)
+	}
+	if len(rotated.ConversationKey) != 32 || len(rotated.ActionSignatures) != 2 {
+		t.Fatalf("rotating remove shape: key %d sigs %d", len(rotated.ConversationKey), len(rotated.ActionSignatures))
+	}
+	if rotated.ActionSignatures[1].SignaturePayload != "" {
+		t.Fatalf("key-change payload should be withheld")
+	}
+
+	left, err := chat.PrepareGroupLeave(GroupLeaveParams{
+		SenderID:               "111",
+		SigningKeyVersion:      "1",
+		ConversationID:         "g100",
+		PromoteAdminID:         "910008",
+		ConversationKeyVersion: "7",
+	})
+	if err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if len(left.ActionSignatures) != 3 || !strings.HasPrefix(left.ActionSignatures[1].SignaturePayload, "ConversationDeleteEvent,") {
+		t.Fatalf("leave signatures: %+v", left.ActionSignatures)
+	}
+
+	titlePrepared, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
+		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
+		ConversationKeyVersion: "4", CustomTitle: "enc-title",
+	})
+	title := onlyAction(t, titlePrepared, err)
+	if !strings.HasSuffix(title.SignaturePayload, ",4,enc-title") {
+		t.Fatalf("title payload %q", title.SignaturePayload)
+	}
+	blockingPrepared, err := chat.PrepareScreenCapture(ScreenCaptureParams{
+		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
+		Change: BlockingEnabled,
+	})
+	blocking := onlyAction(t, blockingPrepared, err)
+	if !strings.HasPrefix(blocking.SignaturePayload, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,") {
+		t.Fatalf("screen capture payload %q", blocking.SignaturePayload)
+	}
+}
+
 func TestPrepareMarkConversationRead(t *testing.T) {
 	v := loadVectors(t)
 

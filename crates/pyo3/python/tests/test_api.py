@@ -170,8 +170,23 @@ class TestParams(unittest.TestCase):
             "EncryptEditParams",
             "ConversationKeyChangeParams",
             "GroupMembersChangeParams",
+            "GroupAdminsAddParams",
+            "GroupAdminsRemoveParams",
+            "GroupAvatarChangeParams",
             "GroupCreateParams",
+            "GroupDescriptionChangeParams",
+            "GroupInviteDisableParams",
+            "GroupInviteEnableParams",
+            "GroupJoinRejectParams",
+            "GroupJoinRequestParams",
+            "GroupLeaveParams",
+            "GroupMembersRemoveParams",
+            "GroupTitleChangeParams",
             "MessageDeleteParams",
+            "MessageTtlChangeParams",
+            "MessageTtlRemoveParams",
+            "ScreenCaptureChange",
+            "ScreenCaptureParams",
             "MarkConversationReadParams",
             "SetIdentityParams",
             "ImportKeysParams",
@@ -232,9 +247,12 @@ class TestParams(unittest.TestCase):
             FileEncryptorParams,
             GroupCreateParams,
             GroupMembersChangeParams,
+            GroupMembersRemoveParams,
+            GroupTitleChangeParams,
             ImportKeysParams,
             MarkConversationReadParams,
             MessageDeleteParams,
+            ScreenCaptureParams,
             SetIdentityParams,
         )
 
@@ -247,6 +265,9 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
+            lambda: GroupMembersRemoveParams("g1"),
+            lambda: GroupTitleChangeParams("g1", "1"),
+            lambda: ScreenCaptureParams("g1"),
             lambda: MarkConversationReadParams("conv-1"),
             lambda: SetIdentityParams("1001"),
             lambda: ImportKeysParams(),
@@ -270,6 +291,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], [], [], "1001"),
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
+            lambda: GroupMembersRemoveParams("g1", ["1"], []),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
             lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
@@ -863,6 +885,118 @@ class TestApiShapes(unittest.TestCase):
                 payload.endswith(",null,null,null"),
                 f"title/avatar must sign as the null sentinel, got: {payload}",
             )
+
+    def test_group_actions_sign_the_verifier_payloads(self):
+        from chat_xdk import (
+            GroupAdminsAddParams,
+            GroupAvatarChangeParams,
+            GroupDescriptionChangeParams,
+            GroupInviteEnableParams,
+            GroupJoinRejectParams,
+            GroupLeaveParams,
+            GroupMembersRemoveParams,
+            GroupTitleChangeParams,
+            MessageTtlChangeParams,
+            MessageTtlRemoveParams,
+            ScreenCaptureChange,
+            ScreenCaptureParams,
+        )
+
+        chat, v = self._unlocked_chat()
+        ident = dict(sender_id="910002", signing_key_version="1")
+
+        plain = chat.prepare_group_members_remove(
+            GroupMembersRemoveParams("g100", ["910007"], **ident)
+        )
+        self.assertNotIn("conversation_key", plain)
+        self.assertEqual(plain["conversation_participant_keys"], [])
+        removal = plain["action_signatures"][0]
+        self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
+        self.assertTrue(removal["signature_payload"].endswith(",910007,null,signature_version=11"))
+
+        rotated = chat.prepare_group_members_remove(
+            GroupMembersRemoveParams(
+                "g100",
+                ["910007"],
+                public_keys=[
+                    {
+                        "user_id": "910002",
+                        "public_key": v["identity_public_b64"],
+                        "key_version": "1",
+                    }
+                ],
+                **ident,
+            )
+        )
+        self.assertEqual(len(rotated["conversation_key"]), 32)
+        self.assertEqual(len(rotated["action_signatures"]), 2)
+        self.assertIn(",910007,", rotated["action_signatures"][0]["signature_payload"])
+        self.assertTrue(
+            rotated["action_signatures"][0]["signature_payload"].endswith(",signature_version=11")
+        )
+        self.assertNotIn("signature_payload", rotated["action_signatures"][1])
+
+        left = chat.prepare_group_leave(
+            GroupLeaveParams("g100", promote_admin_id="910008", conversation_key_version="7", **ident)
+        )
+        self.assertEqual(len(left["action_signatures"]), 3)
+        self.assertTrue(
+            left["action_signatures"][1]["signature_payload"].startswith("ConversationDeleteEvent,")
+        )
+        self.assertTrue(left["action_signatures"][2]["signature_payload"].endswith(",910008"))
+
+        title = chat.prepare_group_title_change(
+            GroupTitleChangeParams("g100", "4", "enc-title", **ident)
+        )["action_signatures"][0]
+        self.assertTrue(title["signature_payload"].endswith(",4,enc-title"))
+        avatar = chat.prepare_group_avatar_change(
+            GroupAvatarChangeParams("g100", "4", "https://img/a.png", **ident)
+        )["action_signatures"][0]
+        self.assertTrue(
+            avatar["signature_payload"].startswith("GroupChangeEvent.GroupAvatarUrlChange,")
+        )
+        description = chat.prepare_group_description_change(
+            GroupDescriptionChangeParams("g100", "4", "enc-desc", **ident)
+        )["action_signatures"][0]
+        self.assertTrue(
+            description["signature_payload"].startswith("GroupChangeEvent.GroupDescriptionChange,")
+        )
+        self.assertTrue(description["signature_payload"].endswith(",4,enc-desc"))
+        admins = chat.prepare_group_admins_add(
+            GroupAdminsAddParams("g100", ["910008", "910009"], **ident)
+        )["action_signatures"][0]
+        self.assertTrue(admins["signature_payload"].endswith(",910008,910009"))
+        invite = chat.prepare_group_invite_enable(
+            GroupInviteEnableParams("g100", "https://x.com/i/invite/abc", **ident)
+        )["action_signatures"][0]
+        self.assertTrue(invite["signature_payload"].endswith(",https://x.com/i/invite/abc,null,null"))
+        rejected = chat.prepare_group_join_reject(
+            GroupJoinRejectParams("g100", ["910010"], **ident)
+        )["action_signatures"][0]
+        self.assertTrue(rejected["signature_payload"].endswith(",910010"))
+        ttl = chat.prepare_message_ttl_change(
+            MessageTtlChangeParams("g100", 86400000, **ident)
+        )["action_signatures"][0]
+        self.assertTrue(ttl["signature_payload"].endswith(",86400000"))
+        cleared = chat.prepare_message_ttl_remove(
+            MessageTtlRemoveParams("g100", **ident)
+        )["action_signatures"][0]
+        self.assertTrue(
+            cleared["signature_payload"].startswith(
+                "ConversationMetadataChangeEvent.MessageDurationRemove,"
+            )
+        )
+        blocking = chat.prepare_screen_capture(
+            ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled, **ident)
+        )["action_signatures"][0]
+        self.assertTrue(
+            blocking["signature_payload"].startswith(
+                "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"
+            )
+        )
+        with self.assertRaises(ValueError) as raised:
+            chat.prepare_screen_capture(ScreenCaptureParams("g100", "nope", **ident))
+        self.assertIn("Invalid screen capture change: 'nope'", str(raised.exception))
 
     def test_prepare_message_delete_shape(self):
         from chat_xdk import MessageDeleteParams

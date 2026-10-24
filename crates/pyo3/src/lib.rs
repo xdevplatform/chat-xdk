@@ -1126,7 +1126,7 @@ impl MessageDeleteParams {
     }
 }
 
-fn apply_identity<T>(
+fn apply_identity(
     sender_id: &mut Option<String>,
     signing_key_version: &mut Option<String>,
     sender: Option<String>,
@@ -1734,7 +1734,13 @@ impl ScreenCaptureParams {
 
 impl ScreenCaptureParams {
     fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::ScreenCaptureParams> {
-        let change = self.change.bind(py).str()?.to_cow()?.into_owned();
+        let bound = self.change.bind(py);
+        // A str enum's str() is its qualified name; the value is the str it is.
+        let change = bound.extract::<String>().or_else(|_| {
+            bound
+                .str()
+                .and_then(|text| text.to_cow().map(|cow| cow.into_owned()))
+        })?;
         let mut params = chat_xdk_core::ScreenCaptureParams::new(
             self.conversation_id.as_str(),
             chat_xdk_core::ScreenCaptureChange::parse(&change).map_err(to_py_err)?,
