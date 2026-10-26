@@ -14,8 +14,8 @@
 //	defer chat.Close()
 //
 //	// Generate keys and register with Juicebox
-//	payload, _ := chat.GenerateKeypairs()
-//	// POST payload to X API...
+//	registration, _ := chat.GenerateKeypairs()
+//	// POST registration to X API...
 //	chat.Setup([]byte("2580"), juiceboxConfigJSON)
 //
 //	// Later: unlock with PIN and set the session identity + stores once.
@@ -36,7 +36,7 @@
 //	// Encrypt messages: the sender identity and conversation key resolve
 //	// from the session; the SDK generates the message id — read it back
 //	// from payload.MessageID.
-//	payload, _ := chat.EncryptMessage(EncryptMessageParams{
+//	payload, _ := chat.EncryptMessage(chatxdk.EncryptMessageParams{
 //	    ConversationID: conversationID,
 //	    Text:           "Hello!",
 //	})
@@ -147,8 +147,8 @@ func (c *Chat) SetCacheKeys(enabled bool) {
 	ffiSetCacheKeys(c.h, enabled)
 }
 
-// SetSigningKeys stores signing keys to use when a decrypt call passes nil
-// (or empty) signingKeys. Each call replaces the previous set; only this
+// SetSigningKeys stores signing keys to use when a decrypt call's params leave
+// SigningKeys nil (or empty). Each call replaces the previous set; only this
 // call populates the store — a key carried inside an event is never trusted
 // for verification.
 func (c *Chat) SetSigningKeys(keys []SigningKeyEntry) error {

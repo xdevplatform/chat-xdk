@@ -506,11 +506,14 @@ those entries on the update's request.
 
 ### Removing members
 
-`PrepareGroupMembersRemove` removes `UserIDs` and rotates the conversation
-key for the members who stay. Pass their identity keys as `PublicKeys`. The
-result is a `*PreparedConversationChange`: the new conversation key,
-`ConversationParticipantKeys` for those members, and `ActionSignatures` in
-this order — the removal, then the conversation-key change.
+`PrepareGroupMembersRemove` removes `UserIDs`. Pass the identity keys of the
+members who stay as `PublicKeys` and it also rotates the conversation key
+for them: the result is a `*PreparedConversationChange` with the new
+conversation key, `ConversationParticipantKeys` for those members, and
+`ActionSignatures` in this order — the removal, then the conversation-key
+change. Without `PublicKeys` it signs the removal alone, with no new key,
+and the removed members can still decrypt later messages, so pass them on
+every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new

@@ -224,8 +224,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Store signing keys to use when a decrypt call omits its {@code signingKeys}
-     * argument. Only this explicit call populates the store — a key carried inside
+     * Store signing keys to use when a decrypt call's params leave {@code signingKeys}
+     * null (or empty). Only this explicit call populates the store — a key carried inside
      * an event is never trusted for verification. Each call replaces the previous set.
      */
     public void setSigningKeys(List<SigningKeyEntry> keys) throws Exception {

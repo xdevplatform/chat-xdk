@@ -8,8 +8,12 @@ the native libraries in the .NET and JVM packages export the same functions.
 [Why 0.6.0 changes](why.md) explains why each change was made, and the
 [index](README.md) lists the language bindings' pages.
 
-Every entry point whose arguments changed takes a new name, so a stale
-header or library fails to link instead of misreading its arguments.
+Every entry point whose C arguments changed takes a new name, so a stale
+header or library fails to link instead of misreading its arguments. The
+calls whose C arguments stayed the same keep their names, even where the
+JSON they take or return changed: the registration document,
+`reply_to_sender_id`, the send payload, action signatures, participant keys
+and the delete result, each shown below.
 
 ## Checklist
 
@@ -73,6 +77,16 @@ returns (see the next section). A signed call made without a version fails with 
 signing_key_version is not set: pass it explicitly or call set_identity()
 first`.
 
+```c
+// 0.5.x
+// {"public_key":{...},"version":"...","generate_version":...}
+char *registration = take(chat_xdk_generate_keypairs(chat));
+
+// 0.6.0
+// {"public_key":{...}}
+char *registration = take(chat_xdk_generate_keypairs(chat));
+```
+
 ## Set the identity with a params document
 
 `chat_xdk_set_identity_params` takes the user id and the signing-key
@@ -116,6 +130,16 @@ and `conversation_key_version`. Anything else fails with an error that
 names the field, such as
 `Invalid sender_id 'user-1': pass a numeric user id (digits only)`.
 
+```c
+// 0.5.x
+// {"conversation_id":"...","text":"pong","reply_to_sender_id":4201,...}
+char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
+
+// 0.6.0
+// {"conversation_id":"...","text":"pong","reply_to_sender_id":"4201",...}
+char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
+```
+
 ## Decrypt with params documents
 
 `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params` each
@@ -145,6 +169,19 @@ they are, along with the payload's `xdk_version`, the version of the SDK
 that built it. The payload also carries `event_b64`, the message as
 recipients receive it: keep it to encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
+
+```c
+// 0.5.x
+// {"message_id":"...","encrypted_content":"...","signature":"...",
+//  "encoded_event_signature":"...",...}
+char *payload = take(chat_xdk_encrypt_message(chat, message_json));
+
+// 0.6.0
+// {"message_id":"...","event_b64":"...","encoded_message_create_event":"...",
+//  "signature":"...","encoded_message_event_signature":"...",
+//  "xdk_version":"...",...}
+char *payload = take(chat_xdk_encrypt_message(chat, message_json));
+```
 
 ## Encrypt a file from its message
 
@@ -339,12 +376,14 @@ those entries on the update's request.
 
 ### Removing members
 
-`chat_xdk_prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange`: the new
-conversation key (base64), `conversation_participant_keys` for those
-members, and `action_signatures` in this order — the removal, then the
-conversation-key change.
+`chat_xdk_prepare_group_members_remove` removes `user_ids`. Pass the
+identity keys of the members who stay as `public_keys` and it also rotates
+the conversation key for them: the result is a `PreparedConversationChange`
+with the new conversation key (base64), `conversation_participant_keys` for
+those members, and `action_signatures` in this order — the removal, then the
+conversation-key change. Without `public_keys` it signs the removal alone,
+with no new key, and the removed members can still decrypt later messages,
+so pass them on every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new

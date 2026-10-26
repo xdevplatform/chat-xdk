@@ -44,9 +44,11 @@ use thrift::protocol::{TBinaryInputProtocol, TSerializable};
 /// ramp, not a security boundary: a relay that strips or lowers the sequence
 /// on a forged v6+ key change keeps that key adopted for *decryption* without
 /// signature enforcement. The signed key version remains the ordering
-/// authority — `apply_ckey_freshness` pins `latest_version` to the newest
-/// *verified* key change, so the *encryption* path cannot be downgraded by
-/// such an event. The gate exists only so stored history from before
+/// authority: once a conversation has a verified key change,
+/// `apply_ckey_freshness` pins `latest_version` to the newest *verified* one,
+/// so such an event cannot lower or replace it. Until then `latest_version`
+/// is the batch's highest adopted version, which such an event can set; the
+/// key cache holds only verified keys. The gate exists only so stored history from before
 /// plaintext-key signatures stays readable; it can be dropped (enforce
 /// everywhere) once that history no longer needs to be decrypted.
 const CKEY_SIG_V6_ENFORCE_AFTER_SEQ: i64 = 2070276095283454002;
@@ -1054,7 +1056,7 @@ impl ChatCore {
     /// Parses each event, attempts to decrypt participant keys using the loaded
     /// identity key, and returns a `ConversationKeyResult` with:
     /// - `keys`: Map of key version → conversation key
-    /// - `latest_version`: The highest key version (for encryption)
+    /// - `latest_version`: The highest key version
     ///
     /// Events that are not `KeyChange` events, or whose keys can't be decrypted
     /// by this identity key, are silently skipped.
@@ -1065,10 +1067,12 @@ impl ChatCore {
     ///
     /// This call adopts every decryptable key without checking signatures and
     /// reports the batch's highest version. [`Self::decrypt_events`] hardens
-    /// this: it pins `latest_version` to the newest key change with a valid
-    /// signature and holds it monotonic, so a replayed older key cannot
-    /// downgrade what callers encrypt with; per-message signatures are verified
-    /// in [`Self::decrypt_event`].
+    /// this: once a conversation has a key change with a valid signature, it
+    /// pins `latest_version` to the newest such version and holds it
+    /// monotonic, so a replayed older key cannot downgrade what callers
+    /// encrypt with. The key cache ([`Self::set_cache_keys`]) holds only keys
+    /// whose key change verified; per-message signatures are verified in
+    /// [`Self::decrypt_event`].
     ///
     /// `latest_version` here is the highest version within this batch only.
     pub fn extract_conversation_keys(&self, events: &[&str]) -> ConversationKeyResult {

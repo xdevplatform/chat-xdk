@@ -129,8 +129,8 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_internal_feature_set_default_endpoint(byte* endpoint);
 
         /// <summary>
-        ///  Store signing keys to use when a decrypt call passes an empty
-        ///  `signing_keys_json`. Only this explicit call populates the store — a key
+        ///  Store signing keys to use when a decrypt call's params document leaves out
+        ///  `signing_keys` (or passes an empty array). Only this explicit call populates the store — a key
         ///  carried inside an event is never trusted for verification. Each call
         ///  replaces the previous set.
         ///

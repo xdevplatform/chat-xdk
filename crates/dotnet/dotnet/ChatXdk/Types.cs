@@ -21,7 +21,7 @@ namespace ChatXdk
 
     /// <summary>
     /// Registration fields expected by the X API
-    /// (<c>POST /2/chat/keys</c>).
+    /// (<c>POST /2/users/{id}/public_keys</c>).
     /// </summary>
     public sealed class PublicKeyRegistration
     {
@@ -177,8 +177,11 @@ namespace ChatXdk
     }
 
     /// <summary>
-    /// A signed message delete or read receipt: the <c>action_signatures</c> a request
-    /// carries for it, one entry.
+    /// Signed actions for a request that does not rotate a conversation key: the
+    /// <c>action_signatures</c> it carries. Returned by <see cref="Chat.PrepareMessageDelete"/>,
+    /// <see cref="Chat.PrepareMarkConversationRead"/>, and the group-action prepares other than
+    /// <see cref="Chat.PrepareGroupMembersRemove"/>; <see cref="Chat.PrepareGroupLeave"/> returns
+    /// one entry per signed event.
     /// </summary>
     public sealed class PreparedAction
     {
@@ -231,8 +234,8 @@ namespace ChatXdk
 
     /// <summary>
     /// Returned by <see cref="Chat.PrepareConversationKeyChange"/>,
-    /// <see cref="Chat.PrepareGroupCreate"/>, and
-    /// <see cref="Chat.PrepareGroupMembersChange"/>. Carries everything needed to POST the change.
+    /// <see cref="Chat.PrepareGroupCreate"/>, <see cref="Chat.PrepareGroupMembersChange"/>, and
+    /// <see cref="Chat.PrepareGroupMembersRemove"/>. Carries everything needed to POST the change.
     /// </summary>
     public sealed class PreparedConversationChange
     {
@@ -269,7 +272,7 @@ namespace ChatXdk
         /// <summary>Version string → raw 32-byte conversation key.</summary>
         public Dictionary<string, byte[]> Keys { get; init; } = new();
 
-        /// <summary>Highest key version (for encrypting new messages), or <see langword="null"/>.</summary>
+        /// <summary>Latest key version, or <see langword="null"/>.</summary>
         public string? LatestVersion { get; init; }
     }
 

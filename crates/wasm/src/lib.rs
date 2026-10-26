@@ -351,7 +351,7 @@ impl Chat {
     ///
     /// Returns a `ConversationKeyResult` with:
     /// - `keys`: Object mapping key version strings to `Uint8Array` conversation keys
-    /// - `latestVersion`: The highest key version (use for encrypting new messages)
+    /// - `latestVersion`: The highest key version; signatures are not checked
     #[wasm_bindgen(js_name = extractConversationKeys)]
     pub fn extract_conversation_keys(&self, events: Vec<String>) -> Result<JsValue, JsError> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();

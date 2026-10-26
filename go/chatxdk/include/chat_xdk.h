@@ -187,8 +187,8 @@ struct FfiResult chat_xdk_set_identity_params(const struct ChatHandle *handle,
 void chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
 
 /**
- * Store signing keys used when a decrypt call passes an empty
- * `signing_keys_json`.
+ * Store signing keys used when a decrypt call's params document leaves out
+ * `signing_keys` (or passes an empty array).
  *
  * `signing_keys_json` takes the same array shape as
  * `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this

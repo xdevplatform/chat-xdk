@@ -636,8 +636,8 @@ pub extern "C" fn chat_xdk_internal_feature_set_default_endpoint(
     })
 }
 
-/// Store signing keys used when a decrypt call passes an empty
-/// `signing_keys_json`.
+/// Store signing keys used when a decrypt call's params document leaves out
+/// `signing_keys` (or passes an empty array).
 ///
 /// `signing_keys_json` takes the same array shape as
 /// `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this

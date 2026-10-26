@@ -161,8 +161,10 @@ you pass the versions the X API returns.
 ## `decryptEvents` takes a params object
 
 Pass `{ events, signingKeys }`. `signingKeys` is optional; without it, the
-keys `setSigningKeys` stored verify the events. The result is unchanged, and
-the call still never throws: errors are collected per event.
+keys `setSigningKeys` stored verify the events. The result is unchanged. An
+event that fails is collected in its `errors` rather than thrown; the call
+throws only for invalid params, such as `events` that is not an array of
+strings or a malformed `signingKeys` entry.
 
 ```js
 // 0.5.x
@@ -177,7 +179,9 @@ const result = chat.decryptEvents({ events, signingKeys });
 Pass `{ eventB64, conversationKeys, signingKeys }`. Both key fields are
 optional: without them, the conversation keys come from the key cache
 (`setCacheKeys(true)`) and the signing keys from `setSigningKeys`. The call
-still throws on failure.
+still throws on failure. A `conversationKeys` entry that is not a 32-byte
+`Uint8Array` throws an error naming its version, where 0.5.x skipped it:
+pass the `keys` map `decryptEvents` or `extractConversationKeys` returns.
 
 ```js
 // 0.5.x
@@ -476,11 +480,14 @@ those entries on the update's request, in snake_case, as this page's other
 
 ### Removing members
 
-`prepareGroupMembersRemove` removes `userIds` and rotates the conversation
-key for the members who stay. Pass their identity keys as `publicKeys`.
-The result is a `PreparedConversationChange`: the new conversation key,
-`conversationParticipantKeys` for those members, and `actionSignatures` in
-this order — the removal, then the conversation-key change.
+`prepareGroupMembersRemove` removes `userIds`. Pass the identity keys of the
+members who stay as `publicKeys` and it also rotates the conversation key
+for them: the result is a `PreparedConversationChange` with the new
+conversation key, `conversationParticipantKeys` for those members, and
+`actionSignatures` in this order — the removal, then the conversation-key
+change. Without `publicKeys` it signs the removal alone, with no new key,
+and the removed members can still decrypt later messages, so pass them on
+every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new
@@ -639,7 +646,7 @@ reject an unsigned receipt. It takes `{ conversationId, seenUntilSequenceId }`
 to now, and returns a `PreparedAction`, one entry shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. The
 path takes the conversation id in its hyphen form. A recipient's
-`decryptEvent` returns a signed receipt as a verified `ReadReceipt` event.
+`decryptEvent` returns a signed receipt as a verified `readReceipt` event.
 
 ```js
 // 0.6.0
