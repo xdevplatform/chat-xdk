@@ -195,6 +195,26 @@ public final class Types {
         public List<ActionSignature> actionSignatures = Collections.emptyList();
     }
 
+    /**
+     * A signed group title, avatar, or description change: the value encrypted
+     * under the conversation key and the {@code action_signatures} a request
+     * carries. Returned by {@link Chat#prepareGroupTitleChange},
+     * {@link Chat#prepareGroupAvatarChange}, and {@link Chat#prepareGroupDescriptionChange}.
+     */
+    public static final class PreparedGroupMetadataChange {
+        /** The value encrypted under the conversation key, base64: what the request sends. */
+        @JsonProperty("encrypted_value")
+        public String encryptedValue = "";
+
+        /** Version of the conversation key the value is encrypted under. */
+        @JsonProperty("conversation_key_version")
+        public String conversationKeyVersion = "";
+
+        /** The signed change, as the request's {@code action_signatures} entries. */
+        @JsonProperty("action_signatures")
+        public List<ActionSignature> actionSignatures = Collections.emptyList();
+    }
+
     /** A signing key entry for {@link Chat#decryptEvent} and {@link Chat#decryptEvents}. */
     public static final class SigningKeyEntry {
         /** ID of the user this signing key belongs to. */
@@ -1353,6 +1373,12 @@ public final class Types {
         public final String conversationId;
         /** User IDs being removed. */
         public final List<String> userIds;
+        /** The group's title, re-encrypted under the new conversation key; null leaves it out. */
+        public String title;
+        /** The group's avatar URL, re-encrypted under the new conversation key; null leaves it out. */
+        public String avatarUrl;
+        /** The group's description, re-encrypted under the new conversation key; null leaves it out. */
+        public String description;
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
         /** Version of the sender's signing key; resolves from the session identity when null. */
@@ -1381,50 +1407,78 @@ public final class Types {
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupTitleChange}. {@code customTitle} is ciphertext. */
+    /**
+     * Parameters for {@link Chat#prepareGroupTitleChange}. {@code newTitle} is plaintext: the
+     * call encrypts it under the conversation key, {@link #conversationKey} /
+     * {@link #conversationKeyVersion} or, both null, the key cache.
+     */
     public static final class GroupTitleChangeParams {
+        /** ID of the group conversation. */
         public final String conversationId;
-        public final String conversationKeyVersion;
-        public final String customTitle;
+        /** The group's new title, as plaintext. */
+        public final String newTitle;
+        /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
+        /** Raw 32-byte conversation key; resolves from the key cache when null. */
+        public byte[] conversationKey;
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
 
-        public GroupTitleChangeParams(String conversationId, String conversationKeyVersion, String customTitle) {
+        public GroupTitleChangeParams(String conversationId, String newTitle) {
             this.conversationId = conversationId;
-            this.conversationKeyVersion = conversationKeyVersion;
-            this.customTitle = customTitle;
+            this.newTitle = newTitle;
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupAvatarChange}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupAvatarChange}. {@code newAvatarUrl} is plaintext: the
+     * call encrypts it under the conversation key, {@link #conversationKey} /
+     * {@link #conversationKeyVersion} or, both null, the key cache.
+     */
     public static final class GroupAvatarChangeParams {
+        /** ID of the group conversation. */
         public final String conversationId;
-        public final String conversationKeyVersion;
-        public final String customAvatarUrl;
+        /** The group's new avatar URL, as plaintext. */
+        public final String newAvatarUrl;
+        /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
+        /** Raw 32-byte conversation key; resolves from the key cache when null. */
+        public byte[] conversationKey;
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
 
-        public GroupAvatarChangeParams(
-                String conversationId, String conversationKeyVersion, String customAvatarUrl) {
+        public GroupAvatarChangeParams(String conversationId, String newAvatarUrl) {
             this.conversationId = conversationId;
-            this.conversationKeyVersion = conversationKeyVersion;
-            this.customAvatarUrl = customAvatarUrl;
+            this.newAvatarUrl = newAvatarUrl;
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupDescriptionChange}. {@code customDescription} is ciphertext. */
+    /**
+     * Parameters for {@link Chat#prepareGroupDescriptionChange}. {@code newDescription} is plaintext: the
+     * call encrypts it under the conversation key, {@link #conversationKey} /
+     * {@link #conversationKeyVersion} or, both null, the key cache.
+     */
     public static final class GroupDescriptionChangeParams {
+        /** ID of the group conversation. */
         public final String conversationId;
-        public final String conversationKeyVersion;
-        public final String customDescription;
+        /** The group's new description, as plaintext. */
+        public final String newDescription;
+        /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
+        /** Raw 32-byte conversation key; resolves from the key cache when null. */
+        public byte[] conversationKey;
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
 
-        public GroupDescriptionChangeParams(
-                String conversationId, String conversationKeyVersion, String customDescription) {
+        public GroupDescriptionChangeParams(String conversationId, String newDescription) {
             this.conversationId = conversationId;
-            this.conversationKeyVersion = conversationKeyVersion;
-            this.customDescription = customDescription;
+            this.newDescription = newDescription;
         }
     }
 

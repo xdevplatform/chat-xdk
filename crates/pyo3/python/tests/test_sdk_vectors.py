@@ -322,6 +322,36 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(messages[0]["reply_preview_validation"], "Valid")
         self.assertEqual(messages[1]["reply_preview_validation"], "Invalid")
 
+    def test_group_description_change_decrypts_on_receive(self):
+        from chat_xdk import Chat, DecryptEventParams
+
+        v = _load_vectors()
+        chat = Chat()
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_description_b64"],
+                keys,
+                signing_keys=_fixture_signing_keys(v),
+            )
+        )
+        self.assertEqual(event["type"], "GroupChange")
+        self.assertTrue(event["verified"])
+        self.assertEqual(event["conversation_id"], v["event_group_id"])
+        self.assertEqual(
+            event["change"],
+            {"change_type": "DescriptionChanged", "new_description": v["event_group_description"]},
+        )
+        # Without the key the description was encrypted under, the change
+        # does not decrypt: it never comes back as ciphertext.
+        with self.assertRaises(ValueError) as raised:
+            chat.decrypt_event(
+                DecryptEventParams(
+                    v["event_group_description_b64"], {}, signing_keys=_fixture_signing_keys(v)
+                )
+            )
+        self.assertIn("Group description encrypted with key version", str(raised.exception))
+
     def test_failure_event_decodes_type_and_rate_limit_tier(self):
         from chat_xdk import Chat, DecryptEventParams
 

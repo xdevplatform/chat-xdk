@@ -8,6 +8,7 @@ import com.x.chatxdk.ChatXdkUtilities;
 import com.x.chatxdk.Types.AttachmentDescriptor;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.PreparedConversationChange;
+import com.x.chatxdk.Types.PreparedGroupMetadataChange;
 import com.x.chatxdk.Types.PublicKeyInput;
 import com.x.chatxdk.Types.PublicKeys;
 import org.junit.jupiter.api.Test;
@@ -74,14 +75,19 @@ class ChatCoreTest {
     }
 
     @Test
-    void genericEncryptDecryptRoundtrip() throws Exception {
+    void groupTitleChangeEncryptsTheTitleItSigns() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("12345");
             byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
-            String plaintext = "hello from the jvm example";
-            String ciphertext = core.encrypt(plaintext, key);
-            assertNotEquals(plaintext, ciphertext);
-            assertEquals(plaintext, core.decrypt(ciphertext, key));
+            String title = "hello from the jvm example";
+            PreparedGroupMetadataChange prepared = core.prepareGroupTitleChange("g123", title, key, "1");
+            assertNotEquals(title, prepared.encryptedValue);
+            assertEquals("1", prepared.conversationKeyVersion);
+            String payload = prepared.actionSignatures.get(0).signaturePayload;
+            assertTrue(payload.startsWith("GroupChangeEvent.GroupTitleChange,"), payload);
+            assertFalse(payload.contains(title), payload);
+            assertEquals(title, core.decrypt(prepared.encryptedValue, key));
         }
     }
 

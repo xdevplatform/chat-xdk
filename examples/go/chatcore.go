@@ -377,14 +377,22 @@ func (c *ChatCore) DecryptMedia(ciphertext []byte, eventB64 string, conversation
 	return append(out, final...), nil
 }
 
-// -- Generic helpers (handy for metadata + tests) ---------------------------
+// -- Group metadata ---------------------------------------------------------------
 
-// Encrypt encrypts a UTF-8 string with the raw 32-byte conversation key.
-func (c *ChatCore) Encrypt(plaintext string, conversationKey []byte) (string, error) {
-	return c.chat.Encrypt(plaintext, conversationKey)
+// PrepareGroupTitleChange prepares a group title change: the SDK encrypts the
+// plaintext title under the conversation key and signs it. Send
+// EncryptedValue as the group's name and ActionSignatures on the request.
+func (c *ChatCore) PrepareGroupTitleChange(conversationID, title string, conversationKey []byte, conversationKeyVersion string) (*chatxdk.PreparedGroupMetadataChange, error) {
+	return c.chat.PrepareGroupTitleChange(chatxdk.GroupTitleChangeParams{
+		ConversationID:         conversationID,
+		NewTitle:               title,
+		ConversationKey:        conversationKey,
+		ConversationKeyVersion: conversationKeyVersion,
+	})
 }
 
-// Decrypt decrypts base64 ciphertext to a UTF-8 string.
+// Decrypt decrypts a group title, avatar URL, or description the X API
+// returns for a conversation.
 func (c *ChatCore) Decrypt(ciphertextB64 string, conversationKey []byte) (string, error) {
 	return c.chat.Decrypt(ciphertextB64, conversationKey)
 }

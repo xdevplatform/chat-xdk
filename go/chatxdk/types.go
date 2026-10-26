@@ -407,13 +407,18 @@ const (
 // GroupMembersRemoveParams are the parameters for PrepareGroupMembersRemove.
 //
 // PublicKeys are the identity keys of the members who stay: the call rotates
-// the conversation key for them.
+// the conversation key for them. Title, AvatarURL and Description are the
+// group's plaintext metadata; each one set is encrypted under the new key and
+// signed with the removal.
 type GroupMembersRemoveParams struct {
 	// PublicKeys are the identity keys of the members who stay.
 	PublicKeys     []PublicKeyInput `json:"public_keys"`
 	ConversationID string           `json:"conversation_id"`
 	// UserIDs are the user ids being removed.
 	UserIDs           []string `json:"user_ids"`
+	Title             string   `json:"title,omitempty"`       // empty = unset
+	AvatarURL         string   `json:"avatar_url,omitempty"`  // empty = unset
+	Description       string   `json:"description,omitempty"` // empty = unset
 	SenderID          string   `json:"sender_id,omitempty"`
 	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
 }
@@ -433,32 +438,42 @@ type GroupLeaveParams struct {
 }
 
 // GroupTitleChangeParams are the parameters for PrepareGroupTitleChange.
-// CustomTitle is the ciphertext the request sends.
+//
+// NewTitle is plaintext: the call encrypts it under the conversation key, the
+// ConversationKey / ConversationKeyVersion pair or, both empty, the key cache.
 type GroupTitleChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	CustomTitle            string `json:"custom_title"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	NewTitle               string `json:"new_title"`
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // GroupAvatarChangeParams are the parameters for PrepareGroupAvatarChange.
+//
+// NewAvatarURL is plaintext: the call encrypts it under the conversation key, the
+// ConversationKey / ConversationKeyVersion pair or, both empty, the key cache.
 type GroupAvatarChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	CustomAvatarURL        string `json:"custom_avatar_url"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	NewAvatarURL           string `json:"new_avatar_url"`
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // GroupDescriptionChangeParams are the parameters for PrepareGroupDescriptionChange.
-// CustomDescription is the ciphertext the request sends.
+//
+// NewDescription is plaintext: the call encrypts it under the conversation key, the
+// ConversationKey / ConversationKeyVersion pair or, both empty, the key cache.
 type GroupDescriptionChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	CustomDescription      string `json:"custom_description"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	NewDescription         string `json:"new_description"`
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // GroupAdminsAddParams are the parameters for PrepareGroupAdminsAdd.
@@ -674,6 +689,19 @@ type MessageEventSignature struct {
 // action_signatures a request carries for it, one entry.
 type PreparedAction struct {
 	ActionSignatures []ActionSignature `json:"action_signatures"`
+}
+
+// PreparedGroupMetadataChange is a signed group title, avatar, or description
+// change, returned by PrepareGroupTitleChange, PrepareGroupAvatarChange, and
+// PrepareGroupDescriptionChange.
+type PreparedGroupMetadataChange struct {
+	// EncryptedValue is the value encrypted under the conversation key,
+	// base64: the title, avatar URL, or description the request sends.
+	EncryptedValue string `json:"encrypted_value"`
+	// ConversationKeyVersion is the version of the key the value is
+	// encrypted under.
+	ConversationKeyVersion string            `json:"conversation_key_version"`
+	ActionSignatures       []ActionSignature `json:"action_signatures"`
 }
 
 // orEmpty returns a non-nil slice so JSON marshals it as [] rather than null.

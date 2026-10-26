@@ -316,6 +316,30 @@ async function main() {
   assert.equal(forgedReply.event.content.text, v.event_reply_text);
   assert.equal(forgedReply.event.replyPreviewValidation, "invalid");
 
+  // A signed group description change: decryptEvent returns the description
+  // decrypted under the fixture conversation key, and without that key the
+  // change fails instead of coming back as ciphertext.
+  const description = chat.decryptEvent({
+    eventB64: v.event_group_description_b64,
+    conversationKeys: fixtureKeys,
+    signingKeys,
+  });
+  assert.equal(description.type, "groupChange");
+  assert.equal(description.verified, true);
+  assert.equal(description.conversationId, v.event_group_id);
+  assert.deepEqual(description.change, {
+    changeType: "descriptionChanged",
+    newDescription: v.event_group_description,
+  });
+  assert.throws(
+    () => chat.decryptEvent({
+      eventB64: v.event_group_description_b64,
+      conversationKeys: {},
+      signingKeys,
+    }),
+    /Group description encrypted with key version/,
+  );
+
   // Failure events are unsigned by protocol: the fixture failure decodes with
   // no keys, and JS camelCases the discriminator values and the tier field.
   const failure = chat.decryptEvent({ eventB64: v.event_failure_b64, conversationKeys: {} });

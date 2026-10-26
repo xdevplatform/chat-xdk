@@ -110,6 +110,19 @@ export interface PreparedAction {
 }
 
 /**
+ * A signed group title, avatar, or description change: the value encrypted
+ * under the conversation key and the `actionSignatures` a request carries.
+ */
+export interface PreparedGroupMetadataChange {
+  /** The value encrypted under the conversation key, base64: what the request sends. */
+  encryptedValue: string;
+  /** Version of the conversation key the value is encrypted under. */
+  conversationKeyVersion: string;
+  /** The signed change, one entry. */
+  actionSignatures: ActionSignature[];
+}
+
+/**
  * A signing key entry for decryptEvent and decryptEvents.
  * Pass all known signing keys for all participants; the SDK matches by userId + version.
  */
@@ -505,6 +518,12 @@ export interface GroupMembersRemoveParams {
   conversationId: string;
   /** User IDs being removed. */
   userIds: string[];
+  /** The group's title, re-encrypted under the new conversation key and signed with the removal. */
+  title?: string | null;
+  /** The group's avatar URL, re-encrypted under the new conversation key and signed with the removal. */
+  avatarUrl?: string | null;
+  /** The group's description, re-encrypted under the new conversation key and signed with the removal. */
+  description?: string | null;
   /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
   /** Version of the signing key; resolves from the session identity when omitted. */
@@ -525,35 +544,64 @@ export interface GroupLeaveParams {
   signingKeyVersion?: string | null;
 }
 
-/** Parameters for prepareGroupTitleChange. `customTitle` is ciphertext. */
+/**
+ * Parameters for prepareGroupTitleChange. `newTitle` is plaintext: the SDK encrypts it under
+ * the conversation key — `conversationKey` / `conversationKeyVersion`, or
+ * the key cache when both are omitted.
+ */
 export interface GroupTitleChangeParams {
+  /** ID of the group conversation. */
   conversationId: string;
-  /** Conversation-key version the title is encrypted under. */
-  conversationKeyVersion: string;
-  /** Encrypted title, the value the request sends as the group name. */
-  customTitle: string;
+  /** The group's new title, as plaintext. */
+  newTitle: string;
+  /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
 }
 
-/** Parameters for prepareGroupAvatarChange. */
+/**
+ * Parameters for prepareGroupAvatarChange. `newAvatarUrl` is plaintext: the SDK encrypts it under
+ * the conversation key — `conversationKey` / `conversationKeyVersion`, or
+ * the key cache when both are omitted.
+ */
 export interface GroupAvatarChangeParams {
+  /** ID of the group conversation. */
   conversationId: string;
-  conversationKeyVersion: string;
-  /** Avatar URL the request sends. */
-  customAvatarUrl: string;
+  /** The group's new avatar URL, as plaintext. */
+  newAvatarUrl: string;
+  /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
 }
 
-/** Parameters for prepareGroupDescriptionChange. `customDescription` is ciphertext. */
+/**
+ * Parameters for prepareGroupDescriptionChange. `newDescription` is plaintext: the SDK encrypts it under
+ * the conversation key — `conversationKey` / `conversationKeyVersion`, or
+ * the key cache when both are omitted.
+ */
 export interface GroupDescriptionChangeParams {
+  /** ID of the group conversation. */
   conversationId: string;
-  conversationKeyVersion: string;
-  /** Encrypted description the request sends. */
-  customDescription: string;
+  /** The group's new description, as plaintext. */
+  newDescription: string;
+  /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
 }
 
 /** Parameters for prepareGroupAdminsAdd. */
@@ -1276,10 +1324,11 @@ interface ChatCrypto {
    */
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
 
-  /** Encrypt a UTF-8 string and return base64 ciphertext. Use for metadata fields like group names. */
-  encrypt(plaintext: string, conversationKey: Uint8Array): string;
-
-  /** Decrypt a base64-encoded ciphertext and return the UTF-8 plaintext. Use for metadata fields like group names. */
+  /**
+   * Decrypt a group title, avatar URL, or description the X API returns for
+   * a conversation. Group changes in events need no call of their own:
+   * decryptEvent returns them decrypted.
+   */
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
 
   /**
@@ -1336,14 +1385,14 @@ interface ChatCrypto {
   /** Sign leaving a group. Does not rotate the conversation key. */
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
 
-  /** Sign a group title change. */
-  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+  /** Encrypt a new group title under the conversation key and sign the change. */
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
 
-  /** Sign a group avatar change. */
-  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
+  /** Encrypt a new group avatar URL under the conversation key and sign the change. */
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedGroupMetadataChange;
 
-  /** Sign a group description change. */
-  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  /** Encrypt a new group description under the conversation key and sign the change. */
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
 
   /** Sign adding group admins. */
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
@@ -1414,16 +1463,15 @@ declare class Chat implements ChatCrypto {
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
-  encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
-  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
-  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
-  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedGroupMetadataChange;
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
   prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
   prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;
@@ -1497,16 +1545,15 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
-  encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
-  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
-  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
-  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedGroupMetadataChange;
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
   prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
   prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;

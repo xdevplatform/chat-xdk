@@ -35,8 +35,8 @@ use chat_xdk_core::crypto::keys::XChatConversationKey;
 
 // Import generated camelCase JS types from core
 use chat_xdk_core::js::{
-    JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPublicKeyInput,
-    JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
+    JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPreparedGroupMetadataChange,
+    JsPublicKeyInput, JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
 };
 
 // Utility Functions (free functions, not methods)
@@ -722,27 +722,31 @@ impl Chat {
         self.prepare_action(self.inner.prepare_group_leave(&p.into_core()))
     }
 
-    /// Sign a group title change. `customTitle` is the ciphertext to send.
+    /// Encrypt a new group title under the conversation key and sign the
+    /// change. `newTitle` is plaintext; `conversationKey` /
+    /// `conversationKeyVersion` resolve from the key cache when omitted.
+    /// Returns `{ encryptedValue, conversationKeyVersion, actionSignatures }`.
     #[wasm_bindgen(js_name = prepareGroupTitleChange)]
     pub fn prepare_group_title_change(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupTitleChangeParams = from_js_params("prepareGroupTitleChange", params)?;
-        self.prepare_action(self.inner.prepare_group_title_change(&p.into_core()))
+        self.prepare_metadata_change(self.inner.prepare_group_title_change(&p.into_core()))
     }
 
-    /// Sign a group avatar change. `customAvatarUrl` is the value to send.
+    /// Encrypt a new group avatar URL under the conversation key and sign
+    /// the change; shaped as `prepareGroupTitleChange`.
     #[wasm_bindgen(js_name = prepareGroupAvatarChange)]
     pub fn prepare_group_avatar_change(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupAvatarChangeParams = from_js_params("prepareGroupAvatarChange", params)?;
-        self.prepare_action(self.inner.prepare_group_avatar_change(&p.into_core()))
+        self.prepare_metadata_change(self.inner.prepare_group_avatar_change(&p.into_core()))
     }
 
-    /// Sign a group description change. `customDescription` is the ciphertext
-    /// to send.
+    /// Encrypt a new group description under the conversation key and sign
+    /// the change; shaped as `prepareGroupTitleChange`.
     #[wasm_bindgen(js_name = prepareGroupDescriptionChange)]
     pub fn prepare_group_description_change(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupDescriptionChangeParams =
             from_js_params("prepareGroupDescriptionChange", params)?;
-        self.prepare_action(self.inner.prepare_group_description_change(&p.into_core()))
+        self.prepare_metadata_change(self.inner.prepare_group_description_change(&p.into_core()))
     }
 
     /// Sign adding group admins.
@@ -816,6 +820,18 @@ impl Chat {
     ) -> Result<JsValue, JsError> {
         let prepared = prepared.map_err(|e| JsError::new(&format!("{}", e)))?;
         let js_prepared: JsPreparedAction = prepared.into();
+        to_js_value(&js_prepared)
+    }
+
+    fn prepare_metadata_change(
+        &self,
+        prepared: Result<
+            chat_xdk_core::PreparedGroupMetadataChange,
+            chat_xdk_core::error::SdkError,
+        >,
+    ) -> Result<JsValue, JsError> {
+        let prepared = prepared.map_err(|e| JsError::new(&format!("{}", e)))?;
+        let js_prepared: JsPreparedGroupMetadataChange = prepared.into();
         to_js_value(&js_prepared)
     }
 
@@ -904,21 +920,9 @@ impl Chat {
         Ok(FileDecryptor { inner })
     }
 
-    /// Encrypt a UTF-8 string and return base64 ciphertext.
-    ///
-    /// Use for metadata fields like group names before sending to the API.
-    #[wasm_bindgen(js_name = encrypt)]
-    pub fn encrypt(&self, plaintext: &str, conversation_key: Vec<u8>) -> Result<String, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
-        self.inner
-            .encrypt(plaintext, &ckey)
-            .map_err(|e| JsError::new(&format!("{}", e)))
-    }
-
-    /// Decrypt a base64-encoded ciphertext and return the UTF-8 plaintext.
-    ///
-    /// Use for metadata fields like group names returned by the API.
+    /// Decrypt a group title, avatar URL, or description the X API returns
+    /// for a conversation. Group changes in events need no call of their
+    /// own: `decryptEvent` returns them decrypted.
     #[wasm_bindgen(js_name = decrypt)]
     pub fn decrypt(
         &self,
@@ -1474,6 +1478,9 @@ struct JsGroupMembersRemoveParams {
     public_keys: Vec<JsPublicKeyInput>,
     conversation_id: String,
     user_ids: Vec<String>,
+    title: Option<String>,
+    avatar_url: Option<String>,
+    description: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1485,6 +1492,9 @@ impl JsGroupMembersRemoveParams {
             self.conversation_id,
             self.user_ids,
         );
+        params.title = self.title;
+        params.avatar_url = self.avatar_url;
+        params.description = self.description;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
@@ -1516,21 +1526,21 @@ impl JsGroupLeaveParams {
 #[serde(rename_all = "camelCase")]
 struct JsGroupTitleChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_title: String,
+    new_title: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 impl JsGroupTitleChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupTitleChangeParams {
-        let mut params = chat_xdk_core::GroupTitleChangeParams::new(
-            self.conversation_id,
-            self.conversation_key_version,
-            self.custom_title,
-        );
+        let mut params =
+            chat_xdk_core::GroupTitleChangeParams::new(self.conversation_id, self.new_title);
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
+        params.conversation_key = self.conversation_key;
+        params.conversation_key_version = self.conversation_key_version;
         params
     }
 }
@@ -1539,21 +1549,21 @@ impl JsGroupTitleChangeParams {
 #[serde(rename_all = "camelCase")]
 struct JsGroupAvatarChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_avatar_url: String,
+    new_avatar_url: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 impl JsGroupAvatarChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupAvatarChangeParams {
-        let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
-            self.conversation_id,
-            self.conversation_key_version,
-            self.custom_avatar_url,
-        );
+        let mut params =
+            chat_xdk_core::GroupAvatarChangeParams::new(self.conversation_id, self.new_avatar_url);
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
+        params.conversation_key = self.conversation_key;
+        params.conversation_key_version = self.conversation_key_version;
         params
     }
 }
@@ -1562,21 +1572,23 @@ impl JsGroupAvatarChangeParams {
 #[serde(rename_all = "camelCase")]
 struct JsGroupDescriptionChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_description: String,
+    new_description: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 impl JsGroupDescriptionChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupDescriptionChangeParams {
         let mut params = chat_xdk_core::GroupDescriptionChangeParams::new(
             self.conversation_id,
-            self.conversation_key_version,
-            self.custom_description,
+            self.new_description,
         );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
+        params.conversation_key = self.conversation_key;
+        params.conversation_key_version = self.conversation_key_version;
         params
     }
 }

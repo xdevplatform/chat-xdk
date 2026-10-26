@@ -14,7 +14,9 @@ use chat_xdk_core::crypto::keys::KeypairPurpose;
 use chat_xdk_core::internals::{self, FixtureAttachment};
 use chat_xdk_core::keys::conversation_keys::encrypt_conversation_key;
 use chat_xdk_core::signatures::build_ckey_change_signature;
-use chat_xdk_core::{AttachmentDescriptor, ChatCore, EncryptMessageParams};
+use chat_xdk_core::{
+    AttachmentDescriptor, ChatCore, EncryptMessageParams, GroupDescriptionChangeParams,
+};
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::json;
 
@@ -29,6 +31,8 @@ const EVENT_MESSAGE_TEXT: &str = "fixture event message";
 const EVENT_REPLY_TEXT: &str = "fixture reply message";
 const EVENT_REPLY_FORGED_PREVIEW_TEXT: &str = "forged preview text";
 const EVENT_GARBAGE: &str = "!!!not-an-event!!!";
+const EVENT_GROUP_ID: &str = "g1111";
+const EVENT_GROUP_DESCRIPTION: &str = "fixture group description, encrypted";
 
 // Raw Thrift enum values embedded in the failure vector; suites assert the
 // decoded names ("RateLimitUpsell" / "Premium", camelCased in JS).
@@ -230,6 +234,22 @@ fn main() {
         EVENT_CONVERSATION_ID,
     )
     .expect("frame forged reply event");
+
+    // Group description vector: a signed description change whose
+    // description is encrypted under the fixture conversation key, so every
+    // suite can check decrypt_event returns it decrypted.
+    let description_change = core
+        .prepare_group_description_change(
+            &GroupDescriptionChangeParams::new(EVENT_GROUP_ID, EVENT_GROUP_DESCRIPTION)
+                .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION),
+        )
+        .expect("prepare group description change");
+    let event_group_description_b64 = internals::frame_action_signature(
+        &description_change.action_signatures[0],
+        EVENT_SENDER_ID,
+        EVENT_GROUP_ID,
+    )
+    .expect("frame group description change");
 
     // Failure vector: an unsigned RATE_LIMIT_UPSELL failure carrying the
     // PREMIUM tier, so every suite can pin the decoded failure metadata.
@@ -433,6 +453,9 @@ fn main() {
         "signature_b64": B64.encode(signature),
         "identity_public_key_signature_b64": B64.encode(identity_binding_signature),
         "event_failure_b64": event_failure_b64,
+        "event_group_description_b64": event_group_description_b64,
+        "event_group_description": EVENT_GROUP_DESCRIPTION,
+        "event_group_id": EVENT_GROUP_ID,
         "event_key_change_b64": event_key_change_b64,
         "event_message_b64": event_message_b64,
         "event_reply_valid_b64": event_reply_valid_b64,

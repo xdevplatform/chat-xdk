@@ -407,21 +407,22 @@ func (c *Chat) PrepareGroupLeave(params GroupLeaveParams) (*PreparedAction, erro
 	return c.prepareAction(params, ffiPrepareGroupLeave)
 }
 
-// PrepareGroupTitleChange signs a group title change. CustomTitle is the
-// ciphertext the request sends.
-func (c *Chat) PrepareGroupTitleChange(params GroupTitleChangeParams) (*PreparedAction, error) {
-	return c.prepareAction(params, ffiPrepareGroupTitleChange)
+// PrepareGroupTitleChange encrypts a new group title (plaintext NewTitle)
+// under the conversation key and signs the change.
+func (c *Chat) PrepareGroupTitleChange(params GroupTitleChangeParams) (*PreparedGroupMetadataChange, error) {
+	return c.prepareMetadataChange(params, ffiPrepareGroupTitleChange)
 }
 
-// PrepareGroupAvatarChange signs a group avatar change.
-func (c *Chat) PrepareGroupAvatarChange(params GroupAvatarChangeParams) (*PreparedAction, error) {
-	return c.prepareAction(params, ffiPrepareGroupAvatarChange)
+// PrepareGroupAvatarChange encrypts a new group avatar URL (plaintext
+// NewAvatarURL) under the conversation key and signs the change.
+func (c *Chat) PrepareGroupAvatarChange(params GroupAvatarChangeParams) (*PreparedGroupMetadataChange, error) {
+	return c.prepareMetadataChange(params, ffiPrepareGroupAvatarChange)
 }
 
-// PrepareGroupDescriptionChange signs a group description change.
-// CustomDescription is the ciphertext the request sends.
-func (c *Chat) PrepareGroupDescriptionChange(params GroupDescriptionChangeParams) (*PreparedAction, error) {
-	return c.prepareAction(params, ffiPrepareGroupDescriptionChange)
+// PrepareGroupDescriptionChange encrypts a new group description (plaintext
+// NewDescription) under the conversation key and signs the change.
+func (c *Chat) PrepareGroupDescriptionChange(params GroupDescriptionChangeParams) (*PreparedGroupMetadataChange, error) {
+	return c.prepareMetadataChange(params, ffiPrepareGroupDescriptionChange)
 }
 
 // PrepareGroupAdminsAdd signs adding group admins.
@@ -474,6 +475,23 @@ func (c *Chat) PrepareMessageTtlRemove(params MessageTtlRemoveParams) (*Prepared
 // PrepareScreenCapture signs one screen-capture setting change.
 func (c *Chat) PrepareScreenCapture(params ScreenCaptureParams) (*PreparedAction, error) {
 	return c.prepareAction(params, ffiPrepareScreenCapture)
+}
+
+func (c *Chat) prepareMetadataChange(params any, call func(handle, string) (string, error)) (*PreparedGroupMetadataChange, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := call(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var out PreparedGroupMetadataChange
+	if err := json.Unmarshal([]byte(data), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (c *Chat) prepareAction(params any, call func(handle, string) (string, error)) (*PreparedAction, error) {
@@ -679,16 +697,10 @@ func (c *Chat) DecryptConversationKey(encryptedKeyB64 string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(keyB64)
 }
 
-// Encrypt encrypts a UTF-8 plaintext string with the raw 32-byte conversation
-// key (metadata fields).
-// Returns base64-encoded ciphertext (same wire format as message content encryption).
-func (c *Chat) Encrypt(plaintext string, conversationKey []byte) (string, error) {
-	defer runtime.KeepAlive(c)
-	return ffiEncrypt(c.h, plaintext, base64.StdEncoding.EncodeToString(conversationKey))
-}
-
-// Decrypt decrypts base64 ciphertext to a UTF-8 plaintext string (metadata fields)
-// with the raw 32-byte conversation key.
+// Decrypt decrypts a group title, avatar URL, or description the X API
+// returns for a conversation (base64 ciphertext) with the raw 32-byte
+// conversation key. Group changes in events need no call of their own:
+// DecryptEvent returns them decrypted.
 func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, error) {
 	defer runtime.KeepAlive(c)
 	return ffiDecrypt(c.h, ciphertextB64, base64.StdEncoding.EncodeToString(conversationKey))

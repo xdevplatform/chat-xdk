@@ -456,14 +456,6 @@ func ffiFileDecryptorFree(h fileDecryptorHandle) {
 	C.chat_xdk_file_decryptor_free(h)
 }
 
-func ffiEncrypt(h handle, plaintext, ckeyB64 string) (string, error) {
-	cPlain := C.CString(plaintext)
-	defer C.free(unsafe.Pointer(cPlain))
-	cKey := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(cKey))
-	return ffiResult(C.chat_xdk_encrypt(h, cPlain, cKey))
-}
-
 func ffiDecrypt(h handle, ciphertextB64, ckeyB64 string) (string, error) {
 	cCipher := C.CString(ciphertextB64)
 	defer C.free(unsafe.Pointer(cCipher))

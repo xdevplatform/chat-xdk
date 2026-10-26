@@ -753,11 +753,15 @@ pub enum GroupChange {
         avatar_url: Option<String>,
     },
 
-    /// Group title changed.
+    /// Group title changed. `new_title` is the decrypted title.
     TitleChanged { new_title: String },
 
-    /// Group avatar changed.
+    /// Group avatar changed. `new_avatar_url` is the decrypted avatar URL.
     AvatarChanged { new_avatar_url: String },
+
+    /// Group description changed. `new_description` is the decrypted
+    /// description.
+    DescriptionChanged { new_description: String },
 
     /// Admins were added.
     AdminsAdded { admin_ids: Vec<String> },
@@ -1438,10 +1442,32 @@ pub struct PreparedConversationChange {
     pub action_signatures: Vec<ActionSignature>,
 }
 
+/// A signed group title, avatar, or description change, ready to send to
+/// the X API.
+///
+/// Returned by `prepare_group_title_change`, `prepare_group_avatar_change`,
+/// and `prepare_group_description_change`, which encrypt the plaintext
+/// value under the conversation key before signing it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+pub struct PreparedGroupMetadataChange {
+    /// The value encrypted under the conversation key, base64: the title,
+    /// avatar URL, or description the request sends.
+    pub encrypted_value: String,
+
+    /// Version of the conversation key the value is encrypted under.
+    pub conversation_key_version: String,
+
+    /// The signed change, as the request's `action_signatures` entries.
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub action_signatures: Vec<ActionSignature>,
+}
+
 /// Signed actions for a request that does not rotate a conversation key.
 ///
 /// Returned by `prepare_message_delete`, `prepare_mark_conversation_read`,
-/// and the group-action prepares other than `prepare_group_members_remove`.
+/// and the group-action prepares other than `prepare_group_members_remove`
+/// and the title, avatar and description changes.
 /// `prepare_group_leave` returns one entry per signed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]

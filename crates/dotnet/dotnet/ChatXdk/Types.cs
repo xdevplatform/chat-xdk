@@ -187,6 +187,27 @@ namespace ChatXdk
         public List<ActionSignature> ActionSignatures { get; init; } = new();
     }
 
+    /// <summary>
+    /// A signed group title, avatar, or description change: the value encrypted under the
+    /// conversation key and the <c>action_signatures</c> a request carries. Returned by
+    /// <see cref="Chat.PrepareGroupTitleChange"/>, <see cref="Chat.PrepareGroupAvatarChange"/>,
+    /// and <see cref="Chat.PrepareGroupDescriptionChange"/>.
+    /// </summary>
+    public sealed class PreparedGroupMetadataChange
+    {
+        /// <summary>The value encrypted under the conversation key, base64: what the request sends.</summary>
+        [JsonPropertyName("encrypted_value")]
+        public string EncryptedValue { get; init; } = "";
+
+        /// <summary>Version of the conversation key the value is encrypted under.</summary>
+        [JsonPropertyName("conversation_key_version")]
+        public string ConversationKeyVersion { get; init; } = "";
+
+        /// <summary>The signed change, as the request's <c>action_signatures</c> entries.</summary>
+        [JsonPropertyName("action_signatures")]
+        public List<ActionSignature> ActionSignatures { get; init; } = new();
+    }
+
     // Key / recipient types
 
     /// <summary>A signing key entry for <see cref="Chat.DecryptEvent"/> and <see cref="Chat.DecryptEvents"/>.</summary>
@@ -1250,6 +1271,12 @@ namespace ChatXdk
         public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
         public string ConversationId { get; }
         public IReadOnlyList<string> UserIds { get; }
+        /// <summary>The group's title, re-encrypted under the new conversation key; null leaves it out.</summary>
+        public string? Title { get; init; }
+        /// <summary>The group's avatar URL, re-encrypted under the new conversation key; null leaves it out.</summary>
+        public string? AvatarUrl { get; init; }
+        /// <summary>The group's description, re-encrypted under the new conversation key; null leaves it out.</summary>
+        public string? Description { get; init; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
     }
@@ -1265,55 +1292,76 @@ namespace ChatXdk
         public string? SigningKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupTitleChange"/>. CustomTitle is ciphertext.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupTitleChange"/>. <see cref="NewTitle"/> is plaintext: the
+    /// call encrypts it under the conversation key, <see cref="ConversationKey"/> /
+    /// <see cref="ConversationKeyVersion"/> or, both null, the key cache.
+    /// </summary>
     public sealed class GroupTitleChangeParams
     {
-        public GroupTitleChangeParams(string conversationId, string conversationKeyVersion, string customTitle)
+        public GroupTitleChangeParams(string conversationId, string newTitle)
         {
             ConversationId = conversationId;
-            ConversationKeyVersion = conversationKeyVersion;
-            CustomTitle = customTitle;
+            NewTitle = newTitle;
         }
 
         public string ConversationId { get; }
-        public string ConversationKeyVersion { get; }
-        public string CustomTitle { get; }
+        /// <summary>The group's new title, as plaintext.</summary>
+        public string NewTitle { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
+        /// <summary>Raw 32-byte conversation key; resolves from the key cache when null.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>. <see cref="NewAvatarUrl"/> is plaintext: the
+    /// call encrypts it under the conversation key, <see cref="ConversationKey"/> /
+    /// <see cref="ConversationKeyVersion"/> or, both null, the key cache.
+    /// </summary>
     public sealed class GroupAvatarChangeParams
     {
-        public GroupAvatarChangeParams(string conversationId, string conversationKeyVersion, string customAvatarUrl)
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl)
         {
             ConversationId = conversationId;
-            ConversationKeyVersion = conversationKeyVersion;
-            CustomAvatarUrl = customAvatarUrl;
+            NewAvatarUrl = newAvatarUrl;
         }
 
         public string ConversationId { get; }
-        public string ConversationKeyVersion { get; }
-        public string CustomAvatarUrl { get; }
+        /// <summary>The group's new avatar URL, as plaintext.</summary>
+        public string NewAvatarUrl { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
+        /// <summary>Raw 32-byte conversation key; resolves from the key cache when null.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupDescriptionChange"/>. CustomDescription is ciphertext.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupDescriptionChange"/>. <see cref="NewDescription"/> is plaintext: the
+    /// call encrypts it under the conversation key, <see cref="ConversationKey"/> /
+    /// <see cref="ConversationKeyVersion"/> or, both null, the key cache.
+    /// </summary>
     public sealed class GroupDescriptionChangeParams
     {
-        public GroupDescriptionChangeParams(string conversationId, string conversationKeyVersion, string customDescription)
+        public GroupDescriptionChangeParams(string conversationId, string newDescription)
         {
             ConversationId = conversationId;
-            ConversationKeyVersion = conversationKeyVersion;
-            CustomDescription = customDescription;
+            NewDescription = newDescription;
         }
 
         public string ConversationId { get; }
-        public string ConversationKeyVersion { get; }
-        public string CustomDescription { get; }
+        /// <summary>The group's new description, as plaintext.</summary>
+        public string NewDescription { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
+        /// <summary>Raw 32-byte conversation key; resolves from the key cache when null.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>Parameters for <see cref="Chat.PrepareGroupAdminsAdd"/>.</summary>

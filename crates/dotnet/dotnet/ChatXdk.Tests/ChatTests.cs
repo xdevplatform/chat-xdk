@@ -39,6 +39,9 @@ namespace ChatXdk.Tests
             [JsonPropertyName("signature_b64")] public string SignatureB64 { get; init; } = "";
             [JsonPropertyName("identity_public_key_signature_b64")] public string IdentityPublicKeySignatureB64 { get; init; } = "";
             [JsonPropertyName("event_failure_b64")] public string EventFailureB64 { get; init; } = "";
+            [JsonPropertyName("event_group_description_b64")] public string EventGroupDescriptionB64 { get; init; } = "";
+            [JsonPropertyName("event_group_description")] public string EventGroupDescription { get; init; } = "";
+            [JsonPropertyName("event_group_id")] public string EventGroupId { get; init; } = "";
             [JsonPropertyName("event_key_change_b64")] public string EventKeyChangeB64 { get; init; } = "";
             [JsonPropertyName("event_message_b64")] public string EventMessageB64 { get; init; } = "";
             [JsonPropertyName("event_reply_valid_b64")] public string EventReplyValidB64 { get; init; } = "";
@@ -800,12 +803,51 @@ namespace ChatXdk.Tests
             Assert.EndsWith(",910008", left.ActionSignatures[1].SignaturePayload);
             Assert.StartsWith("ConversationDeleteEvent,", left.ActionSignatures[2].SignaturePayload);
 
-            var title = OnlyAction(chat.PrepareGroupTitleChange(new GroupTitleChangeParams("g100", "4", "enc-title")
+            var metadata = new (PreparedGroupMetadataChange Prepared, string Prefix, string Plaintext)[]
+            {
+                (chat.PrepareGroupTitleChange(new GroupTitleChangeParams("g100", "Board: layoffs, Q3")
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                    ConversationKey = rotated.ConversationKey,
+                    ConversationKeyVersion = rotated.ConversationKeyVersion,
+                }), "GroupChangeEvent.GroupTitleChange,", "Board: layoffs, Q3"),
+                (chat.PrepareGroupAvatarChange(new GroupAvatarChangeParams("g100", "https://img/a.png")
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                    ConversationKey = rotated.ConversationKey,
+                    ConversationKeyVersion = rotated.ConversationKeyVersion,
+                }), "GroupChangeEvent.GroupAvatarUrlChange,", "https://img/a.png"),
+                (chat.PrepareGroupDescriptionChange(new GroupDescriptionChangeParams("g100", "Rules: be kind")
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                    ConversationKey = rotated.ConversationKey,
+                    ConversationKeyVersion = rotated.ConversationKeyVersion,
+                }), "GroupChangeEvent.GroupDescriptionChange,", "Rules: be kind"),
+            };
+            foreach (var (prepared, prefix, plaintext) in metadata)
+            {
+                Assert.Equal(rotated.ConversationKeyVersion, prepared.ConversationKeyVersion);
+                var payload = Assert.Single(prepared.ActionSignatures).SignaturePayload;
+                Assert.StartsWith(prefix, payload);
+                Assert.EndsWith($",{prepared.ConversationKeyVersion},{prepared.EncryptedValue}", payload);
+                Assert.DoesNotContain(plaintext, payload);
+                Assert.Equal(plaintext, chat.Decrypt(prepared.EncryptedValue, rotated.ConversationKey));
+            }
+            var uncached = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupTitleChange(
+                new GroupTitleChangeParams("g100", "Board") { SenderId = "111", SigningKeyVersion = "1" }));
+            Assert.Contains("no cached conversation key for 'g100'", uncached.Message);
+
+            var withTitle = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(remaining, "g100", new[] { "910007" })
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
-            }));
-            Assert.EndsWith(",4,enc-title", title.SignaturePayload);
+                Title = "Board",
+            });
+            Assert.Equal(3, withTitle.ActionSignatures.Count);
+            Assert.StartsWith("GroupChangeEvent.GroupTitleChange,", withTitle.ActionSignatures[1].SignaturePayload);
 
             var blocking = OnlyAction(chat.PrepareScreenCapture(new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled)
             {
@@ -1447,6 +1489,32 @@ namespace ChatXdk.Tests
         // Failure events are unsigned by protocol: the fixture failure decodes
         // with no conversation or signing keys, and the JSON carries the
         // PascalCase discriminator values.
+        // A signed group description change: DecryptEvent returns the
+        // description decrypted under the fixture conversation key, and
+        // without that key the change fails instead of coming back as
+        // ciphertext.
+        [Fact]
+        public void Vectors_GroupDescriptionChange_DecryptsOnReceive()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+
+            var e = chat.DecryptEvent(new DecryptEventParams(v.EventGroupDescriptionB64, ConversationKeys(v))
+            {
+                SigningKeys = EventSigningKeys(v),
+            });
+            Assert.Equal("GroupChange", e.GetProperty("type").GetString());
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventGroupId, e.GetProperty("conversation_id").GetString());
+            var change = e.GetProperty("change");
+            Assert.Equal("DescriptionChanged", change.GetProperty("change_type").GetString());
+            Assert.Equal(v.EventGroupDescription, change.GetProperty("new_description").GetString());
+
+            var keyless = Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(
+                new DecryptEventParams(v.EventGroupDescriptionB64) { SigningKeys = EventSigningKeys(v) }));
+            Assert.Contains("Group description encrypted with key version", keyless.Message);
+        }
+
         [Fact]
         public void Vectors_FailureEvent_DecodesTypeAndRateLimitTier()
         {
@@ -2022,18 +2090,26 @@ namespace ChatXdk.Tests
             Assert.Equal(16u, dims.Height);
         }
 
-        // Generic UTF-8 metadata encrypt / decrypt
+        // Group metadata the X API returns: the title a title change encrypts
 
         [Fact]
-        public void EncryptDecrypt_Utf8_RoundTrip()
+        public void Decrypt_ReadsTheTitleATitleChangeSends()
         {
             using var chat = CreateUnlocked();
             var ckey = NewConvKey(chat);
             const string plaintext = "metadata payload 🌟 with unicode";
+            var parameters = new GroupTitleChangeParams("g100", plaintext)
+            {
+                SenderId = "910002",
+                SigningKeyVersion = "1",
+                ConversationKey = ckey,
+                ConversationKeyVersion = "4",
+            };
 
-            var ciphertext = chat.Encrypt(plaintext, ckey);
+            var ciphertext = chat.PrepareGroupTitleChange(parameters).EncryptedValue;
             Assert.NotEmpty(ciphertext);
             Assert.NotEqual(plaintext, ciphertext);
+            Assert.NotEqual(ciphertext, chat.PrepareGroupTitleChange(parameters).EncryptedValue);
 
             var decrypted = chat.Decrypt(ciphertext, ckey);
             Assert.Equal(plaintext, decrypted);

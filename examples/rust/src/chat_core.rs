@@ -20,9 +20,9 @@ use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventParams,
     DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
-    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams,
-    PreparedConversationChange, PublicKeyInput, PublicKeyRegistrationPayload, PublicKeys,
-    QuickReply, SigningKeyEntry,
+    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
+    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput,
+    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -394,16 +394,26 @@ impl ChatCore {
         Ok(out)
     }
 
-    // -- Generic helpers (handy for metadata + tests) -----------------------
+    // -- Group metadata -----------------------------------------------------
 
-    pub fn encrypt(
+    /// Prepare a group title change: the SDK encrypts the plaintext title
+    /// under the conversation key and signs it. Send `encrypted_value` as the
+    /// group's name and `action_signatures` on the request.
+    pub fn prepare_group_title_change(
         &self,
-        plaintext: &str,
+        conversation_id: &str,
+        title: &str,
         conversation_key: &XChatConversationKey,
-    ) -> Result<String, SdkError> {
-        self.inner.encrypt(plaintext, conversation_key)
+        conversation_key_version: &str,
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
+        self.inner.prepare_group_title_change(
+            &GroupTitleChangeParams::new(conversation_id, title)
+                .with_conversation_key(conversation_key.to_bytes(), conversation_key_version),
+        )
     }
 
+    /// Decrypt a group title, avatar URL, or description the X API returns
+    /// for a conversation.
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,

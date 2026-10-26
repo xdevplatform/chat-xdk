@@ -65,14 +65,23 @@ fn set_identity_needs_the_registered_version() {
 }
 
 #[test]
-fn generic_encrypt_decrypt_roundtrip() {
+fn group_title_change_encrypts_the_title_it_signs() {
     let v = load_vectors();
     let core = loaded_core(&v);
     let key = conversation_key(&v);
-    let plaintext = "hello from the rust example";
-    let ciphertext = core.encrypt(plaintext, &key).expect("encrypt");
-    assert_ne!(ciphertext, plaintext);
-    assert_eq!(core.decrypt(&ciphertext, &key).expect("decrypt"), plaintext);
+    let title = "hello from the rust example";
+    let prepared = core
+        .prepare_group_title_change("g123", title, &key, "1")
+        .expect("prepare_group_title_change");
+    assert_ne!(prepared.encrypted_value, title);
+    assert_eq!(prepared.conversation_key_version, "1");
+    let payload = &prepared.action_signatures[0].signature_payload;
+    assert!(payload.starts_with("GroupChangeEvent.GroupTitleChange,"), "{payload}");
+    assert!(!payload.contains(title), "{payload}");
+    assert_eq!(
+        core.decrypt(&prepared.encrypted_value, &key).expect("decrypt"),
+        title
+    );
 }
 
 #[test]

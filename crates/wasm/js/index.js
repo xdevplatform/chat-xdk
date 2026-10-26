@@ -501,7 +501,6 @@ export class ChatWithJuicebox {
   fileEncryptor(params) { return this.#inner.fileEncryptor(params); }
   decryptFile(params) { return this.#inner.decryptFile(params); }
   fileDecryptor(params) { return this.#inner.fileDecryptor(params); }
-  encrypt(plaintext, key) { return this.#inner.encrypt(plaintext, key); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
   prepareConversationKeyChange(params) { return this.#inner.prepareConversationKeyChange(params); }
   prepareGroupMembersChange(params) { return this.#inner.prepareGroupMembersChange(params); }

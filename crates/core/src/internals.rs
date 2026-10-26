@@ -260,6 +260,36 @@ pub fn frame_signed_key_change(
     )
 }
 
+/// Frame a prepared action — its encoded event detail and signature — in the
+/// backend `MessageEvent` envelope (base64), as recipients receive it.
+pub fn frame_action_signature(
+    signature: &ActionSignature,
+    sender_id: &str,
+    conversation_id: &str,
+) -> Result<String, SdkError> {
+    let detail_bytes = base64_decode(&signature.encoded_message_event_detail)?;
+    let cursor = Cursor::new(detail_bytes.as_slice());
+    let mut raw = TBinaryInputProtocol::new(cursor, true);
+    let mut protocol = BoundedProtocol::new(&mut raw);
+    let detail = MessageEventDetail::read_from_in_protocol(&mut protocol)
+        .map_err(|e| SdkError::Parse(format!("action detail did not parse: {e}")))?;
+    let signed = &signature.message_event_signature;
+    let sig_struct = MessageEventSignature::new(
+        Some(signed.signature.clone()),
+        Some(signed.public_key_version.clone()),
+        Some(signed.signature_version.clone()),
+        None,
+        None,
+    );
+    frame_event(
+        &signature.message_id,
+        sender_id,
+        conversation_id,
+        detail,
+        Some(sig_struct),
+    )
+}
+
 /// Frame an unsigned `MessageFailureEvent` in the backend `MessageEvent`
 /// envelope (base64). Failure events carry no signature by protocol, so the
 /// output is fully deterministic. `failure_type` and `rate_limit_tier` are

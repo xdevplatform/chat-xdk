@@ -330,6 +330,12 @@ struct FfiGroupMembersRemoveParams {
     conversation_id: String,
     user_ids: Vec<String>,
     #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    avatar_url: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
     signing_key_version: Option<String>,
@@ -351,34 +357,43 @@ struct FfiGroupLeaveParams {
 #[derive(serde::Deserialize)]
 struct FfiGroupTitleChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_title: String,
+    new_title: String,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
     signing_key_version: Option<String>,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct FfiGroupAvatarChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_avatar_url: String,
+    new_avatar_url: String,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
     signing_key_version: Option<String>,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct FfiGroupDescriptionChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_description: String,
+    new_description: String,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
     signing_key_version: Option<String>,
+    #[serde(default)]
+    conversation_key: Option<String>,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1483,6 +1498,18 @@ fn ffi_prepared_action(
     }
 }
 
+fn ffi_prepared_metadata_change(
+    prepared: Result<chat_xdk_core::PreparedGroupMetadataChange, chat_xdk_core::error::SdkError>,
+) -> FfiResult {
+    match prepared {
+        Ok(prepared) => match serde_json::to_string(&prepared) {
+            Ok(json) => ok_data(&json),
+            Err(e) => err_result(&e.to_string()),
+        },
+        Err(e) => err_from(e),
+    }
+}
+
 fn ffi_prepared_change(
     prepared: Result<chat_xdk_core::PreparedConversationChange, chat_xdk_core::error::SdkError>,
 ) -> FfiResult {
@@ -1499,12 +1526,13 @@ fn ffi_prepared_change(
 /// members who stay.
 ///
 /// `params_json` — `public_keys` (the identity keys of the members who
-/// stay), `conversation_id`, `user_ids`, plus optional `sender_id` /
-/// `signing_key_version`.
+/// stay), `conversation_id`, `user_ids`, plus optional `title`, `avatar_url`
+/// and `description` (the group's plaintext metadata, re-encrypted under the
+/// new key) and `sender_id` / `signing_key_version`.
 ///
 /// Returns JSON `PreparedConversationChange`: `conversation_key` is the new
-/// raw key base64, and `action_signatures` is the removal and then the key
-/// change.
+/// raw key base64, and `action_signatures` is the removal, a title, avatar
+/// and description change for each one set, then the key change.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_members_remove(
     handle: *const ChatHandle,
@@ -1521,6 +1549,9 @@ pub extern "C" fn chat_xdk_prepare_group_members_remove(
         };
         let mut params =
             GroupMembersRemoveParams::new(p.public_keys, p.conversation_id, p.user_ids);
+        params.title = p.title;
+        params.avatar_url = p.avatar_url;
+        params.description = p.description;
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
         ffi_prepared_change(h.inner.prepare_group_members_remove(&params))
@@ -1559,13 +1590,17 @@ pub extern "C" fn chat_xdk_prepare_group_leave(
     })
 }
 
-/// Sign a group title change.
+/// Encrypt a new group title under the conversation key and sign the
+/// change.
 ///
-/// `params_json` — `conversation_id`, `conversation_key_version`,
-/// `custom_title` (the ciphertext the request sends), plus optional
-/// `sender_id` / `signing_key_version`.
+/// `params_json` — `conversation_id`, `new_title` (plaintext), plus
+/// optional `sender_id` / `signing_key_version` (unset resolves from the
+/// session identity) and `conversation_key` (base64 raw 32-byte key) /
+/// `conversation_key_version` (unset resolves from the opt-in key cache).
 ///
-/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+/// Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+/// ciphertext the request sends), `conversation_key_version`, and
+/// `action_signatures`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_title_change(
     handle: *const ChatHandle,
@@ -1580,23 +1615,30 @@ pub extern "C" fn chat_xdk_prepare_group_title_change(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let mut params = GroupTitleChangeParams::new(
-            p.conversation_id,
-            p.conversation_key_version,
-            p.custom_title,
-        );
+        let ckey_bytes = match decode_opt_ckey_bytes(p.conversation_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let mut params = GroupTitleChangeParams::new(p.conversation_id, p.new_title);
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
-        ffi_prepared_action(h.inner.prepare_group_title_change(&params))
+        params.conversation_key = ckey_bytes;
+        params.conversation_key_version = p.conversation_key_version;
+        ffi_prepared_metadata_change(h.inner.prepare_group_title_change(&params))
     })
 }
 
-/// Sign a group avatar change.
+/// Encrypt a new group avatar URL under the conversation key and sign the
+/// change.
 ///
-/// `params_json` — `conversation_id`, `conversation_key_version`,
-/// `custom_avatar_url`, plus optional `sender_id` / `signing_key_version`.
+/// `params_json` — `conversation_id`, `new_avatar_url` (plaintext), plus
+/// optional `sender_id` / `signing_key_version` (unset resolves from the
+/// session identity) and `conversation_key` (base64 raw 32-byte key) /
+/// `conversation_key_version` (unset resolves from the opt-in key cache).
 ///
-/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+/// Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+/// ciphertext the request sends), `conversation_key_version`, and
+/// `action_signatures`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_avatar_change(
     handle: *const ChatHandle,
@@ -1611,24 +1653,30 @@ pub extern "C" fn chat_xdk_prepare_group_avatar_change(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let mut params = GroupAvatarChangeParams::new(
-            p.conversation_id,
-            p.conversation_key_version,
-            p.custom_avatar_url,
-        );
+        let ckey_bytes = match decode_opt_ckey_bytes(p.conversation_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let mut params = GroupAvatarChangeParams::new(p.conversation_id, p.new_avatar_url);
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
-        ffi_prepared_action(h.inner.prepare_group_avatar_change(&params))
+        params.conversation_key = ckey_bytes;
+        params.conversation_key_version = p.conversation_key_version;
+        ffi_prepared_metadata_change(h.inner.prepare_group_avatar_change(&params))
     })
 }
 
-/// Sign a group description change.
+/// Encrypt a new group description under the conversation key and sign the
+/// change.
 ///
-/// `params_json` — `conversation_id`, `conversation_key_version`,
-/// `custom_description` (the ciphertext the request sends), plus optional
-/// `sender_id` / `signing_key_version`.
+/// `params_json` — `conversation_id`, `new_description` (plaintext), plus
+/// optional `sender_id` / `signing_key_version` (unset resolves from the
+/// session identity) and `conversation_key` (base64 raw 32-byte key) /
+/// `conversation_key_version` (unset resolves from the opt-in key cache).
 ///
-/// Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+/// Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+/// ciphertext the request sends), `conversation_key_version`, and
+/// `action_signatures`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_description_change(
     handle: *const ChatHandle,
@@ -1643,14 +1691,16 @@ pub extern "C" fn chat_xdk_prepare_group_description_change(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let mut params = GroupDescriptionChangeParams::new(
-            p.conversation_id,
-            p.conversation_key_version,
-            p.custom_description,
-        );
+        let ckey_bytes = match decode_opt_ckey_bytes(p.conversation_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let mut params = GroupDescriptionChangeParams::new(p.conversation_id, p.new_description);
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
-        ffi_prepared_action(h.inner.prepare_group_description_change(&params))
+        params.conversation_key = ckey_bytes;
+        params.conversation_key_version = p.conversation_key_version;
+        ffi_prepared_metadata_change(h.inner.prepare_group_description_change(&params))
     })
 }
 
@@ -2277,38 +2327,9 @@ pub extern "C" fn chat_xdk_decrypt_conversation_key(
     })
 }
 
-/// Encrypt a UTF-8 plaintext string; returns base64 ciphertext (XSalsa20-Poly1305).
-#[no_mangle]
-pub extern "C" fn chat_xdk_encrypt(
-    handle: *const ChatHandle,
-    plaintext: *const c_char,
-    conversation_key_b64: *const c_char,
-) -> FfiResult {
-    catch_ffi(|| {
-        if handle.is_null() {
-            return err_result("Null handle");
-        }
-        let h = unsafe { &*handle };
-        let plaintext = try_str!(plaintext);
-        let ckey_b64 = try_str!(conversation_key_b64);
-
-        let ckey_bytes = match BASE64.decode(ckey_b64) {
-            Ok(b) => b,
-            Err(e) => return err_result(&format!("Base64 error: {}", e)),
-        };
-        let ckey = match XChatConversationKey::from_bytes(ckey_bytes) {
-            Some(k) => k,
-            None => return err_result("Invalid conversation key"),
-        };
-
-        match h.inner.encrypt(plaintext, &ckey) {
-            Ok(s) => ok_data(&s),
-            Err(e) => err_from(e),
-        }
-    })
-}
-
-/// Decrypt base64 ciphertext to UTF-8 plaintext (metadata fields).
+/// Decrypt a group title, avatar URL, or description the X API returns for a
+/// conversation: base64 ciphertext under the conversation key (base64 raw
+/// 32-byte key), decrypted to UTF-8 plaintext.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt(
     handle: *const ChatHandle,

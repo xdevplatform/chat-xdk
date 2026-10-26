@@ -320,12 +320,13 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
  * members who stay.
  *
  * `params_json` — `public_keys` (the identity keys of the members who
- * stay), `conversation_id`, `user_ids`, plus optional `sender_id` /
- * `signing_key_version`.
+ * stay), `conversation_id`, `user_ids`, plus optional `title`, `avatar_url`
+ * and `description` (the group's plaintext metadata, re-encrypted under the
+ * new key) and `sender_id` / `signing_key_version`.
  *
  * Returns JSON `PreparedConversationChange`: `conversation_key` is the new
- * raw key base64, and `action_signatures` is the removal and then the key
- * change.
+ * raw key base64, and `action_signatures` is the removal, a title, avatar
+ * and description change for each one set, then the key change.
  */
 struct FfiResult chat_xdk_prepare_group_members_remove(const struct ChatHandle *handle,
                                                        const char *params_json);
@@ -345,36 +346,49 @@ struct FfiResult chat_xdk_prepare_group_leave(const struct ChatHandle *handle,
                                               const char *params_json);
 
 /**
- * Sign a group title change.
+ * Encrypt a new group title under the conversation key and sign the
+ * change.
  *
- * `params_json` — `conversation_id`, `conversation_key_version`,
- * `custom_title` (the ciphertext the request sends), plus optional
- * `sender_id` / `signing_key_version`.
+ * `params_json` — `conversation_id`, `new_title` (plaintext), plus
+ * optional `sender_id` / `signing_key_version` (unset resolves from the
+ * session identity) and `conversation_key` (base64 raw 32-byte key) /
+ * `conversation_key_version` (unset resolves from the opt-in key cache).
  *
- * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+ * Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+ * ciphertext the request sends), `conversation_key_version`, and
+ * `action_signatures`.
  */
 struct FfiResult chat_xdk_prepare_group_title_change(const struct ChatHandle *handle,
                                                      const char *params_json);
 
 /**
- * Sign a group avatar change.
+ * Encrypt a new group avatar URL under the conversation key and sign the
+ * change.
  *
- * `params_json` — `conversation_id`, `conversation_key_version`,
- * `custom_avatar_url`, plus optional `sender_id` / `signing_key_version`.
+ * `params_json` — `conversation_id`, `new_avatar_url` (plaintext), plus
+ * optional `sender_id` / `signing_key_version` (unset resolves from the
+ * session identity) and `conversation_key` (base64 raw 32-byte key) /
+ * `conversation_key_version` (unset resolves from the opt-in key cache).
  *
- * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+ * Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+ * ciphertext the request sends), `conversation_key_version`, and
+ * `action_signatures`.
  */
 struct FfiResult chat_xdk_prepare_group_avatar_change(const struct ChatHandle *handle,
                                                       const char *params_json);
 
 /**
- * Sign a group description change.
+ * Encrypt a new group description under the conversation key and sign the
+ * change.
  *
- * `params_json` — `conversation_id`, `conversation_key_version`,
- * `custom_description` (the ciphertext the request sends), plus optional
- * `sender_id` / `signing_key_version`.
+ * `params_json` — `conversation_id`, `new_description` (plaintext), plus
+ * optional `sender_id` / `signing_key_version` (unset resolves from the
+ * session identity) and `conversation_key` (base64 raw 32-byte key) /
+ * `conversation_key_version` (unset resolves from the opt-in key cache).
  *
- * Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+ * Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+ * ciphertext the request sends), `conversation_key_version`, and
+ * `action_signatures`.
  */
 struct FfiResult chat_xdk_prepare_group_description_change(const struct ChatHandle *handle,
                                                            const char *params_json);
@@ -593,14 +607,9 @@ struct FfiResult chat_xdk_decrypt_conversation_key(const struct ChatHandle *hand
                                                    const char *encrypted_key_b64);
 
 /**
- * Encrypt a UTF-8 plaintext string; returns base64 ciphertext (XSalsa20-Poly1305).
- */
-struct FfiResult chat_xdk_encrypt(const struct ChatHandle *handle,
-                                  const char *plaintext,
-                                  const char *conversation_key_b64);
-
-/**
- * Decrypt base64 ciphertext to UTF-8 plaintext (metadata fields, same wire as message content).
+ * Decrypt a group title, avatar URL, or description the X API returns for a
+ * conversation: base64 ciphertext under the conversation key (base64 raw
+ * 32-byte key), decrypted to UTF-8 plaintext.
  */
 struct FfiResult chat_xdk_decrypt(const struct ChatHandle *handle,
                                   const char *ciphertext_b64,

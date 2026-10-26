@@ -23,6 +23,9 @@ struct Vectors {
     signature_b64: String,
     identity_public_key_signature_b64: String,
     event_failure_b64: String,
+    event_group_description_b64: String,
+    event_group_description: String,
+    event_group_id: String,
     event_key_change_b64: String,
     event_message_b64: String,
     event_reply_valid_b64: String,
@@ -279,6 +282,54 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
                 .with_signing_keys(signing_keys.to_vec()),
         )
         .is_err());
+}
+
+#[test]
+fn vectors_group_description_change_decrypts_on_receive() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    let conversation_keys = std::collections::HashMap::from([(
+        v.event_conversation_key_version.clone(),
+        XChatConversationKey::from_bytes(B64.decode(&v.conversation_key_b64).unwrap()).unwrap(),
+    )]);
+    let event = core
+        .decrypt_event(
+            DecryptEventParams::new(v.event_group_description_b64.clone(), conversation_keys)
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => {
+            assert!(change.verified);
+            assert_eq!(
+                change.meta.conversation_id.as_deref(),
+                Some(v.event_group_id.as_str())
+            );
+            match change.change {
+                chat_xdk_core::GroupChange::DescriptionChanged { new_description } => {
+                    assert_eq!(new_description, v.event_group_description)
+                }
+                other => panic!("Expected DescriptionChanged, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+
+    // Without the key the description was encrypted under, the change does
+    // not decrypt: it never comes back as ciphertext.
+    let err = core
+        .decrypt_event(
+            DecryptEventParams::new(v.event_group_description_b64.clone(), Default::default())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "Group description encrypted with key version '{}'",
+            v.event_conversation_key_version
+        )),
+        "got: {err}"
+    );
 }
 
 #[test]

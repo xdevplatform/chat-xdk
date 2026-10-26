@@ -362,12 +362,23 @@ export class ChatCore {
     return concatBytes(parts);
   }
 
-  // -- Generic helpers (handy for metadata + tests) -------------------------
+  // -- Group metadata ---------------------------------------------------------
 
-  encrypt(plaintext, conversationKey) {
-    return this.#chat.encrypt(plaintext, conversationKey);
+  /**
+   * Prepare a group title change: the SDK encrypts the plaintext title under
+   * the conversation key and signs it. Send `encryptedValue` as the group's
+   * name and `actionSignatures` on the request.
+   */
+  prepareGroupTitleChange({ conversationId, title, conversationKey, conversationKeyVersion }) {
+    return this.#chat.prepareGroupTitleChange({
+      conversationId,
+      newTitle: title,
+      conversationKey,
+      conversationKeyVersion,
+    });
   }
 
+  /** Decrypt a group title, avatar URL, or description the X API returns. */
   decrypt(ciphertextB64, conversationKey) {
     return this.#chat.decrypt(ciphertextB64, conversationKey);
   }

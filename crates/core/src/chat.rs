@@ -409,16 +409,8 @@ impl Chat {
         self.inner.file_decryptor(params)
     }
 
-    /// Encrypt a UTF-8 string using XSalsa20-Poly1305 and return base64.
-    pub fn encrypt(
-        &self,
-        plaintext: &str,
-        conversation_key: &XChatConversationKey,
-    ) -> Result<String, SdkError> {
-        self.inner.encrypt(plaintext, conversation_key)
-    }
-
-    /// Decrypt a base64-encoded XSalsa20-Poly1305 ciphertext to a UTF-8 string.
+    /// Decrypt a group title, avatar URL, or description the X API returns
+    /// for a conversation; see [`crate::ChatCore::decrypt`].
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,
@@ -488,25 +480,26 @@ impl Chat {
     ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_group_leave(params)
     }
-    /// Sign a group title change.
+    /// Encrypt a new group title and sign the change. See
+    /// [`crate::ChatCore::prepare_group_title_change`].
     pub fn prepare_group_title_change(
         &self,
         params: &GroupTitleChangeParams,
-    ) -> Result<crate::PreparedAction, SdkError> {
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
         self.inner.prepare_group_title_change(params)
     }
-    /// Sign a group avatar change.
+    /// Encrypt a new group avatar URL and sign the change.
     pub fn prepare_group_avatar_change(
         &self,
         params: &GroupAvatarChangeParams,
-    ) -> Result<crate::PreparedAction, SdkError> {
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
         self.inner.prepare_group_avatar_change(params)
     }
-    /// Sign a group description change.
+    /// Encrypt a new group description and sign the change.
     pub fn prepare_group_description_change(
         &self,
         params: &GroupDescriptionChangeParams,
-    ) -> Result<crate::PreparedAction, SdkError> {
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
         self.inner.prepare_group_description_change(params)
     }
     /// Sign adding group admins.

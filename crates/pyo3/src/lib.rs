@@ -303,6 +303,24 @@ fn prepared_change_to_pydict(
     Ok(outer.into())
 }
 
+/// Build the Python dict for a prepared title, avatar or description change.
+fn prepared_metadata_change_to_pydict(
+    py: Python<'_>,
+    prepared: &chat_xdk_core::PreparedGroupMetadataChange,
+) -> PyResult<Py<PyAny>> {
+    let outer = pyo3::types::PyDict::new(py);
+    outer.set_item("encrypted_value", &prepared.encrypted_value)?;
+    outer.set_item(
+        "conversation_key_version",
+        &prepared.conversation_key_version,
+    )?;
+    outer.set_item(
+        "action_signatures",
+        action_signatures_to_pylist(py, &prepared.action_signatures)?,
+    )?;
+    Ok(outer.into())
+}
+
 /// Build the Python dict for a prepared delete or read receipt.
 fn prepared_action_to_pydict(
     py: Python<'_>,
@@ -1139,12 +1157,17 @@ fn apply_identity(
 /// Parameters for ``Chat.prepare_group_members_remove``.
 ///
 /// ``public_keys`` are the identity keys of the members who stay: the call
-/// rotates the conversation key for them.
+/// rotates the conversation key for them. ``title``, ``avatar_url`` and
+/// ``description`` are the group's plaintext metadata; each one set is
+/// encrypted under the new key and signed with the removal.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersRemoveParams {
     public_keys: Py<PyAny>,
     conversation_id: String,
     user_ids: Py<PyAny>,
+    title: Option<String>,
+    avatar_url: Option<String>,
+    description: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1152,11 +1175,15 @@ pub struct GroupMembersRemoveParams {
 #[pymethods]
 impl GroupMembersRemoveParams {
     #[new]
-    #[pyo3(signature = (public_keys, conversation_id, user_ids, *, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (public_keys, conversation_id, user_ids, *, title=None, avatar_url=None, description=None, sender_id=None, signing_key_version=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         public_keys: Py<PyAny>,
         conversation_id: String,
         user_ids: Py<PyAny>,
+        title: Option<String>,
+        avatar_url: Option<String>,
+        description: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
     ) -> Self {
@@ -1164,6 +1191,9 @@ impl GroupMembersRemoveParams {
             public_keys,
             conversation_id,
             user_ids,
+            title,
+            avatar_url,
+            description,
             sender_id,
             signing_key_version,
         }
@@ -1177,6 +1207,9 @@ impl GroupMembersRemoveParams {
             self.conversation_id.as_str(),
             extract_field(py, &self.user_ids, "user_ids")?,
         );
+        params.title = self.title.clone();
+        params.avatar_url = self.avatar_url.clone();
+        params.description = self.description.clone();
         apply_identity(
             &mut params.sender_id,
             &mut params.signing_key_version,
@@ -1234,33 +1267,38 @@ impl GroupLeaveParams {
 
 /// Parameters for ``Chat.prepare_group_title_change``.
 ///
-/// ``custom_title`` is the ciphertext the request sends.
+/// ``new_title`` is plaintext: the call encrypts it under the conversation
+/// key, the explicit ``conversation_key`` / ``conversation_key_version``
+/// pair or, both ``None``, the opt-in key cache.
 #[pyclass(get_all, set_all)]
 pub struct GroupTitleChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_title: String,
+    new_title: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 #[pymethods]
 impl GroupTitleChangeParams {
     #[new]
-    #[pyo3(signature = (conversation_id, conversation_key_version, custom_title, *, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (conversation_id, new_title, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         conversation_id: String,
-        conversation_key_version: String,
-        custom_title: String,
+        new_title: String,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
     ) -> Self {
         Self {
             conversation_id,
-            conversation_key_version,
-            custom_title,
+            new_title,
             sender_id,
             signing_key_version,
+            conversation_key,
+            conversation_key_version,
         }
     }
 }
@@ -1269,42 +1307,50 @@ impl GroupTitleChangeParams {
     fn to_core(&self) -> chat_xdk_core::GroupTitleChangeParams {
         let mut params = chat_xdk_core::GroupTitleChangeParams::new(
             self.conversation_id.as_str(),
-            self.conversation_key_version.as_str(),
-            self.custom_title.as_str(),
+            self.new_title.as_str(),
         );
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
         params
     }
 }
 
 /// Parameters for ``Chat.prepare_group_avatar_change``.
+///
+/// ``new_avatar_url`` is plaintext: the call encrypts it under the conversation
+/// key, the explicit ``conversation_key`` / ``conversation_key_version``
+/// pair or, both ``None``, the opt-in key cache.
 #[pyclass(get_all, set_all)]
 pub struct GroupAvatarChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_avatar_url: String,
+    new_avatar_url: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 #[pymethods]
 impl GroupAvatarChangeParams {
     #[new]
-    #[pyo3(signature = (conversation_id, conversation_key_version, custom_avatar_url, *, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (conversation_id, new_avatar_url, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         conversation_id: String,
-        conversation_key_version: String,
-        custom_avatar_url: String,
+        new_avatar_url: String,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
     ) -> Self {
         Self {
             conversation_id,
-            conversation_key_version,
-            custom_avatar_url,
+            new_avatar_url,
             sender_id,
             signing_key_version,
+            conversation_key,
+            conversation_key_version,
         }
     }
 }
@@ -1313,44 +1359,50 @@ impl GroupAvatarChangeParams {
     fn to_core(&self) -> chat_xdk_core::GroupAvatarChangeParams {
         let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
             self.conversation_id.as_str(),
-            self.conversation_key_version.as_str(),
-            self.custom_avatar_url.as_str(),
+            self.new_avatar_url.as_str(),
         );
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
         params
     }
 }
 
 /// Parameters for ``Chat.prepare_group_description_change``.
 ///
-/// ``custom_description`` is the ciphertext the request sends.
+/// ``new_description`` is plaintext: the call encrypts it under the conversation
+/// key, the explicit ``conversation_key`` / ``conversation_key_version``
+/// pair or, both ``None``, the opt-in key cache.
 #[pyclass(get_all, set_all)]
 pub struct GroupDescriptionChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_description: String,
+    new_description: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 #[pymethods]
 impl GroupDescriptionChangeParams {
     #[new]
-    #[pyo3(signature = (conversation_id, conversation_key_version, custom_description, *, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (conversation_id, new_description, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     fn new(
         conversation_id: String,
-        conversation_key_version: String,
-        custom_description: String,
+        new_description: String,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
     ) -> Self {
         Self {
             conversation_id,
-            conversation_key_version,
-            custom_description,
+            new_description,
             sender_id,
             signing_key_version,
+            conversation_key,
+            conversation_key_version,
         }
     }
 }
@@ -1359,11 +1411,12 @@ impl GroupDescriptionChangeParams {
     fn to_core(&self) -> chat_xdk_core::GroupDescriptionChangeParams {
         let mut params = chat_xdk_core::GroupDescriptionChangeParams::new(
             self.conversation_id.as_str(),
-            self.conversation_key_version.as_str(),
-            self.custom_description.as_str(),
+            self.new_description.as_str(),
         );
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
         params
     }
 }
@@ -2715,29 +2768,9 @@ impl Chat {
         Ok(FileDecryptor { inner: Some(inner) })
     }
 
-    /// Encrypt a UTF-8 string and return base64 ciphertext.
-    ///
-    /// Use for metadata fields like group names before sending to the API.
-    ///
-    /// Args:
-    ///     plaintext: The UTF-8 string to encrypt.
-    ///     conversation_key: Raw 32-byte conversation key (``bytes``).
-    ///
-    /// Returns:
-    ///     Base64-encoded ciphertext (``str``).
-    fn encrypt(&self, plaintext: &str, conversation_key: &[u8]) -> PyResult<String> {
-        let ckey =
-            XChatConversationKey::from_bytes(conversation_key.to_vec()).ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid conversation key (expected 32 bytes)",
-                )
-            })?;
-        self.inner.encrypt(plaintext, &ckey).map_err(to_py_err)
-    }
-
-    /// Decrypt a base64-encoded ciphertext and return the UTF-8 plaintext.
-    ///
-    /// Use for metadata fields like group names returned by the API.
+    /// Decrypt a group title, avatar URL, or description the X API returns
+    /// for a conversation. Group changes in events need no call of their
+    /// own: ``decrypt_event`` returns them decrypted.
     ///
     /// Args:
     ///     ciphertext_b64: Base64-encoded ciphertext (``str``).
@@ -2925,7 +2958,11 @@ impl Chat {
         prepared_action_to_pydict(py, &prepared)
     }
 
-    /// Sign a group title change.
+    /// Encrypt a new group title under the conversation key and sign the
+    /// change.
+    ///
+    /// Returns a dict: ``encrypted_value`` (the base64 ciphertext the request
+    /// sends), ``conversation_key_version``, and ``action_signatures``.
     fn prepare_group_title_change(
         &self,
         py: Python<'_>,
@@ -2935,10 +2972,14 @@ impl Chat {
             .inner
             .prepare_group_title_change(&params.to_core())
             .map_err(to_py_err)?;
-        prepared_action_to_pydict(py, &prepared)
+        prepared_metadata_change_to_pydict(py, &prepared)
     }
 
-    /// Sign a group avatar change.
+    /// Encrypt a new group avatar URL under the conversation key and sign the
+    /// change.
+    ///
+    /// Returns a dict: ``encrypted_value`` (the base64 ciphertext the request
+    /// sends), ``conversation_key_version``, and ``action_signatures``.
     fn prepare_group_avatar_change(
         &self,
         py: Python<'_>,
@@ -2948,10 +2989,14 @@ impl Chat {
             .inner
             .prepare_group_avatar_change(&params.to_core())
             .map_err(to_py_err)?;
-        prepared_action_to_pydict(py, &prepared)
+        prepared_metadata_change_to_pydict(py, &prepared)
     }
 
-    /// Sign a group description change.
+    /// Encrypt a new group description under the conversation key and sign the
+    /// change.
+    ///
+    /// Returns a dict: ``encrypted_value`` (the base64 ciphertext the request
+    /// sends), ``conversation_key_version``, and ``action_signatures``.
     fn prepare_group_description_change(
         &self,
         py: Python<'_>,
@@ -2961,7 +3006,7 @@ impl Chat {
             .inner
             .prepare_group_description_change(&params.to_core())
             .map_err(to_py_err)?;
-        prepared_action_to_pydict(py, &prepared)
+        prepared_metadata_change_to_pydict(py, &prepared)
     }
 
     /// Sign adding group admins.

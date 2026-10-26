@@ -325,12 +325,23 @@ public final class ChatCore implements AutoCloseable {
         }
     }
 
-    // -- Generic helpers (handy for metadata + tests) -----------------------
+    // -- Group metadata -------------------------------------------------------
 
-    public String encrypt(String plaintext, byte[] conversationKey) {
-        return chat.encrypt(plaintext, conversationKey);
+    /**
+     * Prepare a group title change: the SDK encrypts the plaintext title under the
+     * conversation key and signs it. Send {@code encryptedValue} as the group's name and
+     * {@code actionSignatures} on the request.
+     */
+    public PreparedGroupMetadataChange prepareGroupTitleChange(
+            String conversationId, String title, byte[] conversationKey, String conversationKeyVersion)
+            throws Exception {
+        GroupTitleChangeParams params = new GroupTitleChangeParams(conversationId, title);
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        return chat.prepareGroupTitleChange(params);
     }
 
+    /** Decrypt a group title, avatar URL, or description the X API returns. */
     public String decrypt(String ciphertextB64, byte[] conversationKey) {
         return chat.decrypt(ciphertextB64, conversationKey);
     }

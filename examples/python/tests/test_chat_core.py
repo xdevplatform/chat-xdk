@@ -69,15 +69,21 @@ class TestChatCore(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "signing key version unknown"):
             core.set_identity("12345")
 
-    def test_generic_encrypt_decrypt_roundtrip(self):
-        # A real round-trip through the SDK: encrypt then decrypt must return
-        # the original plaintext (not a hardcoded echo).
+    def test_group_title_change_encrypts_the_title_it_signs(self):
+        # A real round-trip through the SDK: the title change signs the
+        # encrypted title, which decrypts back to the original (not a
+        # hardcoded echo).
         core = self._loaded_core()
+        core.set_identity(self.vectors["event_sender_id"])
         conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
-        plaintext = "hello from the chatbot example"
-        ciphertext = core.encrypt(plaintext, conv_key)
-        self.assertNotEqual(ciphertext, plaintext)
-        self.assertEqual(core.decrypt(ciphertext, conv_key), plaintext)
+        title = "hello from the chatbot example"
+        prepared = core.prepare_group_title_change("g123", title, conv_key, "1")
+        self.assertNotEqual(prepared["encrypted_value"], title)
+        self.assertEqual(prepared["conversation_key_version"], "1")
+        payload = prepared["action_signatures"][0]["signature_payload"]
+        self.assertTrue(payload.startswith("GroupChangeEvent.GroupTitleChange,"), payload)
+        self.assertNotIn(title, payload)
+        self.assertEqual(core.decrypt(prepared["encrypted_value"], conv_key), title)
 
     def test_conversation_key_prepare_and_decrypt_roundtrip(self):
         # Conversation-key handling: prepare a fresh key for ourselves, then

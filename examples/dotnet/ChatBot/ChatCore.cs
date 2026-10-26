@@ -263,10 +263,22 @@ public sealed class ChatCore : IDisposable
         return output.ToArray();
     }
 
-    // -- Generic helpers (handy for metadata + tests) -----------------------
+    // -- Group metadata -------------------------------------------------------
 
-    public string Encrypt(string plaintext, byte[] conversationKey) => _chat.Encrypt(plaintext, conversationKey);
+    /// <summary>
+    /// Prepare a group title change: the SDK encrypts the plaintext title under the
+    /// conversation key and signs it. Send <c>EncryptedValue</c> as the group's name and
+    /// <c>ActionSignatures</c> on the request.
+    /// </summary>
+    public PreparedGroupMetadataChange PrepareGroupTitleChange(
+        string conversationId, string title, byte[] conversationKey, string conversationKeyVersion)
+        => _chat.PrepareGroupTitleChange(new GroupTitleChangeParams(conversationId, title)
+        {
+            ConversationKey = conversationKey,
+            ConversationKeyVersion = conversationKeyVersion,
+        });
 
+    /// <summary>Decrypt a group title, avatar URL, or description the X API returns.</summary>
     public string Decrypt(string ciphertextB64, byte[] conversationKey) => _chat.Decrypt(ciphertextB64, conversationKey);
 
     public void Dispose() => _chat.Dispose();

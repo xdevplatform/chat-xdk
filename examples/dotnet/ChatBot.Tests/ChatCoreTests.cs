@@ -93,15 +93,20 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void Generic_Encrypt_Decrypt_Roundtrip()
+    public void Group_Title_Change_Encrypts_The_Title_It_Signs()
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
+        core.SetIdentity("12345");
         var key = Convert.FromBase64String(v.ConversationKeyB64);
-        const string plaintext = "hello from the dotnet example";
-        var ciphertext = core.Encrypt(plaintext, key);
-        Assert.NotEqual(plaintext, ciphertext);
-        Assert.Equal(plaintext, core.Decrypt(ciphertext, key));
+        const string title = "hello from the dotnet example";
+        var prepared = core.PrepareGroupTitleChange("g123", title, key, "1");
+        Assert.NotEqual(title, prepared.EncryptedValue);
+        Assert.Equal("1", prepared.ConversationKeyVersion);
+        var payload = prepared.ActionSignatures[0].SignaturePayload;
+        Assert.StartsWith("GroupChangeEvent.GroupTitleChange,", payload);
+        Assert.DoesNotContain(title, payload);
+        Assert.Equal(title, core.Decrypt(prepared.EncryptedValue, key));
     }
 
     [Fact]

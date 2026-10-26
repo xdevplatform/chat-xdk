@@ -30,6 +30,9 @@ type sdkVectors struct {
 	SignatureB64                  string `json:"signature_b64"`
 	IdentityPublicKeySignatureB64 string `json:"identity_public_key_signature_b64"`
 	EventFailureB64               string `json:"event_failure_b64"`
+	EventGroupDescriptionB64      string `json:"event_group_description_b64"`
+	EventGroupDescription         string `json:"event_group_description"`
+	EventGroupID                  string `json:"event_group_id"`
 	EventKeyChangeB64             string `json:"event_key_change_b64"`
 	EventMessageB64               string `json:"event_message_b64"`
 	EventReplyValidB64            string `json:"event_reply_valid_b64"`
@@ -725,7 +728,9 @@ func TestMatchesRegisteredKey(t *testing.T) {
 	}
 }
 
-func TestEncryptDecryptRoundtrip(t *testing.T) {
+// TestDecryptReadsTheTitleATitleChangeSends decrypts the encrypted title a
+// title change returns, the value the X API stores as the group name.
+func TestDecryptReadsTheTitleATitleChangeSends(t *testing.T) {
 	v := loadVectors(t)
 
 	chat := New()
@@ -734,46 +739,77 @@ func TestEncryptDecryptRoundtrip(t *testing.T) {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	plaintext := "Hello, encryption roundtrip!"
-	ciphertextB64, err := chat.Encrypt(plaintext, v.conversationKey(t))
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
+	title := "Hello, encryption roundtrip, \u00e9\u00e8"
+	params := GroupTitleChangeParams{
+		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100", NewTitle: title,
+		ConversationKey: v.conversationKey(t), ConversationKeyVersion: "4",
 	}
-	if ciphertextB64 == "" {
-		t.Fatal("expected non-empty ciphertext")
+	first, err := chat.PrepareGroupTitleChange(params)
+	if err != nil {
+		t.Fatalf("PrepareGroupTitleChange failed: %v", err)
+	}
+	if first.EncryptedValue == "" || first.EncryptedValue == title {
+		t.Fatalf("expected ciphertext, got %q", first.EncryptedValue)
+	}
+	second, err := chat.PrepareGroupTitleChange(params)
+	if err != nil {
+		t.Fatalf("PrepareGroupTitleChange failed: %v", err)
+	}
+	if second.EncryptedValue == first.EncryptedValue {
+		t.Error("two encryptions of one title should differ (random nonce)")
 	}
 
-	// Decrypt back
-	decrypted, err := chat.Decrypt(ciphertextB64, v.conversationKey(t))
+	decrypted, err := chat.Decrypt(first.EncryptedValue, v.conversationKey(t))
 	if err != nil {
 		t.Fatalf("Decrypt failed: %v", err)
 	}
-	if decrypted != plaintext {
-		t.Errorf("decrypt mismatch:\ngot  %q\nwant %q", decrypted, plaintext)
+	if decrypted != title {
+		t.Errorf("decrypt mismatch:\ngot  %q\nwant %q", decrypted, title)
 	}
 }
 
-func TestEncryptDecryptEmptyString(t *testing.T) {
+// TestGroupDescriptionChangeFixtureVector decrypts the fixture description
+// change: DecryptEvent returns the description decrypted under the fixture
+// conversation key, and without that key the change fails instead of coming
+// back as ciphertext.
+func TestGroupDescriptionChangeFixtureVector(t *testing.T) {
 	v := loadVectors(t)
 
 	chat := New()
 	defer chat.Close()
-	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
-		t.Fatalf("ImportKeys failed: %v", err)
+
+	event, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         v.EventGroupDescriptionB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	if err != nil {
+		t.Fatalf("DecryptEvent failed: %v", err)
+	}
+	change := event.AsGroupChange()
+	if change == nil || !change.Verified {
+		t.Fatalf("expected a verified group change, got %+v", event)
+	}
+	if change.ConversationID == nil || *change.ConversationID != v.EventGroupID {
+		t.Errorf("unexpected conversation_id: %v", change.ConversationID)
+	}
+	var description struct {
+		ChangeType     string `json:"change_type"`
+		NewDescription string `json:"new_description"`
+	}
+	if err := json.Unmarshal(change.Change, &description); err != nil {
+		t.Fatalf("decode change: %v", err)
+	}
+	if description.ChangeType != "DescriptionChanged" || description.NewDescription != v.EventGroupDescription {
+		t.Errorf("unexpected change: %+v", description)
 	}
 
-	// Encrypt empty string
-	ciphertextB64, err := chat.Encrypt("", v.conversationKey(t))
-	if err != nil {
-		t.Fatalf("Encrypt (empty) failed: %v", err)
-	}
-
-	decrypted, err := chat.Decrypt(ciphertextB64, v.conversationKey(t))
-	if err != nil {
-		t.Fatalf("Decrypt (empty) failed: %v", err)
-	}
-	if decrypted != "" {
-		t.Errorf("expected empty string, got %q", decrypted)
+	_, err = chat.DecryptEvent(DecryptEventParams{
+		EventB64:    v.EventGroupDescriptionB64,
+		SigningKeys: v.eventSigningKeys(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "Group description encrypted with key version") {
+		t.Errorf("expected a missing-key error, got %v", err)
 	}
 }
 
@@ -1414,13 +1450,71 @@ func TestGroupActionSignatures(t *testing.T) {
 		t.Fatalf("leave signatures: %+v", left.ActionSignatures)
 	}
 
-	titlePrepared, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
-		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
-		ConversationKeyVersion: "4", CustomTitle: "enc-title",
+	key := rotated.ConversationKey
+	version := rotated.ConversationKeyVersion
+	metadata := []struct {
+		prefix, plaintext string
+		prepare           func() (*PreparedGroupMetadataChange, error)
+	}{
+		{"GroupChangeEvent.GroupTitleChange,", "Board: layoffs, Q3", func() (*PreparedGroupMetadataChange, error) {
+			return chat.PrepareGroupTitleChange(GroupTitleChangeParams{
+				SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
+				NewTitle: "Board: layoffs, Q3", ConversationKey: key, ConversationKeyVersion: version,
+			})
+		}},
+		{"GroupChangeEvent.GroupAvatarUrlChange,", "https://img/a.png", func() (*PreparedGroupMetadataChange, error) {
+			return chat.PrepareGroupAvatarChange(GroupAvatarChangeParams{
+				SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
+				NewAvatarURL: "https://img/a.png", ConversationKey: key, ConversationKeyVersion: version,
+			})
+		}},
+		{"GroupChangeEvent.GroupDescriptionChange,", "Rules: be kind", func() (*PreparedGroupMetadataChange, error) {
+			return chat.PrepareGroupDescriptionChange(GroupDescriptionChangeParams{
+				SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
+				NewDescription: "Rules: be kind", ConversationKey: key, ConversationKeyVersion: version,
+			})
+		}},
+	}
+	for _, m := range metadata {
+		prepared, err := m.prepare()
+		if err != nil {
+			t.Fatalf("%s: %v", m.prefix, err)
+		}
+		if prepared.ConversationKeyVersion != version || len(prepared.ActionSignatures) != 1 {
+			t.Fatalf("%s shape: %+v", m.prefix, prepared)
+		}
+		payload := prepared.ActionSignatures[0].SignaturePayload
+		if !strings.HasPrefix(payload, m.prefix) ||
+			!strings.HasSuffix(payload, ","+version+","+prepared.EncryptedValue) ||
+			strings.Contains(payload, m.plaintext) {
+			t.Fatalf("metadata payload %q", payload)
+		}
+		decrypted, err := chat.Decrypt(prepared.EncryptedValue, key)
+		if err != nil || decrypted != m.plaintext {
+			t.Fatalf("decrypt %s: %q, %v", m.prefix, decrypted, err)
+		}
+	}
+	if _, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
+		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100", NewTitle: "Board",
+	}); err == nil || !strings.Contains(err.Error(), "no cached conversation key for 'g100'") {
+		t.Fatalf("title change without a key: %v", err)
+	}
+	withTitle, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
+		PublicKeys: []PublicKeyInput{{
+			UserID: "111", PublicKey: keys.Identity, KeyVersion: "1",
+		}},
+		ConversationID:    "g100",
+		UserIDs:           []string{"910007"},
+		Title:             "Board",
+		SenderID:          "111",
+		SigningKeyVersion: "1",
 	})
-	title := onlyAction(t, titlePrepared, err)
-	if !strings.HasSuffix(title.SignaturePayload, ",4,enc-title") {
-		t.Fatalf("title payload %q", title.SignaturePayload)
+	if err != nil {
+		t.Fatalf("remove with title: %v", err)
+	}
+	if len(withTitle.ActionSignatures) != 3 ||
+		!strings.HasPrefix(withTitle.ActionSignatures[1].SignaturePayload, "GroupChangeEvent.GroupTitleChange,") {
+		t.Fatalf("remove with title signatures: %+v", withTitle.ActionSignatures)
 	}
 	blockingPrepared, err := chat.PrepareScreenCapture(ScreenCaptureParams{
 		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
@@ -2199,7 +2293,7 @@ func TestUpdateConfigXAPIJuiceboxConfigShape(t *testing.T) {
 	}
 }
 
-func TestEncryptDecryptWithGeneratedKey(t *testing.T) {
+func TestGroupTitleDecryptsWithAGeneratedKey(t *testing.T) {
 	v := loadVectors(t)
 
 	chat := New()
@@ -2208,13 +2302,14 @@ func TestEncryptDecryptWithGeneratedKey(t *testing.T) {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	// Get a fresh conversation key from a prepared key change and use it for encryption.
+	// Get a fresh conversation key from a prepared key change and encrypt a
+	// group title under it.
 	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
 		PublicKeys:        publicKeys,
-		ConversationID:    "conv-1",
+		ConversationID:    "g100",
 	})
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange failed: %v", err)
@@ -2222,11 +2317,14 @@ func TestEncryptDecryptWithGeneratedKey(t *testing.T) {
 	key := prep.ConversationKey
 
 	plaintext := "encrypted with a generated key"
-	ciphertextB64, err := chat.Encrypt(plaintext, key)
+	title, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
+		SenderID: "910002", SigningKeyVersion: "1", ConversationID: "g100", NewTitle: plaintext,
+		ConversationKey: key, ConversationKeyVersion: prep.ConversationKeyVersion,
+	})
 	if err != nil {
-		t.Fatalf("Encrypt (generated key) failed: %v", err)
+		t.Fatalf("PrepareGroupTitleChange (generated key) failed: %v", err)
 	}
-	decrypted, err := chat.Decrypt(ciphertextB64, key)
+	decrypted, err := chat.Decrypt(title.EncryptedValue, key)
 	if err != nil {
 		t.Fatalf("Decrypt (generated key) failed: %v", err)
 	}
@@ -2388,11 +2486,15 @@ func TestDecryptWithWrongKey(t *testing.T) {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	// Encrypt with fixture key
-	ciphertextB64, err := chat.Encrypt("secret", v.conversationKey(t))
+	// A title encrypted under the fixture key
+	title, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
+		SenderID: "910002", SigningKeyVersion: "1", ConversationID: "g100", NewTitle: "secret",
+		ConversationKey: v.conversationKey(t), ConversationKeyVersion: "1",
+	})
 	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
+		t.Fatalf("PrepareGroupTitleChange failed: %v", err)
 	}
+	ciphertextB64 := title.EncryptedValue
 
 	// Decrypt with a different key should fail
 	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}

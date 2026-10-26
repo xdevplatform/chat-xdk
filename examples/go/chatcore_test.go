@@ -111,23 +111,27 @@ func TestSetIdentityNeedsTheRegisteredVersion(t *testing.T) {
 	}
 }
 
-func TestGenericEncryptDecryptRoundtrip(t *testing.T) {
+func TestGroupTitleChangeEncryptsTheTitleItSigns(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
-	plaintext := "hello from the go example"
-	ct, err := core.Encrypt(plaintext, v.conversationKey(t))
+	title := "hello from the go example"
+	prepared, err := core.PrepareGroupTitleChange("g123", title, v.conversationKey(t), "1")
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("PrepareGroupTitleChange: %v", err)
 	}
-	if ct == plaintext {
-		t.Fatal("ciphertext equals plaintext")
+	if prepared.EncryptedValue == title || prepared.ConversationKeyVersion != "1" {
+		t.Fatalf("unexpected title change: %+v", prepared)
 	}
-	got, err := core.Decrypt(ct, v.conversationKey(t))
+	payload := prepared.ActionSignatures[0].SignaturePayload
+	if !strings.HasPrefix(payload, "GroupChangeEvent.GroupTitleChange,") || strings.Contains(payload, title) {
+		t.Fatalf("title payload %q", payload)
+	}
+	got, err := core.Decrypt(prepared.EncryptedValue, v.conversationKey(t))
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
-	if got != plaintext {
-		t.Errorf("roundtrip mismatch:\ngot  %q\nwant %q", got, plaintext)
+	if got != title {
+		t.Errorf("roundtrip mismatch:\ngot  %q\nwant %q", got, title)
 	}
 }
 

@@ -282,12 +282,21 @@ class ChatTest {
     }
 
     @Test
-    void encryptDecryptRoundTrip() throws Exception {
+    void decryptReadsTheTitleATitleChangeSends() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] key = newConvKey(chat);
-            String ct = chat.encrypt("hello jvm", key);
-            assertEquals("hello jvm", chat.decrypt(ct, key));
+            assertEquals("hello jvm", chat.decrypt(encryptedTitle(chat, "hello jvm", key), key));
         }
+    }
+
+    /** The encrypted title a title change under {@code key} sends. */
+    private static String encryptedTitle(Chat chat, String title, byte[] key) throws Exception {
+        GroupTitleChangeParams params = new GroupTitleChangeParams("g100", title);
+        params.senderId = "910002";
+        params.signingKeyVersion = "1";
+        params.conversationKey = key;
+        params.conversationKeyVersion = "4";
+        return chat.prepareGroupTitleChange(params).encryptedValue;
     }
 
     @Test
@@ -639,10 +648,59 @@ class ChatTest {
             assertTrue(left.actionSignatures.get(1).signaturePayload.endsWith(",910008"));
             assertTrue(left.actionSignatures.get(2).signaturePayload.startsWith("ConversationDeleteEvent,"));
 
-            GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "4", "enc-title");
+            GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "Board: layoffs, Q3");
             titleParams.senderId = "111";
             titleParams.signingKeyVersion = "1";
-            assertTrue(onlyAction(chat.prepareGroupTitleChange(titleParams)).signaturePayload.endsWith(",4,enc-title"));
+            titleParams.conversationKey = rotated.conversationKey;
+            titleParams.conversationKeyVersion = rotated.conversationKeyVersion;
+            PreparedGroupMetadataChange title = chat.prepareGroupTitleChange(titleParams);
+            assertEquals(rotated.conversationKeyVersion, title.conversationKeyVersion);
+            assertEquals(1, title.actionSignatures.size());
+            String titlePayload = title.actionSignatures.get(0).signaturePayload;
+            assertTrue(titlePayload.startsWith("GroupChangeEvent.GroupTitleChange,"), titlePayload);
+            assertTrue(titlePayload.endsWith(
+                    "," + title.conversationKeyVersion + "," + title.encryptedValue), titlePayload);
+            assertFalse(titlePayload.contains("Board: layoffs, Q3"), titlePayload);
+            assertEquals("Board: layoffs, Q3", chat.decrypt(title.encryptedValue, rotated.conversationKey));
+
+            GroupAvatarChangeParams avatarParams = new GroupAvatarChangeParams("g100", "https://img/a.png");
+            avatarParams.senderId = "111";
+            avatarParams.signingKeyVersion = "1";
+            avatarParams.conversationKey = rotated.conversationKey;
+            avatarParams.conversationKeyVersion = rotated.conversationKeyVersion;
+            PreparedGroupMetadataChange avatar = chat.prepareGroupAvatarChange(avatarParams);
+            assertTrue(avatar.actionSignatures.get(0).signaturePayload.startsWith(
+                    "GroupChangeEvent.GroupAvatarUrlChange,"));
+            assertEquals("https://img/a.png", chat.decrypt(avatar.encryptedValue, rotated.conversationKey));
+
+            GroupDescriptionChangeParams descriptionParams =
+                    new GroupDescriptionChangeParams("g100", "Rules: be kind");
+            descriptionParams.senderId = "111";
+            descriptionParams.signingKeyVersion = "1";
+            descriptionParams.conversationKey = rotated.conversationKey;
+            descriptionParams.conversationKeyVersion = rotated.conversationKeyVersion;
+            PreparedGroupMetadataChange description = chat.prepareGroupDescriptionChange(descriptionParams);
+            assertTrue(description.actionSignatures.get(0).signaturePayload.startsWith(
+                    "GroupChangeEvent.GroupDescriptionChange,"));
+            assertEquals("Rules: be kind", chat.decrypt(description.encryptedValue, rotated.conversationKey));
+
+            GroupTitleChangeParams uncached = new GroupTitleChangeParams("g100", "Board");
+            uncached.senderId = "111";
+            uncached.signingKeyVersion = "1";
+            ChatXdkException uncachedError =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareGroupTitleChange(uncached));
+            assertTrue(uncachedError.getMessage().contains("no cached conversation key for 'g100'"),
+                    uncachedError.getMessage());
+
+            GroupMembersRemoveParams withTitle =
+                    new GroupMembersRemoveParams(List.of(key), "g100", List.of("910007"));
+            withTitle.senderId = "111";
+            withTitle.signingKeyVersion = "1";
+            withTitle.title = "Board";
+            PreparedConversationChange removedWithTitle = chat.prepareGroupMembersRemove(withTitle);
+            assertEquals(3, removedWithTitle.actionSignatures.size());
+            assertTrue(removedWithTitle.actionSignatures.get(1).signaturePayload.startsWith(
+                    "GroupChangeEvent.GroupTitleChange,"));
 
             ScreenCaptureParams capture = new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled);
             capture.senderId = "111";
@@ -931,13 +989,14 @@ class ChatTest {
     }
 
     @Test
-    void encryptDecryptUnicodeRoundTrip() throws Exception {
+    void decryptReadsAUnicodeTitle() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] key = newConvKey(chat);
             String plaintext = "metadata payload 🌟 with unicode";
-            String ct = chat.encrypt(plaintext, key);
+            String ct = encryptedTitle(chat, plaintext, key);
             assertFalse(ct.isEmpty());
             assertNotEquals(plaintext, ct);
+            assertNotEquals(ct, encryptedTitle(chat, plaintext, key));
             assertEquals(plaintext, chat.decrypt(ct, key));
         }
     }
@@ -1064,6 +1123,32 @@ class ChatTest {
     // Failure events are unsigned by protocol: the fixture failure decodes
     // with no conversation or signing keys, and the JSON carries the
     // PascalCase discriminator values.
+    @Test
+    void vectorsGroupDescriptionChangeDecryptsOnReceive() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_group_description_b64").asText(), conversationKeys(v));
+            params.signingKeys = eventSigningKeys(v);
+            JsonNode event = chat.decryptEvent(params);
+            assertEquals("GroupChange", event.path("type").asText());
+            assertTrue(event.path("verified").asBoolean());
+            assertEquals(v.get("event_group_id").asText(), event.path("conversation_id").asText());
+            assertEquals("DescriptionChanged", event.path("change").path("change_type").asText());
+            assertEquals(
+                    v.get("event_group_description").asText(),
+                    event.path("change").path("new_description").asText());
+
+            // Without the key the description was encrypted under, the change
+            // does not decrypt: it never comes back as ciphertext.
+            DecryptEventParams keyless =
+                    new DecryptEventParams(v.get("event_group_description_b64").asText(), Map.of());
+            keyless.signingKeys = eventSigningKeys(v);
+            ChatXdkException err = assertThrows(ChatXdkException.class, () -> chat.decryptEvent(keyless));
+            assertTrue(err.getMessage().contains("Group description encrypted with key version"), err.getMessage());
+        }
+    }
+
     @Test
     void vectorsFailureEventDecodesTypeAndRateLimitTier() throws Exception {
         JsonNode v = loadVectors();

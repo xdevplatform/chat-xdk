@@ -286,6 +286,9 @@ class GroupMembersRemoveParams:
     public_keys: list[dict[str, str]]
     conversation_id: str
     user_ids: list[str]
+    title: Optional[str]
+    avatar_url: Optional[str]
+    description: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     def __init__(
@@ -294,6 +297,9 @@ class GroupMembersRemoveParams:
         conversation_id: str,
         user_ids: list[str],
         *,
+        title: Optional[str] = None,
+        avatar_url: Optional[str] = None,
+        description: Optional[str] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
     ) -> None: ...
@@ -316,50 +322,56 @@ class GroupLeaveParams:
 
 class GroupTitleChangeParams:
     conversation_id: str
-    conversation_key_version: str
-    custom_title: str
+    new_title: str
     sender_id: Optional[str]
     signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         conversation_id: str,
-        conversation_key_version: str,
-        custom_title: str,
+        new_title: str,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class GroupAvatarChangeParams:
     conversation_id: str
-    conversation_key_version: str
-    custom_avatar_url: str
+    new_avatar_url: str
     sender_id: Optional[str]
     signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         conversation_id: str,
-        conversation_key_version: str,
-        custom_avatar_url: str,
+        new_avatar_url: str,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class GroupDescriptionChangeParams:
     conversation_id: str
-    conversation_key_version: str
-    custom_description: str
+    new_description: str
     sender_id: Optional[str]
     signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
     def __init__(
         self,
         conversation_id: str,
-        conversation_key_version: str,
-        custom_description: str,
+        new_description: str,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class GroupAdminsAddParams:
@@ -687,8 +699,7 @@ class Chat:
     def decrypt_file(self, params: DecryptFileParams) -> bytes: ...
     def file_decryptor(self, params: FileDecryptorParams) -> FileDecryptor: ...
 
-    # Generic Encrypt / Decrypt
-    def encrypt(self, plaintext: str, conversation_key: bytes) -> str: ...
+    # Group metadata the X API returns for a conversation
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str: ...
 
     # Signing

@@ -32,6 +32,7 @@ from chat_xdk import (
     GroupCreateParams,
     GroupMembersChangeParams,
     GroupMembersRemoveParams,
+    GroupTitleChangeParams,
     QuickReply,
     ImportKeysParams,
     SetIdentityParams,
@@ -446,12 +447,32 @@ class ChatCore:
         out += dec.finish()
         return bytes(out)
 
-    # -- Generic helpers (handy for metadata + tests) -----------------------
+    # -- Group metadata -------------------------------------------------------
 
-    def encrypt(self, plaintext: str, conversation_key: bytes) -> str:
-        return self.chat.encrypt(plaintext, conversation_key)
+    def prepare_group_title_change(
+        self,
+        conversation_id: str,
+        title: str,
+        conversation_key: bytes,
+        conversation_key_version: str,
+    ) -> dict[str, Any]:
+        """Prepare a group title change.
+
+        The SDK encrypts the plaintext ``title`` under the conversation key and
+        signs it. Send ``encrypted_value`` as the group's name and
+        ``action_signatures`` on the request.
+        """
+        return self.chat.prepare_group_title_change(
+            GroupTitleChangeParams(
+                conversation_id,
+                title,
+                conversation_key=conversation_key,
+                conversation_key_version=conversation_key_version,
+            )
+        )
 
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str:
+        """Decrypt a group title, avatar URL, or description the X API returns."""
         return self.chat.decrypt(ciphertext_b64, conversation_key)
 
 

@@ -895,6 +895,11 @@ impl GroupCreateParams {
 /// `public_keys` are the identity keys of the members who stay: the call
 /// rotates the conversation key and encrypts the new key for them, so the
 /// removed members cannot read what the group sends next.
+///
+/// `title`, `avatar_url` and `description` are the group's plaintext title,
+/// avatar URL and description. Each one set is encrypted under the new key
+/// and signed as a change of its own, so the members who stay read it under
+/// the key they hold; an empty value is unset.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupMembersRemoveParams {
     /// Identity public keys of the members who stay; the new conversation
@@ -904,6 +909,12 @@ pub struct GroupMembersRemoveParams {
     pub conversation_id: String,
     /// User IDs being removed.
     pub user_ids: Vec<String>,
+    /// The group's title, re-encrypted under the new conversation key.
+    pub title: Option<String>,
+    /// The group's avatar URL, re-encrypted under the new conversation key.
+    pub avatar_url: Option<String>,
+    /// The group's description, re-encrypted under the new conversation key.
+    pub description: Option<String>,
     /// User ID of the sender signing the removal; resolves from the session
     /// identity when unset.
     pub sender_id: Option<String>,
@@ -923,9 +934,32 @@ impl GroupMembersRemoveParams {
             public_keys,
             conversation_id: conversation_id.into(),
             user_ids,
+            title: None,
+            avatar_url: None,
+            description: None,
             sender_id: None,
             signing_key_version: None,
         }
+    }
+
+    /// Set the group's title, to re-encrypt under the new conversation key.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = non_empty(title);
+        self
+    }
+
+    /// Set the group's avatar URL, to re-encrypt under the new conversation
+    /// key.
+    pub fn with_avatar_url(mut self, avatar_url: impl Into<String>) -> Self {
+        self.avatar_url = non_empty(avatar_url);
+        self
+    }
+
+    /// Set the group's description, to re-encrypt under the new conversation
+    /// key.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = non_empty(description);
+        self
     }
 
     /// Set the explicit sender identity, overriding the session identity.
@@ -991,37 +1025,60 @@ impl GroupLeaveParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_title_change`].
 ///
-/// `custom_title` is the title ciphertext the request sends, not plaintext.
-#[derive(Clone, Debug, PartialEq)]
+/// `new_title` is plaintext. The SDK encrypts it under the conversation key,
+/// resolved as `encrypt_message` resolves it: the explicit
+/// `conversation_key` and `conversation_key_version` pair, or the key cache
+/// when both are unset.
+///
+/// The conversation key is zeroized when the params are dropped and is
+/// redacted from `Debug` output. No `PartialEq` is derived:
+/// equality would byte-compare the key non-constant-time.
+#[derive(Clone)]
 pub struct GroupTitleChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
-    /// Conversation-key version the title is encrypted under.
-    pub conversation_key_version: String,
-    /// Encrypted title, the value the request sends as the group name.
-    pub custom_title: String,
+    /// The group's new title, as plaintext.
+    pub new_title: String,
     /// User ID of the sender signing the change; resolves from the session
     /// identity when unset.
     pub sender_id: Option<String>,
     /// Version of the signing key used to sign the change; resolves from the
     /// session identity when unset.
     pub signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key the title is encrypted under; resolves
+    /// from the key cache when unset (set together with
+    /// `conversation_key_version`).
+    pub conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key; resolves from the key cache when
+    /// unset (set together with `conversation_key`).
+    pub conversation_key_version: Option<String>,
 }
 
 impl GroupTitleChangeParams {
-    /// Create params with required fields; identity fields default to `None`.
-    pub fn new(
-        conversation_id: impl Into<String>,
-        conversation_key_version: impl Into<String>,
-        custom_title: impl Into<String>,
-    ) -> Self {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, new_title: impl Into<String>) -> Self {
         Self {
             conversation_id: conversation_id.into(),
-            conversation_key_version: conversation_key_version.into(),
-            custom_title: custom_title.into(),
+            new_title: new_title.into(),
             sender_id: None,
             signing_key_version: None,
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the explicit conversation key and its version.
+    ///
+    /// The two travel together: the version names the key the recipients use
+    /// to decrypt, so setting one without the other is rejected.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = Some(conversation_key_version.into());
+        self
     }
 
     /// Set the explicit sender identity, overriding the session identity.
@@ -1033,42 +1090,87 @@ impl GroupTitleChangeParams {
         self.sender_id = non_empty(sender_id);
         self.signing_key_version = non_empty(signing_key_version);
         self
+    }
+}
+
+impl Drop for GroupTitleChangeParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for GroupTitleChangeParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupTitleChangeParams")
+            .field("conversation_id", &self.conversation_id)
+            .field("new_title", &self.new_title)
+            .field("sender_id", &self.sender_id)
+            .field("signing_key_version", &self.signing_key_version)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .finish()
     }
 }
 
 /// Parameters for [`crate::ChatCore::prepare_group_avatar_change`].
 ///
-/// `custom_avatar_url` is the avatar value the request sends.
-#[derive(Clone, Debug, PartialEq)]
+/// `new_avatar_url` is plaintext. The SDK encrypts it under the conversation key,
+/// resolved as `encrypt_message` resolves it: the explicit
+/// `conversation_key` and `conversation_key_version` pair, or the key cache
+/// when both are unset.
+///
+/// The conversation key is zeroized when the params are dropped and is
+/// redacted from `Debug` output. No `PartialEq` is derived:
+/// equality would byte-compare the key non-constant-time.
+#[derive(Clone)]
 pub struct GroupAvatarChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
-    /// Conversation-key version the avatar is associated with.
-    pub conversation_key_version: String,
-    /// Avatar URL the request sends.
-    pub custom_avatar_url: String,
+    /// The group's new avatar URL, as plaintext.
+    pub new_avatar_url: String,
     /// User ID of the sender signing the change; resolves from the session
     /// identity when unset.
     pub sender_id: Option<String>,
     /// Version of the signing key used to sign the change; resolves from the
     /// session identity when unset.
     pub signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key the avatar URL is encrypted under; resolves
+    /// from the key cache when unset (set together with
+    /// `conversation_key_version`).
+    pub conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key; resolves from the key cache when
+    /// unset (set together with `conversation_key`).
+    pub conversation_key_version: Option<String>,
 }
 
 impl GroupAvatarChangeParams {
-    /// Create params with required fields; identity fields default to `None`.
-    pub fn new(
-        conversation_id: impl Into<String>,
-        conversation_key_version: impl Into<String>,
-        custom_avatar_url: impl Into<String>,
-    ) -> Self {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, new_avatar_url: impl Into<String>) -> Self {
         Self {
             conversation_id: conversation_id.into(),
-            conversation_key_version: conversation_key_version.into(),
-            custom_avatar_url: custom_avatar_url.into(),
+            new_avatar_url: new_avatar_url.into(),
             sender_id: None,
             signing_key_version: None,
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the explicit conversation key and its version.
+    ///
+    /// The two travel together: the version names the key the recipients use
+    /// to decrypt, so setting one without the other is rejected.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = Some(conversation_key_version.into());
+        self
     }
 
     /// Set the explicit sender identity, overriding the session identity.
@@ -1080,42 +1182,87 @@ impl GroupAvatarChangeParams {
         self.sender_id = non_empty(sender_id);
         self.signing_key_version = non_empty(signing_key_version);
         self
+    }
+}
+
+impl Drop for GroupAvatarChangeParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for GroupAvatarChangeParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupAvatarChangeParams")
+            .field("conversation_id", &self.conversation_id)
+            .field("new_avatar_url", &self.new_avatar_url)
+            .field("sender_id", &self.sender_id)
+            .field("signing_key_version", &self.signing_key_version)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .finish()
     }
 }
 
 /// Parameters for [`crate::ChatCore::prepare_group_description_change`].
 ///
-/// `custom_description` is the description ciphertext the request sends.
-#[derive(Clone, Debug, PartialEq)]
+/// `new_description` is plaintext. The SDK encrypts it under the conversation key,
+/// resolved as `encrypt_message` resolves it: the explicit
+/// `conversation_key` and `conversation_key_version` pair, or the key cache
+/// when both are unset.
+///
+/// The conversation key is zeroized when the params are dropped and is
+/// redacted from `Debug` output. No `PartialEq` is derived:
+/// equality would byte-compare the key non-constant-time.
+#[derive(Clone)]
 pub struct GroupDescriptionChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
-    /// Conversation-key version the description is encrypted under.
-    pub conversation_key_version: String,
-    /// Encrypted description the request sends.
-    pub custom_description: String,
+    /// The group's new description, as plaintext.
+    pub new_description: String,
     /// User ID of the sender signing the change; resolves from the session
     /// identity when unset.
     pub sender_id: Option<String>,
     /// Version of the signing key used to sign the change; resolves from the
     /// session identity when unset.
     pub signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key the description is encrypted under; resolves
+    /// from the key cache when unset (set together with
+    /// `conversation_key_version`).
+    pub conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key; resolves from the key cache when
+    /// unset (set together with `conversation_key`).
+    pub conversation_key_version: Option<String>,
 }
 
 impl GroupDescriptionChangeParams {
-    /// Create params with required fields; identity fields default to `None`.
-    pub fn new(
-        conversation_id: impl Into<String>,
-        conversation_key_version: impl Into<String>,
-        custom_description: impl Into<String>,
-    ) -> Self {
+    /// Create params with required fields; all optional fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, new_description: impl Into<String>) -> Self {
         Self {
             conversation_id: conversation_id.into(),
-            conversation_key_version: conversation_key_version.into(),
-            custom_description: custom_description.into(),
+            new_description: new_description.into(),
             sender_id: None,
             signing_key_version: None,
+            conversation_key: None,
+            conversation_key_version: None,
         }
+    }
+
+    /// Set the explicit conversation key and its version.
+    ///
+    /// The two travel together: the version names the key the recipients use
+    /// to decrypt, so setting one without the other is rejected.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = Some(conversation_key_version.into());
+        self
     }
 
     /// Set the explicit sender identity, overriding the session identity.
@@ -1127,6 +1274,28 @@ impl GroupDescriptionChangeParams {
         self.sender_id = non_empty(sender_id);
         self.signing_key_version = non_empty(signing_key_version);
         self
+    }
+}
+
+impl Drop for GroupDescriptionChangeParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for GroupDescriptionChangeParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupDescriptionChangeParams")
+            .field("conversation_id", &self.conversation_id)
+            .field("new_description", &self.new_description)
+            .field("sender_id", &self.sender_id)
+            .field("signing_key_version", &self.signing_key_version)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .finish()
     }
 }
 

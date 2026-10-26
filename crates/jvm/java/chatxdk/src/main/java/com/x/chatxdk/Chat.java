@@ -629,27 +629,29 @@ public final class Chat implements AutoCloseable {
                 buildPrepareGroupLeaveJson(parameters), ChatNative.INSTANCE::chat_xdk_prepare_group_leave);
     }
 
-    /** Sign a group title change. {@code customTitle} is ciphertext. */
-    public PreparedAction prepareGroupTitleChange(GroupTitleChangeParams parameters) throws Exception {
+    /** Encrypt a new group title under the conversation key and sign the change. */
+    public PreparedGroupMetadataChange prepareGroupTitleChange(GroupTitleChangeParams parameters)
+            throws Exception {
         throwIfDisposed();
-        return callAction(
+        return callMetadataChange(
                 buildPrepareGroupTitleChangeJson(parameters),
                 ChatNative.INSTANCE::chat_xdk_prepare_group_title_change);
     }
 
-    /** Sign a group avatar change. */
-    public PreparedAction prepareGroupAvatarChange(GroupAvatarChangeParams parameters) throws Exception {
+    /** Encrypt a new group avatar URL under the conversation key and sign the change. */
+    public PreparedGroupMetadataChange prepareGroupAvatarChange(GroupAvatarChangeParams parameters)
+            throws Exception {
         throwIfDisposed();
-        return callAction(
+        return callMetadataChange(
                 buildPrepareGroupAvatarChangeJson(parameters),
                 ChatNative.INSTANCE::chat_xdk_prepare_group_avatar_change);
     }
 
-    /** Sign a group description change. {@code customDescription} is ciphertext. */
-    public PreparedAction prepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
-            throws Exception {
+    /** Encrypt a new group description under the conversation key and sign the change. */
+    public PreparedGroupMetadataChange prepareGroupDescriptionChange(
+            GroupDescriptionChangeParams parameters) throws Exception {
         throwIfDisposed();
-        return callAction(
+        return callMetadataChange(
                 buildPrepareGroupDescriptionChangeJson(parameters),
                 ChatNative.INSTANCE::chat_xdk_prepare_group_description_change);
     }
@@ -735,6 +737,16 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    private PreparedGroupMetadataChange callMetadataChange(String paramsJson, ParamsJsonFn fn)
+            throws Exception {
+        try (Memory j = FfiStrings.utf8(paramsJson)) {
+            String resultJson = FfiStrings.consume(fn.apply(handle, j));
+            return ChatJson.MAPPER.readValue(resultJson, PreparedGroupMetadataChange.class);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
     private PreparedAction callAction(String paramsJson, ParamsJsonFn fn) throws Exception {
         try (Memory j = FfiStrings.utf8(paramsJson)) {
             String resultJson = FfiStrings.consume(fn.apply(handle, j));
@@ -745,22 +757,10 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Encrypt a UTF-8 metadata string with the conversation key; returns base64 ciphertext
-     * (XSalsa20-Poly1305).
-     */
-    public String encrypt(String plaintext, byte[] conversationKey) {
-        throwIfDisposed();
-        Objects.requireNonNull(conversationKey, "conversationKey");
-        try (Memory pt = FfiStrings.utf8(plaintext);
-                Memory ck = FfiStrings.utf8(Base64.getEncoder().encodeToString(conversationKey))) {
-            return FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_encrypt(handle, pt, ck));
-        } finally {
-            Reference.reachabilityFence(this);
-        }
-    }
-
-    /**
-     * Decrypt base64 ciphertext (from {@link #encrypt}) to a UTF-8 plaintext string.
+     * Decrypt a group title, avatar URL, or description the X API returns for a
+     * conversation (base64 ciphertext) with the raw 32-byte conversation key. Group
+     * changes in events need no call of their own: {@link #decryptEvent} returns them
+     * decrypted.
      */
     public String decrypt(String ciphertextB64, byte[] conversationKey) {
         throwIfDisposed();
@@ -1253,6 +1253,15 @@ public final class Chat implements AutoCloseable {
                 p.publicKeys == null ? List.of() : p.publicKeys));
         n.put("conversation_id", p.conversationId);
         putIds(n, "user_ids", p.userIds);
+        if (p.title != null) {
+            n.put("title", p.title);
+        }
+        if (p.avatarUrl != null) {
+            n.put("avatar_url", p.avatarUrl);
+        }
+        if (p.description != null) {
+            n.put("description", p.description);
+        }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
@@ -1273,18 +1282,16 @@ public final class Chat implements AutoCloseable {
     private static String buildPrepareGroupTitleChangeJson(GroupTitleChangeParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
-        n.put("conversation_key_version", p.conversationKeyVersion);
-        n.put("custom_title", p.customTitle);
-        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        n.put("new_title", p.newTitle);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 
     private static String buildPrepareGroupAvatarChangeJson(GroupAvatarChangeParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
-        n.put("conversation_key_version", p.conversationKeyVersion);
-        n.put("custom_avatar_url", p.customAvatarUrl);
-        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        n.put("new_avatar_url", p.newAvatarUrl);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 
@@ -1292,9 +1299,8 @@ public final class Chat implements AutoCloseable {
             throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
-        n.put("conversation_key_version", p.conversationKeyVersion);
-        n.put("custom_description", p.customDescription);
-        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        n.put("new_description", p.newDescription);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 

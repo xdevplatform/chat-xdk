@@ -285,13 +285,21 @@ async function main() {
 
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // 3. encrypt/decrypt (generic string) + encryptFile/decryptFile
+  // 3. decrypt (the group title a title change sends) + encryptFile/decryptFile
   const text = "group name \u{1F510} \u00e9\u00e8";
-  const ciphertextB64 = chat.encrypt(text, convKey);
+  const titleParams = {
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    newTitle: text,
+    conversationKey: convKey,
+    conversationKeyVersion: "4",
+  };
+  const ciphertextB64 = chat.prepareGroupTitleChange(titleParams).encryptedValue;
   assert.equal(typeof ciphertextB64, "string");
   assert.equal(chat.decrypt(ciphertextB64, convKey), text);
   // randomized ciphertext
-  assert.notEqual(chat.encrypt(text, convKey), chat.encrypt(text, convKey));
+  assert.notEqual(chat.prepareGroupTitleChange(titleParams).encryptedValue, ciphertextB64);
 
   // A message with files is built first; each file is then encrypted from
   // the returned eventB64 and the media hash key its attachment names, and
@@ -616,7 +624,10 @@ async function main() {
   );
 
   // 4c5. Group actions: a removal signs version 11 and rotates the key for
-  // the members who stay, and the other prepares sign one version-7 payload.
+  // the members who stay, the title, avatar and description changes sign the
+  // value encrypted under the conversation key, and the other prepares sign
+  // one version-7 payload.
+  const identity = { senderId: "111", signingKeyVersion: "1" };
   const keys = chat.getPublicKeys();
   const remaining = [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }];
   const rotated = chat.prepareGroupMembersRemove({
@@ -658,22 +669,41 @@ async function main() {
   assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
   assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
 
-  const title = chat.prepareGroupTitleChange({
-    senderId: "111",
-    signingKeyVersion: "1",
+  const metadataKey = { conversationKey: rotated.conversationKey, conversationKeyVersion: rotated.conversationKeyVersion };
+  const metadata = [
+    [chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board: layoffs, Q3", ...metadataKey }),
+      "GroupChangeEvent.GroupTitleChange,", "Board: layoffs, Q3"],
+    [chat.prepareGroupAvatarChange({ ...identity, conversationId: "g100", newAvatarUrl: "https://img/a.png", ...metadataKey }),
+      "GroupChangeEvent.GroupAvatarUrlChange,", "https://img/a.png"],
+    [chat.prepareGroupDescriptionChange({ ...identity, conversationId: "g100", newDescription: "Rules: be kind", ...metadataKey }),
+      "GroupChangeEvent.GroupDescriptionChange,", "Rules: be kind"],
+  ];
+  for (const [prepared, prefix, plaintext] of metadata) {
+    assert.deepEqual(Object.keys(prepared).sort(), ["actionSignatures", "conversationKeyVersion", "encryptedValue"]);
+    assert.equal(prepared.conversationKeyVersion, rotated.conversationKeyVersion);
+    assert.equal(prepared.actionSignatures.length, 1);
+    const payload = prepared.actionSignatures[0].signaturePayload;
+    assert.ok(payload.startsWith(prefix), payload);
+    assert.ok(payload.endsWith(`,${prepared.conversationKeyVersion},${prepared.encryptedValue}`), payload);
+    assert.ok(!payload.includes(plaintext), payload);
+    assert.equal(chat.decrypt(prepared.encryptedValue, rotated.conversationKey), plaintext);
+  }
+  assert.throws(
+    () => chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board" }),
+    /no cached conversation key for 'g100'/,
+  );
+  const withTitle = chat.prepareGroupMembersRemove({
+    ...identity,
+    publicKeys: remaining,
     conversationId: "g100",
-    conversationKeyVersion: "4",
-    customTitle: "enc-title",
+    userIds: ["910007"],
+    title: "Board",
   });
-  assert.ok(onlyAction(title).signaturePayload.endsWith(",4,enc-title"));
-  const description = onlyAction(chat.prepareGroupDescriptionChange({
-    senderId: "111",
-    signingKeyVersion: "1",
-    conversationId: "g100",
-    conversationKeyVersion: "4",
-    customDescription: "enc-desc",
-  }));
-  assert.ok(description.signaturePayload.startsWith("GroupChangeEvent.GroupDescriptionChange,"));
+  assert.deepEqual(
+    withTitle.actionSignatures.slice(0, 2).map((s) => s.signaturePayload.split(",")[0]),
+    ["GroupChangeEvent.GroupMemberRemoveChange", "GroupChangeEvent.GroupTitleChange"],
+  );
+  assert.equal(withTitle.actionSignatures.length, 3);
   const blocking = onlyAction(chat.prepareScreenCapture({
     senderId: "111",
     signingKeyVersion: "1",

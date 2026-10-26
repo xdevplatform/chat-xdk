@@ -306,12 +306,13 @@ namespace ChatXdk
         ///  members who stay.
         ///
         ///  `params_json` — `public_keys` (the identity keys of the members who
-        ///  stay), `conversation_id`, `user_ids`, plus optional `sender_id` /
-        ///  `signing_key_version`.
+        ///  stay), `conversation_id`, `user_ids`, plus optional `title`, `avatar_url`
+        ///  and `description` (the group's plaintext metadata, re-encrypted under the
+        ///  new key) and `sender_id` / `signing_key_version`.
         ///
         ///  Returns JSON `PreparedConversationChange`: `conversation_key` is the new
-        ///  raw key base64, and `action_signatures` is the removal and then the key
-        ///  change.
+        ///  raw key base64, and `action_signatures` is the removal, a title, avatar
+        ///  and description change for each one set, then the key change.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_members_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_members_remove(ChatHandle* handle, byte* params_json);
@@ -331,36 +332,49 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_group_leave(ChatHandle* handle, byte* params_json);
 
         /// <summary>
-        ///  Sign a group title change.
+        ///  Encrypt a new group title under the conversation key and sign the
+        ///  change.
         ///
-        ///  `params_json` — `conversation_id`, `conversation_key_version`,
-        ///  `custom_title` (the ciphertext the request sends), plus optional
-        ///  `sender_id` / `signing_key_version`.
+        ///  `params_json` — `conversation_id`, `new_title` (plaintext), plus
+        ///  optional `sender_id` / `signing_key_version` (unset resolves from the
+        ///  session identity) and `conversation_key` (base64 raw 32-byte key) /
+        ///  `conversation_key_version` (unset resolves from the opt-in key cache).
         ///
-        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+        ///  Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+        ///  ciphertext the request sends), `conversation_key_version`, and
+        ///  `action_signatures`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_title_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_title_change(ChatHandle* handle, byte* params_json);
 
         /// <summary>
-        ///  Sign a group avatar change.
+        ///  Encrypt a new group avatar URL under the conversation key and sign the
+        ///  change.
         ///
-        ///  `params_json` — `conversation_id`, `conversation_key_version`,
-        ///  `custom_avatar_url`, plus optional `sender_id` / `signing_key_version`.
+        ///  `params_json` — `conversation_id`, `new_avatar_url` (plaintext), plus
+        ///  optional `sender_id` / `signing_key_version` (unset resolves from the
+        ///  session identity) and `conversation_key` (base64 raw 32-byte key) /
+        ///  `conversation_key_version` (unset resolves from the opt-in key cache).
         ///
-        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+        ///  Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+        ///  ciphertext the request sends), `conversation_key_version`, and
+        ///  `action_signatures`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_avatar_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_avatar_change(ChatHandle* handle, byte* params_json);
 
         /// <summary>
-        ///  Sign a group description change.
+        ///  Encrypt a new group description under the conversation key and sign the
+        ///  change.
         ///
-        ///  `params_json` — `conversation_id`, `conversation_key_version`,
-        ///  `custom_description` (the ciphertext the request sends), plus optional
-        ///  `sender_id` / `signing_key_version`.
+        ///  `params_json` — `conversation_id`, `new_description` (plaintext), plus
+        ///  optional `sender_id` / `signing_key_version` (unset resolves from the
+        ///  session identity) and `conversation_key` (base64 raw 32-byte key) /
+        ///  `conversation_key_version` (unset resolves from the opt-in key cache).
         ///
-        ///  Returns JSON `PreparedAction`, shaped as `chat_xdk_prepare_message_delete`.
+        ///  Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
+        ///  ciphertext the request sends), `conversation_key_version`, and
+        ///  `action_signatures`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_description_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_description_change(ChatHandle* handle, byte* params_json);
@@ -582,13 +596,9 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_decrypt_conversation_key(ChatHandle* handle, byte* encrypted_key_b64);
 
         /// <summary>
-        ///  Encrypt a UTF-8 plaintext string; returns base64 ciphertext (XSalsa20-Poly1305).
-        /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_encrypt(ChatHandle* handle, byte* plaintext, byte* conversation_key_b64);
-
-        /// <summary>
-        ///  Decrypt base64 ciphertext to UTF-8 plaintext (metadata fields).
+        ///  Decrypt a group title, avatar URL, or description the X API returns for a
+        ///  conversation: base64 ciphertext under the conversation key (base64 raw
+        ///  32-byte key), decrypted to UTF-8 plaintext.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_decrypt(ChatHandle* handle, byte* ciphertext_b64, byte* conversation_key_b64);

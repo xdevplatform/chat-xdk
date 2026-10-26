@@ -266,7 +266,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
             lambda: GroupMembersRemoveParams([], "g1"),
-            lambda: GroupTitleChangeParams("g1", "1"),
+            lambda: GroupTitleChangeParams("g1"),
             lambda: ScreenCaptureParams("g1"),
             lambda: MarkConversationReadParams("conv-1"),
             lambda: SetIdentityParams("1001"),
@@ -292,6 +292,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
             lambda: GroupMembersRemoveParams([], "g1", ["1"], "1001"),
+            lambda: GroupTitleChangeParams("g1", "Board", "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
             lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
@@ -918,6 +919,18 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(len(rotated["conversation_key"]), 32)
         self.assertEqual(len(rotated["conversation_participant_keys"]), 1)
         self.assertEqual(len(rotated["action_signatures"]), 2)
+        with_title = chat.prepare_group_members_remove(
+            GroupMembersRemoveParams(remaining, "g100", ["910007"], title="Board", **ident)
+        )
+        self.assertEqual(
+            [s["signature_payload"].split(",")[0] for s in with_title["action_signatures"][:2]],
+            ["GroupChangeEvent.GroupMemberRemoveChange", "GroupChangeEvent.GroupTitleChange"],
+        )
+        self.assertEqual(len(with_title["action_signatures"]), 3)
+        self.assertIn(
+            f",{with_title['conversation_key_version']},",
+            with_title["action_signatures"][1]["signature_payload"],
+        )
         removal = rotated["action_signatures"][0]
         self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
         self.assertTrue(
@@ -944,23 +957,44 @@ class TestApiShapes(unittest.TestCase):
             left["action_signatures"][2]["signature_payload"].startswith("ConversationDeleteEvent,")
         )
 
-        title = chat.prepare_group_title_change(
-            GroupTitleChangeParams("g100", "4", "enc-title", **ident)
-        )["action_signatures"][0]
-        self.assertTrue(title["signature_payload"].endswith(",4,enc-title"))
-        avatar = chat.prepare_group_avatar_change(
-            GroupAvatarChangeParams("g100", "4", "https://img/a.png", **ident)
-        )["action_signatures"][0]
-        self.assertTrue(
-            avatar["signature_payload"].startswith("GroupChangeEvent.GroupAvatarUrlChange,")
-        )
-        description = chat.prepare_group_description_change(
-            GroupDescriptionChangeParams("g100", "4", "enc-desc", **ident)
-        )["action_signatures"][0]
-        self.assertTrue(
-            description["signature_payload"].startswith("GroupChangeEvent.GroupDescriptionChange,")
-        )
-        self.assertTrue(description["signature_payload"].endswith(",4,enc-desc"))
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        key = dict(conversation_key=conv_key, conversation_key_version="4")
+        metadata = [
+            (
+                chat.prepare_group_title_change(
+                    GroupTitleChangeParams("g100", "Board: layoffs, Q3", **key, **ident)
+                ),
+                "GroupChangeEvent.GroupTitleChange,",
+                "Board: layoffs, Q3",
+            ),
+            (
+                chat.prepare_group_avatar_change(
+                    GroupAvatarChangeParams("g100", "https://img/a.png", **key, **ident)
+                ),
+                "GroupChangeEvent.GroupAvatarUrlChange,",
+                "https://img/a.png",
+            ),
+            (
+                chat.prepare_group_description_change(
+                    GroupDescriptionChangeParams("g100", "Rules: be kind", **key, **ident)
+                ),
+                "GroupChangeEvent.GroupDescriptionChange,",
+                "Rules: be kind",
+            ),
+        ]
+        for prepared, prefix, plaintext in metadata:
+            self.assertEqual(
+                set(prepared), {"encrypted_value", "conversation_key_version", "action_signatures"}
+            )
+            self.assertEqual(prepared["conversation_key_version"], "4")
+            payload = prepared["action_signatures"][0]["signature_payload"]
+            self.assertTrue(payload.startswith(prefix), payload)
+            self.assertTrue(payload.endswith(f",4,{prepared['encrypted_value']}"), payload)
+            self.assertNotIn(plaintext, payload)
+            self.assertEqual(chat.decrypt(prepared["encrypted_value"], conv_key), plaintext)
+        with self.assertRaises(ValueError) as raised:
+            chat.prepare_group_title_change(GroupTitleChangeParams("g100", "Board", **ident))
+        self.assertIn("no cached conversation key for 'g100'", str(raised.exception))
         admins = chat.prepare_group_admins_add(
             GroupAdminsAddParams("g100", ["910008", "910009"], **ident)
         )["action_signatures"][0]
@@ -1149,17 +1183,25 @@ class TestApiShapes(unittest.TestCase):
         )
         self.assertEqual(result["conversation_id"], "17380288:1491585161162473473")
 
-    def test_encrypt_decrypt_generic_roundtrip(self):
-        chat, v = self._unlocked_chat()
+    def test_decrypt_reads_the_title_a_title_change_sends(self):
+        from chat_xdk import GroupTitleChangeParams
 
+        chat, v = self._unlocked_chat()
         conv_key = base64.b64decode(v["conversation_key_b64"])
-        plaintext = "metadata payload \U0001F31F with unicode"
-        ciphertext = chat.encrypt(plaintext, conv_key)
-        self.assertIsInstance(ciphertext, str)
-        self.assertNotEqual(ciphertext, plaintext)
+        title = "metadata payload \U0001F31F with unicode"
+        params = GroupTitleChangeParams(
+            "g100",
+            title,
+            sender_id="910002",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="4",
+        )
+        first = chat.prepare_group_title_change(params)["encrypted_value"]
+        self.assertNotEqual(first, title)
         # Randomized nonce: two encryptions differ.
-        self.assertNotEqual(chat.encrypt(plaintext, conv_key), ciphertext)
-        self.assertEqual(chat.decrypt(ciphertext, conv_key), plaintext)
+        self.assertNotEqual(chat.prepare_group_title_change(params)["encrypted_value"], first)
+        self.assertEqual(chat.decrypt(first, conv_key), title)
 
     def test_export_lock_reimport_roundtrip(self):
         from chat_xdk import ImportKeysParams

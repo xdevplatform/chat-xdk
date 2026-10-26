@@ -692,17 +692,17 @@ namespace ChatXdk
         public PreparedAction PrepareGroupLeave(GroupLeaveParams parameters)
             => CallAction(BuildPrepareGroupLeaveJson(parameters), NativeMethods.chat_xdk_prepare_group_leave);
 
-        /// <summary>Sign a group title change. CustomTitle is ciphertext.</summary>
-        public PreparedAction PrepareGroupTitleChange(GroupTitleChangeParams parameters)
-            => CallAction(BuildPrepareGroupTitleChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_title_change);
+        /// <summary>Encrypt a new group title under the conversation key and sign the change.</summary>
+        public PreparedGroupMetadataChange PrepareGroupTitleChange(GroupTitleChangeParams parameters)
+            => CallMetadataChange(BuildPrepareGroupTitleChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_title_change);
 
-        /// <summary>Sign a group avatar change.</summary>
-        public PreparedAction PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
-            => CallAction(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
+        /// <summary>Encrypt a new group avatar URL under the conversation key and sign the change.</summary>
+        public PreparedGroupMetadataChange PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
+            => CallMetadataChange(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
 
-        /// <summary>Sign a group description change. CustomDescription is ciphertext.</summary>
-        public PreparedAction PrepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
-            => CallAction(BuildPrepareGroupDescriptionChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_description_change);
+        /// <summary>Encrypt a new group description under the conversation key and sign the change.</summary>
+        public PreparedGroupMetadataChange PrepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
+            => CallMetadataChange(BuildPrepareGroupDescriptionChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_description_change);
 
         /// <summary>Sign adding group admins.</summary>
         public PreparedAction PrepareGroupAdminsAdd(GroupAdminsAddParams parameters)
@@ -752,6 +752,17 @@ namespace ChatXdk
             return JsonSerializer.Deserialize<PreparedConversationChange>(resultJson, JsonOpts)!;
         }
 
+        private PreparedGroupMetadataChange CallMetadataChange(string paramsJson, ParamsJsonDelegate fn)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(paramsJson);
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(fn(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<PreparedGroupMetadataChange>(resultJson, JsonOpts)!;
+        }
+
         private PreparedAction CallAction(string paramsJson, ParamsJsonDelegate fn)
         {
             ThrowIfDisposed();
@@ -764,24 +775,9 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Encrypt a UTF-8 metadata string with the conversation key; returns base64 ciphertext (XSalsa20-Poly1305).
-        /// </summary>
-        public string Encrypt(string plaintext, byte[] conversationKey)
-        {
-            ThrowIfDisposed();
-            ArgumentNullException.ThrowIfNull(conversationKey);
-            var pt = Utf8Z(plaintext);
-            var ck = Utf8Z(Convert.ToBase64String(conversationKey));
-            string ciphertext;
-            fixed (byte* ptPtr = pt)
-            fixed (byte* ckPtr = ck)
-                ciphertext = ConsumeResult(NativeMethods.chat_xdk_encrypt(_handle, ptPtr, ckPtr));
-            GC.KeepAlive(this);
-            return ciphertext;
-        }
-
-        /// <summary>
-        /// Decrypt base64 ciphertext (from <see cref="Encrypt"/>) to a UTF-8 plaintext string.
+        /// Decrypt a group title, avatar URL, or description the X API returns for a conversation
+        /// (base64 ciphertext) with the raw 32-byte conversation key. Group changes in events need
+        /// no call of their own: <see cref="DecryptEvent"/> returns them decrypted.
         /// </summary>
         public string Decrypt(string ciphertextB64, byte[] conversationKey)
         {
@@ -1232,6 +1228,9 @@ namespace ChatXdk
                 ["public_keys"] = p.PublicKeys,
                 ["conversation_id"] = p.ConversationId,
                 ["user_ids"] = p.UserIds,
+                ["title"] = p.Title,
+                ["avatar_url"] = p.AvatarUrl,
+                ["description"] = p.Description,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1250,8 +1249,9 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+                ["new_title"] = p.NewTitle,
+                ["conversation_key"] = p.ConversationKey is null ? null : Convert.ToBase64String(p.ConversationKey),
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["custom_title"] = p.CustomTitle,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1260,8 +1260,9 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+                ["new_avatar_url"] = p.NewAvatarUrl,
+                ["conversation_key"] = p.ConversationKey is null ? null : Convert.ToBase64String(p.ConversationKey),
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["custom_avatar_url"] = p.CustomAvatarUrl,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1270,8 +1271,9 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+                ["new_description"] = p.NewDescription,
+                ["conversation_key"] = p.ConversationKey is null ? null : Convert.ToBase64String(p.ConversationKey),
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["custom_description"] = p.CustomDescription,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

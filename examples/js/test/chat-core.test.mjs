@@ -52,13 +52,22 @@ test("setIdentity needs the registered version", async () => {
   assert.throws(() => core.setIdentity("12345"), /signing key version unknown/);
 });
 
-test("generic encrypt -> decrypt round-trip returns the plaintext", async () => {
+test("group title change signs the encrypted title, which decrypts back", async () => {
   const core = await loadedCore();
   const key = convKey();
-  const plaintext = "hello from the js example";
-  const ciphertext = core.encrypt(plaintext, key);
-  assert.notEqual(ciphertext, plaintext);
-  assert.equal(core.decrypt(ciphertext, key), plaintext);
+  const title = "hello from the js example";
+  const prepared = core.prepareGroupTitleChange({
+    conversationId: "g123",
+    title,
+    conversationKey: key,
+    conversationKeyVersion: "1",
+  });
+  assert.notEqual(prepared.encryptedValue, title);
+  assert.equal(prepared.conversationKeyVersion, "1");
+  const payload = prepared.actionSignatures[0].signaturePayload;
+  assert.ok(payload.startsWith("GroupChangeEvent.GroupTitleChange,"), payload);
+  assert.ok(!payload.includes(title), payload);
+  assert.equal(core.decrypt(prepared.encryptedValue, key), title);
 });
 
 test("conversation key prepare -> decrypt round-trip", async () => {

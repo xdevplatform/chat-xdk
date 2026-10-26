@@ -218,6 +218,7 @@ pub mod js {
         JsPostAttachmentInfo,
         JsPreparedAction,
         JsPreparedConversationChange,
+        JsPreparedGroupMetadataChange,
         JsPublicKeyInput,
         JsPublicKeyRegistration,
         JsPublicKeyRegistrationPayload,

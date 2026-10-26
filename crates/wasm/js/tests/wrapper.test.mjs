@@ -325,10 +325,18 @@ async function delegationTests() {
   });
   assert.ok(removeReaction.encodedMessageCreateEvent.length > 0);
 
-  // Generic + file crypto delegations (roundtrips prove every field): two
-  // files encrypted from the message's eventB64 open from the same event.
-  const ct = chat.encrypt("wrapper text", convKey);
-  assert.equal(chat.decrypt(ct, convKey), "wrapper text");
+  // Metadata + file crypto delegations (roundtrips prove every field): the
+  // title a title change encrypts decrypts with the same key, and two files
+  // encrypted from the message's eventB64 open from the same event.
+  const title = chat.prepareGroupTitleChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    newTitle: "wrapper text",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  });
+  assert.equal(chat.decrypt(title.encryptedValue, convKey), "wrapper text");
   const mediaKeys = { [v.event_conversation_key_version]: convKey };
   const photo = (mediaHashKey) => ({
     attachment_type: "media",
