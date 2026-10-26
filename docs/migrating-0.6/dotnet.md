@@ -25,11 +25,12 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -40,14 +41,17 @@ loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
 `DecryptEvents` returns, `bundle` for a `ConversationKeyBundle`, `payload`
 for a `SendPayload`, `prepared` for a `PreparedConversationChange`, and
-`keyChange` and `message` for a decrypted key change and message, as
+`keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
+decrypted key change, message, deletion, read receipt and group change, as
 `JsonElement`s.
 `api.Post(path, body)` stands for your HTTP client: it POSTs `body`,
 serialized with `System.Text.Json`'s default options, to
 `https://api.x.com` + `path` with your user access token and returns the
 parsed JSON response as a `JsonElement`. `PhotoAttachment(mediaHashKey)`
-stands for your code that builds a photo's `AttachmentDescriptor`. The types
-are in the `ChatXdk` namespace.
+stands for your code that builds a photo's `AttachmentDescriptor`, and
+`ShowEdit`, `ShowTitle` and `ShowDescription` for your code that displays
+an edit or a group's title or description. The types are in the `ChatXdk`
+namespace.
 
 ## Upgrade readers before v1 sends start
 
@@ -416,7 +420,7 @@ var encrypted = keyChange.GetProperty("conversation_participant_keys")[0]
     .GetProperty("encrypted_conversation_key").GetString();
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 A decrypted message or key change carries its conversation key version as
 `conversation_key_version`, the name the X API's events and the Thrift
@@ -430,6 +434,37 @@ var keyChangeVersion = keyChange.GetProperty("key_version").GetString();
 // 0.6.0
 var messageVersion = message.GetProperty("conversation_key_version").GetString();
 var keyChangeVersion = keyChange.GetProperty("conversation_key_version").GetString();
+```
+
+Fields that hold sequence ids take the names of the params that send them,
+as those params serialize. `Reaction`, `ReactionRemoved` and `Edit`
+content names its target `target_message_sequence_id`, as
+`EncryptReactionParams` and `EncryptEditParams` do. A `MessageDeleted`
+event names its messages `sequence_ids`, as `MessageDeleteParams` does, and
+a `ReadReceipt` or `MarkedUnread` event names its position
+`seen_until_sequence_id`, as `MarkConversationReadParams` does. An edit's
+text is `updated_text`, as `EncryptEditParams` names it, and a v1 edit
+carries the signed message id of the message it edits as
+`target_message_id`, absent for a v0 edit:
+
+```csharp
+// 0.5.x
+var content = message.GetProperty("content");
+if (content.GetProperty("content_type").GetString() == "Edit")
+{
+    ShowEdit(content.GetProperty("target_message_id").GetString(), content.GetProperty("new_text").GetString());
+}
+var deletedSequenceIds = deleted.GetProperty("message_ids");
+var seenUntil = receipt.GetProperty("seen_until_id").GetString();
+
+// 0.6.0
+var content = message.GetProperty("content");
+if (content.GetProperty("content_type").GetString() == "Edit")
+{
+    ShowEdit(content.GetProperty("target_message_sequence_id").GetString(), content.GetProperty("updated_text").GetString());
+}
+var deletedSequenceIds = deleted.GetProperty("sequence_ids");
+var seenUntil = receipt.GetProperty("seen_until_sequence_id").GetString();
 ```
 
 ## Deletes return a `PreparedAction`
@@ -477,21 +512,28 @@ those entries on the update's request.
 ### Removing members
 
 `PrepareGroupMembersRemove` removes `UserIds` and rotates the conversation
-key for the members who stay. Pass their identity keys as `PublicKeys`.
-The result is a `PreparedConversationChange`: the new conversation key,
-`ConversationParticipantKeys` for those members, and `ActionSignatures` in
-this order — the removal, then the conversation-key change.
+key, so the members removed don't receive the key the group encrypts under
+next. `GroupMembersRemoveParams` takes the identity keys of the members who
+stay, the conversation id and the members to remove; a key for a member
+being removed throws `ChatXdkException`. The group's title, avatar and
+description are encrypted under the conversation key: set the ones the
+group has, as plaintext, in `Title`, `AvatarUrl` and `Description`, and the
+call encrypts each under the new key.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange`: the new `ConversationKey`,
+`ConversationParticipantKeys` for the members who stay, and
+`ActionSignatures` in request order — the removal, a change for each
+title, avatar and description set, then the conversation-key change. Store
+the new key as you store the key a key change returns.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```csharp
 // 0.6.0
-var prepared = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(conversationId, userIds)
-{
-    PublicKeys = remainingPublicKeys,
-});
+var prepared = chat.PrepareGroupMembersRemove(
+    new GroupMembersRemoveParams(remainingPublicKeys, conversationId, userIds) { Title = title });
 api.Post($"/2/chat/conversations/{conversationId}/members/remove", new
 {
     user_ids = userIds,
@@ -522,31 +564,85 @@ var left = chat.PrepareGroupLeave(new GroupLeaveParams(conversationId)
 
 ### Changing the title
 
-`CustomTitle` is the ciphertext the request sends. The result is a
-`PreparedAction`; send its `ActionSignatures` on the request.
+`PrepareGroupTitleChange` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version in
+`ConversationKey` and `ConversationKeyVersion`, or resolves both from the
+key cache when they're null. The result is a `PreparedGroupMetadataChange`:
+the `EncryptedValue` the request sends as the title, the
+`ConversationKeyVersion` it's encrypted under, and the `ActionSignatures`
+to send with it.
 
 ```csharp
+// 0.5.x
+var encryptedTitle = chat.Encrypt(title, keys[conversationKeyVersion]);
+
 // 0.6.0
-var title = chat.PrepareGroupTitleChange(
-    new GroupTitleChangeParams(conversationId, conversationKeyVersion, customTitle));
+var prepared = chat.PrepareGroupTitleChange(new GroupTitleChangeParams(conversationId, title));
+var encryptedTitle = prepared.EncryptedValue;
+```
+
+`DecryptEvent` returns a received title change decrypted: the `new_title`
+of a `TitleChanged` change is the plaintext. It decrypts with the key
+version the change names, from the call's key map or the key cache, and
+throws without that key, as a message does.
+
+```csharp
+// 0.5.x
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "TitleChanged")
+{
+    ShowTitle(chat.Decrypt(change.GetProperty("new_title").GetString()!, keys[conversationKeyVersion]));
+}
+
+// 0.6.0
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "TitleChanged")
+{
+    ShowTitle(change.GetProperty("new_title").GetString()!);
+}
 ```
 
 ### Changing the avatar
 
+`PrepareGroupAvatarChange` takes the new avatar URL as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does. A
+received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+
 ```csharp
+// 0.5.x
+var encryptedAvatarUrl = chat.Encrypt(avatarUrl, keys[conversationKeyVersion]);
+
 // 0.6.0
-var avatar = chat.PrepareGroupAvatarChange(
-    new GroupAvatarChangeParams(conversationId, conversationKeyVersion, customAvatarUrl));
+var prepared = chat.PrepareGroupAvatarChange(new GroupAvatarChangeParams(conversationId, avatarUrl));
+var encryptedAvatarUrl = prepared.EncryptedValue;
 ```
 
 ### Changing the description
 
-`CustomDescription` is the ciphertext the request sends.
+`PrepareGroupDescriptionChange` takes the new description as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does.
+
+```csharp
+// 0.5.x
+var encryptedDescription = chat.Encrypt(description, keys[conversationKeyVersion]);
+
+// 0.6.0
+var prepared = chat.PrepareGroupDescriptionChange(
+    new GroupDescriptionChangeParams(conversationId, description));
+var encryptedDescription = prepared.EncryptedValue;
+```
+
+A received description change is a `DescriptionChanged` change holding the
+decrypted `new_description`:
 
 ```csharp
 // 0.6.0
-var description = chat.PrepareGroupDescriptionChange(
-    new GroupDescriptionChangeParams(conversationId, conversationKeyVersion, customDescription));
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "DescriptionChanged")
+{
+    ShowDescription(change.GetProperty("new_description").GetString()!);
+}
 ```
 
 ### Adding admins

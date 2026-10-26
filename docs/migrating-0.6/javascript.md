@@ -24,11 +24,12 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversationKeyVersion` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -39,12 +40,16 @@ and then as 0.6.0 code writes them. `chat` is the `ChatWithJuicebox` that
 values: ids, versions, keys and events as the X API returns them, `keys` for
 the conversation key map `decryptEvents` returns, `payload` for a
 `SendPayload`, `prepared` for a `PreparedConversationChange`, and
-`keyChange` and `message` for a decrypted keyChange and message event.
-`api.post(path, body)` stands for your HTTP client: it POSTs `body` as JSON
-to `https://api.x.com` + `path` with your user access token, writing every
-key in snake_case as the X API takes them (the package returns camelCase),
-and resolves to the parsed JSON response. `photoAttachment(mediaHashKey)`
-stands for your code that builds a photo's attachment descriptor. Functions
+`keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
+decrypted keyChange, message, messageDeleted, readReceipt and groupChange
+event. `api.post(path, body)` stands for your HTTP client: it POSTs `body`
+as JSON to `https://api.x.com` + `path` with your user access token,
+writing every key in snake_case as the X API takes them (the package
+returns camelCase), and resolves to the parsed JSON response.
+`photoAttachment(mediaHashKey)` stands for your code that builds a photo's
+attachment descriptor, and `showEdit`, `showTitle` and `showDescription`
+for your code that displays an edit or a group's title or description.
+Functions
 such as `encryptedFileSize` and `bytesToBase64` import from
 `@xdevplatform/chat-xdk`.
 
@@ -407,7 +412,7 @@ const sent: ConversationParticipantKey[] = prepared.conversationParticipantKeys;
 const received: ConversationParticipantKey[] = keyChange.conversationParticipantKeys ?? [];
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 Decrypted message and keyChange events carry their conversation key version
 as `conversationKeyVersion`, the X API's `conversation_key_version`
@@ -421,6 +426,32 @@ const keyChangeVersion = keyChange.keyVersion;
 // 0.6.0
 const messageVersion = message.conversationKeyVersion;
 const keyChangeVersion = keyChange.conversationKeyVersion;
+```
+
+Fields that hold sequence ids take the names of the params that send them.
+`reaction`, `reactionRemoved` and `edit` content names its target
+`targetMessageSequenceId`, as the reaction and edit params do. A
+messageDeleted event names its messages `sequenceIds`, as
+`prepareMessageDelete` does, and a readReceipt or markedUnread event names
+its position `seenUntilSequenceId`, as `prepareMarkConversationRead` does.
+An edit's text is `updatedText`, as `encryptEdit` names it, and a v1 edit
+carries the signed message id of the message it edits as
+`targetMessageId`, absent for a v0 edit:
+
+```js
+// 0.5.x
+if (message.content.contentType === 'edit') {
+  showEdit(message.content.targetMessageId, message.content.newText);
+}
+const deletedSequenceIds = deleted.messageIds;
+const seenUntil = receipt.seenUntilId;
+
+// 0.6.0
+if (message.content.contentType === 'edit') {
+  showEdit(message.content.targetMessageSequenceId, message.content.updatedText);
+}
+const deletedSequenceIds = deleted.sequenceIds;
+const seenUntil = receipt.seenUntilSequenceId;
 ```
 
 ## Deletes return a `PreparedAction`
@@ -477,21 +508,30 @@ those entries on the update's request, in snake_case, as this page's other
 ### Removing members
 
 `prepareGroupMembersRemove` removes `userIds` and rotates the conversation
-key for the members who stay. Pass their identity keys as `publicKeys`.
-The result is a `PreparedConversationChange`: the new conversation key,
-`conversationParticipantKeys` for those members, and `actionSignatures` in
-this order — the removal, then the conversation-key change.
+key, so the members removed don't receive the key the group encrypts under
+next. `publicKeys` are the identity keys of the members who stay; a key for
+a member being removed throws. The group's title, avatar and description
+are encrypted under the conversation key: pass the ones the group has, as
+plaintext, as `title`, `avatarUrl` and `description`, and the call encrypts
+each under the new key.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange`: the new `conversationKey`,
+`conversationParticipantKeys` for the members who stay, and
+`actionSignatures` in request order — the removal, a change for each
+title, avatar and description passed, then the conversation-key change.
+Store the new key as you store the key a key change returns.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```js
 // 0.6.0
 const prepared = chat.prepareGroupMembersRemove({
+  publicKeys: remainingPublicKeys,
   conversationId,
   userIds,
-  publicKeys: remainingPublicKeys,
+  title,
 });
 await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
   user_ids: userIds,
@@ -518,40 +558,77 @@ const left = chat.prepareGroupLeave({ conversationId, promoteAdminId });
 
 ### Changing the title
 
-`customTitle` is the ciphertext the request sends. The result is a
-`PreparedAction`; send its `actionSignatures` on the request.
+`prepareGroupTitleChange` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `encryptMessage`, it takes
+the key and its version as `conversationKey` and `conversationKeyVersion`,
+or resolves both from the key cache without them. The result is a
+`PreparedGroupMetadataChange`: the `encryptedValue` the request sends as
+the title, the `conversationKeyVersion` it's encrypted under, and the
+`actionSignatures` to send with it.
 
 ```js
+// 0.5.x
+const encryptedTitle = chat.encrypt(title, keys[conversationKeyVersion]);
+
 // 0.6.0
-const title = chat.prepareGroupTitleChange({
-  conversationId,
-  conversationKeyVersion,
-  customTitle,
-});
+const prepared = chat.prepareGroupTitleChange({ conversationId, newTitle: title });
+const encryptedTitle = prepared.encryptedValue;
+```
+
+`decryptEvent` returns a received title change decrypted: the `newTitle`
+of a `titleChanged` change is the plaintext. It decrypts with the key
+version the change names, from the call's key map or the key cache, and
+throws without that key, as a message does.
+
+```js
+// 0.5.x
+if (groupChange.change.changeType === 'titleChanged') {
+  showTitle(chat.decrypt(groupChange.change.newTitle, keys[conversationKeyVersion]));
+}
+
+// 0.6.0
+if (groupChange.change.changeType === 'titleChanged') {
+  showTitle(groupChange.change.newTitle);
+}
 ```
 
 ### Changing the avatar
 
+`prepareGroupAvatarChange` takes the new avatar URL as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does. A
+received `avatarChanged` change holds the decrypted `newAvatarUrl`.
+
 ```js
+// 0.5.x
+const encryptedAvatarUrl = chat.encrypt(avatarUrl, keys[conversationKeyVersion]);
+
 // 0.6.0
-const avatar = chat.prepareGroupAvatarChange({
-  conversationId,
-  conversationKeyVersion,
-  customAvatarUrl,
-});
+const prepared = chat.prepareGroupAvatarChange({ conversationId, newAvatarUrl: avatarUrl });
+const encryptedAvatarUrl = prepared.encryptedValue;
 ```
 
 ### Changing the description
 
-`customDescription` is the ciphertext the request sends.
+`prepareGroupDescriptionChange` takes the new description as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does.
+
+```js
+// 0.5.x
+const encryptedDescription = chat.encrypt(description, keys[conversationKeyVersion]);
+
+// 0.6.0
+const prepared = chat.prepareGroupDescriptionChange({ conversationId, newDescription: description });
+const encryptedDescription = prepared.encryptedValue;
+```
+
+A received description change is a `descriptionChanged` change holding the
+decrypted `newDescription`:
 
 ```js
 // 0.6.0
-const description = chat.prepareGroupDescriptionChange({
-  conversationId,
-  conversationKeyVersion,
-  customDescription,
-});
+if (groupChange.change.changeType === 'descriptionChanged') {
+  showDescription(groupChange.change.newDescription);
+}
 ```
 
 ### Adding admins

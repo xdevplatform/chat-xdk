@@ -18,6 +18,7 @@ change.
 - [ ] [Pass a `DecryptEventsParams` to `decrypt_events`](#decrypt_events-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass params by reference to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-by-reference)
+- [ ] [Build params with `new` and `with_*`, and give matches on SDK enums a wildcard arm](#types-are-non_exhaustive)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
@@ -25,10 +26,11 @@ change.
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -40,13 +42,17 @@ other names stand for your own values: ids, versions, keys and events as the
 X API returns them, `keys` for the conversation key map `decrypt_events`
 returns, `payload` for a `SendPayload`, `prepared` for a
 `PreparedConversationChange`, `key_change` for a
-`ConversationKeyChangeParams`, `received_key_change` and `message` for a
-decrypted `KeyChangeEvent` and `Message`, and `err` for an `SdkError`.
+`ConversationKeyChangeParams`, `received_key_change`, `message`, `deleted`,
+`receipt` and `group_change` for a decrypted `KeyChangeEvent`, `Message`,
+`MessageDeletedEvent`, `ReadReceiptEvent` and `GroupChangeEvent`, and `err`
+for an `SdkError`.
 `api.post(path, &body)` stands for your HTTP client: it POSTs `body`, a
 `serde_json::Value`, to `https://api.x.com` + `path` with your user access
 token and returns the parsed JSON response as a `serde_json::Value`.
 `photo_attachment(media_hash_key)` stands for your code that builds a
-photo's `AttachmentDescriptor`. Every type and module the snippets use
+photo's `AttachmentDescriptor`, and `show_edit`, `show_title` and
+`show_description` for your code that displays an edit or a group's title
+or description. Every type and module the snippets use
 imports from `chat_xdk_core`, except `SdkError`, which imports from
 `chat_xdk_core::error`.
 
@@ -155,8 +161,7 @@ let mut reply = EncryptReplyParams::new(conversation_id, "pong", event_b64);
 reply.reply_to_sender_id = Some(4201);
 
 // 0.6.0
-let mut reply = EncryptReplyParams::new(conversation_id, "pong", event_b64);
-reply.reply_to_sender_id = Some("4201".to_string());
+let reply = EncryptReplyParams::new(conversation_id, "pong", event_b64).with_reply_to_sender_id("4201");
 ```
 
 ## Key versions are integers written as strings
@@ -222,6 +227,49 @@ let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "pong",
 let prepared = chat.prepare_conversation_key_change(&key_change)?;
 ```
 
+## Types are `#[non_exhaustive]`
+
+Every public enum, params struct and result struct is `#[non_exhaustive]`,
+so a later release can add a variant or a field without breaking your code.
+Code outside the SDK can't build one with a struct literal:
+
+- Build params with `new`, which takes the required fields, and set the
+  optional ones with the `with_*` methods or by assigning the field.
+- Build `PublicKeyInput`, `SigningKeyEntry`, `EntityDescriptor` and
+  `UrlAttachmentImageDescriptor` with `new`, and the quick-reply options with
+  `new` and their `with_*` methods.
+- Read result types such as `SendPayload` and `PreparedConversationChange`
+  by field.
+- Give a `match` on an SDK enum, `SdkError` included, a wildcard arm, and end
+  a pattern on a variant with named fields, such as `MessageContent::Edit`,
+  in `..`.
+
+```rust
+// 0.5.x
+let signing_key = SigningKeyEntry {
+    user_id: user_id.to_string(),
+    public_key_version: public_key_version.to_string(),
+    public_key: signing_public_key.to_string(),
+    identity_public_key: identity_public_key.to_string(),
+    identity_public_key_signature: identity_public_key_signature.to_string(),
+};
+let mut params = EncryptMessageParams::new(conversation_id, "@user hello");
+params.entities = Some(vec![EntityDescriptor { start: 0, end: 5, entity_type: "mention".to_string() }]);
+params.ttl_msec = Some(86_400_000);
+
+// 0.6.0
+let signing_key = SigningKeyEntry::new(
+    user_id,
+    public_key_version,
+    signing_public_key,
+    identity_public_key,
+    identity_public_key_signature,
+);
+let params = EncryptMessageParams::new(conversation_id, "@user hello")
+    .with_entities(vec![EntityDescriptor::new(0, 5, "mention")])
+    .with_ttl_msec(86_400_000);
+```
+
 ## `SendPayload` fields take the send request's names
 
 The two encoded fields carry the names of the fields of the send request,
@@ -250,9 +298,8 @@ let body = serde_json::json!({
 it. It isn't part of the send request: keep it to encrypt the message's
 files (see [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
-`SendPayload` is `#[non_exhaustive]`: code outside the SDK reads its fields
-but can't build one with a struct literal. Read payloads under the new
-names wherever your code reads one, including code that stores payloads.
+Read payloads under the new names wherever your code reads one, including
+code that stores payloads.
 
 ## Encrypt a file from its message
 
@@ -287,8 +334,8 @@ let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
 }))?;
 let session_id = upload["data"]["session_id"].as_str().ok_or("no session_id")?;
 let media_hash_key = upload["data"]["media_hash_key"].as_str().ok_or("no media_hash_key")?;
-let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(vec![photo_attachment(media_hash_key)]);
+let params = EncryptMessageParams::new(conversation_id, "a photo")
+    .with_attachments(vec![photo_attachment(media_hash_key)]);
 let payload = chat.encrypt_message(&params)?;
 let encrypted = chat.encrypt_file(&EncryptFileParams::new(photo, &payload.event_b64, media_hash_key))?;
 api.post(&format!("/2/chat/media/upload/{session_id}/append"), &serde_json::json!({
@@ -452,7 +499,7 @@ let key: &ConversationParticipantKey = &received_key_change.conversation_partici
 let encrypted = &key.encrypted_conversation_key;
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 `Message` and `KeyChangeEvent` carry their conversation key version as
 `conversation_key_version`, the name the X API's events and the Thrift
@@ -466,6 +513,32 @@ let key_change_version = received_key_change.key_version.as_str();
 // 0.6.0
 let message_version = message.conversation_key_version.as_deref();
 let key_change_version = received_key_change.conversation_key_version.as_str();
+```
+
+Fields that hold sequence ids take the names of the params that send them.
+`MessageContent::Reaction`, `ReactionRemoved` and `Edit` name their target
+`target_message_sequence_id`, as `EncryptReactionParams` and
+`EncryptEditParams` do. `MessageDeletedEvent` names its messages
+`sequence_ids`, as `MessageDeleteParams` does, and `ReadReceiptEvent` and
+`MarkedUnreadEvent` name their position `seen_until_sequence_id`, as
+`MarkConversationReadParams` does. An edit's text is `updated_text`, as
+`EncryptEditParams` names it, and a v1 edit carries the signed `message_id`
+of the message it edits as `target_message_id`, `None` for a v0 edit:
+
+```rust
+// 0.5.x
+if let MessageContent::Edit { target_message_id, new_text, .. } = &message.content {
+    show_edit(target_message_id, new_text);
+}
+let deleted_sequence_ids = &deleted.message_ids;
+let seen_until = receipt.seen_until_id.as_deref();
+
+// 0.6.0
+if let MessageContent::Edit { target_message_sequence_id, updated_text, .. } = &message.content {
+    show_edit(target_message_sequence_id, updated_text);
+}
+let deleted_sequence_ids = &deleted.sequence_ids;
+let seen_until = receipt.seen_until_sequence_id.as_deref();
 ```
 
 ## Deletes return a `PreparedAction`
@@ -491,9 +564,9 @@ A missing or invalid parameter fails with `SdkError::InvalidInput`, whose
 message names the value, such as `Invalid sender_id 'user-1': pass a numeric
 user id (digits only)` or `too many attachments: at most 10 per message`.
 `SdkError::InvalidState` is left for values the chat lacks, such as a
-missing session identity or an empty key cache. Add an arm for the new
-variant to any exhaustive `match` on `SdkError`, and match it where your
-code checks for invalid input:
+missing session identity or an empty key cache. Match the new variant where
+your code checks for invalid input; a `match` on `SdkError` takes a wildcard
+arm (see [Types are `#[non_exhaustive]`](#types-are-non_exhaustive)):
 
 ```rust
 // 0.5.x
@@ -513,20 +586,28 @@ those entries on the update's request.
 ### Removing members
 
 `prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange`: the new
-conversation key, `conversation_participant_keys` for those members, and
-`action_signatures` in this order — the removal, then the conversation-key
-change.
+conversation key, so the members removed don't receive the key the group
+encrypts under next. `GroupMembersRemoveParams::new` takes the identity keys
+of the members who stay, the conversation id and the members to remove; a
+key for a member being removed is rejected. The group's title, avatar and
+description are encrypted under the conversation key: pass the ones the
+group has, as plaintext, with `with_title`, `with_avatar_url` and
+`with_description`, and the call encrypts each under the new key.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange`: the new conversation key,
+`conversation_participant_keys` for the members who stay, and
+`action_signatures` in request order — the removal, a change for each
+title, avatar and description passed, then the conversation-key change.
+Store the new key as you store the key a key change returns.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```rust
 // 0.6.0
-let mut removal = GroupMembersRemoveParams::new(conversation_id, user_ids);
-removal.public_keys = Some(remaining_public_keys);
+let removal = GroupMembersRemoveParams::new(remaining_public_keys, conversation_id, user_ids.clone())
+    .with_title(title);
 let prepared = chat.prepare_group_members_remove(&removal)?;
 let path = format!("/2/chat/conversations/{conversation_id}/members/remove");
 api.post(&path, &serde_json::json!({
@@ -548,48 +629,88 @@ conversation key. `action_signatures` are the removal, then a
 
 ```rust
 // 0.6.0
-let mut leave = GroupLeaveParams::new(conversation_id);
-leave.promote_admin_id = Some(promote_admin_id.into());
+let leave = GroupLeaveParams::new(conversation_id).with_promote_admin_id(promote_admin_id);
 let left = chat.prepare_group_leave(&leave)?;
 // left.action_signatures: removal, GroupAdminAddChange, ConversationDeleteEvent
 ```
 
 ### Changing the title
 
-`custom_title` is the ciphertext the request sends. The result is a
-`PreparedAction`; send its `action_signatures` on the request.
+`prepare_group_title_change` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version with
+`with_conversation_key`, or resolves both from the key cache when it's not
+called. The result is a `PreparedGroupMetadataChange`: the
+`encrypted_value` the request sends as the title, the
+`conversation_key_version` it's encrypted under, and the
+`action_signatures` to send with it.
 
 ```rust
+// 0.5.x
+let encrypted_title = chat.encrypt(title, &keys[conversation_key_version])?;
+
 // 0.6.0
-let title = chat.prepare_group_title_change(&GroupTitleChangeParams::new(
-    conversation_id,
-    conversation_key_version,
-    custom_title,
-))?;
+let prepared = chat.prepare_group_title_change(&GroupTitleChangeParams::new(conversation_id, title))?;
+let encrypted_title = prepared.encrypted_value;
+```
+
+`decrypt_event` returns a received title change decrypted: the `new_title`
+of `GroupChange::TitleChanged` is the plaintext. It decrypts with the key
+version the change names, from the call's key map or the key cache, and
+fails without that key, as a message does.
+
+```rust
+// 0.5.x
+if let GroupChange::TitleChanged { new_title } = &group_change.change {
+    show_title(&chat.decrypt(new_title, &keys[conversation_key_version])?);
+}
+
+// 0.6.0
+if let GroupChange::TitleChanged { new_title, .. } = &group_change.change {
+    show_title(new_title);
+}
 ```
 
 ### Changing the avatar
 
+`prepare_group_avatar_change` takes the new avatar URL as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does. A received
+`GroupChange::AvatarChanged` holds the decrypted `new_avatar_url`.
+
 ```rust
+// 0.5.x
+let encrypted_avatar_url = chat.encrypt(avatar_url, &keys[conversation_key_version])?;
+
 // 0.6.0
-let avatar = chat.prepare_group_avatar_change(&GroupAvatarChangeParams::new(
-    conversation_id,
-    conversation_key_version,
-    custom_avatar_url,
-))?;
+let prepared = chat.prepare_group_avatar_change(&GroupAvatarChangeParams::new(conversation_id, avatar_url))?;
+let encrypted_avatar_url = prepared.encrypted_value;
 ```
 
 ### Changing the description
 
-`custom_description` is the ciphertext the request sends.
+`prepare_group_description_change` takes the new description as plaintext
+and returns a `PreparedGroupMetadataChange`, as the title change does.
+
+```rust
+// 0.5.x
+let encrypted_description = chat.encrypt(description, &keys[conversation_key_version])?;
+
+// 0.6.0
+let prepared = chat.prepare_group_description_change(&GroupDescriptionChangeParams::new(
+    conversation_id,
+    description,
+))?;
+let encrypted_description = prepared.encrypted_value;
+```
+
+A received description change is a `GroupChange::DescriptionChanged`
+holding the decrypted `new_description`:
 
 ```rust
 // 0.6.0
-let description = chat.prepare_group_description_change(&GroupDescriptionChangeParams::new(
-    conversation_id,
-    conversation_key_version,
-    custom_description,
-))?;
+if let GroupChange::DescriptionChanged { new_description, .. } = &group_change.change {
+    show_description(new_description);
+}
 ```
 
 ### Adding admins

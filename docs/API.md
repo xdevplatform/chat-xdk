@@ -142,20 +142,20 @@ wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 | 18 | **prepare_conversation_key_change** | `prepare_conversation_key_change(&ConversationKeyChangeParams) → PreparedConversationChange` | `prepareConversationKeyChange(params: ConversationKeyChangeParams) → PreparedConversationChange` | `prepare_conversation_key_change(ConversationKeyChangeParams) → dict` | `PrepareConversationKeyChange(ConversationKeyChangeParams) (*PreparedConversationChange, error)` | `prepareConversationKeyChange(ConversationKeyChangeParams)` | `PrepareConversationKeyChange(ConversationKeyChangeParams)` |
 | 19 | **prepare_group_members_change** | `prepare_group_members_change(&GroupMembersChangeParams) → PreparedConversationChange` | `prepareGroupMembersChange(params: GroupMembersChangeParams) → PreparedConversationChange` | `prepare_group_members_change(GroupMembersChangeParams) → dict` | `PrepareGroupMembersChange(GroupMembersChangeParams) (*PreparedConversationChange, error)` | `prepareGroupMembersChange(GroupMembersChangeParams)` | `PrepareGroupMembersChange(GroupMembersChangeParams)` |
 | 20 | **prepare_group_create** | `prepare_group_create(&GroupCreateParams) → PreparedConversationChange` | `prepareGroupCreate(params: GroupCreateParams) → PreparedConversationChange` | `prepare_group_create(GroupCreateParams) → dict` | `PrepareGroupCreate(GroupCreateParams) (*PreparedConversationChange, error)` | `prepareGroupCreate(GroupCreateParams)` | `PrepareGroupCreate(GroupCreateParams)` |
-| 50 | **prepare_group_members_remove** | `prepare_group_members_remove(&GroupMembersRemoveParams) → PreparedConversationChange` | `prepareGroupMembersRemove(params) → PreparedConversationChange` | `prepare_group_members_remove(GroupMembersRemoveParams) → dict` | `PrepareGroupMembersRemove(GroupMembersRemoveParams) (*PreparedConversationChange, error)` | `prepareGroupMembersRemove(GroupMembersRemoveParams)` | `PrepareGroupMembersRemove(GroupMembersRemoveParams)` |
-| 51 | **prepare_group_leave** | `prepare_group_leave(&GroupLeaveParams) → PreparedAction` | `prepareGroupLeave(params) → PreparedAction` | `prepare_group_leave(GroupLeaveParams) → dict` | `PrepareGroupLeave(GroupLeaveParams) (*PreparedAction, error)` | `prepareGroupLeave(GroupLeaveParams)` → `PreparedAction` | `PrepareGroupLeave(GroupLeaveParams)` → `PreparedAction` |
-| 52 | **prepare_group_title_change** | `prepare_group_title_change(&GroupTitleChangeParams) → PreparedAction` | `prepareGroupTitleChange(params) → PreparedAction` | `prepare_group_title_change(GroupTitleChangeParams) → dict` | `PrepareGroupTitleChange(GroupTitleChangeParams) (*PreparedAction, error)` | `prepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedAction` | `PrepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedAction` |
-| 53 | **prepare_group_avatar_change** | `prepare_group_avatar_change(&GroupAvatarChangeParams) → PreparedAction` | `prepareGroupAvatarChange(params) → PreparedAction` | `prepare_group_avatar_change(GroupAvatarChangeParams) → dict` | `PrepareGroupAvatarChange(GroupAvatarChangeParams) (*PreparedAction, error)` | `prepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedAction` | `PrepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedAction` |
-| 54 | **prepare_group_description_change** | `prepare_group_description_change(&GroupDescriptionChangeParams) → PreparedAction` | `prepareGroupDescriptionChange(params) → PreparedAction` | `prepare_group_description_change(GroupDescriptionChangeParams) → dict` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams) (*PreparedAction, error)` | `prepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedAction` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedAction` |
-| 55 | **prepare_group_admins_add** | `prepare_group_admins_add(&GroupAdminsAddParams) → PreparedAction` | `prepareGroupAdminsAdd(params) → PreparedAction` | `prepare_group_admins_add(GroupAdminsAddParams) → dict` | `PrepareGroupAdminsAdd(GroupAdminsAddParams) (*PreparedAction, error)` | `prepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` | `PrepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` |
-| 56 | **prepare_group_admins_remove** | `prepare_group_admins_remove(&GroupAdminsRemoveParams) → PreparedAction` | `prepareGroupAdminsRemove(params) → PreparedAction` | `prepare_group_admins_remove(GroupAdminsRemoveParams) → dict` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams) (*PreparedAction, error)` | `prepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` |
-| 57 | **prepare_group_invite_enable** | `prepare_group_invite_enable(&GroupInviteEnableParams) → PreparedAction` | `prepareGroupInviteEnable(params) → PreparedAction` | `prepare_group_invite_enable(GroupInviteEnableParams) → dict` | `PrepareGroupInviteEnable(GroupInviteEnableParams) (*PreparedAction, error)` | `prepareGroupInviteEnable(GroupInviteEnableParams)` → `PreparedAction` | `PrepareGroupInviteEnable(GroupInviteEnableParams)` → `PreparedAction` |
-| 58 | **prepare_group_invite_disable** | `prepare_group_invite_disable(&GroupInviteDisableParams) → PreparedAction` | `prepareGroupInviteDisable(params) → PreparedAction` | `prepare_group_invite_disable(GroupInviteDisableParams) → dict` | `PrepareGroupInviteDisable(GroupInviteDisableParams) (*PreparedAction, error)` | `prepareGroupInviteDisable(GroupInviteDisableParams)` → `PreparedAction` | `PrepareGroupInviteDisable(GroupInviteDisableParams)` → `PreparedAction` |
-| 59 | **prepare_group_join_request** | `prepare_group_join_request(&GroupJoinRequestParams) → PreparedAction` | `prepareGroupJoinRequest(params) → PreparedAction` | `prepare_group_join_request(GroupJoinRequestParams) → dict` | `PrepareGroupJoinRequest(GroupJoinRequestParams) (*PreparedAction, error)` | `prepareGroupJoinRequest(GroupJoinRequestParams)` → `PreparedAction` | `PrepareGroupJoinRequest(GroupJoinRequestParams)` → `PreparedAction` |
-| 60 | **prepare_group_join_reject** | `prepare_group_join_reject(&GroupJoinRejectParams) → PreparedAction` | `prepareGroupJoinReject(params) → PreparedAction` | `prepare_group_join_reject(GroupJoinRejectParams) → dict` | `PrepareGroupJoinReject(GroupJoinRejectParams) (*PreparedAction, error)` | `prepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` | `PrepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` |
-| 61 | **prepare_message_ttl_change** | `prepare_message_ttl_change(&MessageTtlChangeParams) → PreparedAction` | `prepareMessageTtlChange(params) → PreparedAction` | `prepare_message_ttl_change(MessageTtlChangeParams) → dict` | `PrepareMessageTtlChange(MessageTtlChangeParams) (*PreparedAction, error)` | `prepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` | `PrepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` |
-| 62 | **prepare_message_ttl_remove** | `prepare_message_ttl_remove(&MessageTtlRemoveParams) → PreparedAction` | `prepareMessageTtlRemove(params) → PreparedAction` | `prepare_message_ttl_remove(MessageTtlRemoveParams) → dict` | `PrepareMessageTtlRemove(MessageTtlRemoveParams) (*PreparedAction, error)` | `prepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` | `PrepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` |
-| 63 | **prepare_screen_capture** | `prepare_screen_capture(&ScreenCaptureParams) → PreparedAction` | `prepareScreenCapture(params) → PreparedAction` | `prepare_screen_capture(ScreenCaptureParams) → dict` | `PrepareScreenCapture(ScreenCaptureParams) (*PreparedAction, error)` | `prepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` | `PrepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` |
+| 49 | **prepare_group_members_remove** | `prepare_group_members_remove(&GroupMembersRemoveParams) → PreparedConversationChange` | `prepareGroupMembersRemove(params) → PreparedConversationChange` | `prepare_group_members_remove(GroupMembersRemoveParams) → dict` | `PrepareGroupMembersRemove(GroupMembersRemoveParams) (*PreparedConversationChange, error)` | `prepareGroupMembersRemove(GroupMembersRemoveParams)` | `PrepareGroupMembersRemove(GroupMembersRemoveParams)` |
+| 50 | **prepare_group_leave** | `prepare_group_leave(&GroupLeaveParams) → PreparedAction` | `prepareGroupLeave(params) → PreparedAction` | `prepare_group_leave(GroupLeaveParams) → dict` | `PrepareGroupLeave(GroupLeaveParams) (*PreparedAction, error)` | `prepareGroupLeave(GroupLeaveParams)` → `PreparedAction` | `PrepareGroupLeave(GroupLeaveParams)` → `PreparedAction` |
+| 51 | **prepare_group_title_change** | `prepare_group_title_change(&GroupTitleChangeParams) → PreparedGroupMetadataChange` | `prepareGroupTitleChange(params) → PreparedGroupMetadataChange` | `prepare_group_title_change(GroupTitleChangeParams) → dict` | `PrepareGroupTitleChange(GroupTitleChangeParams) (*PreparedGroupMetadataChange, error)` | `prepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedGroupMetadataChange` | `PrepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedGroupMetadataChange` |
+| 52 | **prepare_group_avatar_change** | `prepare_group_avatar_change(&GroupAvatarChangeParams) → PreparedGroupMetadataChange` | `prepareGroupAvatarChange(params) → PreparedGroupMetadataChange` | `prepare_group_avatar_change(GroupAvatarChangeParams) → dict` | `PrepareGroupAvatarChange(GroupAvatarChangeParams) (*PreparedGroupMetadataChange, error)` | `prepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedGroupMetadataChange` | `PrepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedGroupMetadataChange` |
+| 53 | **prepare_group_description_change** | `prepare_group_description_change(&GroupDescriptionChangeParams) → PreparedGroupMetadataChange` | `prepareGroupDescriptionChange(params) → PreparedGroupMetadataChange` | `prepare_group_description_change(GroupDescriptionChangeParams) → dict` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams) (*PreparedGroupMetadataChange, error)` | `prepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedGroupMetadataChange` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedGroupMetadataChange` |
+| 54 | **prepare_group_admins_add** | `prepare_group_admins_add(&GroupAdminsAddParams) → PreparedAction` | `prepareGroupAdminsAdd(params) → PreparedAction` | `prepare_group_admins_add(GroupAdminsAddParams) → dict` | `PrepareGroupAdminsAdd(GroupAdminsAddParams) (*PreparedAction, error)` | `prepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` | `PrepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` |
+| 55 | **prepare_group_admins_remove** | `prepare_group_admins_remove(&GroupAdminsRemoveParams) → PreparedAction` | `prepareGroupAdminsRemove(params) → PreparedAction` | `prepare_group_admins_remove(GroupAdminsRemoveParams) → dict` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams) (*PreparedAction, error)` | `prepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` |
+| 56 | **prepare_group_invite_enable** | `prepare_group_invite_enable(&GroupInviteEnableParams) → PreparedAction` | `prepareGroupInviteEnable(params) → PreparedAction` | `prepare_group_invite_enable(GroupInviteEnableParams) → dict` | `PrepareGroupInviteEnable(GroupInviteEnableParams) (*PreparedAction, error)` | `prepareGroupInviteEnable(GroupInviteEnableParams)` → `PreparedAction` | `PrepareGroupInviteEnable(GroupInviteEnableParams)` → `PreparedAction` |
+| 57 | **prepare_group_invite_disable** | `prepare_group_invite_disable(&GroupInviteDisableParams) → PreparedAction` | `prepareGroupInviteDisable(params) → PreparedAction` | `prepare_group_invite_disable(GroupInviteDisableParams) → dict` | `PrepareGroupInviteDisable(GroupInviteDisableParams) (*PreparedAction, error)` | `prepareGroupInviteDisable(GroupInviteDisableParams)` → `PreparedAction` | `PrepareGroupInviteDisable(GroupInviteDisableParams)` → `PreparedAction` |
+| 58 | **prepare_group_join_request** | `prepare_group_join_request(&GroupJoinRequestParams) → PreparedAction` | `prepareGroupJoinRequest(params) → PreparedAction` | `prepare_group_join_request(GroupJoinRequestParams) → dict` | `PrepareGroupJoinRequest(GroupJoinRequestParams) (*PreparedAction, error)` | `prepareGroupJoinRequest(GroupJoinRequestParams)` → `PreparedAction` | `PrepareGroupJoinRequest(GroupJoinRequestParams)` → `PreparedAction` |
+| 59 | **prepare_group_join_reject** | `prepare_group_join_reject(&GroupJoinRejectParams) → PreparedAction` | `prepareGroupJoinReject(params) → PreparedAction` | `prepare_group_join_reject(GroupJoinRejectParams) → dict` | `PrepareGroupJoinReject(GroupJoinRejectParams) (*PreparedAction, error)` | `prepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` | `PrepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` |
+| 60 | **prepare_message_ttl_change** | `prepare_message_ttl_change(&MessageTtlChangeParams) → PreparedAction` | `prepareMessageTtlChange(params) → PreparedAction` | `prepare_message_ttl_change(MessageTtlChangeParams) → dict` | `PrepareMessageTtlChange(MessageTtlChangeParams) (*PreparedAction, error)` | `prepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` | `PrepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` |
+| 61 | **prepare_message_ttl_remove** | `prepare_message_ttl_remove(&MessageTtlRemoveParams) → PreparedAction` | `prepareMessageTtlRemove(params) → PreparedAction` | `prepare_message_ttl_remove(MessageTtlRemoveParams) → dict` | `PrepareMessageTtlRemove(MessageTtlRemoveParams) (*PreparedAction, error)` | `prepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` | `PrepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` |
+| 62 | **prepare_screen_capture** | `prepare_screen_capture(&ScreenCaptureParams) → PreparedAction` | `prepareScreenCapture(params) → PreparedAction` | `prepare_screen_capture(ScreenCaptureParams) → dict` | `PrepareScreenCapture(ScreenCaptureParams) (*PreparedAction, error)` | `prepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` | `PrepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
 single params value, named the same in every language: Rust
@@ -191,8 +191,9 @@ unset or empty key fields and fall back to two opt-in session stores:
   default**). While enabled, `decrypt_events` caches, per conversation, the
   key whose key change carried a valid signature at the highest version seen;
   `decrypt_event` falls back to it when its params' `conversation_keys` map is
-  omitted or empty; and the `encrypt_*` methods resolve an omitted
-  `conversation_key` / `conversation_key_version` pair from it. Disabling
+  omitted or empty; and the `encrypt_*` methods and the group title, avatar
+  and description prepares resolve an omitted `conversation_key` /
+  `conversation_key_version` pair from it. Disabling
   clears the cache; the cached keys zeroize on drop.
 
   Only `decrypt_events` populates the cache, and only from KeyChange events
@@ -241,12 +242,12 @@ The group methods are separate because they sign different events: a group
 create must carry a `GroupChangeEvent.GroupCreate` signature and a member add a
 `GroupChangeEvent.GroupMemberAddChange` signature — each **in addition to** the
 conversation-key change signature, so both return two `actionSignatures`.
-A member removal given the public keys of the members who stay does the same:
-`GroupChangeEvent.GroupMemberRemoveChange`, then the conversation-key change.
-A key rotation signs only the key change, so `prepareConversationKeyChange`
-returns one.
+A member removal does the same, since it always rotates the key:
+`GroupChangeEvent.GroupMemberRemoveChange`, a title, avatar and description
+change for each one passed, then the conversation-key change. A key rotation
+signs only the key change, so `prepareConversationKeyChange` returns one.
 
-A member removal posts both signatures on `/members/remove` together with
+A member removal posts its signatures on `/members/remove` together with
 `group_key_rotation_data`: the new `conversation_key_version` and the
 `conversation_participant_keys` for the members who stay.
 
@@ -399,26 +400,38 @@ conversation-key change (`ConversationKeyChangeEvent`) and the member add
 
 #### prepare_group_members_remove
 
-Sign a group member removal. `user_ids` are the members being removed.
+Sign a group member removal and rotate the conversation key, so the members
+removed don't receive the key the group encrypts under next. Required:
+`public_keys`, the identity keys of the members who stay, in the same shape
+as `prepare_group_members_change`; `conversation_id`; and `user_ids`, the
+members being removed. A `public_keys` entry for someone being removed is
+rejected.
 
-`public_keys` are the identity keys of the members who stay, in the same
-shape as `prepare_group_members_change`. When they are set, the call
-generates a new conversation key, encrypts it for those members, and returns
-a `PreparedConversationChange`: the new key and version, the participant
-keys, and `action_signatures` in this order — the removal, then the
-conversation-key change. The removal is bound to the new key version. A
-`public_keys` entry for someone being removed is rejected.
+The group's title, avatar and description are encrypted under the
+conversation key, so a rotation re-encrypts them: pass the ones the group
+has, as plaintext, in the optional `title`, `avatar_url` and `description`
+(Rust `with_title`, `with_avatar_url`, `with_description`), and the call
+encrypts each under the new key. An empty value is unset.
+
+The call generates a new conversation key, encrypts it for the members who
+stay, and returns a `PreparedConversationChange`: the new key and version,
+the participant keys, and `action_signatures` in request order — the
+removal, bound to the new key version; a title, avatar and description
+change for each one passed, signed as
+[`prepare_group_title_change`](#prepare_group_title_change) and its
+siblings sign them; then the conversation-key change. Store the new key as
+you store the key a key change returns.
 
 Send that result as `POST /2/chat/conversations/{id}/members/remove`.
-`user_ids` are the members being removed. `action_signatures` is both
-signatures, the removal and then the key change. `group_key_rotation_data`
-carries the new `conversation_key_version` and
-`conversation_participant_keys` (JS: `groupKeyRotationData`,
-`conversationKeyVersion`, `conversationParticipantKeys`).
+`user_ids` are the members being removed. `action_signatures` are the
+signatures, in the order returned. `group_key_rotation_data` carries the new
+`conversation_key_version` and `conversation_participant_keys` (JS:
+`groupKeyRotationData`, `conversationKeyVersion`,
+`conversationParticipantKeys`).
 
 ```python
 prepared = chat.prepare_group_members_remove(
-    GroupMembersRemoveParams(conversation_id, ["222"], public_keys=remaining_public_keys)
+    GroupMembersRemoveParams(remaining_public_keys, conversation_id, ["222"], title=title)
 )
 api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
     "user_ids": ["222"],
@@ -432,9 +445,10 @@ api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
 
 ```typescript
 const prepared = chat.prepareGroupMembersRemove({
+  publicKeys: remainingPublicKeys,
   conversationId,
   userIds: ["222"],
-  publicKeys: remainingPublicKeys,
+  title,
 });
 await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
   userIds: ["222"],
@@ -446,18 +460,10 @@ await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
 });
 ```
 
-Without `public_keys`, the same return type comes back with no new key,
-empty participant keys, and only the removal signature.
-`conversation_key_version` on that result is the version bound into the
-removal, or empty when the signature carries the literal `null`. Pass
-`conversation_key_version` on the params to bind a version without rotating;
-an empty or omitted version signs `null`. A rotation ignores that field and
-binds the new version.
-
 The removal is signed at signature version 11:
 
 ```text
-GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version|null},signature_version=11
+GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version},signature_version=11
 ```
 
 The key change is the same `ConversationKeyChangeEvent` payload
@@ -466,11 +472,7 @@ The key change is the same `ConversationKeyChangeEvent` payload
 conversation key.
 
 The result does not carry a ratchet tree (`base64_encoded_key_rotation`) or
-a rewrapped pin-key bundle (`rotated_pmk_bundle`). It also does not
-re-encrypt a title, avatar, or description. Sign those with
-`prepare_group_title_change`, `prepare_group_avatar_change`, and
-`prepare_group_description_change` under the new key, and place those
-signatures between the removal and the key change.
+a rewrapped pin-key bundle (`rotated_pmk_bundle`).
 
 ---
 
@@ -494,37 +496,69 @@ ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}
 
 #### prepare_group_title_change
 
-Sign a group title change. `custom_title` is the ciphertext the request
-sends, and `conversation_key_version` is the key it is encrypted under.
-Returns one `PreparedAction` signature at version 7:
+Encrypt a new group title and sign the change. Required: `conversation_id`
+and `new_title`, the title as plaintext. The call encrypts it under the
+conversation key with XSalsa20-Poly1305, the cipher messages use, and
+resolves the key as `encrypt_message` does: the optional
+`conversation_key` / `conversation_key_version` pair (Rust
+`with_conversation_key`), or the key cache when both are omitted. The
+`sender_id` / `signing_key_version` overrides resolve from the session
+identity.
+
+**Returns: `PreparedGroupMetadataChange`**
+
+| Field | Meaning |
+|---|---|
+| `encrypted_value` | The title encrypted under the conversation key, base64: the value the request sends as the title |
+| `conversation_key_version` | The version of the key it is encrypted under |
+| `action_signatures` | One signature, at version 7, over the key version and the encrypted title |
 
 ```text
-GroupChangeEvent.GroupTitleChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{custom_title}
+GroupChangeEvent.GroupTitleChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{encrypted_value}
 ```
 
-A comma in `custom_title` is rejected.
+```python
+prepared = chat.prepare_group_title_change(GroupTitleChangeParams(conversation_id, "Team"))
+# prepared["encrypted_value"], prepared["action_signatures"]
+```
+
+```typescript
+const prepared = chat.prepareGroupTitleChange({ conversationId, newTitle: "Team" });
+// prepared.encryptedValue, prepared.actionSignatures
+```
+
+A recipient's `decrypt_event` returns the change as `TitleChanged` with the
+plaintext `new_title`, decrypted with the conversation key version the
+change names (see [GroupChange](#groupchange)).
 
 ---
 
 #### prepare_group_avatar_change
 
-Sign a group avatar change. `custom_avatar_url` is the value the request
-sends. Returns one `PreparedAction` signature at version 7:
+Encrypt a new group avatar URL and sign the change. Required:
+`conversation_id` and `new_avatar_url`, the URL as plaintext. The key
+resolves, and the result is shaped, as for
+[`prepare_group_title_change`](#prepare_group_title_change):
 
 ```text
-GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{custom_avatar_url}
+GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{encrypted_value}
 ```
 
 ---
 
 #### prepare_group_description_change
 
-Sign a group description change. `custom_description` is the ciphertext the
-request sends. Returns one `PreparedAction` signature at version 7:
+Encrypt a new group description and sign the change. Required:
+`conversation_id` and `new_description`, the description as plaintext. The
+key resolves, and the result is shaped, as for
+[`prepare_group_title_change`](#prepare_group_title_change):
 
 ```text
-GroupChangeEvent.GroupDescriptionChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{custom_description}
+GroupChangeEvent.GroupDescriptionChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{encrypted_value}
 ```
+
+A recipient's `decrypt_event` returns it as `DescriptionChanged` with the
+plaintext `new_description`.
 
 ---
 
@@ -984,6 +1018,7 @@ interface SigningKeyEntry {
 
 The SDK verifies each entry's identity binding (`identityPublicKeySignature`)
 before trusting it for signature verification, so all fields are required.
+In Rust, `SigningKeyEntry::new` takes them in the order above.
 
 **ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file decrypt params, and the `keys` field of `ConversationKeyResult`:
 ```typescript
@@ -1176,7 +1211,7 @@ a `PreparedAction` shaped as for deletes, whose entry's
 `encodedMessageEventDetail` carries the `MarkConversationReadEvent`. The
 signature covers the read point and its time, so a recipient's
 `decrypt_event` returns a signed receipt as a `ReadReceipt` event with
-`verified` set, `seen_until_id`, and `seen_at_msec`. The identity overrides
+`verified` set, `seen_until_sequence_id`, and `seen_at_msec`. The identity overrides
 and the canonical one-to-one id work as for deletes.
 
 **Action signatures.** Every prepare method returns its signed actions in
@@ -1201,16 +1236,16 @@ into the request body as they are (snake_case shown; JS returns camelCase):
 }
 ```
 
-The Rust structs pair a `new(…required…)` constructor with public optional
-fields:
+The Rust params structs are `#[non_exhaustive]`: build each with a
+`new(…required…)` constructor and set the optional fields with its `with_*`
+methods (the fields stay public):
 
 ```rust
 // Rust — session identity + key cache resolve the omitted fields
 chat.set_identity(&SetIdentityParams::new(my_user_id, signing_key_version))?;
 chat.set_cache_keys(true); // filled by decrypt_events
 
-let mut params = EncryptMessageParams::new(conversation_id, "Hello");
-params.ttl_msec = Some(86_400_000);
+let params = EncryptMessageParams::new(conversation_id, "Hello").with_ttl_msec(86_400_000);
 let payload = chat.encrypt_message(&params)?;
 let message_id = payload.message_id; // generated by the SDK
 
@@ -1407,17 +1442,20 @@ The file calls raise an error that says what to pass instead when:
 - (decrypting) the message is not encrypted, so neither is its media: use the downloaded bytes as they are;
 - (decrypting) a reply shows quoted media but does not embed the quoted message: pass the quoted message's own event.
 
-### Generic Encrypt / Decrypt
+### Group Metadata
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 37 | **encrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Encrypt(plaintext string, conversationKey []byte) (string, error)` — returns base64 ciphertext | `encrypt(String, byte[])` → `String` | `Encrypt(string, byte[])` → `string` |
-| 38 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
+| 37 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
 
-Encrypt/decrypt arbitrary UTF-8 strings using XSalsa20-Poly1305 with a conversation key. Use for encrypted metadata fields like `group_name`, `group_avatar_url`, and `group_description` returned by the XChat API.
-
-- `encrypt(plaintext, key)` returns base64-encoded ciphertext
-- `decrypt(ciphertext_b64, key)` returns the UTF-8 plaintext
+The X API returns a group's title, avatar URL and description (`group_name`,
+`group_avatar_url` and `group_description` on a conversation) encrypted
+under the conversation key. `decrypt(ciphertext_b64, key)` decrypts one with
+XSalsa20-Poly1305 under the raw key of the version it was encrypted under,
+and returns the UTF-8 plaintext. Group changes need no separate call:
+`prepare_group_title_change`, `prepare_group_avatar_change` and
+`prepare_group_description_change` encrypt the new value, and
+`decrypt_event` decrypts a received change.
 
 Wire format: `base64(nonce[24B] || poly1305_tag[16B] || ciphertext)` — same as message content encryption.
 
@@ -1435,10 +1473,10 @@ group_name = chat.decrypt(conversation["group_name"], conv_key)
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 39 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
-| 40 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
-| 41 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
-| 42 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
+| 38 | **sign** | `(&[u8]) → Vec<u8>` | `(Uint8Array) → Uint8Array` | `(bytes) → bytes` | `Sign(data []byte) ([]byte, error)` | `sign(byte[])` → `byte[]` | `Sign(byte[])` → `byte[]` |
+| 39 | **verify** | `(pk_b64, &[u8] sig, &[u8] data) → bool` | `(pk_b64, Uint8Array sig, Uint8Array data) → boolean` | `(pk_b64, bytes sig, bytes data) → bool` | `Verify(publicKeyB64 string, signature, data []byte) (bool, error)` | `verify(String publicKeyB64, byte[] signature, byte[] data)` | `Verify(string publicKeyB64, byte[] signature, byte[] data)` |
+| 40 | **verify_key_binding** | `(identity_b64, signing_b64, sig_b64) → bool` | `verifyKeyBinding(identityB64, signingB64, sigB64) → boolean` | `verify_key_binding(identity_b64, signing_b64, sig_b64) → bool` | `VerifyKeyBinding(identityB64, signingB64, sigB64 string) (bool, error)` | `verifyKeyBinding(String, String, String)` | `VerifyKeyBinding(string, string, string)` |
+| 41 | **matches_registered_key** | `(public_key_b64) → bool` | `matchesRegisteredKey(publicKeyB64) → boolean` | `matches_registered_key(public_key_b64) → bool` | `MatchesRegisteredKey(publicKeyB64 string) (bool, error)` | `matchesRegisteredKey(String)` | `MatchesRegisteredKey(string)` |
 
 Conversation-key changes, group creates, and group member-adds are signed by the
 one-call prepare methods (`prepare_conversation_key_change`,
@@ -1455,13 +1493,13 @@ Common helpers exported as module-level functions (Rust crate root / JS module /
 
 | # | Function | Rust | JS | Python | Go | JVM | .NET |
 |---|----------|------|-----|--------|-----|------|------|
-| 43 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
-| 44 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
-| 45 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
-| 46 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
-| 47 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
-| 48 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
-| 49 | **encrypted_file_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedFileSize(plaintextSize: number) → number` | `encrypted_file_size(plaintext_size: int) → int` | `EncryptedFileSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedFileSize(long)` → `long` | `ChatXdkUtilities.EncryptedFileSize(ulong)` → `ulong` |
+| 42 | **bytes_to_base64** | `(&[u8]) → String` | `bytesToBase64(Uint8Array) → string` | `bytes_to_base64(bytes) → str` | `BytesToBase64(data []byte) (string, error)` | `ChatXdkUtilities.bytesToBase64(byte[])` | `ChatXdkUtilities.BytesToBase64(ReadOnlySpan<byte>)` |
+| 43 | **base64_to_bytes** | `(&str) → Option<Vec<u8>>` | `base64ToBytes(string) → Uint8Array?` | `base64_to_bytes(str) → bytes?` | `Base64ToBytes(b64 string) ([]byte, error)` | `ChatXdkUtilities.base64ToBytes(String)` | `ChatXdkUtilities.Base64ToBytes(string)` |
+| 44 | **bytes_to_hex** | `(&[u8]) → String` | `bytesToHex(Uint8Array) → string` | `bytes_to_hex(bytes) → str` | `BytesToHex(data []byte) (string, error)` | `ChatXdkUtilities.bytesToHex(byte[])` | `ChatXdkUtilities.BytesToHex(ReadOnlySpan<byte>)` |
+| 45 | **hex_to_bytes** | `(&str) → Option<Vec<u8>>` | `hexToBytes(string) → Uint8Array?` | `hex_to_bytes(str) → bytes?` | `HexToBytes(hex string) ([]byte, error)` | `ChatXdkUtilities.hexToBytes(String)` | `ChatXdkUtilities.HexToBytes(string)` |
+| 46 | **detect_mime_type** | `(&[u8]) → Option<&str>` | `detectMimeType(Uint8Array) → string?` | `detect_mime_type(bytes) → str?` | `DetectMimeType(data []byte) (mime string, err error)` — empty string if unknown | `ChatXdkUtilities.detectMimeType(byte[])` → `String` or `null` | `ChatXdkUtilities.DetectMimeType(ReadOnlySpan<byte>)` → `string?` |
+| 47 | **detect_image_dimensions** | `(&[u8]) → Option<ImageDimensions>` | `detectImageDimensions(Uint8Array) → {width, height}?` | `detect_image_dimensions(bytes) → (w, h)?` | `DetectImageDimensions(data []byte) (*ImageDimensions, error)` — nil if unknown | `ChatXdkUtilities.detectImageDimensions(byte[])` → `ImageDimensions` or `null` | `ChatXdkUtilities.DetectImageDimensions(ReadOnlySpan<byte>)` → `ImageDimensions?` |
+| 48 | **encrypted_file_size** | `(plaintext_size: u64) → Option<u64>` | `encryptedFileSize(plaintextSize: number) → number` | `encrypted_file_size(plaintext_size: int) → int` | `EncryptedFileSize(plaintextSize uint64) (uint64, error)` | `ChatXdkUtilities.encryptedFileSize(long)` → `long` | `ChatXdkUtilities.EncryptedFileSize(ulong)` → `ulong` |
 
 `encrypted_file_size` returns the exact byte length that `encrypt_file` or
 `file_encryptor` will produce, without encrypting or requiring a key:
@@ -1888,16 +1926,17 @@ let decrypted = chat.decrypt_file(DecryptFileParams::new(
 // `POST /2/chat/media/upload/initialize` returns for
 // `{conversation_id, total_bytes: size}`.
 let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64).unwrap();
-let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(vec![AttachmentDescriptor::Media {
-    media_hash_key: new_media_hash_key.clone(),
-    width,
-    height,
-    filesize_bytes: size as i64,
-    filename: "photo.jpg".to_string(),
-    media_type: Some(1),
-    duration_millis: None,
-}]);
+let params = EncryptMessageParams::new(conversation_id, "a photo").with_attachments(vec![
+    AttachmentDescriptor::Media {
+        media_hash_key: new_media_hash_key.clone(),
+        width,
+        height,
+        filesize_bytes: size as i64,
+        filename: "photo.jpg".to_string(),
+        media_type: Some(1),
+        duration_millis: None,
+    },
+]);
 let photo_message = chat.encrypt_message(&params)?;
 let encrypted_photo = chat.encrypt_file(&EncryptFileParams::new(
     photo,
@@ -2196,15 +2235,25 @@ type MessageContent =
       quickReply?: QuickReply;
       ctas?: CallToAction[];
     }
-  | { contentType: 'reaction'; emoji: string; targetMessageId: string }
-  | { contentType: 'reactionRemoved'; emoji: string; targetMessageId: string }
-  | { contentType: 'edit'; targetMessageId: string; newText: string; entities?: RichTextEntity[] }
+  | { contentType: 'reaction'; emoji: string; targetMessageSequenceId: string }
+  | { contentType: 'reactionRemoved'; emoji: string; targetMessageSequenceId: string }
+  | { contentType: 'edit'; targetMessageSequenceId: string; targetMessageId?: string; updatedText: string; entities?: RichTextEntity[] }
   | { contentType: 'markRead' }
   | { contentType: 'markUnread' }
   | { contentType: 'unknown'; typeId?: number };
 ```
 
-For reactions and edits, `targetMessageId` is the message **sequenceId**.
+Reactions and edits name the message they target by its `sequenceId`, as
+`targetMessageSequenceId` (`target_message_sequence_id` in the other
+bindings), the name `EncryptReactionParams` and `EncryptEditParams` take. A
+v1 edit also carries the signed message id of the message it edits as
+`targetMessageId` (`target_message_id`), the id apps deduplicate and anchor
+on; a v0 edit doesn't carry it. An edit's replacement text is `updatedText`
+(`updated_text`), as `EncryptEditParams` names it.
+
+Rust's `MessageContent` is `#[non_exhaustive]`, and so is each variant with
+named fields: give a `match` a wildcard arm and end a variant's pattern in
+`..`, as in `MessageContent::Edit { updated_text, .. }`.
 
 ### SendPayload
 
@@ -2266,6 +2315,11 @@ pub struct EntityDescriptor {
     pub end: i32,            // End byte offset in the message text
     pub entity_type: String, // One of the types below, e.g. "url", "mention"
 }
+```
+
+```rust
+// Rust: build one with new(start, end, entity_type)
+let entities = vec![EntityDescriptor::new(0, 23, "url"), EntityDescriptor::new(25, 30, "mention")];
 ```
 
 ```typescript
@@ -2356,7 +2410,9 @@ banners small (a few hundred KB): clients honor data-usage thresholds when
 deciding whether to auto-load media.
 
 Rust, .NET, and JVM expose typed variants/factories
-(`AttachmentDescriptor::Url { … }`, `AttachmentDescriptor.UrlCard(url,
+(`AttachmentDescriptor::Url { … }` with images built by
+`UrlAttachmentImageDescriptor::new(media_hash_key, filesize_bytes, filename)`
+and `with_dimensions(width, height)`, `AttachmentDescriptor.UrlCard(url,
 displayTitle, bannerImage, faviconImage)`, `Types.AttachmentDescriptor
 .urlCard(url, displayTitle, bannerImage, faviconImage)`); Go uses the flat
 `AttachmentDescriptor` struct with `BannerImage`/`FaviconImage` pointer
@@ -2386,7 +2442,7 @@ Each binding names these types the same way, in its own idiom:
 
 | Binding | Shape | Field casing |
 |---------|-------|--------------|
-| Rust | `QuickReply::Request { request }` / `QuickReply::Response { response }` enum | snake_case |
+| Rust | `QuickReply::Request { request }` / `QuickReply::Response { response }` enum; the option structs build with `new()` and `with_*` (`QuickReplyOption::new().with_id("yes").with_label("Yes")`) | snake_case |
 | JS/WASM | `{ request: QuickReplyRequest } \| { response: QuickReplyResponse }` union | camelCase (`requestId`, `selectedOptionId`) |
 | Python | `QuickReply` `TypedDict` (and the nested `TypedDict`s), exported from `chat_xdk` | snake_case keys |
 | Go | `*chatxdk.QuickReply` struct with `Request` / `Response` pointer fields; `TextContent.QuickReply` decodes into the same type | Go field names, snake_case JSON |
@@ -2487,6 +2543,7 @@ type GroupChange =
   | { changeType: 'created'; memberIds: string[]; adminIds: string[]; title?: string; avatarUrl?: string }
   | { changeType: 'titleChanged'; newTitle: string }
   | { changeType: 'avatarChanged'; newAvatarUrl: string }
+  | { changeType: 'descriptionChanged'; newDescription: string }
   | { changeType: 'adminsAdded'; adminIds: string[] }
   | { changeType: 'adminsRemoved'; adminIds: string[] }
   | { changeType: 'membersAdded'; memberIds: string[]; currentMemberIds: string[]; currentAdminIds: string[] }
@@ -2497,6 +2554,14 @@ type GroupChange =
   | { changeType: 'joinRejected'; userIds: string[] }
   | { changeType: 'unknown' };
 ```
+
+A title, avatar or description change carries its value encrypted under the
+conversation key, and `decrypt_event` / `decrypt_events` return it
+decrypted: `newTitle`, `newAvatarUrl` and `newDescription` are plaintext.
+They decrypt with the key version the change names, from the call's key map
+or the key cache; without that key the event fails as a message does.
+Rust's `GroupChange` is `#[non_exhaustive]`, as is each variant with named
+fields.
 
 ### SettingsChange
 

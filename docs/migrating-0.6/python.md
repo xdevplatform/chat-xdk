@@ -26,10 +26,11 @@ change.
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -39,13 +40,16 @@ and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
 loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
 `decrypt_events` returns, `payload` for a `SendPayload`, `prepared` for
-the dict a prepare method returns, and `key_change` and `message` for a
-decrypted key change and message. `api.post(path, body)` stands for your
+the dict a prepare method returns, and `key_change`, `message`, `deleted`,
+`receipt` and `group_change` for a decrypted key change, message, deletion,
+read receipt and group change. `api.post(path, body)` stands for your
 HTTP client: it POSTs `body` as JSON to `https://api.x.com` + `path` with
 your user access token and returns the parsed JSON response.
 `photo_attachment(media_hash_key)` stands for your code that builds a
-photo's attachment descriptor. Every class and function the snippets use
-imports from `chat_xdk`.
+photo's attachment descriptor, and `show_edit`, `show_title` and
+`show_description` for your code that displays an edit or a group's title
+or description. Every class and function the snippets use imports from
+`chat_xdk`.
 
 ## Upgrade readers before v1 sends start
 
@@ -438,7 +442,7 @@ encrypted = key_change["participant_keys"][0]["encrypted_key"]
 encrypted = key_change["conversation_participant_keys"][0]["encrypted_conversation_key"]
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 Decrypted messages and key changes carry their conversation key version as
 `conversation_key_version`, the name the X API's events and the Thrift
@@ -452,6 +456,32 @@ key_change_version = key_change["key_version"]
 # 0.6.0
 message_version = message["conversation_key_version"]
 key_change_version = key_change["conversation_key_version"]
+```
+
+Keys that hold sequence ids take the names of the params that send them. A
+`Reaction`, `ReactionRemoved` or `Edit` content names its target
+`target_message_sequence_id`, as `EncryptReactionParams` and
+`EncryptEditParams` do. A `MessageDeleted` event names its messages
+`sequence_ids`, as `MessageDeleteParams` does, and a `ReadReceipt` or
+`MarkedUnread` event names its position `seen_until_sequence_id`, as
+`MarkConversationReadParams` does. An edit's text is `updated_text`, as
+`EncryptEditParams` names it, and a v1 edit carries the signed `message_id`
+of the message it edits as `target_message_id`, absent for a v0 edit:
+
+```python
+# 0.5.x
+content = message["content"]
+if content["content_type"] == "Edit":
+    show_edit(content["target_message_id"], content["new_text"])
+deleted_sequence_ids = deleted["message_ids"]
+seen_until = receipt["seen_until_id"]
+
+# 0.6.0
+content = message["content"]
+if content["content_type"] == "Edit":
+    show_edit(content["target_message_sequence_id"], content["updated_text"])
+deleted_sequence_ids = deleted["sequence_ids"]
+seen_until = receipt["seen_until_sequence_id"]
 ```
 
 ## Deletes return a `PreparedAction`
@@ -489,20 +519,28 @@ those entries on the update's request.
 ### Removing members
 
 `prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange` dict: the new
-conversation key, `conversation_participant_keys` for those members, and
-`action_signatures` in this order — the removal, then the conversation-key
-change.
+conversation key, so the members removed don't receive the key the group
+encrypts under next. `GroupMembersRemoveParams` takes the identity keys of
+the members who stay, the conversation id and the members to remove; a key
+for a member being removed raises `ValueError`. The group's title, avatar
+and description are encrypted under the conversation key: pass the ones the
+group has, as plaintext, as `title`, `avatar_url` and `description`, and
+the call encrypts each under the new key.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange` dict: the new conversation
+key, `conversation_participant_keys` for the members who stay, and
+`action_signatures` in request order — the removal, a change for each
+title, avatar and description passed, then the conversation-key change.
+Store the new key as you store the key a key change returns.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```python
 # 0.6.0
 prepared = chat.prepare_group_members_remove(
-    GroupMembersRemoveParams(conversation_id, user_ids, public_keys=remaining_public_keys)
+    GroupMembersRemoveParams(remaining_public_keys, conversation_id, user_ids, title=title)
 )
 api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
     "user_ids": user_ids,
@@ -531,34 +569,80 @@ left = chat.prepare_group_leave(
 
 ### Changing the title
 
-`custom_title` is the ciphertext the request sends. The result is a
-`PreparedAction` dict; send its `action_signatures` on the request.
+`prepare_group_title_change` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version as the
+`conversation_key` and `conversation_key_version` keywords, or resolves
+both from the key cache without them. The result is a
+`PreparedGroupMetadataChange` dict: the `encrypted_value` the request sends
+as the title, the `conversation_key_version` it's encrypted under, and the
+`action_signatures` to send with it.
 
 ```python
+# 0.5.x
+encrypted_title = chat.encrypt(title, keys[conversation_key_version])
+
 # 0.6.0
-title = chat.prepare_group_title_change(
-    GroupTitleChangeParams(conversation_id, conversation_key_version, custom_title)
-)
+prepared = chat.prepare_group_title_change(GroupTitleChangeParams(conversation_id, title))
+encrypted_title = prepared["encrypted_value"]
+```
+
+`decrypt_event` returns a received title change decrypted: the `new_title`
+of a `TitleChanged` change is the plaintext. It decrypts with the key
+version the change names, from the call's key map or the key cache, and
+raises without that key, as a message does.
+
+```python
+# 0.5.x
+change = group_change["change"]
+if change["change_type"] == "TitleChanged":
+    show_title(chat.decrypt(change["new_title"], keys[conversation_key_version]))
+
+# 0.6.0
+change = group_change["change"]
+if change["change_type"] == "TitleChanged":
+    show_title(change["new_title"])
 ```
 
 ### Changing the avatar
 
+`prepare_group_avatar_change` takes the new avatar URL as plaintext and
+returns a `PreparedGroupMetadataChange` dict, as the title change does. A
+received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+
 ```python
+# 0.5.x
+encrypted_avatar_url = chat.encrypt(avatar_url, keys[conversation_key_version])
+
 # 0.6.0
-avatar = chat.prepare_group_avatar_change(
-    GroupAvatarChangeParams(conversation_id, conversation_key_version, custom_avatar_url)
-)
+prepared = chat.prepare_group_avatar_change(GroupAvatarChangeParams(conversation_id, avatar_url))
+encrypted_avatar_url = prepared["encrypted_value"]
 ```
 
 ### Changing the description
 
-`custom_description` is the ciphertext the request sends.
+`prepare_group_description_change` takes the new description as plaintext
+and returns a `PreparedGroupMetadataChange` dict, as the title change does.
+
+```python
+# 0.5.x
+encrypted_description = chat.encrypt(description, keys[conversation_key_version])
+
+# 0.6.0
+prepared = chat.prepare_group_description_change(
+    GroupDescriptionChangeParams(conversation_id, description)
+)
+encrypted_description = prepared["encrypted_value"]
+```
+
+A received description change is a `DescriptionChanged` change holding the
+decrypted `new_description`:
 
 ```python
 # 0.6.0
-description = chat.prepare_group_description_change(
-    GroupDescriptionChangeParams(conversation_id, conversation_key_version, custom_description)
-)
+change = group_change["change"]
+if change["change_type"] == "DescriptionChanged":
+    show_description(change["new_description"])
 ```
 
 ### Adding admins

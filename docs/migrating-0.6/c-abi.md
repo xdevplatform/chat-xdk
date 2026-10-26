@@ -26,9 +26,10 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` in decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -38,7 +39,8 @@ and then as 0.6.0 code writes them. `chat` is a `ChatHandle *` with your
 keys loaded, and `keys`, `keys_len` and `keys_b64` are your saved private
 keys. `take(r)` stands for your error handling: it returns `r.data` (free it
 with `chat_xdk_free_string`) and handles `r.error`. The `*_json` and `*_b64`
-values are documents and base64 strings your code builds, and
+values are documents and base64 strings your code builds, `title`,
+`avatar_url`, `description` and `new_title` are UTF-8 strings it holds, and
 `encrypt_file_json(photo_message)` and `file_encryptor_json(photo_message)`
 stand for building a file's params from a send payload's `event_b64`.
 
@@ -304,7 +306,7 @@ char *key_change = take(chat_xdk_decrypt_event(chat, key_change_b64, conversatio
 char *key_change = take(chat_xdk_decrypt_event_params(chat, decrypt_key_change_json));
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 The decrypt calls return a message's or key change's conversation key
 version as `conversation_key_version`, the name the X API's events and the
@@ -318,6 +320,30 @@ char *message = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_j
 // 0.6.0
 // {"type":"Message",...,"conversation_key_version":"...",...}
 char *message = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+```
+
+Fields that hold sequence ids take the names of the params that send them.
+`Reaction`, `ReactionRemoved` and `Edit` content names its target
+`target_message_sequence_id`, as the reaction and edit params do. A
+`MessageDeleted` event names its messages `sequence_ids`, as the delete
+params do, and a `ReadReceipt` or `MarkedUnread` event names its position
+`seen_until_sequence_id`, as the read-receipt params do. An edit's text is
+`updated_text`, as the edit params name it, and a v1 edit carries the
+signed message id of the message it edits as `target_message_id`, absent
+for a v0 edit:
+
+```c
+// 0.5.x
+// {"type":"Message",...,"content":{"content_type":"Edit","target_message_id":"7","new_text":"..."}}
+// {"type":"MessageDeleted",...,"message_ids":["7"],...}
+// {"type":"ReadReceipt",...,"seen_until_id":"7",...}
+char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_json, signing_keys_json));
+
+// 0.6.0
+// {"type":"Message",...,"content":{"content_type":"Edit","target_message_sequence_id":"7","updated_text":"..."}}
+// {"type":"MessageDeleted",...,"sequence_ids":["7"],...}
+// {"type":"ReadReceipt",...,"seen_until_sequence_id":"7",...}
+char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
 ```
 
 ## Invalid input errors
@@ -340,20 +366,28 @@ those entries on the update's request.
 ### Removing members
 
 `chat_xdk_prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange`: the new
-conversation key (base64), `conversation_participant_keys` for those
-members, and `action_signatures` in this order — the removal, then the
-conversation-key change.
+conversation key, so the members removed don't receive the key the group
+encrypts under next. `public_keys` are the identity keys of the members who
+stay; a key for a member being removed is an error. The group's title,
+avatar and description are encrypted under the conversation key: pass the
+ones the group has, as plaintext, as `title`, `avatar_url` and
+`description`, and the call encrypts each under the new key.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange`: the new
+`conversation_key` (base64), `conversation_participant_keys` for the
+members who stay, and `action_signatures` in request order — the removal, a
+change for each title, avatar and description passed, then the
+conversation-key change. Store the new key as you store the key a key
+change returns.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```c
 // 0.6.0
-// {"conversation_id":"g1","user_ids":["222"],
-//  "public_keys":[{"user_id":"111","public_key":"...","key_version":"1"}]}
+// {"public_keys":[{"user_id":"111","public_key":"...","key_version":"1"}],
+//  "conversation_id":"g1","user_ids":["222"],"title":"Team"}
 char *prepared = take(chat_xdk_prepare_group_members_remove(chat, remove_json));
 // POST /2/chat/conversations/g1/members/remove
 // {"user_ids":["222"],
@@ -379,31 +413,72 @@ char *left = take(chat_xdk_prepare_group_leave(chat, leave_json));
 
 ### Changing the title
 
-`custom_title` is the ciphertext the request sends. The result is a
-`PreparedAction`; send its `action_signatures` on the request.
+`chat_xdk_prepare_group_title_change` takes the new title as plaintext,
+encrypts it under the conversation key and signs it. Like the message
+params, its params take the key and its version as `conversation_key`
+(base64) and `conversation_key_version`, or resolve both from the key cache
+without them. The result is a `PreparedGroupMetadataChange`: the
+`encrypted_value` the request sends as the title, the
+`conversation_key_version` it's encrypted under, and the
+`action_signatures` to send with it.
 
 ```c
+// 0.5.x
+char *encrypted_title = take(chat_xdk_encrypt(chat, title, conversation_key_b64));
+
 // 0.6.0
-// {"conversation_id":"g1","conversation_key_version":"...","custom_title":"..."}
+// {"conversation_id":"g1","new_title":"Team"}
 char *title = take(chat_xdk_prepare_group_title_change(chat, title_json));
+// {"encrypted_value":"...","conversation_key_version":"...","action_signatures":[...]}
+```
+
+The decrypt calls return a received title change decrypted: the
+`new_title` of a `TitleChanged` change is the plaintext. They decrypt with
+the key version the change names, from the call's key map or the key
+cache, and fail without that key, as for a message.
+
+```c
+// 0.5.x
+// {"type":"GroupChange",...,"change":{"change_type":"TitleChanged","new_title":"<ciphertext>"}}
+char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_json, signing_keys_json));
+char *title = take(chat_xdk_decrypt(chat, new_title, conversation_key_b64));
+
+// 0.6.0
+// {"type":"GroupChange",...,"change":{"change_type":"TitleChanged","new_title":"Team"}}
+char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
 ```
 
 ### Changing the avatar
 
+`chat_xdk_prepare_group_avatar_change` takes the new avatar URL as
+plaintext and returns a `PreparedGroupMetadataChange`, as the title change
+does. A received `AvatarChanged` change holds the decrypted
+`new_avatar_url`.
+
 ```c
+// 0.5.x
+char *encrypted_avatar_url = take(chat_xdk_encrypt(chat, avatar_url, conversation_key_b64));
+
 // 0.6.0
-// {"conversation_id":"g1","conversation_key_version":"...","custom_avatar_url":"..."}
+// {"conversation_id":"g1","new_avatar_url":"https://..."}
 char *avatar = take(chat_xdk_prepare_group_avatar_change(chat, avatar_json));
 ```
 
 ### Changing the description
 
-`custom_description` is the ciphertext the request sends.
+`chat_xdk_prepare_group_description_change` takes the new description as
+plaintext and returns a `PreparedGroupMetadataChange`, as the title change
+does. A received description change is a `DescriptionChanged` change
+holding the decrypted `new_description`.
 
 ```c
+// 0.5.x
+char *encrypted_description = take(chat_xdk_encrypt(chat, description, conversation_key_b64));
+
 // 0.6.0
-// {"conversation_id":"g1","conversation_key_version":"...","custom_description":"..."}
+// {"conversation_id":"g1","new_description":"..."}
 char *description = take(chat_xdk_prepare_group_description_change(chat, description_json));
+// {"type":"GroupChange",...,"change":{"change_type":"DescriptionChanged","new_description":"..."}}
 ```
 
 ### Adding admins

@@ -188,7 +188,7 @@ output = K_1 || K_2 || ... truncated to key_length
 
 ## 5. Message Encryption — XSalsa20-Poly1305
 
-Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction).
+Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title, avatar URL and description are encrypted the same way under the conversation key: `prepare_group_title_change`, `prepare_group_avatar_change`, `prepare_group_description_change` and `prepare_group_members_remove` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received change, and `decrypt` opens the values the X API returns with a conversation.
 
 ### Algorithm
 
@@ -540,20 +540,24 @@ comma-separated payloads (`signatures.rs`):
 
 Both `prepare_group_create` and `prepare_group_members_change` emit **two**
 action signatures — a `ConversationKeyChangeEvent` plus the group change — since
-the backend validates the pair together. `prepare_group_members_remove` emits
-the removal at signature version 11, and a `ConversationKeyChangeEvent` after
-it when the caller supplies the remaining members' public keys:
+the backend validates the pair together. `prepare_group_members_remove`
+always rotates the conversation key for the remaining members: it emits the
+removal at signature version 11, bound to the new key version; a title,
+avatar and description change for each one the caller passes, encrypted
+under the new key; then the `ConversationKeyChangeEvent`:
 
 ```
-"GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version|null},signature_version=11"
+"GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version},signature_version=11"
 ```
 
-`prepare_group_leave` signs that same removal of the sender, then a
-`GroupAdminAddChange` when a member is promoted, then
+`prepare_group_leave` signs that same removal of the sender, without
+rotating the key, so its key version is the one the caller passes or `null`;
+then a `GroupAdminAddChange` when a member is promoted, then
 `ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`. The other group and
 metadata prepares sign one version-7 payload: title
-(`GroupTitleChange`, key version then ciphertext), avatar
-(`GroupAvatarUrlChange`), description (`GroupDescriptionChange`), admin add
+(`GroupTitleChange`, key version then the encrypted title), avatar
+(`GroupAvatarUrlChange`, key version then the encrypted URL), description
+(`GroupDescriptionChange`, key version then the encrypted description), admin add
 and remove, invite enable (`url`, expiry or `null`, affiliate or `null`),
 invite disable, join request, join reject, message TTL
 (`MessageDurationChange` with the millisecond count, or
@@ -598,7 +602,9 @@ also nested in each `ActionSignature`) and byte values embedded inside signed pa
 base64 **without** padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
 `encoded_message_create_event`, `encoded_message_event_signature`, and
 `ActionSignature.encoded_message_event_detail` — use standard base64 **with**
-padding (`base64_encode` in `protocol/serialization.rs`); decoding accepts
+padding (`base64_encode` in `protocol/serialization.rs`), and so does an
+encrypted group title, avatar URL or description, which its change event
+carries and its signature covers as the same string; decoding accepts
 either form (`DecodePaddingMode::Indifferent`), but producers must not swap
 conventions.
 

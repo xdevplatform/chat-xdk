@@ -8,29 +8,43 @@ Group and conversation-metadata actions should be signed before they are sent.
 Each call takes one params object and returns `action_signatures` for the
 request.
 
-`prepare_group_members_remove` signs a member removal at signature version
-11, binding the conversation-key version (or the literal `null` when the
-call does not name one). Pass the remaining members' public keys to rotate
-the conversation key in the same call. The result is a
+`prepare_group_members_remove` removes members and rotates the conversation
+key, so the members removed don't receive the key the group encrypts under
+next. `GroupMembersRemoveParams` takes the public keys of the members who
+stay, the conversation id and the members to remove, and the result is a
 `PreparedConversationChange`: the new key, the remaining members'
-participant keys, and signatures for the removal and then the key change.
-Without those keys the same type comes back with only the removal signature.
+participant keys, and the request's signatures — the removal, signed at
+signature version 11 and bound to the new key version, then the key change.
+The group's title, avatar and description are encrypted under the
+conversation key, so the removal takes the ones the group has as plaintext
+(`title`, `avatar_url`, `description`), encrypts each under the new key, and
+signs each change between the removal and the key change. The result
+carries no ratchet tree and no rewrapped pin-key bundle.
 
 `prepare_group_leave` signs leaving a group: a removal of the sender, an
 admin add when `promote_admin_id` names the member to promote, and a
 conversation delete. Leave does not rotate the conversation key.
 
-Title, avatar, description, admin, invite, and join changes, message-TTL
-changes, and screen-capture setting changes each return a `PreparedAction`
-signed at signature version 7. Screen-capture blocking signs
-`EnableScreenCaptureBlocking` and `DisableScreenCaptureBlocking`. Detection
-signs `EnableScreenCaptureDetection` and `DisableScreenCaptureDetection`.
+`prepare_group_title_change`, `prepare_group_avatar_change` and
+`prepare_group_description_change` take the new value as plaintext and
+encrypt it under the conversation key, which resolves as for
+`encrypt_message`: the params' key and version, or the key cache. Each
+returns a `PreparedGroupMetadataChange`: the `encrypted_value` the request
+sends, the `conversation_key_version` it is encrypted under, and its
+signature at signature version 7. `decrypt_event` and `decrypt_events`
+decrypt a received title, avatar or description change, and a description
+change decrypts to the new `GroupChange::DescriptionChanged`
+(`descriptionChanged` in JS) with its `new_description`.
 
-A member-removal result that rotates a key carries the new conversation key
-and the remaining members' participant keys. It carries no ratchet tree and
-no rewrapped pin-key bundle. Sign a title, avatar, or description under the
-new key with that action's prepare call, and place the signature between the
-removal and the key change.
+Admin, invite, and join changes, message-TTL changes, and screen-capture
+setting changes each return a `PreparedAction` signed at signature version
+7. Screen-capture blocking signs `EnableScreenCaptureBlocking` and
+`DisableScreenCaptureBlocking`. Detection signs
+`EnableScreenCaptureDetection` and `DisableScreenCaptureDetection`.
+
+A decrypted v1 edit carries the signed message id of the message it edits
+as `target_message_id` (`targetMessageId` in JS), next to that message's
+`target_message_sequence_id`; a v0 edit carries the sequence id only.
 
 To move code from 0.5.x, follow your binding's guide in
 [docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
@@ -534,9 +548,17 @@ prepared = chat.prepare_conversation_key_change(
 
 #### Other breaking changes
 
-- Rust: `SendPayload` gains `event_b64` and `xdk_version` and is
-  `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
-  builds it with a struct literal.
+- Rust: `SendPayload` gains `event_b64` and `xdk_version`. Every public
+  enum, params struct and result struct, `SendPayload` included, is
+  `#[non_exhaustive]`, as are the variants with named fields of the decrypted
+  `MessageContent`, `GroupChange` and `SettingsChange`, so a release can add
+  a variant or field without breaking callers. Code outside the SDK builds
+  params with `new()` and the `with_*` methods (or assigns their public
+  fields), builds `PublicKeyInput`, `SigningKeyEntry`, `EntityDescriptor` and
+  `UrlAttachmentImageDescriptor` with `new()` and the quick-reply options
+  with `new()` and `with_*`, reads result types by field, gives a `match` on
+  an SDK enum a wildcard arm, and ends a pattern on a variant with named
+  fields in `..`.
 - `SendPayload`'s `encrypted_content` and `encoded_event_signature` are
   `encoded_message_create_event` and `encoded_message_event_signature`, the
   send request's field names, in every binding
@@ -556,10 +578,26 @@ prepared = chat.prepare_conversation_key_change(
   both directions. The names are `conversationParticipantKeys` /
   `encryptedConversationKey` in JS and the JVM, and
   `ConversationParticipantKeys` / `EncryptedConversationKey` in Go and .NET.
-- Decrypted messages and key changes carry their conversation key version
-  as `conversation_key_version`, the name the X API's events and Thrift give
-  it: `key_version` is `conversation_key_version` in every binding
-  (`conversationKeyVersion` in JS, `ConversationKeyVersion` in Go).
+- Decrypted events use the names the calls take, in every binding.
+  Messages and key changes carry their conversation key version as
+  `conversation_key_version`, the name the X API's events and Thrift give it
+  (`conversationKeyVersion` in JS, `ConversationKeyVersion` in Go). Fields
+  that hold sequence ids say so, as the params that send them do: reactions
+  and edits name their target `target_message_sequence_id`, deletions their
+  messages `sequence_ids`, and read receipts and unread markers their
+  position `seen_until_sequence_id` (`targetMessageSequenceId`,
+  `sequenceIds` and `seenUntilSequenceId` in JS; `TargetMessageSequenceID`
+  and `SeenUntilSequenceID` in Go). An edit's text is `updated_text`
+  (`updatedText` in JS). Each binding's
+  [migration guide](docs/migrating-0.6/README.md) shows the lines to change.
+- Group titles, avatars and descriptions are plaintext in the API, and the
+  SDK encrypts and decrypts them: their prepare calls and a member removal
+  take the plaintext, and a decrypted `TitleChanged` or `AvatarChanged`
+  change carries the plaintext `new_title` or `new_avatar_url` (`newTitle`
+  or `newAvatarUrl` in JS), decrypted with the conversation key version the
+  change names. `decrypt` opens the encrypted `group_name`,
+  `group_avatar_url` and `group_description` the X API returns with a
+  conversation.
 - Rust: every encrypt and prepare method takes its params by reference:
   `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
   edit, delete and mark-read methods, and also `encrypt_file`,

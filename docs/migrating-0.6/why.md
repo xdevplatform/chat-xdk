@@ -118,8 +118,10 @@ name and fields in every binding (`SetIdentityParams`,
 `DecryptEventsParams`, `EncryptFileParams` and so on), so the bindings stay
 symmetric, and optional inputs are named fields that fall back to the chat's
 state (identity, key cache, signing keys) when unset. Rust takes every
-params value by reference, and Python takes a params class for every encrypt
-and prepare method:
+params value by reference and builds it with `new`, which takes the required
+fields, and `with_*` methods for the optional ones, so a field can be added
+without breaking callers. Python takes a params class for every encrypt and
+prepare method:
 [Rust](rust.md#set_identity-takes-setidentityparams),
 [Python](python.md#set_identity-takes-setidentityparams),
 [JavaScript](javascript.md#setidentity-takes-a-params-object),
@@ -189,19 +191,29 @@ Received keys:
 [.NET](dotnet.md#received-participant-keys-take-the-same-names),
 [C ABI](c-abi.md#received-participant-keys-take-the-same-names).
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
-Decrypted messages and key changes carry their conversation key version as
+A decrypted event names each value as the calls that send it do, so one name
+follows a value from the events an app reads to the calls it makes.
+Messages and key changes carry their conversation key version as
 `conversation_key_version`: the name the X API's events and the Thrift
-events give it, and the name the encrypt calls take. One name follows a key
-version from the events an app reads to the calls it makes:
-[Rust](rust.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[Python](python.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[JavaScript](javascript.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[Go](go.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[JVM](jvm.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[.NET](dotnet.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[C ABI](c-abi.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does).
+events give it, and the name the encrypt calls take. Fields that hold
+sequence ids say so, because apps deduplicate and anchor on a message's
+signed `message_id`, and a field named for a message id must hold one: a
+reaction or an edit names its target as `target_message_sequence_id`, a
+deletion its messages as `sequence_ids`, and a read receipt or unread
+marker its position as `seen_until_sequence_id`, the names the reaction,
+edit, delete and read-receipt params take. An edit's text is
+`updated_text`, as the edit params name it, and a v1 edit, which signs the
+`message_id` of the message it edits, carries that id as
+`target_message_id`:
+[Rust](rust.md#decrypted-events-use-the-names-the-calls-take),
+[Python](python.md#decrypted-events-use-the-names-the-calls-take),
+[JavaScript](javascript.md#decrypted-events-use-the-names-the-calls-take),
+[Go](go.md#decrypted-events-use-the-names-the-calls-take),
+[JVM](jvm.md#decrypted-events-use-the-names-the-calls-take),
+[.NET](dotnet.md#decrypted-events-use-the-names-the-calls-take),
+[C ABI](c-abi.md#decrypted-events-use-the-names-the-calls-take).
 
 ## Signatures verify at versions 8 through 11
 
@@ -233,16 +245,25 @@ returns the receipt as a verified `ReadReceipt`:
 ## Group actions should be signed
 
 Apps should sign a group update with the signatures of the actions it
-performs. Removing members also rotates the conversation key for the
-members who stay:
-`prepare_group_members_remove` takes their public keys and returns a
-`PreparedConversationChange`, and
+performs. Removing members rotates the conversation key, so the members
+removed don't receive the key the group encrypts under next:
+`prepare_group_members_remove` takes the public keys of the members who
+stay and returns a `PreparedConversationChange` with the new key, and
 `POST /2/chat/conversations/{id}/members/remove` sends
-`group_key_rotation_data` with both signatures. Leaving signs the sender's
+`group_key_rotation_data` with its signatures. Leaving signs the sender's
 removal, then an admin add when `promote_admin_id` is set, then a
-conversation delete, and does not rotate the key. Title, avatar,
-description, admin, invite, and join changes, message-TTL changes, and
-screen-capture changes each return a `PreparedAction`:
+conversation delete, and does not rotate the key.
+
+A group's title, avatar and description are encrypted under the
+conversation key, and the SDK encrypts them: their prepare calls take the
+plaintext, resolve the key as `encrypt_message` does, and return the
+encrypted value with its signature, so an app never encrypts a value itself
+and no plaintext reaches the X API. A removal re-encrypts the ones the app
+passes under the new key and signs them between the removal and the key
+change, in the order the request takes them. `decrypt_event` decrypts a
+received title, avatar or description change. Admin, invite, and join
+changes, message-TTL changes, and screen-capture changes each return a
+`PreparedAction`:
 [Rust](rust.md#group-actions-should-be-signed),
 [Python](python.md#group-actions-should-be-signed),
 [JavaScript](javascript.md#group-actions-should-be-signed),
@@ -275,9 +296,11 @@ empty key cache. Callers can tell a bad argument from missing setup:
 - C ABI entry points whose arguments differ from 0.5.x take new names, so a
   stale header or library fails to link instead of misreading its arguments
   ([C ABI](c-abi.md)).
-- Rust's `SendPayload` is `#[non_exhaustive]`, so a field can be added to it
-  without breaking code that reads it
-  ([Rust](rust.md#sendpayload-fields-take-the-send-requests-names)).
+- Rust's public enums, params structs and result structs, `SendPayload`
+  among them, are `#[non_exhaustive]`, so a variant or field can be added
+  without breaking code that builds params with `new` and `with_*`, reads
+  results, and matches enums with a wildcard arm
+  ([Rust](rust.md#types-are-non_exhaustive)).
 - The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
   so apps there need no copy of their own; a library built for 0.5.x doesn't
   export the entry points 0.6.0 calls

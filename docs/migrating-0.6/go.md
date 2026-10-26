@@ -26,10 +26,11 @@ change.
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `ConversationKeyVersion` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -39,14 +40,18 @@ and then as 0.6.0 code writes them. `chat` is a `*chatxdk.Chat` with your
 keys loaded, and the other names stand for your own values: ids, versions,
 keys and events as the X API returns them, `keys` for the conversation key
 map `DecryptEvents` returns, `payload` for a `*SendPayload`, `prepared`
-for a `*PreparedConversationChange`, and `keyChange` and `message` for a
-decrypted `*KeyChangeEvent` and `*Message`. `must(err)` stands for your error
-handling. `api.Post(path, body)` stands for your HTTP client: it POSTs
-`body` as JSON to `https://api.x.com` + `path` with your user access token
-and returns the parsed JSON response as a `map[string]any`.
+for a `*PreparedConversationChange`, `keyChange`, `message`, `receipt`
+and `groupChange` for a decrypted `*KeyChangeEvent`, `*Message`,
+`ReadReceiptEvent` and `*GroupChangeEvent`, and `event` for a decrypted
+`*Event`. `must(err)` stands for your error handling. `api.Post(path,
+body)` stands for your HTTP client: it POSTs `body` as JSON to
+`https://api.x.com` + `path` with your user access token and returns the
+parsed JSON response as a `map[string]any`.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-`AttachmentDescriptor`. `base64` (`encoding/base64`) and `strings` are the
-standard library's.
+`AttachmentDescriptor`, and `showReaction`, `showTitle` and
+`showDescription` for your code that displays a reaction or a group's
+title or description. `base64` (`encoding/base64`), `json`
+(`encoding/json`) and `strings` are the standard library's.
 
 ## Upgrade readers before v1 sends start
 
@@ -449,7 +454,7 @@ var key chatxdk.ConversationParticipantKey = keyChange.ConversationParticipantKe
 encrypted := key.EncryptedConversationKey
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 `Message` and `KeyChangeEvent` carry their conversation key version as
 `ConversationKeyVersion` (`conversation_key_version` in JSON), the name the
@@ -464,6 +469,43 @@ keyChangeVersion := keyChange.KeyVersion
 // 0.6.0
 messageVersion := *message.ConversationKeyVersion
 keyChangeVersion := keyChange.ConversationKeyVersion
+```
+
+Fields that hold sequence ids take the names of the params that send them.
+`ReactionContent` names its target `TargetMessageSequenceID`, as
+`EncryptReactionParams` does, and `ReadReceiptEvent` names its position
+`SeenUntilSequenceID`, as `MarkConversationReadParams` does:
+
+```go
+// 0.5.x
+showReaction(message.Content.ReactionContent.TargetMessageID, message.Content.ReactionContent.Emoji)
+seenUntil := *receipt.SeenUntilID
+
+// 0.6.0
+showReaction(message.Content.ReactionContent.TargetMessageSequenceID, message.Content.ReactionContent.Emoji)
+seenUntil := *receipt.SeenUntilSequenceID
+```
+
+Events and content without a Go type keep the same names in their JSON,
+which `Event.Raw` returns: an edit names its target
+`target_message_sequence_id` and its text `updated_text`, as
+`EncryptEditParams` does, a deletion names its messages `sequence_ids`, as
+`MessageDeleteParams` does, and a markedUnread event names its position
+`seen_until_sequence_id`. A v1 edit also carries the signed message id of
+the message it edits as `target_message_id`, absent for a v0 edit:
+
+```go
+// 0.5.x
+var deleted struct {
+	MessageIDs []string `json:"message_ids"`
+}
+must(json.Unmarshal(event.Raw(), &deleted))
+
+// 0.6.0
+var deleted struct {
+	SequenceIDs []string `json:"sequence_ids"`
+}
+must(json.Unmarshal(event.Raw(), &deleted))
 ```
 
 ## Deletes return a `PreparedAction`
@@ -507,21 +549,30 @@ those entries on the update's request.
 ### Removing members
 
 `PrepareGroupMembersRemove` removes `UserIDs` and rotates the conversation
-key for the members who stay. Pass their identity keys as `PublicKeys`. The
-result is a `*PreparedConversationChange`: the new conversation key,
-`ConversationParticipantKeys` for those members, and `ActionSignatures` in
-this order — the removal, then the conversation-key change.
+key, so the members removed don't receive the key the group encrypts under
+next. `PublicKeys` are the identity keys of the members who stay; a key for
+a member being removed returns an error. The group's title, avatar and
+description are encrypted under the conversation key: set the ones the
+group has, as plaintext, in `Title`, `AvatarURL` and `Description`, and the
+call encrypts each under the new key.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `*PreparedConversationChange`: the new `ConversationKey`,
+`ConversationParticipantKeys` for the members who stay, and
+`ActionSignatures` in request order — the removal, a change for each
+title, avatar and description set, then the conversation-key change. Store
+the new key as you store the key a key change returns.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```go
 // 0.6.0
 prepared, err := chat.PrepareGroupMembersRemove(chatxdk.GroupMembersRemoveParams{
+	PublicKeys:     remainingPublicKeys,
 	ConversationID: conversationID,
 	UserIDs:        userIDs,
-	PublicKeys:     remainingPublicKeys,
+	Title:          title,
 })
 must(err)
 path := "/2/chat/conversations/" + conversationID + "/members/remove"
@@ -555,43 +606,110 @@ must(err)
 
 ### Changing the title
 
-`CustomTitle` is the ciphertext the request sends. The result is a
-`*PreparedAction`; send its `ActionSignatures` on the request.
+`PrepareGroupTitleChange` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version in
+`ConversationKey` and `ConversationKeyVersion`, or resolves both from the
+key cache when they're empty. The result is a
+`*PreparedGroupMetadataChange`: the `EncryptedValue` the request sends as
+the title, the `ConversationKeyVersion` it's encrypted under, and the
+`ActionSignatures` to send with it.
 
 ```go
+// 0.5.x
+encryptedTitle, err := chat.Encrypt(title, keys[conversationKeyVersion])
+must(err)
+
 // 0.6.0
-title, err := chat.PrepareGroupTitleChange(chatxdk.GroupTitleChangeParams{
-	ConversationID:         conversationID,
-	ConversationKeyVersion: conversationKeyVersion,
-	CustomTitle:            customTitle,
+prepared, err := chat.PrepareGroupTitleChange(chatxdk.GroupTitleChangeParams{
+	ConversationID: conversationID,
+	NewTitle:       title,
 })
 must(err)
+encryptedTitle := prepared.EncryptedValue
+```
+
+`DecryptEvent` returns a received title change decrypted: the `new_title`
+of a `TitleChanged` change, in the `Change` JSON, is the plaintext. It
+decrypts with the key version the change names, from the call's key map or
+the key cache, and returns an error without that key, as a message does.
+
+```go
+// 0.5.x
+var change struct {
+	ChangeType string `json:"change_type"`
+	NewTitle   string `json:"new_title"`
+}
+must(json.Unmarshal(groupChange.Change, &change))
+if change.ChangeType == "TitleChanged" {
+	title, err := chat.Decrypt(change.NewTitle, keys[conversationKeyVersion])
+	must(err)
+	showTitle(title)
+}
+
+// 0.6.0
+var change struct {
+	ChangeType string `json:"change_type"`
+	NewTitle   string `json:"new_title"`
+}
+must(json.Unmarshal(groupChange.Change, &change))
+if change.ChangeType == "TitleChanged" {
+	showTitle(change.NewTitle)
+}
 ```
 
 ### Changing the avatar
 
+`PrepareGroupAvatarChange` takes the new avatar URL as plaintext and
+returns a `*PreparedGroupMetadataChange`, as the title change does. A
+received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+
 ```go
+// 0.5.x
+encryptedAvatarURL, err := chat.Encrypt(avatarURL, keys[conversationKeyVersion])
+must(err)
+
 // 0.6.0
-avatar, err := chat.PrepareGroupAvatarChange(chatxdk.GroupAvatarChangeParams{
-	ConversationID:         conversationID,
-	ConversationKeyVersion: conversationKeyVersion,
-	CustomAvatarURL:        customAvatarURL,
+prepared, err := chat.PrepareGroupAvatarChange(chatxdk.GroupAvatarChangeParams{
+	ConversationID: conversationID,
+	NewAvatarURL:   avatarURL,
 })
 must(err)
+encryptedAvatarURL := prepared.EncryptedValue
 ```
 
 ### Changing the description
 
-`CustomDescription` is the ciphertext the request sends.
+`PrepareGroupDescriptionChange` takes the new description as plaintext and
+returns a `*PreparedGroupMetadataChange`, as the title change does.
+
+```go
+// 0.5.x
+encryptedDescription, err := chat.Encrypt(description, keys[conversationKeyVersion])
+must(err)
+
+// 0.6.0
+prepared, err := chat.PrepareGroupDescriptionChange(chatxdk.GroupDescriptionChangeParams{
+	ConversationID: conversationID,
+	NewDescription: description,
+})
+must(err)
+encryptedDescription := prepared.EncryptedValue
+```
+
+A received description change is a `DescriptionChanged` change holding the
+decrypted `new_description`:
 
 ```go
 // 0.6.0
-description, err := chat.PrepareGroupDescriptionChange(chatxdk.GroupDescriptionChangeParams{
-	ConversationID:         conversationID,
-	ConversationKeyVersion: conversationKeyVersion,
-	CustomDescription:      customDescription,
-})
-must(err)
+var change struct {
+	ChangeType     string `json:"change_type"`
+	NewDescription string `json:"new_description"`
+}
+must(json.Unmarshal(groupChange.Change, &change))
+if change.ChangeType == "DescriptionChanged" {
+	showDescription(change.NewDescription)
+}
 ```
 
 ### Adding admins

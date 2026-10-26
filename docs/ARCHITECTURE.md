@@ -482,6 +482,12 @@ See [API.md](API.md) for the complete method reference.
 
 #### `types.rs` — Developer-Facing Types
 
+Every public enum and struct here, in `params.rs`, and in `error.rs` is
+`#[non_exhaustive]`, so a release can add a variant or field without
+breaking callers: params build with `new()` and `with_*` methods, and the
+input types callers fill in (`PublicKeyInput`, `SigningKeyEntry`,
+`EntityDescriptor`, …) with `new()`.
+
 | Type | Description |
 |------|-------------|
 | `Event` | Enum with 12 variants: `Message`, `KeyChange`, `GroupChange`, `MessageDeleted`, `ConversationDeleted`, `Typing`, `ReadReceipt`, `MarkedUnread`, `Failure`, `SettingsChange`, `MemberDeleted`, `Unknown` |
