@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+The .NET `Verify` and JVM `verify` errors ask you to check the inputs that
+failed: the public key, which must be a base64 P-256 signing key, and the
+signature. Verifying needs no loaded keys.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.

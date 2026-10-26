@@ -1855,6 +1855,21 @@ namespace ChatXdk.Tests
                 chat.Verify("notAPublicKey", sig, data));
         }
 
+        // Verifying needs no loaded keys, and its error names the input, not the lock state.
+        [Fact]
+        public void Verify_NeedsNoLoadedKeys()
+        {
+            using var signer = CreateUnlocked();
+            using var verifier = new Chat();
+            var data = System.Text.Encoding.UTF8.GetBytes("data");
+            var sig = signer.Sign(data);
+
+            Assert.True(verifier.Verify(signer.GetPublicKeys().Signing, sig, data));
+            var ex = Assert.Throws<ChatXdkException>(() => verifier.Verify("notAPublicKey", sig, data));
+            Assert.Contains("public key", ex.Message);
+            Assert.DoesNotContain("unlocked", ex.Message);
+        }
+
         // Finalizer: the native handle must be freed without explicit Dispose().
         // We can only smoke-test that the object can be garbage collected without
         // throwing. A full leak test would require a memory profiler.

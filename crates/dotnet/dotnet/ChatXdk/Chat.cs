@@ -1025,8 +1025,9 @@ namespace ChatXdk
         /// <param name="data">The original signed data.</param>
         /// <returns><see langword="true"/> if the signature is valid, <see langword="false"/> if invalid.</returns>
         /// <exception cref="ChatXdkException">
-        /// Thrown when the SDK returns an error (e.g. keys not loaded, malformed public key).
-        /// An SDK error is always thrown, never returned as a <see langword="false"/> result.
+        /// Thrown when the SDK returns an error (a malformed public key or signature). Verifying
+        /// needs no loaded keys. An SDK error is always thrown, never returned as a
+        /// <see langword="false"/> result.
         /// </exception>
         public bool Verify(string publicKeyB64, byte[] signature, byte[] data)
         {
@@ -1060,10 +1061,9 @@ namespace ChatXdk
             {
                 1 => true,
                 0 => false,
-                // -1: SDK locked, invalid public key format, or bad signature base64.
-                // We throw on a -1 error code.
+                // -1: a malformed public key or signature.
                 _ => throw new ChatXdkException(
-                    "Signature verification error — ensure the SDK is unlocked and the public key is valid."),
+                    "Signature verification error — ensure the public key is a base64 P-256 signing key and the signature is valid."),
             };
         }
 
