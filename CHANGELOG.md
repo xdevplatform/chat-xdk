@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+## [0.6.0] - 2026-10-26
 
 ### Added
 
@@ -673,3 +675,6 @@ prepared = chat.prepare_conversation_key_change(
     `User-Agent: juicebox_networking/<juicebox version>` on every request;
   - applies the timeout juicebox-sdk sets on each request, or 30 seconds when
     it sets none.
+
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/xdevplatform/chat-xdk/compare/v0.5.2...v0.6.0

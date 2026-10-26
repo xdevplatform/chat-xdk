@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "chat-xdk-core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "chat-xdk-dotnet"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "chat-xdk-core",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "chat-xdk-go"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "cbindgen",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "chat-xdk-macros"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "chat-xdk-python"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "chat-xdk-core",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "chat-xdk-wasm"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "chat-xdk-core",
