@@ -377,6 +377,73 @@ async function delegationTests() {
   const out = new Uint8Array([...dec.push(streamed), ...dec.finish()]);
   assert.deepEqual(out, b64ToBytes(v.plaintext_b64));
 
+  // The edit, delete, read-receipt and group-action delegations: each signed
+  // payload carries the values its params named.
+  const ident = { senderId: "111", signingKeyVersion: "1" };
+  const edit = chat.encryptEdit({
+    ...ident,
+    conversationId: "conv-1",
+    targetMessageSequenceId: "seq-7",
+    updatedText: "edited through the wrapper",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  });
+  const editSigningKeys = [{ ...signingKeys[0], userId: "111", publicKeyVersion: "1" }];
+  const editEvent = chat.decryptEvent({
+    eventB64: edit.eventB64,
+    conversationKeys: { 1: convKey },
+    signingKeys: editSigningKeys,
+  });
+  assert.equal(editEvent.content.contentType, "edit");
+  assert.equal(editEvent.content.newText, "edited through the wrapper");
+  assert.equal(editEvent.content.targetMessageId, "seq-7");
+  const signed = (prepared) => {
+    assert.equal(prepared.actionSignatures.length, 1);
+    const [action] = prepared.actionSignatures;
+    return [action.messageId, action.signaturePayload];
+  };
+  const group = { ...ident, conversationId: "g100" };
+  const actions = [
+    ["MessageDeleteEvent", ",111,g100,2,seq-5",
+      () => chat.prepareMessageDelete({ ...group, sequenceIds: ["seq-5"], deleteForAll: true })],
+    ["MarkConversationReadEvent", ",111,g100,seq-9,1700000000123",
+      () => chat.prepareMarkConversationRead({ ...group, seenUntilSequenceId: "seq-9", seenAtMsec: 1700000000123 })],
+    ["GroupChangeEvent.GroupMemberRemoveChange", ",111,g100,910007,null,signature_version=11",
+      () => chat.prepareGroupMembersRemove({ ...group, userIds: ["910007"] })],
+    ["GroupChangeEvent.GroupTitleChange", ",111,g100,4,enc-title",
+      () => chat.prepareGroupTitleChange({ ...group, conversationKeyVersion: "4", customTitle: "enc-title" })],
+    ["GroupChangeEvent.GroupAvatarUrlChange", ",111,g100,4,https://img/a.png",
+      () => chat.prepareGroupAvatarChange({ ...group, conversationKeyVersion: "4", customAvatarUrl: "https://img/a.png" })],
+    ["GroupChangeEvent.GroupDescriptionChange", ",111,g100,4,enc-desc",
+      () => chat.prepareGroupDescriptionChange({ ...group, conversationKeyVersion: "4", customDescription: "enc-desc" })],
+    ["GroupChangeEvent.GroupAdminAddChange", ",111,g100,910008,910009",
+      () => chat.prepareGroupAdminsAdd({ ...group, userIds: ["910008", "910009"] })],
+    ["GroupChangeEvent.GroupAdminRemoveChange", ",111,g100,910008",
+      () => chat.prepareGroupAdminsRemove({ ...group, userIds: ["910008"] })],
+    ["GroupChangeEvent.GroupInviteEnable", ",111,g100,https://x.com/i/invite/abc,null,null",
+      () => chat.prepareGroupInviteEnable({ ...group, inviteUrl: "https://x.com/i/invite/abc" })],
+    ["GroupChangeEvent.GroupInviteDisable", ",111,g100,910011",
+      () => chat.prepareGroupInviteDisable({ ...group, disabledBy: "910011" })],
+    ["GroupChangeEvent.GroupJoinRequest", ",111,g100,910012",
+      () => chat.prepareGroupJoinRequest({ ...group, requestingUserId: "910012" })],
+    ["GroupChangeEvent.GroupJoinReject", ",111,g100,910010",
+      () => chat.prepareGroupJoinReject({ ...group, userIds: ["910010"] })],
+    ["ConversationMetadataChangeEvent.MessageDurationChange", ",111,g100,86400000",
+      () => chat.prepareMessageTtlChange({ ...group, ttlMsec: 86400000 })],
+    ["ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+      () => chat.prepareMessageTtlRemove({ ...group })],
+    ["ConversationMetadataChangeEvent.EnableScreenCaptureBlocking", ",111,g100",
+      () => chat.prepareScreenCapture({ ...group, change: "blockingEnabled" })],
+  ];
+  for (const [event, fields, prepare] of actions) {
+    const [messageId, payload] = signed(prepare());
+    assert.equal(payload, `${event},${messageId}${fields}`);
+  }
+  const left = chat.prepareGroupLeave({ ...group, promoteAdminId: "910008", conversationKeyVersion: "7" });
+  assert.equal(left.actionSignatures.length, 3);
+  assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
+  assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
+
   // changePin re-registers through the stub with the new PIN.
   await chat.changePin("2580", "1359");
   assert.equal(stubClient.registerCalls, 2);

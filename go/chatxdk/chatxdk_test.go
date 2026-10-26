@@ -634,16 +634,48 @@ func TestHasIdentityKey(t *testing.T) {
 	}
 }
 
+// SetRejectUnverified decides whether a message from a sender whose signing
+// key the chat lacks is rejected or returned unverified.
 func TestSetRejectUnverified(t *testing.T) {
 	chat := New()
 	defer chat.Close()
+	sender := New()
+	defer sender.Close()
+	for _, c := range []*Chat{chat, sender} {
+		if _, err := c.GenerateKeypairs(); err != nil {
+			t.Fatalf("GenerateKeypairs failed: %v", err)
+		}
+	}
+	conversationKey := make([]byte, 32)
+	payload, err := sender.EncryptMessage(EncryptMessageParams{
+		SenderID:               "910005",
+		SigningKeyVersion:      "1",
+		ConversationID:         "910004:910005",
+		Text:                   "hi",
+		ConversationKey:        conversationKey,
+		ConversationKeyVersion: "1",
+	})
+	if err != nil {
+		t.Fatalf("EncryptMessage failed: %v", err)
+	}
+	received := DecryptEventParams{EventB64: payload.EventB64, ConversationKeys: map[string][]byte{"1": conversationKey}}
 
-	// FFI plumbing smoke only: the flag crosses the boundary without a crash.
-	// The policy's behavior is pinned by TestDecryptEventsFixtureVectors
-	// (default reject) and the Rust core suite.
-	chat.SetRejectUnverified(true)
+	if _, err := chat.DecryptEvent(received); err == nil {
+		t.Fatal("an unverified message decrypted under the default policy")
+	}
 	chat.SetRejectUnverified(false)
+	event, err := chat.DecryptEvent(received)
+	if err != nil {
+		t.Fatalf("DecryptEvent with rejection off failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || msg.Text() != "hi" || msg.Verified {
+		t.Fatalf("want the message returned unverified, got %+v", msg)
+	}
 	chat.SetRejectUnverified(true)
+	if _, err := chat.DecryptEvent(received); err == nil {
+		t.Fatal("an unverified message decrypted once rejection was back on")
+	}
 }
 
 func TestVerifyKeyBinding(t *testing.T) {
@@ -1430,6 +1462,81 @@ func TestGroupActionSignatures(t *testing.T) {
 	blocking := onlyAction(t, blockingPrepared, err)
 	if !strings.HasPrefix(blocking.SignaturePayload, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,") {
 		t.Fatalf("screen capture payload %q", blocking.SignaturePayload)
+	}
+}
+
+// The group and conversation-metadata actions each sign one action at
+// signature version 7: its payload names the event and ends with the signed
+// fields, and its signature verifies with the signer's signing key.
+func TestPrepareGroupActionsSignEachAction(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "111", SigningKeyVersion: "1"}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	keys, err := chat.GetPublicKeys()
+	if err != nil {
+		t.Fatalf("GetPublicKeys failed: %v", err)
+	}
+	cases := []struct {
+		name, event, suffix string
+		prepare             func() (*PreparedAction, error)
+	}{
+		{"avatar", "GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png", func() (*PreparedAction, error) {
+			return chat.PrepareGroupAvatarChange(GroupAvatarChangeParams{ConversationID: "g100", ConversationKeyVersion: "4", CustomAvatarURL: "https://img/a.png"})
+		}},
+		{"description", "GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc", func() (*PreparedAction, error) {
+			return chat.PrepareGroupDescriptionChange(GroupDescriptionChangeParams{ConversationID: "g100", ConversationKeyVersion: "4", CustomDescription: "enc-desc"})
+		}},
+		{"admins add", "GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009", func() (*PreparedAction, error) {
+			return chat.PrepareGroupAdminsAdd(GroupAdminsAddParams{ConversationID: "g100", UserIDs: []string{"910008", "910009"}})
+		}},
+		{"admins remove", "GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008", func() (*PreparedAction, error) {
+			return chat.PrepareGroupAdminsRemove(GroupAdminsRemoveParams{ConversationID: "g100", UserIDs: []string{"910008"}})
+		}},
+		{"invite enable", "GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null", func() (*PreparedAction, error) {
+			return chat.PrepareGroupInviteEnable(GroupInviteEnableParams{ConversationID: "g100", InviteURL: "https://x.com/i/invite/abc"})
+		}},
+		{"invite disable", "GroupChangeEvent.GroupInviteDisable", ",g100,111", func() (*PreparedAction, error) {
+			return chat.PrepareGroupInviteDisable(GroupInviteDisableParams{ConversationID: "g100"})
+		}},
+		{"join request", "GroupChangeEvent.GroupJoinRequest", ",g100,111", func() (*PreparedAction, error) {
+			return chat.PrepareGroupJoinRequest(GroupJoinRequestParams{ConversationID: "g100"})
+		}},
+		{"join reject", "GroupChangeEvent.GroupJoinReject", ",g100,910010", func() (*PreparedAction, error) {
+			return chat.PrepareGroupJoinReject(GroupJoinRejectParams{ConversationID: "g100", UserIDs: []string{"910010"}})
+		}},
+		{"ttl change", "ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000", func() (*PreparedAction, error) {
+			return chat.PrepareMessageTtlChange(MessageTtlChangeParams{ConversationID: "g100", TTLMsec: 86400000})
+		}},
+		{"ttl remove", "ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100", func() (*PreparedAction, error) {
+			return chat.PrepareMessageTtlRemove(MessageTtlRemoveParams{ConversationID: "g100"})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prepared, err := c.prepare()
+			action := onlyAction(t, prepared, err)
+			if !strings.HasPrefix(action.SignaturePayload, c.event+",") || !strings.HasSuffix(action.SignaturePayload, c.suffix) {
+				t.Fatalf("payload %q, want %s,...%s", action.SignaturePayload, c.event, c.suffix)
+			}
+			sig := action.MessageEventSignature
+			if sig.SignatureVersion != "7" || sig.SigningPublicKey != keys.Signing {
+				t.Fatalf("signature version %q, signing key %q", sig.SignatureVersion, sig.SigningPublicKey)
+			}
+			raw, err := base64.RawStdEncoding.DecodeString(sig.Signature)
+			if err != nil {
+				t.Fatalf("signature is not unpadded base64: %v", err)
+			}
+			valid, err := chat.Verify(keys.Signing, raw, []byte(action.SignaturePayload))
+			if err != nil || !valid {
+				t.Fatalf("signature does not verify: %v, %v", valid, err)
+			}
+		})
 	}
 }
 
