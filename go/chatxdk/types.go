@@ -123,7 +123,8 @@ type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey             []byte                       `json:"conversation_key"`
+	// It is secret, so it never appears in the JSON of this struct.
+	ConversationKey             []byte                       `json:"-"`
 	ConversationKeyVersion      string                       `json:"conversation_key_version"`
 	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
 	ActionSignatures            []ActionSignature            `json:"action_signatures"`

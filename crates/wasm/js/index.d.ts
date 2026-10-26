@@ -210,7 +210,10 @@ export interface PublicKeyInput {
 export interface PreparedConversationChange {
   /** Conversation id the change applies to (derived for a one-to-one, or the id you passed). */
   conversationId: string;
-  /** Raw conversation key bytes (32 bytes). Store locally for encrypting messages. */
+  /**
+   * Raw conversation key bytes (32 bytes). Store locally for encrypting
+   * messages. It is secret, so JSON.stringify leaves it out of this object.
+   */
   conversationKey: Uint8Array;
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;

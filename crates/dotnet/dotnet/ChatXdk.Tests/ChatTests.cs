@@ -933,6 +933,46 @@ namespace ChatXdk.Tests
             Assert.Equal(prepared.ConversationKey, decrypted);
         }
 
+        // The conversation key is secret: a prepared change carries it, but its JSON, the shape
+        // a request body is built from, never does.
+        [Fact]
+        public void PreparedConversationChange_JsonLeavesOutTheKey()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("910002", "1"));
+            var publicKeys = new[]
+            {
+                new PublicKeyInput { UserId = "910002", PublicKey = chat.GetPublicKeys().Identity, KeyVersion = "1" },
+            };
+
+            var prepared = new[]
+            {
+                chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(publicKeys)
+                {
+                    ConversationId = "910002:910005",
+                }),
+                chat.PrepareGroupCreate(new GroupCreateParams(
+                    publicKeys, "g123", new[] { "910002", "910005" }, new[] { "910002" })),
+                chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams("g123", new[] { "910005" })
+                {
+                    PublicKeys = publicKeys,
+                }),
+            };
+
+            foreach (var change in prepared)
+            {
+                Assert.Equal(32, change.ConversationKey!.Length);
+                foreach (var options in new[] { new JsonSerializerOptions(), new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull } })
+                {
+                    var json = JsonSerializer.SerializeToElement(change, options);
+                    Assert.False(json.TryGetProperty("conversation_key", out _), json.GetRawText());
+                    Assert.Equal(
+                        new[] { "conversation_id", "conversation_key_version", "conversation_participant_keys", "action_signatures" },
+                        json.EnumerateObject().Select(p => p.Name).ToArray());
+                }
+            }
+        }
+
         // File encrypt / decrypt
 
         // A message with files is built first; each file is then encrypted from the returned

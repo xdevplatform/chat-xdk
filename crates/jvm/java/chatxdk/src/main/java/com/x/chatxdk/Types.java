@@ -248,9 +248,10 @@ public final class Types {
 
         /**
          * Raw 32-byte conversation key when one was generated, otherwise {@code null}.
-         * Unlike a String, the array can be zeroed once no longer needed.
+         * Unlike a String, the array can be zeroed once no longer needed. It is secret, so
+         * serializing this object to JSON leaves it out.
          */
-        @JsonProperty("conversation_key")
+        @JsonProperty(value = "conversation_key", access = JsonProperty.Access.WRITE_ONLY)
         public byte[] conversationKey;
 
         /** Version assigned to the conversation key. */

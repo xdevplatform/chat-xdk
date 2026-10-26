@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Security
+
+The JSON of a prepared conversation change leaves out its conversation key
+in the Go, JavaScript, JVM and .NET bindings, so a request body serialized
+from the returned object never carries the key. The key stays on the object
+(`ConversationKey` / `conversationKey`) for the app to keep. The X API
+requests that take a prepared change read its participant keys, key version
+and action signatures, never the key itself. Rust, whose
+`PreparedConversationChange` never serialized the key, and Python, whose
+result is a dict that `json.dumps` refuses to encode because the key is
+bytes, are unchanged. The C ABI returns the key in its JSON result, as the
+only way it hands the key to the caller.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.
