@@ -177,13 +177,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     )
     .unwrap();
 
-    let signing_keys = [chat_xdk_core::SigningKeyEntry {
-        user_id: v.event_sender_id.clone(),
-        public_key_version: v.event_signing_key_version.clone(),
-        public_key: v.signing_public_b64.clone(),
-        identity_public_key: v.identity_public_b64.clone(),
-        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
-    }];
+    let signing_keys = [signing_key_for(&v, &v.event_sender_id)];
 
     // Batch path: [KeyChange, message, garbage] never throws; the garbage
     // event is collected as an indexed error.
@@ -306,7 +300,9 @@ fn vectors_group_description_change_decrypts_on_receive() {
                 Some(v.event_group_id.as_str())
             );
             match change.change {
-                chat_xdk_core::GroupChange::DescriptionChanged { new_description } => {
+                chat_xdk_core::GroupChange::DescriptionChanged {
+                    new_description, ..
+                } => {
                     assert_eq!(new_description, v.event_group_description)
                 }
                 other => panic!("Expected DescriptionChanged, got {:?}", other),
@@ -371,13 +367,7 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
     )
     .unwrap();
 
-    let signing_keys = [chat_xdk_core::SigningKeyEntry {
-        user_id: v.event_sender_id.clone(),
-        public_key_version: v.event_signing_key_version.clone(),
-        public_key: v.signing_public_b64.clone(),
-        identity_public_key: v.identity_public_b64.clone(),
-        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
-    }];
+    let signing_keys = [signing_key_for(&v, &v.event_sender_id)];
 
     let events = vec![
         v.event_key_change_b64.clone(),
@@ -413,13 +403,13 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
 
 /// The fixture signing key, registered to `user_id`.
 fn signing_key_for(v: &Vectors, user_id: &str) -> chat_xdk_core::SigningKeyEntry {
-    chat_xdk_core::SigningKeyEntry {
-        user_id: user_id.to_string(),
-        public_key_version: v.event_signing_key_version.clone(),
-        public_key: v.signing_public_b64.clone(),
-        identity_public_key: v.identity_public_b64.clone(),
-        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
-    }
+    chat_xdk_core::SigningKeyEntry::new(
+        user_id,
+        &v.event_signing_key_version,
+        &v.signing_public_b64,
+        &v.identity_public_b64,
+        &v.identity_public_key_signature_b64,
+    )
 }
 
 fn key_map(

@@ -51,6 +51,7 @@ pub const CKEY_PLAINTEXT_SIGNATURE_VERSION: i32 = 6;
 /// the signature is nested under `message_event_signature`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ActionSignature {
     /// Unique message ID (UUID).
     pub message_id: String,
@@ -70,6 +71,7 @@ pub struct ActionSignature {
 /// The signature of an [`ActionSignature`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MessageEventSignature {
     /// Base64 ECDSA signature of the payload.
     pub signature: String,

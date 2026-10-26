@@ -4648,13 +4648,13 @@ mod tests {
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "1733889755256".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "1733889755256",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         let event = core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -4682,22 +4682,18 @@ mod tests {
             .with_conversation_key(ckey.to_bytes(), "9001");
         params.conversation_id = Some("conv-1".into());
         params.target_message_sequence_id = Some("seq-orig".into());
-        params.entities = Some(vec![crate::types::EntityDescriptor {
-            start: 5,
-            end: 24,
-            entity_type: "url".into(),
-        }]);
+        params.entities = Some(vec![crate::types::EntityDescriptor::new(5, 24, "url")]);
         let payload = core.encrypt_edit(&params).unwrap();
 
         let event_b64 = wrap_signed_payload_with_seq(&payload, "4001", "conv-1", "seq-edit");
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "1733889755256".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "1733889755256",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         let event = core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -4790,13 +4786,13 @@ mod tests {
 
         let event_b64 = wrap_signed_payload_with_seq(&payload, "4001", "conv-1", "seq-qr");
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "1733889755256".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "1733889755256",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         match core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -4972,13 +4968,13 @@ mod tests {
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "1733889755256".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "1733889755256",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         let event = core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -5086,26 +5082,20 @@ mod tests {
         // entry carries the version the forged signature names, so selecting
         // by version alone would wrongly verify this event.
         let signing_keys = [
-            SigningKeyEntry {
-                user_id: "4003".to_string(),
-                public_key_version: "victim-pkv".to_string(),
-                public_key: victim_reg.public_key.signing_public_key.clone(),
-                identity_public_key: victim_reg.public_key.public_key.clone(),
-                identity_public_key_signature: victim_reg
-                    .public_key
-                    .identity_public_key_signature
-                    .clone(),
-            },
-            SigningKeyEntry {
-                user_id: "4004".to_string(),
-                public_key_version: "62".to_string(),
-                public_key: attacker_reg.public_key.signing_public_key.clone(),
-                identity_public_key: attacker_reg.public_key.public_key.clone(),
-                identity_public_key_signature: attacker_reg
-                    .public_key
-                    .identity_public_key_signature
-                    .clone(),
-            },
+            SigningKeyEntry::new(
+                "4003",
+                "victim-pkv",
+                &victim_reg.public_key.signing_public_key,
+                &victim_reg.public_key.public_key,
+                &victim_reg.public_key.identity_public_key_signature,
+            ),
+            SigningKeyEntry::new(
+                "4004",
+                "62",
+                &attacker_reg.public_key.signing_public_key,
+                &attacker_reg.public_key.public_key,
+                &attacker_reg.public_key.identity_public_key_signature,
+            ),
         ];
 
         let err = attacker
@@ -5188,13 +5178,13 @@ mod tests {
             let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
             let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-            let signing_keys = [SigningKeyEntry {
-                user_id: sender.to_string(),
-                public_key_version: "1733889755256".to_string(),
-                public_key: reg.public_key.signing_public_key.clone(),
-                identity_public_key: reg.public_key.public_key.clone(),
-                identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-            }];
+            let signing_keys = [SigningKeyEntry::new(
+                sender,
+                "1733889755256",
+                &reg.public_key.signing_public_key,
+                &reg.public_key.public_key,
+                &reg.public_key.identity_public_key_signature,
+            )];
 
             let event = core
                 .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -5220,11 +5210,7 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "111".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("111", &pk.identity, "1")];
 
         for form in ["222", "222-111", "111:222"] {
             let mut params =
@@ -6807,13 +6793,13 @@ mod tests {
         );
         let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
 
-        let signing_keys = [SigningKeyEntry {
-            user_id: "910003".to_string(),
-            public_key_version: "pkv-self".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "910003",
+            "pkv-self",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         // Empty key map forces the self-decrypt path.
         let decrypted = core
@@ -7242,16 +7228,8 @@ mod tests {
 
         let public_keys = core.get_public_keys().unwrap();
         let input = vec![
-            PublicKeyInput {
-                user_id: "910004".to_string(),
-                public_key: public_keys.identity.clone(),
-                key_version: "100".to_string(),
-            },
-            PublicKeyInput {
-                user_id: "910004".to_string(),
-                public_key: public_keys.identity.clone(),
-                key_version: "200".to_string(),
-            },
+            PublicKeyInput::new("910004", &public_keys.identity, "100"),
+            PublicKeyInput::new("910004", &public_keys.identity, "200"),
         ];
 
         let mut params =
@@ -7273,16 +7251,8 @@ mod tests {
         // Numeric ordering: the shorter id is numerically smaller and sorts
         // first, even though it would sort last lexically.
         let input = vec![
-            PublicKeyInput {
-                user_id: "1491585161162473473".to_string(),
-                public_key: "x".to_string(),
-                key_version: "1".to_string(),
-            },
-            PublicKeyInput {
-                user_id: "17380288".to_string(),
-                public_key: "y".to_string(),
-                key_version: "1".to_string(),
-            },
+            PublicKeyInput::new("1491585161162473473", "x", "1"),
+            PublicKeyInput::new("17380288", "y", "1"),
         ];
         let id = ChatCore::derive_one_to_one_conversation_id(&input).unwrap();
         assert_eq!(id, "17380288:1491585161162473473");
@@ -7290,11 +7260,7 @@ mod tests {
 
     #[test]
     fn derive_one_to_one_conversation_id_requires_two_users() {
-        let one = vec![PublicKeyInput {
-            user_id: "solo".to_string(),
-            public_key: "x".to_string(),
-            key_version: "1".to_string(),
-        }];
+        let one = vec![PublicKeyInput::new("solo", "x", "1")];
         assert!(ChatCore::derive_one_to_one_conversation_id(&one).is_err());
     }
 
@@ -7303,11 +7269,7 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
         let mut params =
             crate::ConversationKeyChangeParams::new(input).with_identity("910004", "1");
         params.conversation_id = Some("conv-1".into());
@@ -7348,22 +7310,18 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
 
-        let mut params = crate::GroupCreateParams::new(
+        let params = crate::GroupCreateParams::new(
             input,
             "g999",
             vec!["910004".to_string(), "910007".to_string()],
             vec!["910004".to_string()],
         )
-        .with_identity("910004", "1");
-        params.title = Some("Squad".into());
-        params.avatar_url = Some("https://img/a.png".into());
-        params.ttl_msec = Some(86400000);
+        .with_identity("910004", "1")
+        .with_title("Squad")
+        .with_avatar_url("https://img/a.png")
+        .with_ttl_msec(86400000);
         let result = core.prepare_group_create(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g999");
@@ -7414,13 +7372,9 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
 
-        let mut params = crate::GroupMembersChangeParams::new(
+        let params = crate::GroupMembersChangeParams::new(
             input,
             "g555",
             vec!["910006".to_string()],
@@ -7428,8 +7382,8 @@ mod tests {
             vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("910004", "1");
-        params.current_title = Some("Team".into());
+        .with_identity("910004", "1")
+        .with_current_title("Team");
         let result = core.prepare_group_members_change(&params).unwrap();
 
         assert_eq!(result.action_signatures.len(), 2);
@@ -7540,23 +7494,19 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
 
         // GroupCreate: CKCE + GroupCreate signatures both round-trip.
-        let mut create_params = crate::GroupCreateParams::new(
+        let create_params = crate::GroupCreateParams::new(
             input.clone(),
             "g999",
             vec!["910004".to_string(), "910007".to_string()],
             vec!["910004".to_string()],
         )
-        .with_identity("910004", "1");
-        create_params.title = Some("Squad".into());
-        create_params.avatar_url = Some("https://img/a.png".into());
-        create_params.ttl_msec = Some(86400000);
+        .with_identity("910004", "1")
+        .with_title("Squad")
+        .with_avatar_url("https://img/a.png")
+        .with_ttl_msec(86400000);
         let created = core.prepare_group_create(&create_params).unwrap();
         let created_ckey_b64 =
             STANDARD_NO_PAD.encode(created.conversation_key.as_ref().unwrap().encoded());
@@ -7576,7 +7526,7 @@ mod tests {
         );
 
         // GroupMemberAdd: CKCE + GroupMemberAdd signatures both round-trip.
-        let mut add_params = crate::GroupMembersChangeParams::new(
+        let add_params = crate::GroupMembersChangeParams::new(
             input.clone(),
             "g555",
             vec!["910006".to_string()],
@@ -7584,10 +7534,10 @@ mod tests {
             vec!["910004".to_string()],
             vec!["910008".to_string()],
         )
-        .with_identity("910004", "1");
-        add_params.current_title = Some("Team".into());
-        add_params.current_avatar_url = Some("https://img/b.png".into());
-        add_params.current_ttl_msec = Some(3600000);
+        .with_identity("910004", "1")
+        .with_current_title("Team")
+        .with_current_avatar_url("https://img/b.png")
+        .with_current_ttl_msec(3600000);
         let added = core.prepare_group_members_change(&add_params).unwrap();
         let added_ckey_b64 =
             STANDARD_NO_PAD.encode(added.conversation_key.as_ref().unwrap().encoded());
@@ -7608,7 +7558,7 @@ mod tests {
 
         // GroupMemberAdd with screen-capture blocking enabled: the flag lands
         // in the encoded detail, is signed, and the signature round-trips.
-        let mut blocked_params = crate::GroupMembersChangeParams::new(
+        let blocked_params = crate::GroupMembersChangeParams::new(
             input,
             "g555",
             vec!["910006".to_string()],
@@ -7616,8 +7566,8 @@ mod tests {
             vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("910004", "1");
-        blocked_params.current_screen_capture_blocking_enabled = Some(true);
+        .with_identity("910004", "1")
+        .with_current_screen_capture_blocking_enabled(true);
         let blocked = core.prepare_group_members_change(&blocked_params).unwrap();
         let blocked_add = &blocked.action_signatures[1];
         assert!(blocked_add.signature_payload.ends_with(",true"));
@@ -7738,8 +7688,8 @@ mod tests {
         core.set_identity(&SetIdentityParams::new("111", "61"))
             .unwrap();
 
-        let mut params = crate::MarkConversationReadParams::new("222-111", "2011626338877079553");
-        params.seen_at_msec = Some(1_700_000_000_123);
+        let params = crate::MarkConversationReadParams::new("222-111", "2011626338877079553")
+            .with_seen_at_msec(1_700_000_000_123);
         let sig = only_action(core.prepare_mark_conversation_read(&params).unwrap());
 
         // The session identity's signing key version signs the receipt, and
@@ -7893,20 +7843,16 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
 
-        let mut params = crate::GroupCreateParams::new(
+        let params = crate::GroupCreateParams::new(
             input,
             "g999",
             vec!["910004".to_string()],
             vec!["910004".to_string()],
         )
-        .with_identity("910004", "1");
-        params.title = Some("Team, the sequel".into());
+        .with_identity("910004", "1")
+        .with_title("Team, the sequel");
         let result = core.prepare_group_create(&params);
         assert!(matches!(result, Err(SdkError::Parse(_))));
     }
@@ -7916,11 +7862,7 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
         let members = vec!["910004".to_string()];
         let admins = vec!["910004".to_string()];
 
@@ -7960,13 +7902,9 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
 
-        let mut params = crate::GroupMembersChangeParams::new(
+        let params = crate::GroupMembersChangeParams::new(
             input,
             "g999",
             vec!["910006".to_string()],
@@ -7974,8 +7912,8 @@ mod tests {
             vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("910004", "1");
-        params.current_title = Some("Team, the sequel".into());
+        .with_identity("910004", "1")
+        .with_current_title("Team, the sequel");
         let result = core.prepare_group_members_change(&params);
         assert!(matches!(result, Err(SdkError::Parse(_))));
     }
@@ -7985,11 +7923,7 @@ mod tests {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910004".to_string(),
-            public_key: pk.identity.clone(),
-            key_version: "1".to_string(),
-        }];
+        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
         let new_members = vec!["910006".to_string()];
         let members = vec!["910004".to_string()];
         let admins = vec!["910004".to_string()];
@@ -8491,13 +8425,13 @@ mod tests {
             .unwrap();
         let msg_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
-        let good_key = SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "61".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        };
+        let good_key = SigningKeyEntry::new(
+            "4001",
+            "61",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        );
 
         // A bad-binding variant: corrupt the identity binding signature.
         let mut bad_sig_bytes =
@@ -8611,13 +8545,13 @@ mod tests {
     }
 
     fn signing_key_entry_for(reg: &PublicKeyRegistrationPayload, user_id: &str) -> SigningKeyEntry {
-        SigningKeyEntry {
-            user_id: user_id.to_string(),
-            public_key_version: "61".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }
+        SigningKeyEntry::new(
+            user_id,
+            "61",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )
     }
 
     #[test]
@@ -9150,13 +9084,13 @@ mod tests {
         let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "61".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "61",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         let event = core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -9185,13 +9119,13 @@ mod tests {
         let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "61".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "61",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         let event = core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -9229,13 +9163,13 @@ mod tests {
         let event_b64 = wrap_signed_payload(&payload, &payload.message_id, "4001", "conv-1");
 
         let conv_keys = [("9001".to_string(), ckey)].into_iter().collect();
-        let signing_keys = [SigningKeyEntry {
-            user_id: "4001".to_string(),
-            public_key_version: "61".to_string(),
-            public_key: reg.public_key.signing_public_key.clone(),
-            identity_public_key: reg.public_key.public_key.clone(),
-            identity_public_key_signature: reg.public_key.identity_public_key_signature.clone(),
-        }];
+        let signing_keys = [SigningKeyEntry::new(
+            "4001",
+            "61",
+            &reg.public_key.signing_public_key,
+            &reg.public_key.public_key,
+            &reg.public_key.identity_public_key_signature,
+        )];
 
         let event = core
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -9554,11 +9488,11 @@ mod tests {
         core.set_identity(&SetIdentityParams::new("910002", "1"))
             .unwrap();
         let pubkeys = core.get_public_keys().unwrap();
-        let mut params = crate::ConversationKeyChangeParams::new(vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: pubkeys.identity,
-            key_version: "1".into(),
-        }]);
+        let mut params = crate::ConversationKeyChangeParams::new(vec![PublicKeyInput::new(
+            "910002",
+            pubkeys.identity,
+            "1",
+        )]);
         params.conversation_id = Some("conv-1".into());
         let prepared = core.prepare_conversation_key_change(&params).unwrap();
         assert_eq!(
@@ -9970,11 +9904,7 @@ mod tests {
         let mut orig_params = crate::EncryptMessageParams::new("conv-1", "#topic original")
             .with_identity("4002", "61")
             .with_conversation_key(ckey.to_bytes(), "9001");
-        orig_params.entities = Some(vec![crate::EntityDescriptor {
-            start: 0,
-            end: 6,
-            entity_type: "hashtag".into(),
-        }]);
+        orig_params.entities = Some(vec![crate::EntityDescriptor::new(0, 6, "hashtag")]);
         let orig_payload = core.encrypt_message(&orig_params).unwrap();
         let orig_b64 = wrap_signed_payload_with_seq(&orig_payload, "4002", "conv-1", "seq-orig");
 

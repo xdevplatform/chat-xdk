@@ -76,10 +76,14 @@ fn group_title_change_encrypts_the_title_it_signs() {
     assert_ne!(prepared.encrypted_value, title);
     assert_eq!(prepared.conversation_key_version, "1");
     let payload = &prepared.action_signatures[0].signature_payload;
-    assert!(payload.starts_with("GroupChangeEvent.GroupTitleChange,"), "{payload}");
+    assert!(
+        payload.starts_with("GroupChangeEvent.GroupTitleChange,"),
+        "{payload}"
+    );
     assert!(!payload.contains(title), "{payload}");
     assert_eq!(
-        core.decrypt(&prepared.encrypted_value, &key).expect("decrypt"),
+        core.decrypt(&prepared.encrypted_value, &key)
+            .expect("decrypt"),
         title
     );
 }
@@ -90,11 +94,11 @@ fn conversation_key_prepare_and_decrypt_roundtrip() {
     let core = loaded_core(&v);
     let prepared = core
         .prepare_conversation_key_change(
-            &[PublicKeyInput {
-                user_id: "910002".to_string(),
-                public_key: v["identity_public_b64"].as_str().unwrap().to_string(),
-                key_version: "1".to_string(),
-            }],
+            &[PublicKeyInput::new(
+                "910002",
+                v["identity_public_b64"].as_str().unwrap(),
+                "1",
+            )],
             Some("conv-1"),
         )
         .expect("prepare_conversation_key_change");
@@ -149,11 +153,11 @@ fn decrypt_one_rejects_garbage() {
 }
 
 fn fixture_public_keys(v: &Value) -> Vec<PublicKeyInput> {
-    vec![PublicKeyInput {
-        user_id: "1000".to_string(),
-        public_key: v["identity_public_b64"].as_str().unwrap().to_string(),
-        key_version: "1".to_string(),
-    }]
+    vec![PublicKeyInput::new(
+        "1000",
+        v["identity_public_b64"].as_str().unwrap(),
+        "1",
+    )]
 }
 
 fn sorted_keys(obj: &Value) -> Vec<&str> {
@@ -306,11 +310,7 @@ fn threaded_reply_with_entities_and_ttl() {
             ReplyOptions {
                 reply_to_event: Some(v["event_message_b64"].as_str().unwrap().to_string()),
                 reply_to_ckces: None,
-                entities: Some(vec![EntityDescriptor {
-                    start: 0,
-                    end: 5,
-                    entity_type: "mention".to_string(),
-                }]),
+                entities: Some(vec![EntityDescriptor::new(0, 5, "mention")]),
                 attachments: None,
                 quick_reply: None,
                 ttl_msec: Some(60_000),

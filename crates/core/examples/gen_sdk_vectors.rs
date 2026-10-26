@@ -217,13 +217,13 @@ fn main() {
     )
     .expect("frame valid reply event");
 
-    let mut forged_params = chat_xdk_core::EncryptReplyParams::new(
+    let forged_params = chat_xdk_core::EncryptReplyParams::new(
         EVENT_CONVERSATION_ID,
         EVENT_REPLY_TEXT,
         event_message_b64.clone(),
     )
-    .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION);
-    forged_params.reply_to_text = Some(EVENT_REPLY_FORGED_PREVIEW_TEXT.to_string());
+    .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION)
+    .with_reply_to_text(EVENT_REPLY_FORGED_PREVIEW_TEXT);
     let reply_forged = core
         .encrypt_reply(&forged_params)
         .expect("encrypt forged reply");
@@ -354,18 +354,18 @@ fn main() {
     let media_favicon_encrypted =
         encrypt_media(MK_SECOND_ATTACHMENT_KEY_HEX, &media_favicon_plaintext);
 
-    let mut ckey_media_params = EncryptMessageParams::new(EVENT_CONVERSATION_ID, CKEY_MEDIA_TEXT)
+    let ckey_media_params = EncryptMessageParams::new(EVENT_CONVERSATION_ID, CKEY_MEDIA_TEXT)
         .with_identity(EVENT_SENDER_ID, EVENT_SIGNING_KEY_VERSION)
-        .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION);
-    ckey_media_params.attachments = Some(vec![AttachmentDescriptor::Media {
-        media_hash_key: CKEY_MEDIA_HASH_KEY.to_string(),
-        width: 4,
-        height: 3,
-        filesize_bytes: 1500,
-        filename: "fixture.jpg".to_string(),
-        media_type: Some(1),
-        duration_millis: None,
-    }]);
+        .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION)
+        .with_attachments(vec![AttachmentDescriptor::Media {
+            media_hash_key: CKEY_MEDIA_HASH_KEY.to_string(),
+            width: 4,
+            height: 3,
+            filesize_bytes: 1500,
+            filename: "fixture.jpg".to_string(),
+            media_type: Some(1),
+            duration_millis: None,
+        }]);
     let ckey_media_payload = core
         .encrypt_message(&ckey_media_params)
         .expect("encrypt conversation-key media message");
@@ -411,13 +411,13 @@ fn main() {
         ))
         .unwrap();
     replier.set_cache_keys(true);
-    let fixture_signing_keys = [chat_xdk_core::SigningKeyEntry {
-        user_id: EVENT_SENDER_ID.to_string(),
-        public_key_version: EVENT_SIGNING_KEY_VERSION.to_string(),
-        public_key: B64.encode(signing_kp.public.encoded()),
-        identity_public_key: B64.encode(identity_kp.public.encoded()),
-        identity_public_key_signature: B64.encode(&identity_binding_signature),
-    }];
+    let fixture_signing_keys = [chat_xdk_core::SigningKeyEntry::new(
+        EVENT_SENDER_ID,
+        EVENT_SIGNING_KEY_VERSION,
+        B64.encode(signing_kp.public.encoded()),
+        B64.encode(identity_kp.public.encoded()),
+        B64.encode(&identity_binding_signature),
+    )];
     let cached = replier.decrypt_events(
         chat_xdk_core::DecryptEventsParams::new(vec![event_key_change_message_key_b64.clone()])
             .with_signing_keys(fixture_signing_keys.to_vec()),

@@ -947,11 +947,13 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
     assert!(err.contains("call set_identity() first"), "{err}");
 
     let author = author();
-    let as_other = SigningKeyEntry {
-        user_id: "1002".to_string(),
-        public_key_version: "2".to_string(),
-        ..author.entry.clone()
-    };
+    let as_other = SigningKeyEntry::new(
+        "1002",
+        "2",
+        &author.entry.public_key,
+        &author.entry.identity_public_key,
+        &author.entry.identity_public_key_signature,
+    );
     let cases = [
         (
             &anonymous,
@@ -1049,11 +1051,7 @@ fn every_user_id_input_must_be_numeric() {
     author.core.encrypt_reply(&reply).unwrap();
 
     let public_key = author.core.get_public_keys().unwrap().identity;
-    let participant = |user_id: &str| PublicKeyInput {
-        user_id: user_id.into(),
-        public_key: public_key.clone(),
-        key_version: "1".into(),
-    };
+    let participant = |user_id: &str| PublicKeyInput::new(user_id, &public_key, "1");
     let err = error_text(author.core.prepare_conversation_key_change(
         &ConversationKeyChangeParams::new(vec![participant(AUTHOR), participant("bob")]),
     ));
@@ -1110,12 +1108,9 @@ fn every_key_version_input_takes_the_api_form() {
     );
 
     let public_key = author.core.get_public_keys().unwrap().identity;
-    let mut key_change = ConversationKeyChangeParams::new(vec![PublicKeyInput {
-        user_id: AUTHOR.into(),
-        public_key,
-        key_version: "v2".into(),
-    }]);
-    key_change.conversation_id = Some(CONVERSATION.into());
+    let key_change =
+        ConversationKeyChangeParams::new(vec![PublicKeyInput::new(AUTHOR, public_key, "v2")])
+            .with_conversation_id(CONVERSATION);
     let err = error_text(author.core.prepare_conversation_key_change(&key_change));
     assert!(
         err.starts_with("Invalid public_keys key_version 'v2'"),

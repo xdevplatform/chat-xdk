@@ -1295,13 +1295,9 @@ fn reply_to_sender_id_string<'de, D: serde::Deserializer<'de>>(
 fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<chat_xdk_core::EntityDescriptor> {
     tuples
         .into_iter()
-        .map(
-            |(start, end, entity_type)| chat_xdk_core::EntityDescriptor {
-                start,
-                end,
-                entity_type,
-            },
-        )
+        .map(|(start, end, entity_type)| {
+            chat_xdk_core::EntityDescriptor::new(start, end, entity_type)
+        })
         .collect()
 }
 

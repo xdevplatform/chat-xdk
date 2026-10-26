@@ -136,11 +136,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
         "message_with_entities" => {
             let mut params = EncryptMessageParams::new(conversation.clone(), "see https://x.com")
                 .with_conversation_key(key.clone(), version);
-            params.entities = Some(vec![EntityDescriptor {
-                start: 4,
-                end: 17,
-                entity_type: "url".to_string(),
-            }]);
+            params.entities = Some(vec![EntityDescriptor::new(4, 17, "url")]);
             core.encrypt_message(&params)
         }
         "reaction_add" => core.encrypt_add_reaction(&reaction("\u{1f44d}")),

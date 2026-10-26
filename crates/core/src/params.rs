@@ -1,14 +1,14 @@
 //! Parameter structs for the SDK methods that encrypt, decrypt, and sign.
 //!
-//! Each struct pairs a [`new()`] constructor taking only the required fields
-//! with public fields for the optional ones, so call sites name every value
-//! they set and new optional protocol fields can be added without breaking
-//! existing callers:
+//! Each struct is `#[non_exhaustive]`: build it with `new()`, which takes the
+//! required fields, and set the optional ones with its `with_*` methods, so
+//! call sites name every value they set and new optional protocol fields can
+//! be added without breaking existing callers. The fields stay public to
+//! read and to assign:
 //!
 //! ```rust,ignore
 //! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
-//! let mut params = EncryptMessageParams::new(conversation_id, "Hello");
-//! params.ttl_msec = Some(86_400_000);
+//! let params = EncryptMessageParams::new(conversation_id, "Hello").with_ttl_msec(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
 //! let payload = chat.encrypt_message(&params)?;
 //! let message_id = payload.message_id;
@@ -46,6 +46,7 @@ fn non_empty(s: impl Into<String>) -> Option<String> {
 
 /// Parameters for [`crate::ChatCore::set_identity`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SetIdentityParams {
     /// Your user id: the sender of everything this chat signs.
     pub user_id: String,
@@ -69,6 +70,7 @@ impl SetIdentityParams {
 /// The key bytes are zeroized when the params are dropped and are redacted
 /// from `Debug` output.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ImportKeysParams {
     /// The key blob from `export_keys`: 32 bytes (the identity key) or 64
     /// (the identity and signing keys).
@@ -118,6 +120,7 @@ impl std::fmt::Debug for ImportKeysParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct EncryptMessageParams {
     /// ID of the conversation the message belongs to.
     pub conversation_id: String,
@@ -166,6 +169,38 @@ impl EncryptMessageParams {
             should_notify: None,
             ttl_msec: None,
         }
+    }
+
+    /// Set the rich-text entities (URLs, mentions, etc.) to embed.
+    pub fn with_entities(mut self, entities: Vec<EntityDescriptor>) -> Self {
+        self.entities = Some(entities);
+        self
+    }
+
+    /// Set the attachments: posts, links, and files, each file named by the
+    /// media hash key its upload started with.
+    pub fn with_attachments(mut self, attachments: Vec<AttachmentDescriptor>) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
+
+    /// Set the quick reply: a request offering options, or a response
+    /// selecting one.
+    pub fn with_quick_reply(mut self, quick_reply: QuickReply) -> Self {
+        self.quick_reply = Some(quick_reply);
+        self
+    }
+
+    /// Set whether to send a push notification.
+    pub fn with_should_notify(mut self, should_notify: bool) -> Self {
+        self.should_notify = Some(should_notify);
+        self
+    }
+
+    /// Set the TTL in milliseconds of a disappearing message.
+    pub fn with_ttl_msec(mut self, ttl_msec: i64) -> Self {
+        self.ttl_msec = Some(ttl_msec);
+        self
     }
 
     /// Set the explicit conversation key and its version.
@@ -238,6 +273,7 @@ impl std::fmt::Debug for EncryptMessageParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct EncryptReplyParams {
     /// ID of the conversation the reply belongs to.
     pub conversation_id: String,
@@ -327,6 +363,88 @@ impl EncryptReplyParams {
         }
     }
 
+    /// Set the base64 raw signed edit event, when the original was edited.
+    pub fn with_reply_to_edit_event(mut self, reply_to_edit_event: impl Into<String>) -> Self {
+        self.reply_to_edit_event = non_empty(reply_to_edit_event);
+        self
+    }
+
+    /// Set the base64 raw key-change events needed to decrypt the original
+    /// when it was encrypted under a different key version than this reply.
+    pub fn with_reply_to_ckces(mut self, reply_to_ckces: Vec<String>) -> Self {
+        self.reply_to_ckces = Some(reply_to_ckces);
+        self
+    }
+
+    /// Set the `sequence_id` of the message being replied to, overriding
+    /// the one `reply_to_event` carries.
+    pub fn with_reply_to_sequence_id(mut self, reply_to_sequence_id: impl Into<String>) -> Self {
+        self.reply_to_sequence_id = non_empty(reply_to_sequence_id);
+        self
+    }
+
+    /// Set the preview's sender id, overriding the one `reply_to_event`
+    /// carries.
+    pub fn with_reply_to_sender_id(mut self, reply_to_sender_id: impl Into<String>) -> Self {
+        self.reply_to_sender_id = non_empty(reply_to_sender_id);
+        self
+    }
+
+    /// Set the preview's text, overriding the one `reply_to_event` carries.
+    pub fn with_reply_to_text(mut self, reply_to_text: impl Into<String>) -> Self {
+        self.reply_to_text = non_empty(reply_to_text);
+        self
+    }
+
+    /// Set the preview's rich-text entities, overriding the ones
+    /// `reply_to_event` carries.
+    pub fn with_reply_to_entities(mut self, reply_to_entities: Vec<EntityDescriptor>) -> Self {
+        self.reply_to_entities = Some(reply_to_entities);
+        self
+    }
+
+    /// Set the preview's attachments, overriding the ones `reply_to_event`
+    /// carries.
+    pub fn with_reply_to_attachments(
+        mut self,
+        reply_to_attachments: Vec<AttachmentDescriptor>,
+    ) -> Self {
+        self.reply_to_attachments = Some(reply_to_attachments);
+        self
+    }
+
+    /// Set the rich-text entities (URLs, mentions, etc.) to embed.
+    pub fn with_entities(mut self, entities: Vec<EntityDescriptor>) -> Self {
+        self.entities = Some(entities);
+        self
+    }
+
+    /// Set the attachments: posts, links, and files, each file named by the
+    /// media hash key its upload started with.
+    pub fn with_attachments(mut self, attachments: Vec<AttachmentDescriptor>) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
+
+    /// Set the quick reply: a request offering options, or a response
+    /// selecting one.
+    pub fn with_quick_reply(mut self, quick_reply: QuickReply) -> Self {
+        self.quick_reply = Some(quick_reply);
+        self
+    }
+
+    /// Set whether to send a push notification.
+    pub fn with_should_notify(mut self, should_notify: bool) -> Self {
+        self.should_notify = Some(should_notify);
+        self
+    }
+
+    /// Set the TTL in milliseconds of a disappearing message.
+    pub fn with_ttl_msec(mut self, ttl_msec: i64) -> Self {
+        self.ttl_msec = Some(ttl_msec);
+        self
+    }
+
     /// Set the explicit conversation key and its version.
     ///
     /// The two travel together: the version names the key the recipients use
@@ -402,6 +520,7 @@ impl std::fmt::Debug for EncryptReplyParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct EncryptReactionParams {
     /// Base64 of the raw event being reacted to. The conversation id and
     /// target sequence id are derived from it.
@@ -444,6 +563,22 @@ impl EncryptReactionParams {
             conversation_key: None,
             conversation_key_version: None,
         }
+    }
+
+    /// Set the conversation id, overriding the one `target_event` carries.
+    pub fn with_conversation_id(mut self, conversation_id: impl Into<String>) -> Self {
+        self.conversation_id = non_empty(conversation_id);
+        self
+    }
+
+    /// Set the `sequence_id` of the message being reacted to, overriding
+    /// the one `target_event` carries.
+    pub fn with_target_message_sequence_id(
+        mut self,
+        target_message_sequence_id: impl Into<String>,
+    ) -> Self {
+        self.target_message_sequence_id = non_empty(target_message_sequence_id);
+        self
     }
 
     /// Set the explicit conversation key and its version.
@@ -511,6 +646,7 @@ impl std::fmt::Debug for EncryptReactionParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct EncryptEditParams {
     /// Base64 of the raw event being edited. The conversation id and target
     /// sequence id are derived from it.
@@ -557,6 +693,28 @@ impl EncryptEditParams {
             conversation_key: None,
             conversation_key_version: None,
         }
+    }
+
+    /// Set the rich-text entities of the replacement text.
+    pub fn with_entities(mut self, entities: Vec<EntityDescriptor>) -> Self {
+        self.entities = Some(entities);
+        self
+    }
+
+    /// Set the conversation id, overriding the one `target_event` carries.
+    pub fn with_conversation_id(mut self, conversation_id: impl Into<String>) -> Self {
+        self.conversation_id = non_empty(conversation_id);
+        self
+    }
+
+    /// Set the `sequence_id` of the message being edited, overriding the
+    /// one `target_event` carries.
+    pub fn with_target_message_sequence_id(
+        mut self,
+        target_message_sequence_id: impl Into<String>,
+    ) -> Self {
+        self.target_message_sequence_id = non_empty(target_message_sequence_id);
+        self
     }
 
     /// Set the explicit conversation key and its version.
@@ -620,6 +778,7 @@ impl std::fmt::Debug for EncryptEditParams {
 /// conversation key is involved: the result is an action signature the
 /// caller submits alongside the delete request.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct MessageDeleteParams {
     /// ID of the conversation the messages belong to.
     pub conversation_id: String,
@@ -670,6 +829,7 @@ impl MessageDeleteParams {
 /// no conversation key is involved: the result is an action signature the
 /// caller submits alongside the mark-read request.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct MarkConversationReadParams {
     /// ID of the conversation being marked read.
     pub conversation_id: String,
@@ -701,6 +861,13 @@ impl MarkConversationReadParams {
         }
     }
 
+    /// Set when the conversation was read, in milliseconds since the Unix
+    /// epoch.
+    pub fn with_seen_at_msec(mut self, seen_at_msec: i64) -> Self {
+        self.seen_at_msec = Some(seen_at_msec);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -715,6 +882,7 @@ impl MarkConversationReadParams {
 
 /// Parameters for [`crate::ChatCore::prepare_conversation_key_change`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ConversationKeyChangeParams {
     /// Identity public keys for every participant the new key is encrypted for.
     pub public_keys: Vec<PublicKeyInput>,
@@ -741,6 +909,13 @@ impl ConversationKeyChangeParams {
         }
     }
 
+    /// Set the conversation the change applies to: the existing id of a
+    /// group whose key rotates.
+    pub fn with_conversation_id(mut self, conversation_id: impl Into<String>) -> Self {
+        self.conversation_id = non_empty(conversation_id);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -760,6 +935,7 @@ impl ConversationKeyChangeParams {
 /// as unset, and an unset value signs the null sentinel, so every binding
 /// produces identical signed bytes.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupMembersChangeParams {
     /// Identity public keys for every participant of the updated roster.
     pub public_keys: Vec<PublicKeyInput>,
@@ -815,6 +991,34 @@ impl GroupMembersChangeParams {
         }
     }
 
+    /// Set the group's current title.
+    pub fn with_current_title(mut self, current_title: impl Into<String>) -> Self {
+        self.current_title = non_empty(current_title);
+        self
+    }
+
+    /// Set the group's current avatar URL.
+    pub fn with_current_avatar_url(mut self, current_avatar_url: impl Into<String>) -> Self {
+        self.current_avatar_url = non_empty(current_avatar_url);
+        self
+    }
+
+    /// Set the group's current message TTL in milliseconds.
+    pub fn with_current_ttl_msec(mut self, current_ttl_msec: i64) -> Self {
+        self.current_ttl_msec = Some(current_ttl_msec);
+        self
+    }
+
+    /// Set the group's current screen-capture-blocking state.
+    pub fn with_current_screen_capture_blocking_enabled(
+        mut self,
+        current_screen_capture_blocking_enabled: bool,
+    ) -> Self {
+        self.current_screen_capture_blocking_enabled =
+            Some(current_screen_capture_blocking_enabled);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -833,6 +1037,7 @@ impl GroupMembersChangeParams {
 /// and an unset value signs the null sentinel, so every binding produces
 /// identical signed bytes.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupCreateParams {
     /// Identity public keys for every participant of the new group.
     pub public_keys: Vec<PublicKeyInput>,
@@ -878,6 +1083,24 @@ impl GroupCreateParams {
         }
     }
 
+    /// Set the group's title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = non_empty(title);
+        self
+    }
+
+    /// Set the group's avatar URL.
+    pub fn with_avatar_url(mut self, avatar_url: impl Into<String>) -> Self {
+        self.avatar_url = non_empty(avatar_url);
+        self
+    }
+
+    /// Set the group's message TTL in milliseconds.
+    pub fn with_ttl_msec(mut self, ttl_msec: i64) -> Self {
+        self.ttl_msec = Some(ttl_msec);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -901,6 +1124,7 @@ impl GroupCreateParams {
 /// and signed as a change of its own, so the members who stay read it under
 /// the key they hold; an empty value is unset.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupMembersRemoveParams {
     /// Identity public keys of the members who stay; the new conversation
     /// key is encrypted for each of them.
@@ -983,6 +1207,7 @@ impl GroupMembersRemoveParams {
 /// `conversation_key_version` is bound into the removal signature. An empty
 /// string is absent, and an absent version signs the literal `null`.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupLeaveParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1011,6 +1236,21 @@ impl GroupLeaveParams {
         }
     }
 
+    /// Set the member promoted to admin with this leave.
+    pub fn with_promote_admin_id(mut self, promote_admin_id: impl Into<String>) -> Self {
+        self.promote_admin_id = non_empty(promote_admin_id);
+        self
+    }
+
+    /// Set the conversation-key version bound into the removal.
+    pub fn with_conversation_key_version(
+        mut self,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key_version = non_empty(conversation_key_version);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -1034,6 +1274,7 @@ impl GroupLeaveParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct GroupTitleChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1126,6 +1367,7 @@ impl std::fmt::Debug for GroupTitleChangeParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct GroupAvatarChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1218,6 +1460,7 @@ impl std::fmt::Debug for GroupAvatarChangeParams {
 /// redacted from `Debug` output. No `PartialEq` is derived:
 /// equality would byte-compare the key non-constant-time.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct GroupDescriptionChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1301,6 +1544,7 @@ impl std::fmt::Debug for GroupDescriptionChangeParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_admins_add`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupAdminsAddParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1339,6 +1583,7 @@ impl GroupAdminsAddParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_admins_remove`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupAdminsRemoveParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1380,6 +1625,7 @@ impl GroupAdminsRemoveParams {
 /// An empty `affiliate_id` and a negative `expires_at_msec` are treated as
 /// unset, and an unset value signs the literal `null`.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupInviteEnableParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1410,6 +1656,18 @@ impl GroupInviteEnableParams {
         }
     }
 
+    /// Set when the invite expires, in milliseconds since the Unix epoch.
+    pub fn with_expires_at_msec(mut self, expires_at_msec: i64) -> Self {
+        self.expires_at_msec = Some(expires_at_msec);
+        self
+    }
+
+    /// Set the affiliate id carried with the invite.
+    pub fn with_affiliate_id(mut self, affiliate_id: impl Into<String>) -> Self {
+        self.affiliate_id = non_empty(affiliate_id);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -1426,6 +1684,7 @@ impl GroupInviteEnableParams {
 ///
 /// `disabled_by` defaults to the sender when unset or empty.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupInviteDisableParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1450,6 +1709,12 @@ impl GroupInviteDisableParams {
         }
     }
 
+    /// Set the member disabling the invite.
+    pub fn with_disabled_by(mut self, disabled_by: impl Into<String>) -> Self {
+        self.disabled_by = non_empty(disabled_by);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -1467,6 +1732,7 @@ impl GroupInviteDisableParams {
 /// `requesting_user_id` defaults to the sender when unset or empty. The
 /// invite token a request carries is not part of the signature.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupJoinRequestParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1491,6 +1757,12 @@ impl GroupJoinRequestParams {
         }
     }
 
+    /// Set the user asking to join.
+    pub fn with_requesting_user_id(mut self, requesting_user_id: impl Into<String>) -> Self {
+        self.requesting_user_id = non_empty(requesting_user_id);
+        self
+    }
+
     /// Set the explicit sender identity, overriding the session identity.
     pub fn with_identity(
         mut self,
@@ -1505,6 +1777,7 @@ impl GroupJoinRequestParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_join_reject`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GroupJoinRejectParams {
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1545,6 +1818,7 @@ impl GroupJoinRejectParams {
 ///
 /// The signature covers `ttl_msec` only.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct MessageTtlChangeParams {
     /// ID of the conversation whose message TTL is changing.
     pub conversation_id: String,
@@ -1583,6 +1857,7 @@ impl MessageTtlChangeParams {
 
 /// Parameters for [`crate::ChatCore::prepare_message_ttl_remove`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct MessageTtlRemoveParams {
     /// ID of the conversation whose message TTL is being cleared.
     pub conversation_id: String,
@@ -1618,6 +1893,7 @@ impl MessageTtlRemoveParams {
 
 /// Parameters for [`crate::ChatCore::prepare_screen_capture`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ScreenCaptureParams {
     /// ID of the conversation whose screen-capture setting is changing.
     pub conversation_id: String,
@@ -1659,6 +1935,7 @@ impl ScreenCaptureParams {
 /// The conversation keys zeroize when the params are dropped and are
 /// redacted from `Debug` output.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DecryptEventParams {
     /// The base64 event, as delivered.
     pub event_b64: String,
@@ -1694,6 +1971,7 @@ impl DecryptEventParams {
 
 /// Parameters for [`crate::ChatCore::decrypt_events`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DecryptEventsParams {
     /// The base64 events, as delivered. Their key changes supply the
     /// conversation keys the messages among them are decrypted with.
@@ -1726,6 +2004,7 @@ impl DecryptEventsParams {
 /// from the opt-in key cache. It is zeroized when the params are dropped and,
 /// with the file, redacted from `Debug` output.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct EncryptFileParams {
     /// The file to encrypt.
     pub file: Vec<u8>,
@@ -1799,6 +2078,7 @@ impl std::fmt::Debug for EncryptFileParams {
 /// The conversation keys zeroize when the params are dropped and are
 /// redacted from `Debug` output.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct DecryptFileParams {
     /// The encrypted file, as downloaded.
     pub encrypted: Vec<u8>,
@@ -1851,6 +2131,7 @@ impl std::fmt::Debug for DecryptFileParams {
 /// The conversation key is zeroized when the params are dropped and is
 /// redacted from `Debug` output.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct FileEncryptorParams {
     /// The `event_b64` of the payload that `encrypt_message` or
     /// `encrypt_reply` returned for the message carrying the file.
@@ -1918,6 +2199,7 @@ impl std::fmt::Debug for FileEncryptorParams {
 /// The conversation keys zeroize when the params are dropped and are
 /// redacted from `Debug` output.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct FileDecryptorParams {
     /// The base64 event of the message that carries the file, as passed to
     /// `decrypt_event`.
@@ -1959,11 +2241,7 @@ mod tests {
 
     fn self_public_keys(core: &ChatCore) -> Vec<PublicKeyInput> {
         let pk = core.get_public_keys().unwrap();
-        vec![PublicKeyInput {
-            user_id: "910002".to_string(),
-            public_key: pk.identity,
-            key_version: "1".to_string(),
-        }]
+        vec![PublicKeyInput::new("910002", pk.identity, "1")]
     }
 
     // The encrypt-params structs deliberately derive no `PartialEq` (equality
@@ -1984,34 +2262,28 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_message_params_new_plus_field_set_equals_full_construction() {
+    fn encrypt_message_params_builders_set_the_fields() {
         let core = unlocked_core();
         let ckey = crate::crypto::key_factory::KeyFactory::generate_conversation_key()
             .unwrap()
             .to_bytes();
 
-        let mut via_new = EncryptMessageParams::new("conv-1", "hi")
+        let via_builders = EncryptMessageParams::new("conv-1", "hi")
             .with_identity("1000", "2")
-            .with_conversation_key(ckey.clone(), "1");
-        via_new.should_notify = Some(false);
-        via_new.ttl_msec = Some(30_000);
+            .with_conversation_key(ckey.clone(), "1")
+            .with_should_notify(false)
+            .with_ttl_msec(30_000);
 
-        let full = EncryptMessageParams {
-            conversation_id: "conv-1".into(),
-            text: "hi".into(),
-            sender_id: Some("1000".into()),
-            signing_key_version: Some("2".into()),
-            conversation_key: Some(ckey),
-            conversation_key_version: Some("1".into()),
-            entities: None,
-            attachments: None,
-            quick_reply: None,
-            should_notify: Some(false),
-            ttl_msec: Some(30_000),
-        };
-        assert_message_params_eq(&via_new, &full);
+        let mut via_fields = EncryptMessageParams::new("conv-1", "hi");
+        via_fields.sender_id = Some("1000".into());
+        via_fields.signing_key_version = Some("2".into());
+        via_fields.conversation_key = Some(ckey);
+        via_fields.conversation_key_version = Some("1".into());
+        via_fields.should_notify = Some(false);
+        via_fields.ttl_msec = Some(30_000);
+        assert_message_params_eq(&via_builders, &via_fields);
 
-        let payload = core.encrypt_message(&via_new).unwrap();
+        let payload = core.encrypt_message(&via_builders).unwrap();
         assert!(!payload.should_notify);
         assert_eq!(payload.conversation_key_version, "1");
     }
@@ -2023,12 +2295,12 @@ mod tests {
             .unwrap()
             .to_bytes();
 
-        let mut params = EncryptReplyParams::new("conv-1", "a reply", "")
+        let params = EncryptReplyParams::new("conv-1", "a reply", "")
             .with_identity("1000", "2")
-            .with_conversation_key(ckey, "1");
-        params.reply_to_sequence_id = Some("seq-9".into());
-        params.reply_to_sender_id = Some("42".to_string());
-        params.reply_to_text = Some("original".into());
+            .with_conversation_key(ckey, "1")
+            .with_reply_to_sequence_id("seq-9")
+            .with_reply_to_sender_id("42")
+            .with_reply_to_text("original");
 
         let payload = core.encrypt_reply(&params).unwrap();
         assert!(
@@ -2044,11 +2316,11 @@ mod tests {
             .unwrap()
             .to_bytes();
 
-        let mut params = EncryptReactionParams::new("", "👍")
+        let params = EncryptReactionParams::new("", "👍")
             .with_identity("1000", "2")
-            .with_conversation_key(ckey, "1");
-        params.conversation_id = Some("conv-1".into());
-        params.target_message_sequence_id = Some("seq-42".into());
+            .with_conversation_key(ckey, "1")
+            .with_conversation_id("conv-1")
+            .with_target_message_sequence_id("seq-42");
 
         // The same params value serves both the add and the remove.
         assert!(!core
@@ -2064,66 +2336,61 @@ mod tests {
     }
 
     #[test]
-    fn conversation_key_change_params_new_plus_field_set_equals_full_construction() {
+    fn conversation_key_change_params_builders_set_the_fields() {
         let core = unlocked_core();
         let public_keys = self_public_keys(&core);
 
-        let mut via_new = ConversationKeyChangeParams::new(public_keys.clone());
-        via_new = via_new.with_identity("910002", "1");
-        via_new.conversation_id = Some("conv-1".into());
+        let via_builders = ConversationKeyChangeParams::new(public_keys.clone())
+            .with_identity("910002", "1")
+            .with_conversation_id("conv-1");
 
-        let full = ConversationKeyChangeParams {
-            public_keys,
-            sender_id: Some("910002".into()),
-            signing_key_version: Some("1".into()),
-            conversation_id: Some("conv-1".into()),
-        };
-        assert_eq!(via_new, full);
+        let mut via_fields = ConversationKeyChangeParams::new(public_keys);
+        via_fields.sender_id = Some("910002".into());
+        via_fields.signing_key_version = Some("1".into());
+        via_fields.conversation_id = Some("conv-1".into());
+        assert_eq!(via_builders, via_fields);
 
-        let prepared = core.prepare_conversation_key_change(&via_new).unwrap();
+        let prepared = core.prepare_conversation_key_change(&via_builders).unwrap();
         assert_eq!(prepared.conversation_id, "conv-1");
         assert_eq!(prepared.action_signatures.len(), 1);
     }
 
     #[test]
-    fn group_members_change_params_new_plus_field_set_equals_full_construction() {
+    fn group_members_change_params_builders_set_the_fields() {
         let core = unlocked_core();
         let public_keys = self_public_keys(&core);
-
-        let mut via_new = GroupMembersChangeParams::new(
-            public_keys.clone(),
-            "g123",
-            vec!["910006".into()],
-            vec!["910002".into()],
-            vec!["910002".into()],
-            vec![],
-        )
-        .with_identity("910002", "1");
-        via_new.current_title = Some("Team".into());
-
-        let full = GroupMembersChangeParams {
-            public_keys,
-            conversation_id: "g123".into(),
-            new_member_ids: vec!["910006".into()],
-            current_member_ids: vec!["910002".into()],
-            current_admin_ids: vec!["910002".into()],
-            current_pending_member_ids: vec![],
-            sender_id: Some("910002".into()),
-            signing_key_version: Some("1".into()),
-            current_title: Some("Team".into()),
-            current_avatar_url: None,
-            current_ttl_msec: None,
-            current_screen_capture_blocking_enabled: None,
+        let new = |public_keys| {
+            GroupMembersChangeParams::new(
+                public_keys,
+                "g123",
+                vec!["910006".into()],
+                vec!["910002".into()],
+                vec!["910002".into()],
+                vec![],
+            )
         };
-        assert_eq!(via_new, full);
+
+        let via_builders = new(public_keys.clone())
+            .with_identity("910002", "1")
+            .with_current_title("Team")
+            .with_current_ttl_msec(60_000)
+            .with_current_screen_capture_blocking_enabled(true);
+
+        let mut via_fields = new(public_keys);
+        via_fields.sender_id = Some("910002".into());
+        via_fields.signing_key_version = Some("1".into());
+        via_fields.current_title = Some("Team".into());
+        via_fields.current_ttl_msec = Some(60_000);
+        via_fields.current_screen_capture_blocking_enabled = Some(true);
+        assert_eq!(via_builders, via_fields);
 
         // Both constructions encode identical member-add event details for
         // the same conversation-key version (the detail is deterministic).
         let a = core
-            .prepare_group_members_change_with_version(&via_new, "42")
+            .prepare_group_members_change_with_version(&via_builders, "42")
             .unwrap();
         let b = core
-            .prepare_group_members_change_with_version(&full, "42")
+            .prepare_group_members_change_with_version(&via_fields, "42")
             .unwrap();
         assert_eq!(
             a.action_signatures[1].encoded_message_event_detail,
@@ -2132,41 +2399,54 @@ mod tests {
     }
 
     #[test]
-    fn group_create_params_new_plus_field_set_equals_full_construction() {
+    fn group_create_params_builders_set_the_fields() {
         let core = unlocked_core();
         let public_keys = self_public_keys(&core);
-
-        let mut via_new = GroupCreateParams::new(
-            public_keys.clone(),
-            "g123",
-            vec!["910002".into(), "910005".into()],
-            vec!["910002".into()],
-        )
-        .with_identity("910002", "1");
-        via_new.title = Some("Team".into());
-
-        let full = GroupCreateParams {
-            public_keys,
-            conversation_id: "g123".into(),
-            member_ids: vec!["910002".into(), "910005".into()],
-            admin_ids: vec!["910002".into()],
-            sender_id: Some("910002".into()),
-            signing_key_version: Some("1".into()),
-            title: Some("Team".into()),
-            avatar_url: None,
-            ttl_msec: None,
+        let new = |public_keys| {
+            GroupCreateParams::new(
+                public_keys,
+                "g123",
+                vec!["910002".into(), "910005".into()],
+                vec!["910002".into()],
+            )
         };
-        assert_eq!(via_new, full);
+
+        let via_builders = new(public_keys.clone())
+            .with_identity("910002", "1")
+            .with_title("Team")
+            .with_ttl_msec(86_400_000);
+
+        let mut via_fields = new(public_keys);
+        via_fields.sender_id = Some("910002".into());
+        via_fields.signing_key_version = Some("1".into());
+        via_fields.title = Some("Team".into());
+        via_fields.ttl_msec = Some(86_400_000);
+        assert_eq!(via_builders, via_fields);
 
         // Both constructions encode identical group-create event details for
         // the same conversation-key version (the detail is deterministic).
         let a = core
-            .prepare_group_create_with_version(&via_new, "42")
+            .prepare_group_create_with_version(&via_builders, "42")
             .unwrap();
-        let b = core.prepare_group_create_with_version(&full, "42").unwrap();
+        let b = core
+            .prepare_group_create_with_version(&via_fields, "42")
+            .unwrap();
         assert_eq!(
             a.action_signatures[1].encoded_message_event_detail,
             b.action_signatures[1].encoded_message_event_detail,
         );
+    }
+
+    #[test]
+    fn string_builders_treat_an_empty_value_as_unset() {
+        let leave = GroupLeaveParams::new("g1")
+            .with_promote_admin_id("")
+            .with_conversation_key_version("");
+        assert_eq!(leave, GroupLeaveParams::new("g1"));
+        let invite = GroupInviteEnableParams::new("g1", "https://x.com/i/invite/a")
+            .with_affiliate_id("")
+            .with_expires_at_msec(1_700_000_000_000);
+        assert_eq!(invite.affiliate_id, None);
+        assert_eq!(invite.expires_at_msec, Some(1_700_000_000_000));
     }
 }

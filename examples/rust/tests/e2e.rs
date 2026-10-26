@@ -54,11 +54,7 @@ fn unix_secs() -> u64 {
 /// Signing entries -> the flat entries the prepare methods take.
 fn key_entries(pks: &[SigningKeyEntry]) -> Vec<PublicKeyInput> {
     pks.iter()
-        .map(|pk| PublicKeyInput {
-            user_id: pk.user_id.clone(),
-            public_key: pk.identity_public_key.clone(),
-            key_version: pk.public_key_version.clone(),
-        })
+        .map(|pk| PublicKeyInput::new(&pk.user_id, &pk.identity_public_key, &pk.public_key_version))
         .collect()
 }
 
@@ -292,11 +288,7 @@ fn e2e_live() {
                 // under an older key version.
                 reply_to_event: last_inbound_event.clone(),
                 reply_to_ckces: (!key_change_events.is_empty()).then(|| key_change_events.clone()),
-                entities: Some(vec![EntityDescriptor {
-                    start: 0,
-                    end: 5,
-                    entity_type: "mention".to_string(),
-                }]),
+                entities: Some(vec![EntityDescriptor::new(0, 5, "mention")]),
                 attachments: None,
                 quick_reply: None,
                 ttl_msec: Some(24 * 60 * 60 * 1000),

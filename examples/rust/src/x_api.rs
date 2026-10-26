@@ -346,15 +346,15 @@ mod http_impl {
             };
             Ok(items
                 .iter()
-                .map(|pk| SigningKeyEntry {
-                    user_id: user_id.to_string(),
-                    public_key_version: pk["public_key_version"].as_str().unwrap_or("").to_string(),
-                    public_key: pk["signing_public_key"].as_str().unwrap_or("").to_string(),
-                    identity_public_key: pk["public_key"].as_str().unwrap_or("").to_string(),
-                    identity_public_key_signature: pk["identity_public_key_signature"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
+                .map(|pk| {
+                    let field = |name: &str| pk[name].as_str().unwrap_or("").to_string();
+                    SigningKeyEntry::new(
+                        user_id,
+                        field("public_key_version"),
+                        field("signing_public_key"),
+                        field("public_key"),
+                        field("identity_public_key_signature"),
+                    )
                 })
                 .collect())
         }

@@ -909,12 +909,12 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
-        let mut params = EncryptReplyParams::new("conv-1", "This is a reply", "")
+        let params = EncryptReplyParams::new("conv-1", "This is a reply", "")
             .with_identity("4101", "67")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.reply_to_sequence_id = Some("seq-99".into());
-        params.reply_to_sender_id = Some("12345".to_string());
-        params.reply_to_text = Some("Original message".into());
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-99")
+            .with_reply_to_sender_id("12345")
+            .with_reply_to_text("Original message");
         let payload = chat.encrypt_reply(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
     }
@@ -926,20 +926,14 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
-        let mut params = EncryptReactionParams::new("", "👍")
+        let params = EncryptReactionParams::new("", "👍")
             .with_identity("4101", "67")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.conversation_id = Some("conv-1".into());
-        params.target_message_sequence_id = Some("seq-42".into());
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_conversation_id("conv-1")
+            .with_target_message_sequence_id("seq-42");
 
         let add_payload = chat.encrypt_add_reaction(&params).unwrap();
         assert!(!add_payload.encoded_message_create_event.is_empty());
-
-        let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("4101", "67")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.conversation_id = Some("conv-1".into());
-        params.target_message_sequence_id = Some("seq-42".into());
 
         let remove_payload = chat.encrypt_remove_reaction(&params).unwrap();
         assert!(!remove_payload.encoded_message_create_event.is_empty());
@@ -954,11 +948,11 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         // should_notify=false, ttl_msec=30s
-        let mut params = EncryptMessageParams::new("conv-1", "Disappearing!")
+        let params = EncryptMessageParams::new("conv-1", "Disappearing!")
             .with_identity("4201", "66")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.should_notify = Some(false);
-        params.ttl_msec = Some(30_000);
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_should_notify(false)
+            .with_ttl_msec(30_000);
         let payload = chat.encrypt_message(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.should_notify);
@@ -973,46 +967,18 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         let entities = vec![
-            EntityDescriptor {
-                start: 0,
-                end: 5,
-                entity_type: "url".into(),
-            },
-            EntityDescriptor {
-                start: 6,
-                end: 10,
-                entity_type: "mention".into(),
-            },
-            EntityDescriptor {
-                start: 11,
-                end: 15,
-                entity_type: "hashtag".into(),
-            },
-            EntityDescriptor {
-                start: 16,
-                end: 20,
-                entity_type: "cashtag".into(),
-            },
-            EntityDescriptor {
-                start: 21,
-                end: 30,
-                entity_type: "email".into(),
-            },
-            EntityDescriptor {
-                start: 31,
-                end: 40,
-                entity_type: "address".into(),
-            },
-            EntityDescriptor {
-                start: 41,
-                end: 50,
-                entity_type: "phone_number".into(),
-            },
+            EntityDescriptor::new(0, 5, "url"),
+            EntityDescriptor::new(6, 10, "mention"),
+            EntityDescriptor::new(11, 15, "hashtag"),
+            EntityDescriptor::new(16, 20, "cashtag"),
+            EntityDescriptor::new(21, 30, "email"),
+            EntityDescriptor::new(31, 40, "address"),
+            EntityDescriptor::new(41, 50, "phone_number"),
         ];
-        let mut params = EncryptMessageParams::new("conv-1", "text with all entity types")
+        let params = EncryptMessageParams::new("conv-1", "text with all entity types")
             .with_identity("4201", "66")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.entities = Some(entities);
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_entities(entities);
         let payload = chat.encrypt_message(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
     }
@@ -1027,22 +993,22 @@ mod tests {
 
         chat.set_identity(&SetIdentityParams::new("4201", "66"))
             .unwrap();
-        let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.reply_to_sequence_id = Some("seq-99".into());
-        params.reply_to_sender_id = Some("12345".to_string());
-        params.reply_to_text = Some("Original".into());
-        params.attachments = Some(vec![AttachmentDescriptor::Media {
-            media_hash_key: "hash123".into(),
-            width: 1024,
-            height: 768,
-            filesize_bytes: 50000,
-            filename: "photo.jpg".into(),
-            media_type: Some(1),
-            duration_millis: None,
-        }]);
-        params.should_notify = Some(false);
-        params.ttl_msec = Some(60_000);
+        let params = EncryptReplyParams::new("conv-1", "Reply with media", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-99")
+            .with_reply_to_sender_id("12345")
+            .with_reply_to_text("Original")
+            .with_attachments(vec![AttachmentDescriptor::Media {
+                media_hash_key: "hash123".into(),
+                width: 1024,
+                height: 768,
+                filesize_bytes: 50000,
+                filename: "photo.jpg".into(),
+                media_type: Some(1),
+                duration_millis: None,
+            }])
+            .with_should_notify(false)
+            .with_ttl_msec(60_000);
         let payload = chat.encrypt_reply(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.should_notify);
@@ -1055,14 +1021,11 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("910002", &public_keys.identity, "1")];
 
-        let mut params = ConversationKeyChangeParams::new(input).with_identity("910002", "1");
-        params.conversation_id = Some("conv-1".into());
+        let params = ConversationKeyChangeParams::new(input)
+            .with_identity("910002", "1")
+            .with_conversation_id("conv-1");
         let result = chat.prepare_conversation_key_change(&params).unwrap();
 
         assert_eq!(result.conversation_id, "conv-1");
@@ -1108,20 +1071,13 @@ mod tests {
         let public_keys = chat.get_public_keys().unwrap();
         // Same user with two key versions — should pick version "2"
         let input = vec![
-            PublicKeyInput {
-                user_id: "910001".into(),
-                public_key: public_keys.identity.clone(),
-                key_version: "1".into(),
-            },
-            PublicKeyInput {
-                user_id: "910001".into(),
-                public_key: public_keys.identity.clone(),
-                key_version: "2".into(),
-            },
+            PublicKeyInput::new("910001", &public_keys.identity, "1"),
+            PublicKeyInput::new("910001", &public_keys.identity, "2"),
         ];
 
-        let mut params = ConversationKeyChangeParams::new(input).with_identity("910001", "1");
-        params.conversation_id = Some("conv-1".into());
+        let params = ConversationKeyChangeParams::new(input)
+            .with_identity("910001", "1")
+            .with_conversation_id("conv-1");
         let result = chat.prepare_conversation_key_change(&params).unwrap();
         assert_eq!(result.conversation_participant_keys.len(), 1);
         assert_eq!(
@@ -1146,16 +1102,8 @@ mod tests {
 
         // Numeric ids: the smaller sorts first regardless of input order.
         let input = vec![
-            PublicKeyInput {
-                user_id: "1491585161162473473".into(),
-                public_key: alice_pk.identity.clone(),
-                key_version: "1".into(),
-            },
-            PublicKeyInput {
-                user_id: "17380288".into(),
-                public_key: bob_pk.identity.clone(),
-                key_version: "3".into(),
-            },
+            PublicKeyInput::new("1491585161162473473", &alice_pk.identity, "1"),
+            PublicKeyInput::new("17380288", &bob_pk.identity, "3"),
         ];
 
         // Omitting conversation_id derives the canonical one-to-one id.
@@ -1196,8 +1144,9 @@ mod tests {
         chat.generate_keypairs().unwrap();
         chat.setup(b"2580").await.unwrap();
 
-        let mut params = ConversationKeyChangeParams::new(vec![]).with_identity("910002", "1");
-        params.conversation_id = Some("conv-1".into());
+        let params = ConversationKeyChangeParams::new(vec![])
+            .with_identity("910002", "1")
+            .with_conversation_id("conv-1");
         let result = chat.prepare_conversation_key_change(&params);
         assert!(result.is_err());
     }
@@ -1209,11 +1158,7 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "solo".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("solo", &public_keys.identity, "1")];
 
         // No conversation_id and only one participant cannot derive an id.
         let result = chat.prepare_conversation_key_change(
@@ -1229,13 +1174,9 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("910002", &public_keys.identity, "1")];
 
-        let mut params = GroupMembersChangeParams::new(
+        let params = GroupMembersChangeParams::new(
             input,
             "g123",
             vec!["910006".to_string()],
@@ -1243,8 +1184,8 @@ mod tests {
             vec!["910002".to_string()],
             vec![],
         )
-        .with_identity("910002", "1");
-        params.current_title = Some("Team".into());
+        .with_identity("910002", "1")
+        .with_current_title("Team");
         let result = chat.prepare_group_members_change(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g123");
@@ -1271,20 +1212,16 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("910002", &public_keys.identity, "1")];
 
-        let mut params = GroupCreateParams::new(
+        let params = GroupCreateParams::new(
             input,
             "g123",
             vec!["910002".to_string(), "910005".to_string()],
             vec!["910002".to_string()],
         )
-        .with_identity("910002", "1");
-        params.title = Some("Team".into());
+        .with_identity("910002", "1")
+        .with_title("Team");
         let result = chat.prepare_group_create(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g123");
@@ -1525,17 +1462,17 @@ mod tests {
         String,
         std::collections::HashMap<String, XChatConversationKey>,
     ) {
-        let mut params = EncryptMessageParams::new("1000:2000", "a file")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.attachments = Some(vec![crate::AttachmentDescriptor::Media {
-            media_hash_key: media_hash_key.to_string(),
-            width: 4,
-            height: 3,
-            filesize_bytes: 64,
-            filename: "photo.png".to_string(),
-            media_type: None,
-            duration_millis: None,
-        }]);
+        let params = EncryptMessageParams::new("1000:2000", "a file")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_attachments(vec![crate::AttachmentDescriptor::Media {
+                media_hash_key: media_hash_key.to_string(),
+                width: 4,
+                height: 3,
+                filesize_bytes: 64,
+                filename: "photo.png".to_string(),
+                media_type: None,
+                duration_millis: None,
+            }]);
         let payload = chat.encrypt_message(&params).unwrap();
         (
             payload.event_b64,

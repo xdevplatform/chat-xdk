@@ -1359,11 +1359,7 @@ fn parse_params<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, FfiResu
 fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<EntityDescriptor> {
     tuples
         .into_iter()
-        .map(|(start, end, entity_type)| EntityDescriptor {
-            start,
-            end,
-            entity_type,
-        })
+        .map(|(start, end, entity_type)| EntityDescriptor::new(start, end, entity_type))
         .collect()
 }
 

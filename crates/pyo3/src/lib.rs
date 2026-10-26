@@ -124,11 +124,7 @@ fn entities_field(
     Ok(tuples.map(|tuples| {
         tuples
             .into_iter()
-            .map(|(start, end, entity_type)| EntityDescriptor {
-                start,
-                end,
-                entity_type,
-            })
+            .map(|(start, end, entity_type)| EntityDescriptor::new(start, end, entity_type))
             .collect()
     }))
 }
@@ -175,13 +171,13 @@ fn parse_signing_key_entry(mut m: HashMap<String, String>) -> PyResult<SigningKe
             ))
         })
     };
-    Ok(SigningKeyEntry {
-        user_id: require(&mut m, "user_id")?,
-        public_key_version: require(&mut m, "public_key_version")?,
-        public_key: require(&mut m, "public_key")?,
-        identity_public_key: require(&mut m, "identity_public_key")?,
-        identity_public_key_signature: require(&mut m, "identity_public_key_signature")?,
-    })
+    Ok(SigningKeyEntry::new(
+        require(&mut m, "user_id")?,
+        require(&mut m, "public_key_version")?,
+        require(&mut m, "public_key")?,
+        require(&mut m, "identity_public_key")?,
+        require(&mut m, "identity_public_key_signature")?,
+    ))
 }
 
 fn parse_signing_key_entries(
@@ -232,17 +228,16 @@ fn public_keys_field(
     extract_field::<Vec<HashMap<String, String>>>(py, value, "public_keys")?
         .into_iter()
         .map(|mut r| {
-            Ok(chat_xdk_core::PublicKeyInput {
-                user_id: r.remove("user_id").ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>("missing 'user_id'")
-                })?,
-                public_key: r.remove("public_key").ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>("missing 'public_key'")
-                })?,
-                key_version: r.remove("key_version").ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>("missing 'key_version'")
-                })?,
-            })
+            let mut take = |key: &str| {
+                r.remove(key).ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("missing '{key}'"))
+                })
+            };
+            Ok(chat_xdk_core::PublicKeyInput::new(
+                take("user_id")?,
+                take("public_key")?,
+                take("key_version")?,
+            ))
         })
         .collect()
 }

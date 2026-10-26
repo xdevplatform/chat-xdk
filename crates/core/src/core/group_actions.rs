@@ -812,13 +812,13 @@ mod tests {
         let core = ChatCore::new();
         let registration = core.generate_keypairs().unwrap().public_key;
         let (sender, version) = identity();
-        let signing_keys = vec![SigningKeyEntry {
-            user_id: sender,
-            public_key_version: version,
-            public_key: registration.signing_public_key,
-            identity_public_key: registration.public_key,
-            identity_public_key_signature: registration.identity_public_key_signature,
-        }];
+        let signing_keys = vec![SigningKeyEntry::new(
+            sender,
+            version,
+            registration.signing_public_key,
+            registration.public_key,
+            registration.identity_public_key_signature,
+        )];
         (core, signing_keys)
     }
 
@@ -937,11 +937,11 @@ mod tests {
     }
 
     fn remaining_keys(core: &ChatCore, user_id: &str) -> Vec<PublicKeyInput> {
-        vec![PublicKeyInput {
-            user_id: user_id.to_string(),
-            public_key: core.get_public_keys().unwrap().identity,
-            key_version: "1".into(),
-        }]
+        vec![PublicKeyInput::new(
+            user_id,
+            core.get_public_keys().unwrap().identity,
+            "1",
+        )]
     }
 
     #[test]
@@ -1047,9 +1047,10 @@ mod tests {
     fn leave_appends_a_conversation_delete_and_optional_admin_add() {
         let core = ready_core();
         let (sender, version) = identity();
-        let mut params = GroupLeaveParams::new("g100").with_identity(&sender, &version);
-        params.conversation_key_version = Some("7".into());
-        params.promote_admin_id = Some("910008".into());
+        let params = GroupLeaveParams::new("g100")
+            .with_identity(&sender, &version)
+            .with_conversation_key_version("7")
+            .with_promote_admin_id("910008");
         let prepared = core.prepare_group_leave(&params).unwrap();
         assert_eq!(prepared.action_signatures.len(), 3);
         assert!(prepared.action_signatures[0]

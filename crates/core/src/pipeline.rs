@@ -844,21 +844,9 @@ mod tests {
     #[test]
     fn test_build_message_content_with_entities() {
         let entities = build_thrift_entities(&[
-            EntityDescriptor {
-                start: 0,
-                end: 23,
-                entity_type: "url".to_string(),
-            },
-            EntityDescriptor {
-                start: 25,
-                end: 30,
-                entity_type: "mention".to_string(),
-            },
-            EntityDescriptor {
-                start: 32,
-                end: 40,
-                entity_type: "hashtag".to_string(),
-            },
+            EntityDescriptor::new(0, 23, "url"),
+            EntityDescriptor::new(25, 30, "mention"),
+            EntityDescriptor::new(32, 40, "hashtag"),
         ]);
         let content = build_message_content(
             "https://example.com @user #topic",
@@ -873,41 +861,13 @@ mod tests {
     #[test]
     fn test_build_message_content_with_all_entity_types() {
         let entities = build_thrift_entities(&[
-            EntityDescriptor {
-                start: 0,
-                end: 5,
-                entity_type: "url".to_string(),
-            },
-            EntityDescriptor {
-                start: 6,
-                end: 11,
-                entity_type: "mention".to_string(),
-            },
-            EntityDescriptor {
-                start: 12,
-                end: 17,
-                entity_type: "hashtag".to_string(),
-            },
-            EntityDescriptor {
-                start: 18,
-                end: 23,
-                entity_type: "cashtag".to_string(),
-            },
-            EntityDescriptor {
-                start: 24,
-                end: 40,
-                entity_type: "email".to_string(),
-            },
-            EntityDescriptor {
-                start: 41,
-                end: 55,
-                entity_type: "address".to_string(),
-            },
-            EntityDescriptor {
-                start: 56,
-                end: 66,
-                entity_type: "phone_number".to_string(),
-            },
+            EntityDescriptor::new(0, 5, "url"),
+            EntityDescriptor::new(6, 11, "mention"),
+            EntityDescriptor::new(12, 17, "hashtag"),
+            EntityDescriptor::new(18, 23, "cashtag"),
+            EntityDescriptor::new(24, 40, "email"),
+            EntityDescriptor::new(41, 55, "address"),
+            EntityDescriptor::new(56, 66, "phone_number"),
         ]);
         assert_eq!(entities.len(), 7);
     }
@@ -1307,11 +1267,7 @@ mod tests {
 
     #[test]
     fn test_build_entities_unknown_type_filtered() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 5,
-            entity_type: "unknown_type".to_string(),
-        }]);
+        let entities = build_thrift_entities(&[EntityDescriptor::new(0, 5, "unknown_type")]);
         assert!(
             entities.is_empty(),
             "Unknown entity types should be filtered out"
@@ -1320,11 +1276,7 @@ mod tests {
 
     #[test]
     fn test_build_entities_phone_number_camel_case() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 14,
-            entity_type: "phoneNumber".to_string(),
-        }]);
+        let entities = build_thrift_entities(&[EntityDescriptor::new(0, 14, "phoneNumber")]);
         assert_eq!(
             entities.len(),
             1,
@@ -1335,21 +1287,9 @@ mod tests {
     #[test]
     fn test_build_entities_mixed_with_unknown_filtered() {
         let entities = build_thrift_entities(&[
-            EntityDescriptor {
-                start: 0,
-                end: 5,
-                entity_type: "url".to_string(),
-            },
-            EntityDescriptor {
-                start: 6,
-                end: 11,
-                entity_type: "bogus".to_string(),
-            },
-            EntityDescriptor {
-                start: 12,
-                end: 17,
-                entity_type: "mention".to_string(),
-            },
+            EntityDescriptor::new(0, 5, "url"),
+            EntityDescriptor::new(6, 11, "bogus"),
+            EntityDescriptor::new(12, 17, "mention"),
         ]);
         assert_eq!(entities.len(), 2, "Only valid types should survive");
     }
@@ -1374,11 +1314,7 @@ mod tests {
             ("phoneNumber", 1),
             ("invalid", 0),
         ] {
-            let entities = build_thrift_entities(&[EntityDescriptor {
-                start: 0,
-                end: 10,
-                entity_type: etype.to_string(),
-            }]);
+            let entities = build_thrift_entities(&[EntityDescriptor::new(0, 10, etype)]);
             assert_eq!(
                 entities.len(),
                 expected_count,
@@ -1421,11 +1357,7 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_entities_and_attachments() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 23,
-            entity_type: "url".to_string(),
-        }]);
+        let entities = build_thrift_entities(&[EntityDescriptor::new(0, 23, "url")]);
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Url {
             url: "https://example.com".to_string(),
             display_title: Some("Example".to_string()),
@@ -1462,11 +1394,7 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_preview_and_entities() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 5,
-            entity_type: "mention".to_string(),
-        }]);
+        let entities = build_thrift_entities(&[EntityDescriptor::new(0, 5, "mention")]);
         let content = build_message_content_with_preview(
             "@user yes!",
             test_preview(
@@ -1508,11 +1436,7 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_preview_entities() {
-        let reply_entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 6,
-            entity_type: "hashtag".to_string(),
-        }]);
+        let reply_entities = build_thrift_entities(&[EntityDescriptor::new(0, 6, "hashtag")]);
         let content = build_message_content_with_preview(
             "Replying to tagged msg",
             test_preview(
@@ -1568,22 +1492,14 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_preview_all_fields() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 5,
-            entity_type: "mention".to_string(),
-        }]);
+        let entities = build_thrift_entities(&[EntityDescriptor::new(0, 5, "mention")]);
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Url {
             url: "https://reply-link.com".to_string(),
             display_title: None,
             banner_image: None,
             favicon_image: None,
         }]);
-        let reply_entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 20,
-            entity_type: "url".to_string(),
-        }]);
+        let reply_entities = build_thrift_entities(&[EntityDescriptor::new(0, 20, "url")]);
         let reply_attachments = build_thrift_attachments(&[AttachmentDescriptor::Media {
             media_hash_key: "orig_media".to_string(),
             width: 400,

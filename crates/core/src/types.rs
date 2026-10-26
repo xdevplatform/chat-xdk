@@ -35,12 +35,14 @@ use serde::{Deserialize, Serialize};
 /// additional data (e.g. a hashtag or mention marker).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct EmptyObject {}
 
 /// A rich-text entity (mention, URL, hashtag, etc.) spanning a range of the
 /// message text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct RichTextEntity {
     pub start_index: Option<i32>,
     pub end_index: Option<i32>,
@@ -53,6 +55,7 @@ pub struct RichTextEntity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum RichTextContent {
     Hashtag {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -90,6 +93,7 @@ pub enum RichTextContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum MessageAttachment {
     Media {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -116,6 +120,7 @@ pub enum MessageAttachment {
 /// Money attachment as it appears in decrypted message content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MoneyAttachment {
     pub fallback_text: Option<String>,
     pub payload: Option<String>,
@@ -124,6 +129,7 @@ pub struct MoneyAttachment {
 /// Post (tweet) attachment as it appears in decrypted message content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PostAttachment {
     pub rest_id: Option<String>,
     pub post_url: Option<String>,
@@ -134,6 +140,7 @@ pub struct PostAttachment {
 /// any preview images.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct UrlAttachment {
     pub url: Option<String>,
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -147,6 +154,7 @@ pub struct UrlAttachment {
 /// Unified card attachment as it appears in decrypted message content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct UnifiedCardAttachment {
     pub url: Option<String>,
     pub attachment_id: Option<String>,
@@ -155,6 +163,7 @@ pub struct UnifiedCardAttachment {
 /// A preview image (banner or favicon) referenced by a URL card attachment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct UrlAttachmentImage {
     pub media_hash_key: Option<String>,
     pub filesize_bytes: Option<i64>,
@@ -167,6 +176,7 @@ pub struct UrlAttachmentImage {
 /// message content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MediaAttachment {
     pub media_hash_key: Option<String>,
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -185,6 +195,7 @@ pub struct MediaAttachment {
 /// Media dimensions (width/height).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MediaDimensions {
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -195,6 +206,7 @@ pub struct MediaDimensions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum MediaType {
     #[cfg_attr(feature = "js", js_camel(wrap))]
     Known(MediaTypeKnown),
@@ -205,6 +217,7 @@ pub enum MediaType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum MediaTypeKnown {
     Image,
     Gif,
@@ -217,6 +230,7 @@ pub enum MediaTypeKnown {
 /// Preview of the message being replied to, embedded in a reply's content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ReplyingToPreview {
     pub sender_id: Option<String>,
     pub message_text: Option<String>,
@@ -232,6 +246,7 @@ pub struct ReplyingToPreview {
 /// Metadata describing a forwarded message's original content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ForwardedMessage {
     pub message_text: Option<String>,
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -243,6 +258,7 @@ pub struct ForwardedMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum SentFromSurface {
     #[cfg_attr(feature = "js", js_camel(wrap))]
     Known(SentFromSurfaceKnown),
@@ -253,6 +269,7 @@ pub enum SentFromSurface {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum SentFromSurfaceKnown {
     ConversationScreenComposer,
     NotificationReply,
@@ -268,6 +285,7 @@ pub enum SentFromSurfaceKnown {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged, deny_unknown_fields)]
+#[non_exhaustive]
 pub enum QuickReply {
     Request {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -283,6 +301,7 @@ pub enum QuickReply {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum QuickReplyRequest {
     Options {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -294,6 +313,7 @@ pub enum QuickReplyRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum QuickReplyResponse {
     Options {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -302,26 +322,73 @@ pub enum QuickReplyResponse {
 }
 
 /// The options offered by a quick-reply request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct QuickReplyOptionsRequest {
     pub id: Option<String>,
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub options: Option<Vec<QuickReplyOption>>,
 }
 
+impl QuickReplyOptionsRequest {
+    /// Create a request with no fields set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the request's id, which a response names as its `request_id`.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Set the options offered.
+    pub fn with_options(mut self, options: Vec<QuickReplyOption>) -> Self {
+        self.options = Some(options);
+        self
+    }
+}
+
 /// The option selected in a quick-reply response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct QuickReplyOptionsResponse {
     pub request_id: Option<String>,
     pub metadata: Option<String>,
     pub selected_option_id: Option<String>,
 }
 
+impl QuickReplyOptionsResponse {
+    /// Create a response with no fields set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the id of the request this response answers.
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
+    }
+
+    /// Set the metadata of the selected option.
+    pub fn with_metadata(mut self, metadata: impl Into<String>) -> Self {
+        self.metadata = Some(metadata.into());
+        self
+    }
+
+    /// Set the id of the selected option.
+    pub fn with_selected_option_id(mut self, selected_option_id: impl Into<String>) -> Self {
+        self.selected_option_id = Some(selected_option_id.into());
+        self
+    }
+}
+
 /// A single selectable quick-reply option.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct QuickReplyOption {
     pub id: Option<String>,
     pub label: Option<String>,
@@ -329,9 +396,41 @@ pub struct QuickReplyOption {
     pub description: Option<String>,
 }
 
+impl QuickReplyOption {
+    /// Create an option with no fields set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the option's id, which a response names as `selected_option_id`.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Set the option's label.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Set the option's metadata, which a response echoes.
+    pub fn with_metadata(mut self, metadata: impl Into<String>) -> Self {
+        self.metadata = Some(metadata.into());
+        self
+    }
+
+    /// Set the option's description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
 /// A call-to-action button (label plus URL) attached to a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct CallToAction {
     pub label: Option<String>,
     pub url: Option<String>,
@@ -363,6 +462,7 @@ pub struct CallToAction {
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum Event {
     /// A new message (text, reaction, edit, etc.)
     /// Maps to `MessageCreateEvent` in Thrift.
@@ -418,6 +518,7 @@ pub enum Event {
 /// The `content` field tells you what type of message this is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct Message {
     /// Event metadata
     #[serde(flatten)]
@@ -470,6 +571,7 @@ pub struct Message {
 /// `replying_to_message_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub enum ReplyPreviewValidation {
     /// The raw event verified and the preview matches the original.
     Valid,
@@ -509,8 +611,10 @@ impl Message {
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "content_type")]
+#[non_exhaustive]
 pub enum MessageContent {
     /// A text message.
+    #[non_exhaustive]
     Text {
         /// The message text.
         text: String,
@@ -545,6 +649,7 @@ pub enum MessageContent {
     },
 
     /// A reaction was added.
+    #[non_exhaustive]
     Reaction {
         /// The emoji.
         emoji: String,
@@ -553,6 +658,7 @@ pub enum MessageContent {
     },
 
     /// A reaction was removed.
+    #[non_exhaustive]
     ReactionRemoved {
         /// The emoji.
         emoji: String,
@@ -561,6 +667,7 @@ pub enum MessageContent {
     },
 
     /// A message was edited.
+    #[non_exhaustive]
     Edit {
         /// The `sequence_id` of the edited message.
         target_message_sequence_id: String,
@@ -583,6 +690,7 @@ pub enum MessageContent {
     MarkUnread,
 
     /// Unknown content type.
+    #[non_exhaustive]
     Unknown {
         /// Raw content type ID if available.
         type_id: Option<i16>,
@@ -592,6 +700,7 @@ pub enum MessageContent {
 /// A reference to a media hash key found in attachments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MediaHashReference {
     /// Where the media hash was found (e.g. "media", "url_banner", "url_favicon").
     pub source: String,
@@ -602,6 +711,7 @@ pub struct MediaHashReference {
 /// A message attachment with media-related metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MediaAttachmentInfo {
     pub media_hash_key: Option<String>,
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -618,6 +728,7 @@ pub struct MediaAttachmentInfo {
 /// Media dimensions (width/height).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MediaDimensionsInfo {
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -626,6 +737,7 @@ pub struct MediaDimensionsInfo {
 /// URL attachment metadata, including any media hashes for preview images.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct UrlAttachmentInfo {
     pub url: Option<String>,
     pub banner_image_media_hash_key: Option<String>,
@@ -637,6 +749,7 @@ pub struct UrlAttachmentInfo {
 /// Post attachment metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PostAttachmentInfo {
     pub rest_id: Option<String>,
     pub post_url: Option<String>,
@@ -646,6 +759,7 @@ pub struct PostAttachmentInfo {
 /// Unified card attachment metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct UnifiedCardAttachmentInfo {
     pub url: Option<String>,
     pub attachment_id: Option<String>,
@@ -654,6 +768,7 @@ pub struct UnifiedCardAttachmentInfo {
 /// Money attachment metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MoneyAttachmentInfo {
     pub fallback_text: Option<String>,
 }
@@ -662,6 +777,7 @@ pub struct MoneyAttachmentInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(tag = "attachment_type")]
+#[non_exhaustive]
 pub enum AttachmentInfo {
     Media(#[cfg_attr(feature = "js", js_camel(wrap))] MediaAttachmentInfo),
     Url(#[cfg_attr(feature = "js", js_camel(wrap))] UrlAttachmentInfo),
@@ -678,6 +794,7 @@ pub enum AttachmentInfo {
 /// Maps to `ConversationKeyChangeEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct KeyChangeEvent {
     /// Event metadata.
     #[serde(flatten)]
@@ -710,6 +827,7 @@ impl KeyChangeEvent {
 /// request, and a received key change carries them as delivered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ConversationParticipantKey {
     /// The participant's user id.
     pub user_id: String,
@@ -728,6 +846,7 @@ pub struct ConversationParticipantKey {
 /// Maps to `GroupChangeEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct GroupChangeEvent {
     /// Event metadata.
     #[serde(flatten)]
@@ -748,8 +867,10 @@ pub struct GroupChangeEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(tag = "change_type")]
+#[non_exhaustive]
 pub enum GroupChange {
     /// Group was created.
+    #[non_exhaustive]
     Created {
         member_ids: Vec<String>,
         admin_ids: Vec<String>,
@@ -758,22 +879,28 @@ pub enum GroupChange {
     },
 
     /// Group title changed. `new_title` is the decrypted title.
+    #[non_exhaustive]
     TitleChanged { new_title: String },
 
     /// Group avatar changed. `new_avatar_url` is the decrypted avatar URL.
+    #[non_exhaustive]
     AvatarChanged { new_avatar_url: String },
 
     /// Group description changed. `new_description` is the decrypted
     /// description.
+    #[non_exhaustive]
     DescriptionChanged { new_description: String },
 
     /// Admins were added.
+    #[non_exhaustive]
     AdminsAdded { admin_ids: Vec<String> },
 
     /// Admins were removed.
+    #[non_exhaustive]
     AdminsRemoved { admin_ids: Vec<String> },
 
     /// Members were added.
+    #[non_exhaustive]
     MembersAdded {
         /// IDs of the members that were just added.
         member_ids: Vec<String>,
@@ -784,21 +911,26 @@ pub enum GroupChange {
     },
 
     /// Members were removed.
+    #[non_exhaustive]
     MembersRemoved { member_ids: Vec<String> },
 
     /// Group invite link enabled.
+    #[non_exhaustive]
     InviteEnabled {
         invite_url: String,
         expires_at_msec: Option<i64>,
     },
 
     /// Group invite link disabled.
+    #[non_exhaustive]
     InviteDisabled { disabled_by: Option<String> },
 
     /// Someone requested to join.
+    #[non_exhaustive]
     JoinRequested { user_id: String },
 
     /// Join request was rejected.
+    #[non_exhaustive]
     JoinRejected { user_ids: Vec<String> },
 
     /// Unknown group change type.
@@ -810,6 +942,7 @@ pub enum GroupChange {
 /// Maps to `MessageDeleteEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MessageDeletedEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -830,6 +963,7 @@ pub struct MessageDeletedEvent {
 /// Maps to `ConversationDeleteEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ConversationDeletedEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -847,6 +981,7 @@ pub struct ConversationDeletedEvent {
 /// Maps to `MessageTypingEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct TypingEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -858,6 +993,7 @@ pub struct TypingEvent {
 /// Maps to `MarkConversationReadEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ReadReceiptEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -878,6 +1014,7 @@ pub struct ReadReceiptEvent {
 /// Maps to `MarkConversationUnreadEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MarkedUnreadEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -896,6 +1033,7 @@ pub struct MarkedUnreadEvent {
 /// Maps to `MessageFailureEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct FailureEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -919,6 +1057,7 @@ pub struct FailureEvent {
 /// Maps to `FailureType` enum in Thrift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub enum FailureType {
     EmptyDetail,
     InternalError,
@@ -946,6 +1085,7 @@ pub enum FailureType {
 /// Maps to `RateLimitTier` enum in Thrift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub enum RateLimitTier {
     Free,
     VerifiedPhone,
@@ -960,6 +1100,7 @@ pub enum RateLimitTier {
 /// Maps to `ConversationMetadataChangeEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct SettingsChangeEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -979,8 +1120,10 @@ pub struct SettingsChangeEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[serde(tag = "setting")]
+#[non_exhaustive]
 pub enum SettingsChange {
     /// Disappearing message duration changed.
+    #[non_exhaustive]
     MessageDuration { ttl_msec: i64, apply_to_all: bool },
     /// Disappearing messages disabled.
     MessageDurationRemoved,
@@ -1005,6 +1148,7 @@ pub enum SettingsChange {
 /// Maps to `MemberAccountDeleteEvent` in Thrift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MemberDeletedEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1017,6 +1161,7 @@ pub struct MemberDeletedEvent {
 /// Unknown or unsupported event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct UnknownEvent {
     #[serde(flatten)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1031,6 +1176,7 @@ pub struct UnknownEvent {
 /// Maps to fields on `MessageEvent` in Thrift.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct EventMeta {
     /// Unique sequence ID for ordering.
     pub sequence_id: Option<String>,
@@ -1102,6 +1248,7 @@ fn default_true() -> bool {
 /// Signature information for a sent message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct SignatureInfo {
     /// Version of the signing key used.
     pub public_key_version: String,
@@ -1118,6 +1265,7 @@ fn default_sig_version() -> String {
 /// Describes a rich-text entity (URL, mention, hashtag, etc.) to embed in a
 /// message.  The `start` and `end` byte offsets refer to the message text.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EntityDescriptor {
     /// Start byte offset of the entity within the message text (inclusive).
     pub start: i32,
@@ -1126,6 +1274,17 @@ pub struct EntityDescriptor {
     /// One of: `"url"`, `"mention"`, `"hashtag"`, `"cashtag"`, `"email"`,
     /// `"address"`, `"phone_number"`. Unrecognized values are ignored.
     pub entity_type: String,
+}
+
+impl EntityDescriptor {
+    /// Describe an entity of `entity_type` spanning `start..end` of the text.
+    pub fn new(start: i32, end: i32, entity_type: impl Into<String>) -> Self {
+        Self {
+            start,
+            end,
+            entity_type: entity_type.into(),
+        }
+    }
 }
 
 /// Describes an attachment to include in a message or reply-to preview.
@@ -1139,6 +1298,7 @@ pub struct EntityDescriptor {
 /// be passed unchanged from every binding, including JS.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "attachment_type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AttachmentDescriptor {
     /// A media attachment (image, gif, video, etc.).
     Media {
@@ -1191,6 +1351,7 @@ pub enum AttachmentDescriptor {
 /// field names stay snake_case in every binding so the same object shape can
 /// be passed unchanged from each language.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UrlAttachmentImageDescriptor {
     /// Media hash key the image's upload started with.
     pub media_hash_key: String,
@@ -1212,8 +1373,33 @@ pub struct UrlAttachmentImageDescriptor {
     pub height: Option<i64>,
 }
 
+impl UrlAttachmentImageDescriptor {
+    /// Describe the image whose upload started with `media_hash_key`.
+    pub fn new(
+        media_hash_key: impl Into<String>,
+        filesize_bytes: i64,
+        filename: impl Into<String>,
+    ) -> Self {
+        Self {
+            media_hash_key: media_hash_key.into(),
+            filesize_bytes,
+            filename: filename.into(),
+            width: None,
+            height: None,
+        }
+    }
+
+    /// Set the image's width and height in pixels.
+    pub fn with_dimensions(mut self, width: i64, height: i64) -> Self {
+        self.width = Some(width);
+        self.height = Some(height);
+        self
+    }
+}
+
 /// Public keys returned by setup/get_public_keys.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PublicKeys {
     /// Base64-encoded identity public key (P-256, for ECDH).
     pub identity: String,
@@ -1229,6 +1415,7 @@ pub struct PublicKeys {
 /// Public key registration payload for the X API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PublicKeyRegistrationPayload {
     /// Public key registration object.
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1238,6 +1425,7 @@ pub struct PublicKeyRegistrationPayload {
 /// Public key registration fields expected by the X API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PublicKeyRegistration {
     /// Raw r||s ECDSA signature: the **signing** private key signs the
     /// SPKI-encoded **identity** public key.  Proves the signing key holder
@@ -1271,6 +1459,7 @@ pub struct PublicKeyRegistration {
 /// the one matching the `public_key_version` embedded in the message signature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct SigningKeyEntry {
     /// ID of the user that owns this signing key.
     pub user_id: String,
@@ -1285,11 +1474,31 @@ pub struct SigningKeyEntry {
     pub identity_public_key_signature: String,
 }
 
+impl SigningKeyEntry {
+    /// A signing key as the X API returns it for `user_id`.
+    pub fn new(
+        user_id: impl Into<String>,
+        public_key_version: impl Into<String>,
+        public_key: impl Into<String>,
+        identity_public_key: impl Into<String>,
+        identity_public_key_signature: impl Into<String>,
+    ) -> Self {
+        Self {
+            user_id: user_id.into(),
+            public_key_version: public_key_version.into(),
+            public_key: public_key.into(),
+            identity_public_key: identity_public_key.into(),
+            identity_public_key_signature: identity_public_key_signature.into(),
+        }
+    }
+}
+
 /// Result from `extract_conversation_keys`.
 ///
 /// Contains the full key map plus convenience accessors for the latest key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ConversationKeyResult {
     /// Map of key version → raw conversation key bytes.
     #[serde(skip)]
@@ -1323,6 +1532,7 @@ impl ConversationKeyResult {
 /// A decrypted message with its verification status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct DecryptedMessage {
     /// The decrypted event.
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1335,6 +1545,7 @@ pub struct DecryptedMessage {
 /// Result from `decrypt_events` batch API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct DecryptEventsResult {
     /// Successfully decrypted messages.
     #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1354,6 +1565,7 @@ pub struct DecryptEventsResult {
 /// will group by user and pick the latest version per user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PublicKeyInput {
     /// The user's ID.
     pub user_id: String,
@@ -1363,12 +1575,28 @@ pub struct PublicKeyInput {
     pub key_version: String,
 }
 
+impl PublicKeyInput {
+    /// A public key as the X API returns it for `user_id`.
+    pub fn new(
+        user_id: impl Into<String>,
+        public_key: impl Into<String>,
+        key_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            user_id: user_id.into(),
+            public_key: public_key.into(),
+            key_version: key_version.into(),
+        }
+    }
+}
+
 /// Which screen-capture setting a [`crate::ScreenCaptureParams`] signs.
 ///
 /// Blocking names are the ones X clients sign. Detection names are the event
 /// names this SDK's verifier reconstructs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub enum ScreenCaptureChange {
     /// `ConversationMetadataChangeEvent.EnableScreenCaptureBlocking`.
     BlockingEnabled,
@@ -1421,6 +1649,7 @@ impl ScreenCaptureChange {
 /// copies, and the action signatures that let recipients verify the change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PreparedConversationChange {
     /// Conversation id the change applies to. Derived for a one-to-one,
     /// or the id passed in for a group.
@@ -1455,6 +1684,7 @@ pub struct PreparedConversationChange {
 /// value under the conversation key before signing it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PreparedGroupMetadataChange {
     /// The value encrypted under the conversation key, base64: the title,
     /// avatar URL, or description the request sends.
@@ -1476,6 +1706,7 @@ pub struct PreparedGroupMetadataChange {
 /// `prepare_group_leave` returns one entry per signed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct PreparedAction {
     /// The signed action, as the request's `action_signatures` entries.
     #[cfg_attr(feature = "js", js_camel(wrap))]

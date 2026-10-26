@@ -7,6 +7,7 @@ pub type SdkResult<T> = Result<T, SdkError>;
 
 /// Top-level error type for all SDK operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SdkError {
     /// Cryptographic operation failed.
     #[error("Crypto error: {0}")]
@@ -40,6 +41,7 @@ pub enum SdkError {
 
 /// Errors related to cryptographic operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CryptoError {
     /// Key generation failed.
     #[error("Key generation failed: {0}")]
@@ -76,6 +78,7 @@ pub enum CryptoError {
 
 /// Errors related to key management.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum KeyError {
     /// Keys not loaded/unlocked.
     #[error("Keys not unlocked - call unlock() first")]
@@ -96,6 +99,7 @@ pub enum KeyError {
 
 /// Errors from Juicebox SDK integration.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum JuiceboxError {
     /// Wrong PIN provided. `guesses_remaining` is the attempt budget Juicebox
     /// reports after the failure (0 = exhausted, keys locked); `None` when the
@@ -168,6 +172,7 @@ impl JuiceboxError {
 
 /// Errors related to serialization/deserialization.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SerializationError {
     /// JSON serialization failed.
     #[error("JSON error: {0}")]
