@@ -384,7 +384,7 @@ public class E2ELiveTests
             await api.CreateConversationAsync(body);
         }
         var kv = prep.ConversationKeyVersion;
-        var key = prep.ConversationKey!;
+        var key = prep.ConversationKey;
         Console.WriteLine($"group created: {groupId} with {members.Count} member(s)");
 
         var marker = $"chat-xdk e2e group [dotnet] {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";

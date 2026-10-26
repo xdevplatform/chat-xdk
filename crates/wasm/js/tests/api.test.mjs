@@ -615,32 +615,37 @@ async function main() {
     `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
   );
 
-  // 4c5. Group actions: a removal signs version 11, a rotation adds a key
-  // change, and the other prepares sign one version-7 payload.
-  const removed = chat.prepareGroupMembersRemove({
-    senderId: "111",
-    signingKeyVersion: "1",
-    conversationId: "g100",
-    userIds: ["910007"],
-  });
-  assert.equal(removed.conversationKey, undefined);
-  assert.deepEqual(removed.conversationParticipantKeys, []);
-  assert.equal(removed.actionSignatures.length, 1);
-  assert.equal(removed.actionSignatures[0].messageEventSignature.signatureVersion, "11");
-  assert.ok(removed.actionSignatures[0].signaturePayload.endsWith(",910007,null,signature_version=11"));
-
+  // 4c5. Group actions: a removal signs version 11 and rotates the key for
+  // the members who stay, and the other prepares sign one version-7 payload.
   const keys = chat.getPublicKeys();
+  const remaining = [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }];
   const rotated = chat.prepareGroupMembersRemove({
     senderId: "111",
     signingKeyVersion: "1",
+    publicKeys: remaining,
     conversationId: "g100",
     userIds: ["910007"],
-    publicKeys: [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }],
   });
   assert.equal(rotated.conversationKey.length, 32);
+  assert.equal(rotated.conversationParticipantKeys.length, 1);
   assert.equal(rotated.actionSignatures.length, 2);
-  assert.ok(rotated.actionSignatures[0].signaturePayload.endsWith(",signature_version=11"));
+  assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "11");
+  assert.ok(
+    rotated.actionSignatures[0].signaturePayload.endsWith(
+      `,910007,${rotated.conversationKeyVersion},signature_version=11`,
+    ),
+  );
   assert.equal(rotated.actionSignatures[1].signaturePayload, undefined);
+  assert.throws(
+    () => chat.prepareGroupMembersRemove({
+      senderId: "111",
+      signingKeyVersion: "1",
+      publicKeys: [],
+      conversationId: "g100",
+      userIds: ["910007"],
+    }),
+    /public_keys is empty: pass the public keys of the remaining members/,
+  );
 
   const left = chat.prepareGroupLeave({
     senderId: "111",

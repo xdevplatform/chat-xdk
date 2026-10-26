@@ -117,8 +117,8 @@ type DecryptEventsResult struct {
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,
-// PrepareGroupCreate, and PrepareGroupMembersChange. It carries everything
-// needed to POST the change.
+// PrepareGroupCreate, PrepareGroupMembersChange, and PrepareGroupMembersRemove.
+// It carries everything needed to POST the change.
 type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
@@ -406,20 +406,16 @@ const (
 
 // GroupMembersRemoveParams are the parameters for PrepareGroupMembersRemove.
 //
-// PublicKeys are the identity keys of the members who stay. When set, the
-// call rotates the conversation key for them. An empty slice does not rotate.
-// ConversationKeyVersion is bound into a removal that does not rotate; empty
-// signs the literal null.
+// PublicKeys are the identity keys of the members who stay: the call rotates
+// the conversation key for them.
 type GroupMembersRemoveParams struct {
-	ConversationID string `json:"conversation_id"`
+	// PublicKeys are the identity keys of the members who stay.
+	PublicKeys     []PublicKeyInput `json:"public_keys"`
+	ConversationID string           `json:"conversation_id"`
 	// UserIDs are the user ids being removed.
-	UserIDs []string `json:"user_ids"`
-	// PublicKeys are the identity keys of the members who remain.
-	PublicKeys []PublicKeyInput `json:"public_keys,omitempty"`
-	// ConversationKeyVersion is bound into a removal that does not rotate.
-	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	UserIDs           []string `json:"user_ids"`
+	SenderID          string   `json:"sender_id,omitempty"`
+	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
 }
 
 // GroupLeaveParams are the parameters for PrepareGroupLeave.

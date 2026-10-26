@@ -202,10 +202,7 @@ public sealed class ChatCore : IDisposable
         IReadOnlyList<PublicKeyInput> publicKeys,
         string conversationId,
         IReadOnlyList<string> userIds)
-        => _chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(conversationId, userIds)
-        {
-            PublicKeys = publicKeys,
-        });
+        => _chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(publicKeys, conversationId, userIds));
 
     // -- Media files ----------------------------------------------------------
 

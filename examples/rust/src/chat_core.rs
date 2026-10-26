@@ -322,9 +322,12 @@ impl ChatCore {
         conversation_id: &str,
         user_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
-        let mut params = GroupMembersRemoveParams::new(conversation_id, user_ids.to_vec());
-        params.public_keys = Some(public_keys.to_vec());
-        self.inner.prepare_group_members_remove(&params)
+        self.inner
+            .prepare_group_members_remove(&GroupMembersRemoveParams::new(
+                public_keys.to_vec(),
+                conversation_id,
+                user_ids.to_vec(),
+            ))
     }
 
     // -- Media files -----------------------------------------------------------

@@ -226,7 +226,7 @@ public class ChatCoreTests
         }, "g123", new[] { "1000" }, new[] { "1000" });
         Assert.Equal(2, prep.ActionSignatures.Count);
         Assert.NotNull(prep.ConversationKey);
-        Assert.Equal(32, prep.ConversationKey!.Length);
+        Assert.Equal(32, prep.ConversationKey.Length);
     }
 
     [Fact]

@@ -283,19 +283,17 @@ class ScreenCaptureChange(str, Enum):
     DetectionDisabled = "DetectionDisabled"
 
 class GroupMembersRemoveParams:
+    public_keys: list[dict[str, str]]
     conversation_id: str
     user_ids: list[str]
-    public_keys: Optional[list[dict[str, str]]]
-    conversation_key_version: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     def __init__(
         self,
+        public_keys: list[dict[str, str]],
         conversation_id: str,
         user_ids: list[str],
         *,
-        public_keys: Optional[list[dict[str, str]]] = None,
-        conversation_key_version: Optional[str] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
     ) -> None: ...

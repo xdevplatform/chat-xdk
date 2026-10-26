@@ -1,9 +1,9 @@
 //! Signed group and conversation-metadata actions.
 //!
 //! Each prepare builds one request's `action_signatures`. A member remove
-//! that is given the remaining members' public keys also rotates the
-//! conversation key, reusing the key-change signer, and returns that key.
-//! The other prepares sign a single event and do not rotate.
+//! also rotates the conversation key for the members who stay, reusing the
+//! key-change signer, and returns that key. The other prepares do not
+//! rotate.
 
 use crate::error::SdkError;
 use crate::params::{
@@ -37,16 +37,14 @@ struct ActionCtx {
 }
 
 impl ChatCore {
-    /// Sign a group member removal.
+    /// Sign a group member removal and rotate the conversation key for the
+    /// members who stay.
     ///
-    /// Pass `public_keys` for the members who remain to rotate the
-    /// conversation key in this call: the result is a
-    /// [`PreparedConversationChange`] whose `action_signatures` are the
-    /// removal (bound to the new key version) and then the key change.
-    /// Without `public_keys` the same type comes back with no new key, empty
-    /// participant keys, and only the removal signature. `conversation_key`
-    /// is unset in that case, and `conversation_key_version` is the version
-    /// bound into the removal, or empty when that field signs `null`.
+    /// `public_keys` are the identity keys of the members who stay. The
+    /// result is a [`PreparedConversationChange`]: the new conversation key,
+    /// its participant keys, and `action_signatures` in request order — the
+    /// removal (bound to the new key version), then the conversation-key
+    /// change.
     ///
     /// The removal is signed at signature version 11 so the key version is
     /// part of the payload. The key change is signed at the version every
@@ -62,19 +60,15 @@ impl ChatCore {
         &self,
         params: &GroupMembersRemoveParams,
     ) -> Result<PreparedConversationChange, SdkError> {
-        let version = if rotates(params) {
-            super::now_millis()
-        } else {
-            String::new()
-        };
-        self.prepare_group_members_remove_with_version(params, &version)
+        self.prepare_group_members_remove_with_version(params, &super::now_millis())
     }
 
-    /// Like [`Self::prepare_group_members_remove`], using `conversation_key_version`
-    /// as the new key version when the call rotates.
+    /// Like [`Self::prepare_group_members_remove`], using
+    /// `conversation_key_version` as the new key version instead of the
+    /// system clock.
     ///
-    /// The version is ignored when `public_keys` is absent. WASM calls this
-    /// with a JavaScript timestamp so the core never reads the system clock.
+    /// WASM calls this with a JavaScript timestamp so the core never reads
+    /// the system clock.
     pub fn prepare_group_members_remove_with_version(
         &self,
         params: &GroupMembersRemoveParams,
@@ -86,27 +80,16 @@ impl ChatCore {
             params.signing_key_version.as_deref(),
         )?;
         require_user_ids("user_ids", &params.user_ids)?;
-        let bound = bound_key_version(&params.conversation_key_version)?;
-
-        let Some(public_keys) = params
-            .public_keys
-            .as_deref()
-            .filter(|keys| !keys.is_empty())
-        else {
-            let removal = sign_member_remove(&ctx, &params.user_ids, bound.as_deref())?;
-            return Ok(PreparedConversationChange {
-                conversation_id: ctx.conversation_id,
-                conversation_key: None,
-                conversation_key_version: bound.unwrap_or_default(),
-                conversation_participant_keys: Vec::new(),
-                action_signatures: vec![removal],
-            });
-        };
-
         crate::pipeline::validate_key_version(
             "conversation_key_version",
             conversation_key_version,
         )?;
+        let public_keys = &params.public_keys;
+        if public_keys.is_empty() {
+            return Err(SdkError::InvalidInput(
+                "public_keys is empty: pass the public keys of the remaining members".into(),
+            ));
+        }
         if public_keys
             .iter()
             .any(|key| params.user_ids.iter().any(|id| id == &key.user_id))
@@ -586,13 +569,6 @@ impl ChatCore {
     }
 }
 
-fn rotates(params: &GroupMembersRemoveParams) -> bool {
-    params
-        .public_keys
-        .as_ref()
-        .is_some_and(|keys| !keys.is_empty())
-}
-
 fn one_action(signature: ActionSignature) -> PreparedAction {
     PreparedAction {
         action_signatures: vec![signature],
@@ -832,45 +808,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn member_remove_without_rotation_signs_null_key_version_at_v11() {
-        let core = ready_core();
-        let (sender, version) = identity();
-        let prepared = core
-            .prepare_group_members_remove(
-                &GroupMembersRemoveParams::new("g100", vec!["910007".into()])
-                    .with_identity(&sender, &version),
-            )
-            .unwrap();
-        assert!(prepared.conversation_key.is_none());
-        assert!(prepared.conversation_participant_keys.is_empty());
-        assert!(prepared.conversation_key_version.is_empty());
-        assert_eq!(prepared.action_signatures.len(), 1);
-        let removal = &prepared.action_signatures[0];
-        assert_eq!(
-            removal.message_event_signature.signature_version,
-            MEMBER_REMOVE_SIGNATURE_VERSION.to_string()
-        );
-        assert!(removal
-            .signature_payload
-            .ends_with(",910007,null,signature_version=11"));
-        assert!(removal.signature_payload.contains(",g100,"));
-        assert_actions(&core, &prepared.action_signatures, &sender, "g100", None);
+    fn remaining_keys(core: &ChatCore, user_id: &str) -> Vec<PublicKeyInput> {
+        vec![PublicKeyInput {
+            user_id: user_id.to_string(),
+            public_key: core.get_public_keys().unwrap().identity,
+            key_version: "1".into(),
+        }]
     }
 
     #[test]
-    fn member_remove_with_rotation_signs_the_new_key_then_the_key_change() {
+    fn member_remove_signs_the_new_key_then_the_key_change() {
         let core = ready_core();
         let (sender, version) = identity();
-        let pk = core.get_public_keys().unwrap();
-        let mut params = GroupMembersRemoveParams::new("222-111", vec!["910007".into()])
-            .with_identity(&sender, &version);
-        params.public_keys = Some(vec![PublicKeyInput {
-            user_id: sender.clone(),
-            public_key: pk.identity,
-            key_version: "1".into(),
-        }]);
-        params.conversation_key_version = Some("9".into());
+        let params = GroupMembersRemoveParams::new(
+            remaining_keys(&core, &sender),
+            "222-111",
+            vec!["910007".into()],
+        )
+        .with_identity(&sender, &version);
         let prepared = core
             .prepare_group_members_remove_with_version(&params, "42")
             .unwrap();
@@ -880,6 +835,10 @@ mod tests {
         assert_eq!(prepared.conversation_participant_keys.len(), 1);
         assert_eq!(prepared.action_signatures.len(), 2);
         let removal = &prepared.action_signatures[0];
+        assert_eq!(
+            removal.message_event_signature.signature_version,
+            MEMBER_REMOVE_SIGNATURE_VERSION.to_string()
+        );
         assert!(removal
             .signature_payload
             .contains(",910007,42,signature_version=11"));
@@ -902,21 +861,58 @@ mod tests {
     }
 
     #[test]
+    fn member_remove_rotates_with_the_clock_version() {
+        let core = ready_core();
+        let (sender, version) = identity();
+        let prepared = core
+            .prepare_group_members_remove(
+                &GroupMembersRemoveParams::new(
+                    remaining_keys(&core, &sender),
+                    "g100",
+                    vec!["910007".into()],
+                )
+                .with_identity(&sender, &version),
+            )
+            .unwrap();
+        let key_version = &prepared.conversation_key_version;
+        assert!(key_version.parse::<u64>().unwrap() > 0, "{key_version}");
+        assert!(prepared.action_signatures[0]
+            .signature_payload
+            .ends_with(&format!(",910007,{key_version},signature_version=11")));
+        assert_eq!(prepared.action_signatures.len(), 2);
+    }
+
+    #[test]
     fn member_remove_rejects_a_removed_member_in_the_new_key() {
         let core = ready_core();
         let (sender, version) = identity();
-        let pk = core.get_public_keys().unwrap();
-        let mut params = GroupMembersRemoveParams::new("g100", vec!["910007".into()])
-            .with_identity(&sender, &version);
-        params.public_keys = Some(vec![PublicKeyInput {
-            user_id: "910007".into(),
-            public_key: pk.identity,
-            key_version: "1".into(),
-        }]);
+        let params = GroupMembersRemoveParams::new(
+            remaining_keys(&core, "910007"),
+            "g100",
+            vec!["910007".into()],
+        )
+        .with_identity(&sender, &version);
         let err = core
             .prepare_group_members_remove_with_version(&params, "42")
             .unwrap_err();
         assert!(err.to_string().contains("remaining members"), "got: {err}");
+    }
+
+    #[test]
+    fn member_remove_requires_the_remaining_members_keys() {
+        let core = ready_core();
+        let (sender, version) = identity();
+        let err = core
+            .prepare_group_members_remove(
+                &GroupMembersRemoveParams::new(vec![], "g100", vec!["910007".into()])
+                    .with_identity(&sender, &version),
+            )
+            .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err:?}");
+        assert_eq!(
+            err.to_string(),
+            "public_keys is empty: pass the public keys of the remaining members"
+        );
     }
 
     #[test]
@@ -1125,7 +1121,8 @@ mod tests {
         let (sender, version) = identity();
         let err = core
             .prepare_group_members_remove(
-                &GroupMembersRemoveParams::new("g100", vec![]).with_identity(&sender, &version),
+                &GroupMembersRemoveParams::new(remaining_keys(&core, &sender), "g100", vec![])
+                    .with_identity(&sender, &version),
             )
             .unwrap_err();
         assert!(err.to_string().contains("user_ids"), "got: {err}");

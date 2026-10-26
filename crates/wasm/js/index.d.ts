@@ -494,22 +494,17 @@ export type ScreenCaptureChange =
   | "detectionEnabled"
   | "detectionDisabled";
 
-/** Parameters for prepareGroupMembersRemove. */
+/**
+ * Parameters for prepareGroupMembersRemove. The call rotates the
+ * conversation key for the members who stay.
+ */
 export interface GroupMembersRemoveParams {
+  /** Identity public keys of the members who stay; the new key is encrypted for them. */
+  publicKeys: PublicKeyInput[];
   /** ID of the group conversation. */
   conversationId: string;
   /** User IDs being removed. */
   userIds: string[];
-  /**
-   * Identity public keys of the members who remain. Set to rotate the
-   * conversation key in this same call.
-   */
-  publicKeys?: PublicKeyInput[] | null;
-  /**
-   * Conversation-key version bound into a removal that does not rotate.
-   * Omit it to sign the literal `null`. Ignored when `publicKeys` is set.
-   */
-  conversationKeyVersion?: string | null;
   /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
   /** Version of the signing key; resolves from the session identity when omitted. */
@@ -1330,9 +1325,11 @@ interface ChatCrypto {
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
 
   /**
-   * Sign a group member removal. When `publicKeys` names the members who
-   * stay, also rotates the conversation key and returns it. Otherwise the
-   * result has no new key and one removal signature.
+   * Sign a group member removal and rotate the conversation key for the
+   * members who stay (`publicKeys`).
+   *
+   * @returns PreparedConversationChange with the new key and two action
+   * signatures: the removal and the conversation-key change
    */
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
 

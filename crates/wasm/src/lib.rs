@@ -697,15 +697,12 @@ impl Chat {
         to_js_value(&js_prepared)
     }
 
-    /// Sign a group member removal.
+    /// Sign a group member removal and rotate the conversation key for the
+    /// members who stay.
     ///
-    /// `publicKeys` are the identity keys of the members who stay. When set,
-    /// the call rotates the conversation key for them and returns it with
-    /// two action signatures: the removal, bound to the new key version, and
-    /// the key change. Without them the same result has no new key and only
-    /// the removal signature. `conversationKeyVersion` on the params is the
-    /// version bound into a removal that does not rotate; omit it to sign
-    /// `null`.
+    /// `publicKeys` are the identity keys of the members who stay. The
+    /// result carries the new key and two action signatures: the removal,
+    /// bound to the new key version, and the key change.
     #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
     pub fn prepare_group_members_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupMembersRemoveParams = from_js_params("prepareGroupMembersRemove", params)?;
@@ -1474,22 +1471,20 @@ impl JsMarkConversationReadParams {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsGroupMembersRemoveParams {
+    public_keys: Vec<JsPublicKeyInput>,
     conversation_id: String,
     user_ids: Vec<String>,
-    public_keys: Option<Vec<JsPublicKeyInput>>,
-    conversation_key_version: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
 
 impl JsGroupMembersRemoveParams {
     fn into_core(self) -> chat_xdk_core::GroupMembersRemoveParams {
-        let mut params =
-            chat_xdk_core::GroupMembersRemoveParams::new(self.conversation_id, self.user_ids);
-        params.public_keys = self
-            .public_keys
-            .map(|keys| keys.into_iter().map(Into::into).collect());
-        params.conversation_key_version = self.conversation_key_version;
+        let mut params = chat_xdk_core::GroupMembersRemoveParams::new(
+            self.public_keys.into_iter().map(Into::into).collect(),
+            self.conversation_id,
+            self.user_ids,
+        );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params

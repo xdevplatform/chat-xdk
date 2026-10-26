@@ -302,17 +302,16 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_message_delete(ChatHandle* handle, byte* params_json);
 
         /// <summary>
-        ///  Sign a group member removal.
+        ///  Sign a group member removal and rotate the conversation key for the
+        ///  members who stay.
         ///
-        ///  `params_json` — `conversation_id`, `user_ids`, plus optional `public_keys`
-        ///  (the members who stay; set them to rotate the conversation key),
-        ///  `conversation_key_version` (bound into a removal that does not rotate;
-        ///  absent signs `null`), and `sender_id` / `signing_key_version`.
+        ///  `params_json` — `public_keys` (the identity keys of the members who
+        ///  stay), `conversation_id`, `user_ids`, plus optional `sender_id` /
+        ///  `signing_key_version`.
         ///
-        ///  Returns JSON `PreparedConversationChange`. With `public_keys`,
-        ///  `action_signatures` is the removal and then the key change, and
-        ///  `conversation_key` is the new raw key base64. Without them,
-        ///  `conversation_key` is absent and `action_signatures` is the removal only.
+        ///  Returns JSON `PreparedConversationChange`: `conversation_key` is the new
+        ///  raw key base64, and `action_signatures` is the removal and then the key
+        ///  change.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_members_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_members_remove(ChatHandle* handle, byte* params_json);

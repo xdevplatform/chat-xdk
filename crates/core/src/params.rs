@@ -892,26 +892,18 @@ impl GroupCreateParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_members_remove`].
 ///
-/// `public_keys` are the identity keys of the members who stay. When they
-/// are set, the call rotates the conversation key for those members and
-/// returns the new key alongside the signatures. When they are absent, the
-/// call signs only the removal. An empty list is the same as absent.
-///
-/// `conversation_key_version` is the version bound into the removal
-/// signature when the call does not rotate. An empty string is absent, and
-/// an absent version signs the literal `null`. A rotation ignores this
-/// field and binds the new version instead.
+/// `public_keys` are the identity keys of the members who stay: the call
+/// rotates the conversation key and encrypts the new key for them, so the
+/// removed members cannot read what the group sends next.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupMembersRemoveParams {
+    /// Identity public keys of the members who stay; the new conversation
+    /// key is encrypted for each of them.
+    pub public_keys: Vec<PublicKeyInput>,
     /// ID of the group conversation.
     pub conversation_id: String,
     /// User IDs being removed.
     pub user_ids: Vec<String>,
-    /// Identity public keys of the members who remain. Set to rotate the
-    /// conversation key in this same call.
-    pub public_keys: Option<Vec<PublicKeyInput>>,
-    /// Conversation-key version bound into the removal when not rotating.
-    pub conversation_key_version: Option<String>,
     /// User ID of the sender signing the removal; resolves from the session
     /// identity when unset.
     pub sender_id: Option<String>,
@@ -922,12 +914,15 @@ pub struct GroupMembersRemoveParams {
 
 impl GroupMembersRemoveParams {
     /// Create params with required fields; all optional fields default to `None`.
-    pub fn new(conversation_id: impl Into<String>, user_ids: Vec<String>) -> Self {
+    pub fn new(
+        public_keys: Vec<PublicKeyInput>,
+        conversation_id: impl Into<String>,
+        user_ids: Vec<String>,
+    ) -> Self {
         Self {
+            public_keys,
             conversation_id: conversation_id.into(),
             user_ids,
-            public_keys: None,
-            conversation_key_version: None,
             sender_id: None,
             signing_key_version: None,
         }

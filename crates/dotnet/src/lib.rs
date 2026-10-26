@@ -326,12 +326,9 @@ struct FfiMessageDeleteParams {
 
 #[derive(serde::Deserialize)]
 struct FfiGroupMembersRemoveParams {
+    public_keys: Vec<PublicKeyInput>,
     conversation_id: String,
     user_ids: Vec<String>,
-    #[serde(default)]
-    public_keys: Option<Vec<PublicKeyInput>>,
-    #[serde(default)]
-    conversation_key_version: Option<String>,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
@@ -1498,17 +1495,16 @@ fn ffi_prepared_change(
     }
 }
 
-/// Sign a group member removal.
+/// Sign a group member removal and rotate the conversation key for the
+/// members who stay.
 ///
-/// `params_json` — `conversation_id`, `user_ids`, plus optional `public_keys`
-/// (the members who stay; set them to rotate the conversation key),
-/// `conversation_key_version` (bound into a removal that does not rotate;
-/// absent signs `null`), and `sender_id` / `signing_key_version`.
+/// `params_json` — `public_keys` (the identity keys of the members who
+/// stay), `conversation_id`, `user_ids`, plus optional `sender_id` /
+/// `signing_key_version`.
 ///
-/// Returns JSON `PreparedConversationChange`. With `public_keys`,
-/// `action_signatures` is the removal and then the key change, and
-/// `conversation_key` is the new raw key base64. Without them,
-/// `conversation_key` is absent and `action_signatures` is the removal only.
+/// Returns JSON `PreparedConversationChange`: `conversation_key` is the new
+/// raw key base64, and `action_signatures` is the removal and then the key
+/// change.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_members_remove(
     handle: *const ChatHandle,
@@ -1523,9 +1519,8 @@ pub extern "C" fn chat_xdk_prepare_group_members_remove(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let mut params = GroupMembersRemoveParams::new(p.conversation_id, p.user_ids);
-        params.public_keys = p.public_keys;
-        params.conversation_key_version = p.conversation_key_version;
+        let mut params =
+            GroupMembersRemoveParams::new(p.public_keys, p.conversation_id, p.user_ids);
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
         ffi_prepared_change(h.inner.prepare_group_members_remove(&params))

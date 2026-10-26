@@ -1138,16 +1138,13 @@ fn apply_identity(
 
 /// Parameters for ``Chat.prepare_group_members_remove``.
 ///
-/// ``public_keys`` are the identity keys of the members who stay. When set,
-/// the call rotates the conversation key for them. An empty list is the same
-/// as omitting them. ``conversation_key_version`` is bound into a removal
-/// that does not rotate; omit it to sign the literal ``null``.
+/// ``public_keys`` are the identity keys of the members who stay: the call
+/// rotates the conversation key for them.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersRemoveParams {
+    public_keys: Py<PyAny>,
     conversation_id: String,
     user_ids: Py<PyAny>,
-    public_keys: Option<Py<PyAny>>,
-    conversation_key_version: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1155,20 +1152,18 @@ pub struct GroupMembersRemoveParams {
 #[pymethods]
 impl GroupMembersRemoveParams {
     #[new]
-    #[pyo3(signature = (conversation_id, user_ids, *, public_keys=None, conversation_key_version=None, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (public_keys, conversation_id, user_ids, *, sender_id=None, signing_key_version=None))]
     fn new(
+        public_keys: Py<PyAny>,
         conversation_id: String,
         user_ids: Py<PyAny>,
-        public_keys: Option<Py<PyAny>>,
-        conversation_key_version: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
     ) -> Self {
         Self {
+            public_keys,
             conversation_id,
             user_ids,
-            public_keys,
-            conversation_key_version,
             sender_id,
             signing_key_version,
         }
@@ -1178,14 +1173,10 @@ impl GroupMembersRemoveParams {
 impl GroupMembersRemoveParams {
     fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::GroupMembersRemoveParams> {
         let mut params = chat_xdk_core::GroupMembersRemoveParams::new(
+            public_keys_field(py, &self.public_keys)?,
             self.conversation_id.as_str(),
             extract_field(py, &self.user_ids, "user_ids")?,
         );
-        params.public_keys = match &self.public_keys {
-            Some(keys) if !keys.bind(py).is_none() => Some(public_keys_field(py, keys)?),
-            _ => None,
-        };
-        params.conversation_key_version = self.conversation_key_version.clone();
         apply_identity(
             &mut params.sender_id,
             &mut params.signing_key_version,
@@ -2899,14 +2890,12 @@ impl Chat {
         prepared_action_to_pydict(py, &prepared)
     }
 
-    /// Sign a group member removal.
+    /// Sign a group member removal and rotate the conversation key for the
+    /// members who stay.
     ///
-    /// Pass ``public_keys`` for the members who stay to rotate the
-    /// conversation key in this call. The result then carries the new key,
-    /// the remaining members' participant keys, and two action signatures:
-    /// the removal (bound to the new key version) and the key change.
-    /// Without ``public_keys`` the same dict has no ``conversation_key``,
-    /// empty participant keys, and only the removal signature.
+    /// The result carries the new key, the remaining members' participant
+    /// keys, and two action signatures: the removal (bound to the new key
+    /// version) and the key change.
     fn prepare_group_members_remove(
         &self,
         py: Python<'_>,

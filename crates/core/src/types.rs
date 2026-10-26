@@ -1410,8 +1410,6 @@ impl ScreenCaptureChange {
 /// `prepare_group_members_change`, and `prepare_group_members_remove`.
 /// Carries the new key (to keep locally), the per-participant encrypted
 /// copies, and the action signatures that let recipients verify the change.
-/// `prepare_group_members_remove` leaves `conversation_key` unset and
-/// `conversation_participant_keys` empty when it does not rotate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 pub struct PreparedConversationChange {
@@ -1421,8 +1419,9 @@ pub struct PreparedConversationChange {
 
     /// Raw conversation key bytes (32 bytes). Store this locally for encrypting messages.
     ///
-    /// Excluded from serialization — this is secret key material that should
-    /// never be sent to the server.
+    /// Every prepare call that returns this type sets it. It is excluded
+    /// from serialization — this is secret key material that should never
+    /// be sent to the server.
     #[serde(skip_serializing, skip_deserializing)]
     pub conversation_key: Option<crate::crypto::keys::XChatConversationKey>,
 

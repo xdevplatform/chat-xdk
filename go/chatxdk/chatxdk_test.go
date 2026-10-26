@@ -1364,39 +1364,38 @@ func TestGroupActionSignatures(t *testing.T) {
 		t.Fatalf("GetPublicKeys: %v", err)
 	}
 
-	plain, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
-		SenderID:          "111",
-		SigningKeyVersion: "1",
+	rotated, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
+		PublicKeys: []PublicKeyInput{{
+			UserID: "111", PublicKey: keys.Identity, KeyVersion: "1",
+		}},
 		ConversationID:    "g100",
 		UserIDs:           []string{"910007"},
+		SenderID:          "111",
+		SigningKeyVersion: "1",
 	})
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if len(plain.ConversationKey) != 0 || len(plain.ConversationParticipantKeys) != 0 {
-		t.Fatalf("removal without keys rotated: %+v", plain)
+	if len(rotated.ConversationKey) != 32 || len(rotated.ConversationParticipantKeys) != 1 || len(rotated.ActionSignatures) != 2 {
+		t.Fatalf("remove shape: key %d participant keys %d sigs %d",
+			len(rotated.ConversationKey), len(rotated.ConversationParticipantKeys), len(rotated.ActionSignatures))
 	}
-	if len(plain.ActionSignatures) != 1 || !strings.HasSuffix(plain.ActionSignatures[0].SignaturePayload, ",910007,null,signature_version=11") {
-		t.Fatalf("removal payload: %+v", plain.ActionSignatures)
-	}
-
-	rotated, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
-		SenderID:          "111",
-		SigningKeyVersion: "1",
-		ConversationID:    "g100",
-		UserIDs:           []string{"910007"},
-		PublicKeys: []PublicKeyInput{{
-			UserID: "111", PublicKey: keys.Identity, KeyVersion: "1",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("rotating remove: %v", err)
-	}
-	if len(rotated.ConversationKey) != 32 || len(rotated.ActionSignatures) != 2 {
-		t.Fatalf("rotating remove shape: key %d sigs %d", len(rotated.ConversationKey), len(rotated.ActionSignatures))
+	removal := rotated.ActionSignatures[0]
+	if removal.MessageEventSignature.SignatureVersion != "11" ||
+		!strings.HasSuffix(removal.SignaturePayload, ",910007,"+rotated.ConversationKeyVersion+",signature_version=11") {
+		t.Fatalf("removal payload: %+v", removal)
 	}
 	if rotated.ActionSignatures[1].SignaturePayload != "" {
 		t.Fatalf("key-change payload should be withheld")
+	}
+	_, err = chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
+		ConversationID:    "g100",
+		UserIDs:           []string{"910007"},
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+	})
+	if err == nil || err.Error() != "public_keys is empty: pass the public keys of the remaining members" {
+		t.Fatalf("remove without the remaining members' keys: %v", err)
 	}
 
 	left, err := chat.PrepareGroupLeave(GroupLeaveParams{

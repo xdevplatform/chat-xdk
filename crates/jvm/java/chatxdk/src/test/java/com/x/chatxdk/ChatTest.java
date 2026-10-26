@@ -601,27 +601,33 @@ class ChatTest {
     @Test
     void groupActionsSignVerifierPayloads() throws Exception {
         try (Chat chat = createUnlocked()) {
-            GroupMembersRemoveParams plain = new GroupMembersRemoveParams("g100", List.of("910007"));
-            plain.senderId = "111";
-            plain.signingKeyVersion = "1";
-            PreparedConversationChange removed = chat.prepareGroupMembersRemove(plain);
-            assertNull(removed.conversationKey);
-            assertTrue(removed.conversationParticipantKeys.isEmpty());
-            assertTrue(removed.actionSignatures.get(0).signaturePayload.endsWith(",910007,null,signature_version=11"));
-
             PublicKeyInput key = new PublicKeyInput();
             key.userId = "111";
             key.publicKey = chat.getPublicKeys().identity;
             key.keyVersion = "1";
-            GroupMembersRemoveParams rotating = new GroupMembersRemoveParams("g100", List.of("910007"));
-            rotating.senderId = "111";
-            rotating.signingKeyVersion = "1";
-            rotating.publicKeys = List.of(key);
-            PreparedConversationChange rotated = chat.prepareGroupMembersRemove(rotating);
+            GroupMembersRemoveParams removal =
+                    new GroupMembersRemoveParams(List.of(key), "g100", List.of("910007"));
+            removal.senderId = "111";
+            removal.signingKeyVersion = "1";
+            PreparedConversationChange rotated = chat.prepareGroupMembersRemove(removal);
             assertEquals(32, rotated.conversationKey.length);
+            assertEquals(1, rotated.conversationParticipantKeys.size());
             assertEquals(2, rotated.actionSignatures.size());
+            assertEquals("11", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
+            assertTrue(rotated.actionSignatures.get(0).signaturePayload.endsWith(
+                    ",910007," + rotated.conversationKeyVersion + ",signature_version=11"));
             assertTrue(rotated.actionSignatures.get(1).signaturePayload == null
                     || rotated.actionSignatures.get(1).signaturePayload.isEmpty());
+
+            GroupMembersRemoveParams noKeys =
+                    new GroupMembersRemoveParams(List.of(), "g100", List.of("910007"));
+            noKeys.senderId = "111";
+            noKeys.signingKeyVersion = "1";
+            ChatXdkException noKeysError =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareGroupMembersRemove(noKeys));
+            assertEquals(
+                    "public_keys is empty: pass the public keys of the remaining members",
+                    noKeysError.getMessage());
 
             GroupLeaveParams leave = new GroupLeaveParams("g100");
             leave.senderId = "111";

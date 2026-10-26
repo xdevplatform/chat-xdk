@@ -265,7 +265,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
-            lambda: GroupMembersRemoveParams("g1"),
+            lambda: GroupMembersRemoveParams([], "g1"),
             lambda: GroupTitleChangeParams("g1", "1"),
             lambda: ScreenCaptureParams("g1"),
             lambda: MarkConversationReadParams("conv-1"),
@@ -291,7 +291,7 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], [], [], "1001"),
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
-            lambda: GroupMembersRemoveParams("g1", ["1"], []),
+            lambda: GroupMembersRemoveParams([], "g1", ["1"], "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
             lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
@@ -905,36 +905,35 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
         ident = dict(sender_id="910002", signing_key_version="1")
 
-        plain = chat.prepare_group_members_remove(
-            GroupMembersRemoveParams("g100", ["910007"], **ident)
-        )
-        self.assertNotIn("conversation_key", plain)
-        self.assertEqual(plain["conversation_participant_keys"], [])
-        removal = plain["action_signatures"][0]
-        self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
-        self.assertTrue(removal["signature_payload"].endswith(",910007,null,signature_version=11"))
-
+        remaining = [
+            {
+                "user_id": "910002",
+                "public_key": v["identity_public_b64"],
+                "key_version": "1",
+            }
+        ]
         rotated = chat.prepare_group_members_remove(
-            GroupMembersRemoveParams(
-                "g100",
-                ["910007"],
-                public_keys=[
-                    {
-                        "user_id": "910002",
-                        "public_key": v["identity_public_b64"],
-                        "key_version": "1",
-                    }
-                ],
-                **ident,
-            )
+            GroupMembersRemoveParams(remaining, "g100", ["910007"], **ident)
         )
         self.assertEqual(len(rotated["conversation_key"]), 32)
+        self.assertEqual(len(rotated["conversation_participant_keys"]), 1)
         self.assertEqual(len(rotated["action_signatures"]), 2)
-        self.assertIn(",910007,", rotated["action_signatures"][0]["signature_payload"])
+        removal = rotated["action_signatures"][0]
+        self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
         self.assertTrue(
-            rotated["action_signatures"][0]["signature_payload"].endswith(",signature_version=11")
+            removal["signature_payload"].endswith(
+                f",910007,{rotated['conversation_key_version']},signature_version=11"
+            )
         )
         self.assertNotIn("signature_payload", rotated["action_signatures"][1])
+        with self.assertRaises(ValueError) as raised:
+            chat.prepare_group_members_remove(
+                GroupMembersRemoveParams([], "g100", ["910007"], **ident)
+            )
+        self.assertEqual(
+            str(raised.exception),
+            "public_keys is empty: pass the public keys of the remaining members",
+        )
 
         left = chat.prepare_group_leave(
             GroupLeaveParams("g100", promote_admin_id="910008", conversation_key_version="7", **ident)

@@ -231,8 +231,8 @@ namespace ChatXdk
 
     /// <summary>
     /// Returned by <see cref="Chat.PrepareConversationKeyChange"/>,
-    /// <see cref="Chat.PrepareGroupCreate"/>, and
-    /// <see cref="Chat.PrepareGroupMembersChange"/>. Carries everything needed to POST the change.
+    /// <see cref="Chat.PrepareGroupCreate"/>, <see cref="Chat.PrepareGroupMembersChange"/>, and
+    /// <see cref="Chat.PrepareGroupMembersRemove"/>. Carries everything needed to POST the change.
     /// </summary>
     public sealed class PreparedConversationChange
     {
@@ -241,11 +241,11 @@ namespace ChatXdk
         public string ConversationId { get; init; } = "";
 
         /// <summary>
-        /// Raw 32-byte conversation key when one was generated, otherwise <see langword="null"/>.
+        /// Raw 32-byte conversation key the call generated.
         /// (JSON carries it base64-encoded; <see cref="byte"/> arrays map to that natively.)
         /// </summary>
         [JsonPropertyName("conversation_key")]
-        public byte[]? ConversationKey { get; init; }
+        public byte[] ConversationKey { get; init; } = Array.Empty<byte>();
 
         /// <summary>Version assigned to the conversation key.</summary>
         [JsonPropertyName("conversation_key_version")]
@@ -1226,19 +1226,30 @@ namespace ChatXdk
         DetectionDisabled,
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupMembersRemove"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupMembersRemove"/>. The call rotates the
+    /// conversation key for the members who stay.
+    /// </summary>
     public sealed class GroupMembersRemoveParams
     {
-        public GroupMembersRemoveParams(string conversationId, IReadOnlyList<string> userIds)
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="publicKeys">Identity public keys of the members who stay.</param>
+        /// <param name="conversationId">ID of the group conversation.</param>
+        /// <param name="userIds">User IDs being removed.</param>
+        public GroupMembersRemoveParams(
+            IReadOnlyList<PublicKeyInput> publicKeys,
+            string conversationId,
+            IReadOnlyList<string> userIds)
         {
+            PublicKeys = publicKeys;
             ConversationId = conversationId;
             UserIds = userIds;
         }
 
+        /// <summary>Identity public keys of the members who stay; the new key is encrypted for them.</summary>
+        public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
         public string ConversationId { get; }
         public IReadOnlyList<string> UserIds { get; }
-        public IReadOnlyList<PublicKeyInput>? PublicKeys { get; init; }
-        public string? ConversationKeyVersion { get; init; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
     }

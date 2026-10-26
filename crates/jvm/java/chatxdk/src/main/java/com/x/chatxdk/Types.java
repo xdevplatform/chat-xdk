@@ -238,8 +238,8 @@ public final class Types {
 
     /**
      * Returned by {@link Chat#prepareConversationKeyChange},
-     * {@link Chat#prepareGroupCreate}, and {@link Chat#prepareGroupMembersChange}.
-     * Carries everything needed to POST the change.
+     * {@link Chat#prepareGroupCreate}, {@link Chat#prepareGroupMembersChange}, and
+     * {@link Chat#prepareGroupMembersRemove}. Carries everything needed to POST the change.
      */
     public static final class PreparedConversationChange {
         /** Conversation id the change applies to (derived for a one-to-one, or the id you passed). */
@@ -247,8 +247,8 @@ public final class Types {
         public String conversationId = "";
 
         /**
-         * Raw 32-byte conversation key when one was generated, otherwise {@code null}.
-         * Unlike a String, the array can be zeroed once no longer needed.
+         * Raw 32-byte conversation key the call generated. Unlike a String, the array
+         * can be zeroed once no longer needed.
          */
         @JsonProperty("conversation_key")
         public byte[] conversationKey;
@@ -1342,22 +1342,25 @@ public final class Types {
         DetectionDisabled
     }
 
-    /** Parameters for {@link Chat#prepareGroupMembersRemove}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupMembersRemove}. The call rotates the
+     * conversation key for the members who stay.
+     */
     public static final class GroupMembersRemoveParams {
+        /** Identity public keys of the members who stay; the new key is encrypted for them. */
+        public final List<PublicKeyInput> publicKeys;
         /** ID of the group conversation. */
         public final String conversationId;
         /** User IDs being removed. */
         public final List<String> userIds;
-        /** Identity public keys of the members who remain. Null does not rotate. */
-        public List<PublicKeyInput> publicKeys;
-        /** Version bound into a removal that does not rotate. Null signs {@code null}. */
-        public String conversationKeyVersion;
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
-        public GroupMembersRemoveParams(String conversationId, List<String> userIds) {
+        public GroupMembersRemoveParams(
+                List<PublicKeyInput> publicKeys, String conversationId, List<String> userIds) {
+            this.publicKeys = publicKeys;
             this.conversationId = conversationId;
             this.userIds = userIds;
         }

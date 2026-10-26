@@ -258,9 +258,8 @@ public final class ChatCore implements AutoCloseable {
     public PreparedConversationChange prepareGroupMembersRemove(
             List<PublicKeyInput> publicKeys, String conversationId, List<String> userIds)
             throws Exception {
-        GroupMembersRemoveParams params = new GroupMembersRemoveParams(conversationId, userIds);
-        params.publicKeys = publicKeys;
-        return chat.prepareGroupMembersRemove(params);
+        return chat.prepareGroupMembersRemove(
+                new GroupMembersRemoveParams(publicKeys, conversationId, userIds));
     }
 
     // -- Media files ----------------------------------------------------------

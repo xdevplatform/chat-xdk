@@ -610,8 +610,9 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Sign a group member removal. When {@code publicKeys} names the members who
-     * stay, also rotates the conversation key and returns it.
+     * Sign a group member removal and rotate the conversation key for the members
+     * who stay ({@code publicKeys}). The result carries the new key and two action
+     * signatures: the removal and the conversation-key change.
      */
     public PreparedConversationChange prepareGroupMembersRemove(GroupMembersRemoveParams parameters)
             throws Exception {
@@ -1248,14 +1249,10 @@ public final class Chat implements AutoCloseable {
 
     private static String buildPrepareGroupMembersRemoveJson(GroupMembersRemoveParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.set("public_keys", ChatJson.MAPPER.valueToTree(
+                p.publicKeys == null ? List.of() : p.publicKeys));
         n.put("conversation_id", p.conversationId);
         putIds(n, "user_ids", p.userIds);
-        if (p.publicKeys != null) {
-            n.set("public_keys", ChatJson.MAPPER.valueToTree(p.publicKeys));
-        }
-        if (p.conversationKeyVersion != null) {
-            n.put("conversation_key_version", p.conversationKeyVersion);
-        }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

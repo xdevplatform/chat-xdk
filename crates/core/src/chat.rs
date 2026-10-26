@@ -47,7 +47,7 @@
 //! | [`Chat::prepare_conversation_key_change`] | Generate, encrypt, and sign a key change |
 //! | [`Chat::prepare_group_create`] | Generate, encrypt, and sign a group create |
 //! | [`Chat::prepare_group_members_change`] | Generate, encrypt, and sign a member add |
-//! | [`Chat::prepare_group_members_remove`] | Sign a member removal, rotating the key when given the remaining members |
+//! | [`Chat::prepare_group_members_remove`] | Sign a member removal and rotate the key for the members who stay |
 //! | [`Chat::prepare_group_leave`] | Sign leaving a group |
 //! | [`Chat::decrypt_conversation_key`] | Decrypt a conversation key |
 //! | [`Chat::sign`] | Sign arbitrary data |
@@ -473,8 +473,8 @@ impl Chat {
     ) -> Result<PreparedConversationChange, SdkError> {
         self.inner.prepare_group_members_change(params)
     }
-    /// Sign a group member removal. See
-    /// [`crate::ChatCore::prepare_group_members_remove`].
+    /// Sign a group member removal and rotate the conversation key for the
+    /// members who stay. See [`crate::ChatCore::prepare_group_members_remove`].
     pub fn prepare_group_members_remove(
         &self,
         params: &GroupMembersRemoveParams,

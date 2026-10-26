@@ -676,8 +676,9 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Sign a group member removal. When <c>PublicKeys</c> names the members
-        /// who stay, also rotates the conversation key and returns it.
+        /// Sign a group member removal and rotate the conversation key for the members who
+        /// stay (<c>PublicKeys</c>). The result carries the new key and two action
+        /// signatures: the removal and the conversation-key change.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersRemove(GroupMembersRemoveParams parameters)
         {
@@ -1228,10 +1229,9 @@ namespace ChatXdk
         {
             return IdentityJson(new Dictionary<string, object?>
             {
+                ["public_keys"] = p.PublicKeys,
                 ["conversation_id"] = p.ConversationId,
                 ["user_ids"] = p.UserIds,
-                ["public_keys"] = p.PublicKeys,
-                ["conversation_key_version"] = p.ConversationKeyVersion,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

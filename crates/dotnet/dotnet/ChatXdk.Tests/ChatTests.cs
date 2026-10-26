@@ -131,7 +131,7 @@ namespace ChatXdk.Tests
                 SigningKeyVersion = "1",
                 ConversationId = "conv-1",
             });
-            return prep.ConversationKey!;
+            return prep.ConversationKey;
         }
 
         /// <summary>Signing keys matching the fixture's event vectors.</summary>
@@ -763,29 +763,31 @@ namespace ChatXdk.Tests
         public void GroupActions_SignVerifierPayloads()
         {
             using var chat = CreateUnlocked();
-            var removed = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams("g100", new[] { "910007" })
-            {
-                SenderId = "111",
-                SigningKeyVersion = "1",
-            });
-            Assert.Null(removed.ConversationKey);
-            Assert.Empty(removed.ConversationParticipantKeys);
-            Assert.EndsWith(",910007,null,signature_version=11", removed.ActionSignatures[0].SignaturePayload);
-
             var keys = chat.GetPublicKeys();
-            var rotated = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams("g100", new[] { "910007" })
+            var remaining = new[]
+            {
+                new PublicKeyInput { UserId = "111", PublicKey = keys.Identity, KeyVersion = "1" },
+            };
+            var rotated = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(remaining, "g100", new[] { "910007" })
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
-                PublicKeys = new[]
-                {
-                    new PublicKeyInput { UserId = "111", PublicKey = keys.Identity, KeyVersion = "1" },
-                },
             });
-            Assert.NotNull(rotated.ConversationKey);
             Assert.Equal(32, rotated.ConversationKey.Length);
+            Assert.Single(rotated.ConversationParticipantKeys);
             Assert.Equal(2, rotated.ActionSignatures.Count);
+            Assert.Equal("11", rotated.ActionSignatures[0].MessageEventSignature.SignatureVersion);
+            Assert.EndsWith(
+                $",910007,{rotated.ConversationKeyVersion},signature_version=11",
+                rotated.ActionSignatures[0].SignaturePayload);
             Assert.True(string.IsNullOrEmpty(rotated.ActionSignatures[1].SignaturePayload));
+            var noKeys = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupMembersRemove(
+                new GroupMembersRemoveParams(Array.Empty<PublicKeyInput>(), "g100", new[] { "910007" })
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                }));
+            Assert.Equal("public_keys is empty: pass the public keys of the remaining members", noKeys.Message);
 
             var left = chat.PrepareGroupLeave(new GroupLeaveParams("g100")
             {
@@ -2056,7 +2058,7 @@ namespace ChatXdk.Tests
             Assert.NotNull(prepared);
             Assert.Equal("conv-1", prepared.ConversationId);
             Assert.NotNull(prepared.ConversationKey);
-            Assert.Equal(32, prepared.ConversationKey!.Length);
+            Assert.Equal(32, prepared.ConversationKey.Length);
             Assert.Single(prepared.ConversationParticipantKeys);
             Assert.NotEmpty(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
             Assert.Single(prepared.ActionSignatures);

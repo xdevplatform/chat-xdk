@@ -381,7 +381,7 @@ class ChatCore:
         Signed with the ``set_identity`` session identity.
         """
         return self.chat.prepare_group_members_remove(
-            GroupMembersRemoveParams(conversation_id, user_ids, public_keys=public_keys)
+            GroupMembersRemoveParams(public_keys, conversation_id, user_ids)
         )
 
     # -- Media files ----------------------------------------------------------

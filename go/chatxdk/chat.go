@@ -373,15 +373,17 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 	return &out, nil
 }
 
-// PrepareGroupMembersRemove signs a group member removal.
+// PrepareGroupMembersRemove signs a group member removal and rotates the
+// conversation key for the members who stay.
 //
-// Set PublicKeys to the identity keys of the members who stay to rotate the
-// conversation key in this call. The result then carries the new key, those
-// members' participant keys, and two action signatures: the removal (bound to
-// the new key version) and the key change. Without PublicKeys the same result
-// has no new key and only the removal signature.
+// PublicKeys are the identity keys of the members who stay. The result
+// carries the new key, those members' participant keys, and two action
+// signatures: the removal (bound to the new key version) and the key change.
 func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
+	if params.PublicKeys == nil {
+		params.PublicKeys = []PublicKeyInput{}
+	}
 	params.UserIDs = orEmpty(params.UserIDs)
 	j, err := json.Marshal(params)
 	if err != nil {
