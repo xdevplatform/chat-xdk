@@ -290,6 +290,17 @@ func (c *ChatCore) PrepareGroupMembersChange(publicKeys []chatxdk.PublicKeyInput
 	})
 }
 
+// PrepareGroupMembersRemove prepares a member removal under the session
+// identity and rotates the key for the members who stay. publicKeys are
+// those members' identity keys.
+func (c *ChatCore) PrepareGroupMembersRemove(publicKeys []chatxdk.PublicKeyInput, conversationID string, userIDs []string) (*chatxdk.PreparedConversationChange, error) {
+	return c.chat.PrepareGroupMembersRemove(chatxdk.GroupMembersRemoveParams{
+		PublicKeys:     publicKeys,
+		ConversationID: conversationID,
+		UserIDs:        userIDs,
+	})
+}
+
 // -- Media files ----------------------------------------------------------------
 
 // mediaChunk is the fixed chunk size fed through the incremental file API.
@@ -397,5 +408,19 @@ func PrepToRequest(prep *chatxdk.PreparedConversationChange) map[string]any {
 		"conversation_key_version":      prep.ConversationKeyVersion,
 		"conversation_participant_keys": prep.ConversationParticipantKeys,
 		"action_signatures":             prep.ActionSignatures,
+	}
+}
+
+// RemovalToRequest maps a rotating member removal into the members/remove
+// request. Both signatures go in action_signatures. The new key version and
+// the participant keys for the members who stay go in group_key_rotation_data.
+func RemovalToRequest(userIDs []string, prep *chatxdk.PreparedConversationChange) map[string]any {
+	return map[string]any{
+		"user_ids":          userIDs,
+		"action_signatures": prep.ActionSignatures,
+		"group_key_rotation_data": map[string]any{
+			"conversation_key_version":      prep.ConversationKeyVersion,
+			"conversation_participant_keys": prep.ConversationParticipantKeys,
+		},
 	}
 }

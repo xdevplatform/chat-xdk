@@ -166,6 +166,42 @@ test("prepToRequest maps the X API request shape", async () => {
   assert.ok(!("signaturePayload" in sig));
 });
 
+test("removalToRequest rotates the key for the members who stay", async () => {
+  const { removalToRequest } = await import("../src/chat-core.mjs");
+  const core = await loadedCore();
+  const prep = core.prepareGroupMembersRemove({
+    publicKeys: [
+      {
+        userId: vectors.event_sender_id,
+        publicKey: vectors.identity_public_b64,
+        keyVersion: "1",
+      },
+    ],
+    conversationId: "g123",
+    userIds: ["2000"],
+  });
+  const body = removalToRequest(["2000"], prep);
+
+  assert.deepEqual(body.userIds, ["2000"]);
+  assert.equal(body.actionSignatures.length, 2);
+  assert.equal(body.actionSignatures, prep.actionSignatures);
+  assert.equal(
+    body.groupKeyRotationData.conversationKeyVersion,
+    prep.conversationKeyVersion,
+  );
+  assert.equal(body.groupKeyRotationData.conversationParticipantKeys.length, 1);
+  assert.equal(
+    body.groupKeyRotationData.conversationParticipantKeys[0].userId,
+    vectors.event_sender_id,
+  );
+  assert.deepEqual(
+    Object.keys(body.groupKeyRotationData.conversationParticipantKeys[0]).sort(),
+    ["encryptedConversationKey", "publicKeyVersion", "userId"],
+  );
+  assert.equal(body.conversationKeyVersion, undefined);
+  assert.equal(body.conversationParticipantKeys, undefined);
+});
+
 test("prepareGroupCreate yields the two required signatures", async () => {
   const core = await loadedCore();
   const prep = core.prepareGroupCreate({

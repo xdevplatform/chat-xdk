@@ -615,6 +615,88 @@ async function main() {
     `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
   );
 
+  // 4c5. Group actions: a removal signs version 11, a rotation adds a key
+  // change, and the other prepares sign one version-7 payload.
+  const removed = chat.prepareGroupMembersRemove({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    userIds: ["910007"],
+  });
+  assert.equal(removed.conversationKey, undefined);
+  assert.deepEqual(removed.conversationParticipantKeys, []);
+  assert.equal(removed.actionSignatures.length, 1);
+  assert.equal(removed.actionSignatures[0].messageEventSignature.signatureVersion, "11");
+  assert.ok(removed.actionSignatures[0].signaturePayload.endsWith(",910007,null,signature_version=11"));
+
+  const keys = chat.getPublicKeys();
+  const rotated = chat.prepareGroupMembersRemove({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    userIds: ["910007"],
+    publicKeys: [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }],
+  });
+  assert.equal(rotated.conversationKey.length, 32);
+  assert.equal(rotated.actionSignatures.length, 2);
+  assert.ok(rotated.actionSignatures[0].signaturePayload.endsWith(",signature_version=11"));
+  assert.equal(rotated.actionSignatures[1].signaturePayload, undefined);
+
+  const left = chat.prepareGroupLeave({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    promoteAdminId: "910008",
+    conversationKeyVersion: "7",
+  });
+  assert.equal(left.actionSignatures.length, 3);
+  assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
+  assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
+
+  const title = chat.prepareGroupTitleChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    conversationKeyVersion: "4",
+    customTitle: "enc-title",
+  });
+  assert.ok(onlyAction(title).signaturePayload.endsWith(",4,enc-title"));
+  const description = onlyAction(chat.prepareGroupDescriptionChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    conversationKeyVersion: "4",
+    customDescription: "enc-desc",
+  }));
+  assert.ok(description.signaturePayload.startsWith("GroupChangeEvent.GroupDescriptionChange,"));
+  const blocking = onlyAction(chat.prepareScreenCapture({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    change: "blockingEnabled",
+  }));
+  assert.ok(blocking.signaturePayload.startsWith(
+    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,",
+  ));
+  const detection = onlyAction(chat.prepareScreenCapture({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    change: "detectionDisabled",
+  }));
+  assert.ok(detection.signaturePayload.startsWith(
+    "ConversationMetadataChangeEvent.DisableScreenCaptureDetection,",
+  ));
+  assert.throws(
+    () => chat.prepareScreenCapture({
+      senderId: "111",
+      signingKeyVersion: "1",
+      conversationId: "g100",
+      change: "nope",
+    }),
+    /Invalid screen capture change: 'nope'/,
+  );
+
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.
   const readSig = onlyAction(chat.prepareMarkConversationRead({

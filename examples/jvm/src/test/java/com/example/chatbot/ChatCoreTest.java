@@ -177,6 +177,32 @@ class ChatCoreTest {
     }
 
     @Test
+    void removalToRequestRotatesForMembersWhoStay() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            PreparedConversationChange prep =
+                    core.prepareGroupMembersRemove(fixtureKeys(v), "g123", List.of("2000"));
+            ObjectNode body = ChatCore.removalToRequest(List.of("2000"), prep);
+
+            assertEquals("2000", body.path("user_ids").get(0).asText());
+            assertEquals(2, body.path("action_signatures").size());
+            JsonNode rotation = body.path("group_key_rotation_data");
+            assertEquals(prep.conversationKeyVersion, rotation.path("conversation_key_version").asText());
+            JsonNode pks = rotation.path("conversation_participant_keys");
+            assertEquals(1, pks.size());
+            assertEquals("1000", pks.get(0).path("user_id").asText());
+            List<String> fields = new ArrayList<>();
+            pks.get(0).fieldNames().forEachRemaining(fields::add);
+            Collections.sort(fields);
+            assertEquals(
+                    List.of("encrypted_conversation_key", "public_key_version", "user_id"), fields);
+            assertTrue(body.path("conversation_key_version").isMissingNode());
+            assertTrue(body.path("conversation_participant_keys").isMissingNode());
+        }
+    }
+
+    @Test
     void prepareGroupCreateYieldsTwoSignatures() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

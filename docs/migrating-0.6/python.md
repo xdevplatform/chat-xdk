@@ -29,7 +29,8 @@ change.
 - [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -478,17 +479,179 @@ the value, such as `Invalid sender_id 'user-1': pass a numeric user id
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Signed read receipts
+## Group actions should be signed
 
-`prepare_mark_conversation_read` signs a read receipt for the newest event
-you read. It takes a `MarkConversationReadParams` (the conversation id, that
-event's sequence id, and an optional `seen_at_msec` that defaults to now)
-and returns a dict with `action_signatures`, one entry shaped as
+Apps should sign each group update below. The sender comes from
+`set_identity`. Each returns `action_signatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
-them as the `action_signatures` of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
-in its hyphen form. A recipient's `decrypt_event` returns a signed receipt
-as a verified `ReadReceipt` event.
+those entries on the update's request.
+
+### Removing members
+
+`prepare_group_members_remove` removes `user_ids` and rotates the
+conversation key for the members who stay. Pass their identity keys as
+`public_keys`. The result is a `PreparedConversationChange` dict: the new
+conversation key, `conversation_participant_keys` for those members, and
+`action_signatures` in this order — the removal, then the conversation-key
+change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```python
+# 0.6.0
+prepared = chat.prepare_group_members_remove(
+    GroupMembersRemoveParams(conversation_id, user_ids, public_keys=remaining_public_keys)
+)
+api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
+    "user_ids": user_ids,
+    "action_signatures": prepared["action_signatures"],
+    "group_key_rotation_data": {
+        "conversation_key_version": prepared["conversation_key_version"],
+        "conversation_participant_keys": prepared["conversation_participant_keys"],
+    },
+})
+```
+
+### Leaving a group
+
+`prepare_group_leave` signs the sender's removal and does not rotate the
+conversation key. `action_signatures` are the removal, then a
+`GroupAdminAddChange` when `promote_admin_id` is set, then a
+`ConversationDeleteEvent`. It returns a `PreparedAction` dict.
+
+```python
+# 0.6.0
+left = chat.prepare_group_leave(
+    GroupLeaveParams(conversation_id, promote_admin_id=promote_admin_id)
+)
+# left["action_signatures"]: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`custom_title` is the ciphertext the request sends. The result is a
+`PreparedAction` dict; send its `action_signatures` on the request.
+
+```python
+# 0.6.0
+title = chat.prepare_group_title_change(
+    GroupTitleChangeParams(conversation_id, conversation_key_version, custom_title)
+)
+```
+
+### Changing the avatar
+
+```python
+# 0.6.0
+avatar = chat.prepare_group_avatar_change(
+    GroupAvatarChangeParams(conversation_id, conversation_key_version, custom_avatar_url)
+)
+```
+
+### Changing the description
+
+`custom_description` is the ciphertext the request sends.
+
+```python
+# 0.6.0
+description = chat.prepare_group_description_change(
+    GroupDescriptionChangeParams(conversation_id, conversation_key_version, custom_description)
+)
+```
+
+### Adding admins
+
+```python
+# 0.6.0
+added = chat.prepare_group_admins_add(GroupAdminsAddParams(conversation_id, user_ids))
+```
+
+### Removing admins
+
+```python
+# 0.6.0
+removed = chat.prepare_group_admins_remove(GroupAdminsRemoveParams(conversation_id, user_ids))
+```
+
+### Enabling an invite
+
+An omitted `expires_at_msec` or `affiliate_id` signs `null`.
+
+```python
+# 0.6.0
+invite = chat.prepare_group_invite_enable(
+    GroupInviteEnableParams(conversation_id, invite_url, expires_at_msec=expires_at_msec)
+)
+```
+
+### Disabling an invite
+
+`disabled_by` defaults to the sender.
+
+```python
+# 0.6.0
+disabled = chat.prepare_group_invite_disable(GroupInviteDisableParams(conversation_id))
+```
+
+### Requesting to join
+
+`requesting_user_id` defaults to the sender. An invite token is not part of
+the signature.
+
+```python
+# 0.6.0
+request = chat.prepare_group_join_request(GroupJoinRequestParams(conversation_id))
+```
+
+### Rejecting join requests
+
+```python
+# 0.6.0
+rejected = chat.prepare_group_join_reject(GroupJoinRejectParams(conversation_id, user_ids))
+```
+
+### Changing the message TTL
+
+The signature covers `ttl_msec` only.
+
+```python
+# 0.6.0
+ttl = chat.prepare_message_ttl_change(MessageTtlChangeParams(conversation_id, ttl_msec))
+```
+
+### Removing the message TTL
+
+```python
+# 0.6.0
+cleared = chat.prepare_message_ttl_remove(MessageTtlRemoveParams(conversation_id))
+```
+
+### Changing screen capture
+
+`change` is a `ScreenCaptureChange`: `BlockingEnabled`,
+`BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`.
+
+```python
+# 0.6.0
+capture = chat.prepare_screen_capture(
+    ScreenCaptureParams(conversation_id, ScreenCaptureChange.BlockingEnabled)
+)
+```
+
+## Read receipts should be signed
+
+Apps should sign a read receipt with `prepare_mark_conversation_read` and
+send the `PreparedAction`'s `action_signatures` on
+`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
+reject an unsigned receipt. The call takes a `MarkConversationReadParams`
+(the conversation id, the sequence id of the newest event read, and a
+`seen_at_msec` that defaults to now) and returns a dict with
+`action_signatures`, one entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. The
+path takes the conversation id in its hyphen form. A recipient's
+`decrypt_event` returns a signed receipt as a verified `ReadReceipt` event.
 
 ```python
 # 0.6.0

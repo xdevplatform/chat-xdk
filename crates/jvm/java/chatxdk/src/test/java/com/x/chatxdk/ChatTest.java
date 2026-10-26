@@ -599,6 +599,54 @@ class ChatTest {
     }
 
     @Test
+    void groupActionsSignVerifierPayloads() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            GroupMembersRemoveParams plain = new GroupMembersRemoveParams("g100", List.of("910007"));
+            plain.senderId = "111";
+            plain.signingKeyVersion = "1";
+            PreparedConversationChange removed = chat.prepareGroupMembersRemove(plain);
+            assertNull(removed.conversationKey);
+            assertTrue(removed.conversationParticipantKeys.isEmpty());
+            assertTrue(removed.actionSignatures.get(0).signaturePayload.endsWith(",910007,null,signature_version=11"));
+
+            PublicKeyInput key = new PublicKeyInput();
+            key.userId = "111";
+            key.publicKey = chat.getPublicKeys().identity;
+            key.keyVersion = "1";
+            GroupMembersRemoveParams rotating = new GroupMembersRemoveParams("g100", List.of("910007"));
+            rotating.senderId = "111";
+            rotating.signingKeyVersion = "1";
+            rotating.publicKeys = List.of(key);
+            PreparedConversationChange rotated = chat.prepareGroupMembersRemove(rotating);
+            assertEquals(32, rotated.conversationKey.length);
+            assertEquals(2, rotated.actionSignatures.size());
+            assertTrue(rotated.actionSignatures.get(1).signaturePayload == null
+                    || rotated.actionSignatures.get(1).signaturePayload.isEmpty());
+
+            GroupLeaveParams leave = new GroupLeaveParams("g100");
+            leave.senderId = "111";
+            leave.signingKeyVersion = "1";
+            leave.promoteAdminId = "910008";
+            leave.conversationKeyVersion = "7";
+            PreparedAction left = chat.prepareGroupLeave(leave);
+            assertEquals(3, left.actionSignatures.size());
+            assertTrue(left.actionSignatures.get(1).signaturePayload.endsWith(",910008"));
+            assertTrue(left.actionSignatures.get(2).signaturePayload.startsWith("ConversationDeleteEvent,"));
+
+            GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "4", "enc-title");
+            titleParams.senderId = "111";
+            titleParams.signingKeyVersion = "1";
+            assertTrue(onlyAction(chat.prepareGroupTitleChange(titleParams)).signaturePayload.endsWith(",4,enc-title"));
+
+            ScreenCaptureParams capture = new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled);
+            capture.senderId = "111";
+            capture.signingKeyVersion = "1";
+            assertTrue(onlyAction(chat.prepareScreenCapture(capture)).signaturePayload.startsWith(
+                    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"));
+        }
+    }
+
+    @Test
     void prepareMarkConversationReadSignsCanonicalPayload() throws Exception {
         try (Chat chat = createUnlocked()) {
             // A 1:1 id is signed in its canonical colon form, followed by the

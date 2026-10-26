@@ -67,6 +67,34 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_message_delete(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_prepare_group_members_remove(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_leave(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_title_change(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_avatar_change(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_description_change(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_admins_add(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_admins_remove(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_invite_enable(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_invite_disable(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_join_request(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_group_join_reject(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_message_ttl_change(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_message_ttl_remove(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_screen_capture(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_prepare_mark_conversation_read(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_decrypt_event_params(Pointer handle, Pointer paramsJson);

@@ -416,9 +416,16 @@ impl AuthTokenManager for StaticAuthTokenManager {
     }
 }
 
-/// HTTP transport for Juicebox realm requests: rustls with the bundled webpki
-/// roots. Every request carries `X-Juicebox-Version`, which realms check to
-/// answer outdated clients with 426 (`UpgradeRequired`).
+/// HTTP transport for Juicebox realm requests.
+///
+/// rustls with the bundled webpki roots, HTTP/2 and HTTP/1.1, and the system
+/// proxy configuration. Every request carries `X-Juicebox-Version`, which
+/// realms check to answer an outdated value with 426 (`UpgradeRequired`).
+///
+/// `User-Agent` is `juicebox_networking/<version>`. `ClientBuilder::reqwest`
+/// inserts `JuiceboxSdk-Rust/<version>` and then `HashMap::extend`s
+/// `juicebox_networking`'s default headers over it, so the networking crate's
+/// agent string is the one that is sent.
 #[cfg(feature = "juicebox")]
 struct RealmHttpClient(reqwest::Client);
 
@@ -430,9 +437,16 @@ impl RealmHttpClient {
             juicebox_sdk::JUICEBOX_VERSION_HEADER,
             reqwest::header::HeaderValue::from_static(juicebox_sdk::VERSION),
         );
+        let user_agent = format!("juicebox_networking/{}", juicebox_sdk::VERSION);
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_str(&user_agent)
+                .expect("juicebox version is a valid user-agent"),
+        );
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .user_agent(format!("JuiceboxSdk-Rust/{}", juicebox_sdk::VERSION))
+            .tls_info(true)
+            .use_rustls_tls()
             .default_headers(headers)
             .build()
             .expect("rustls client with bundled roots always builds");
@@ -444,7 +458,8 @@ impl RealmHttpClient {
         request: juicebox_sdk::http::Request,
     ) -> Result<juicebox_sdk::http::Response, reqwest::Error> {
         use juicebox_sdk::http::Method;
-        use reqwest::header::{HeaderName, HeaderValue};
+        use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+        use std::str::FromStr;
 
         let mut builder = match request.method {
             Method::Get => self.0.get(request.url),
@@ -452,14 +467,17 @@ impl RealmHttpClient {
             Method::Post => self.0.post(request.url),
             Method::Delete => self.0.delete(request.url),
         };
-        for (name, value) in &request.headers {
-            if let (Ok(name), Ok(value)) = (
-                HeaderName::from_bytes(name.as_bytes()),
-                HeaderValue::from_str(value),
-            ) {
-                builder = builder.header(name, value);
+        // Same as juicebox_networking's reqwest adapter: drop a header the
+        // HTTP stack rejects, and let a request header occupy the name a
+        // default header already uses.
+        let mut headers = HeaderMap::new();
+        for (key, value) in &request.headers {
+            if let (Ok(name), Ok(value)) = (HeaderName::from_str(key), HeaderValue::from_str(value))
+            {
+                headers.append(name, value);
             }
         }
+        builder = builder.headers(headers);
         if let Some(body) = request.body {
             builder = builder.body(body);
         }
@@ -964,12 +982,19 @@ mod tests {
         assert!(raw.starts_with("post /req http/1.1\r\n"), "{raw}");
         let version = format!("\r\nx-juicebox-version: {}\r\n", juicebox_sdk::VERSION);
         let agent = format!(
-            "\r\nuser-agent: juiceboxsdk-rust/{}\r\n",
+            "\r\nuser-agent: juicebox_networking/{}\r\n",
             juicebox_sdk::VERSION
         );
         assert!(raw.contains(&version), "{raw}");
         assert!(raw.contains(&agent), "{raw}");
+        assert!(
+            !raw.contains("juiceboxsdk-rust"),
+            "user-agent must be the juicebox_networking default, got {raw}"
+        );
+        assert!(raw.contains("\r\naccept: */*\r\n"), "{raw}");
+        assert!(!raw.contains("accept-encoding"), "{raw}");
         assert!(raw.contains("\r\nx-custom: 1\r\n"), "{raw}");
+        assert!(raw.contains("\r\ncontent-length: 4\r\n"), "{raw}");
         assert_eq!(response.status_code, 201);
         assert_eq!(
             response.headers.get("x-reply").map(String::as_str),
@@ -987,6 +1012,36 @@ mod tests {
             })
             .await;
         assert!(unreachable.is_none());
+    }
+
+    /// Live TLS to the realm hosts in an X Chat `juicebox_config`.
+    /// `CHAT_XDK_REALM_TLS=1 cargo test -p chat-xdk-core --features juicebox
+    /// realm_hosts_complete_tls -- --nocapture --ignored`
+    #[cfg(feature = "juicebox")]
+    #[tokio::test]
+    #[ignore]
+    async fn realm_hosts_complete_tls() {
+        use juicebox_sdk::http::{Client as _, Method, Request};
+
+        let hosts = [
+            "https://realm-b.x.com/",
+            "https://realm-east1.x.com/",
+            "https://realm-west1.x.com/",
+        ];
+        for url in hosts {
+            let response = RealmHttpClient::new()
+                .send(Request {
+                    method: Method::Get,
+                    url: url.to_string(),
+                    headers: HashMap::new(),
+                    body: None,
+                    timeout: Some(std::time::Duration::from_secs(20)),
+                })
+                .await;
+            let status = response.as_ref().map(|r| r.status_code);
+            eprintln!("{url} status={status:?}");
+            assert!(response.is_some(), "{url} TLS or HTTP failed");
+        }
     }
 
     #[cfg(feature = "juicebox")]

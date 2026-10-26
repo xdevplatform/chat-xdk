@@ -760,6 +760,60 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public void GroupActions_SignVerifierPayloads()
+        {
+            using var chat = CreateUnlocked();
+            var removed = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams("g100", new[] { "910007" })
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            });
+            Assert.Null(removed.ConversationKey);
+            Assert.Empty(removed.ConversationParticipantKeys);
+            Assert.EndsWith(",910007,null,signature_version=11", removed.ActionSignatures[0].SignaturePayload);
+
+            var keys = chat.GetPublicKeys();
+            var rotated = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams("g100", new[] { "910007" })
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+                PublicKeys = new[]
+                {
+                    new PublicKeyInput { UserId = "111", PublicKey = keys.Identity, KeyVersion = "1" },
+                },
+            });
+            Assert.NotNull(rotated.ConversationKey);
+            Assert.Equal(32, rotated.ConversationKey.Length);
+            Assert.Equal(2, rotated.ActionSignatures.Count);
+            Assert.True(string.IsNullOrEmpty(rotated.ActionSignatures[1].SignaturePayload));
+
+            var left = chat.PrepareGroupLeave(new GroupLeaveParams("g100")
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+                PromoteAdminId = "910008",
+                ConversationKeyVersion = "7",
+            });
+            Assert.Equal(3, left.ActionSignatures.Count);
+            Assert.EndsWith(",910008", left.ActionSignatures[1].SignaturePayload);
+            Assert.StartsWith("ConversationDeleteEvent,", left.ActionSignatures[2].SignaturePayload);
+
+            var title = OnlyAction(chat.PrepareGroupTitleChange(new GroupTitleChangeParams("g100", "4", "enc-title")
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            }));
+            Assert.EndsWith(",4,enc-title", title.SignaturePayload);
+
+            var blocking = OnlyAction(chat.PrepareScreenCapture(new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled)
+            {
+                SenderId = "111",
+                SigningKeyVersion = "1",
+            }));
+            Assert.StartsWith("ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,", blocking.SignaturePayload);
+        }
+
+        [Fact]
         public void PrepareMessageDelete_ForSelf()
         {
             using var chat = CreateUnlocked();

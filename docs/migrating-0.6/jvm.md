@@ -31,7 +31,8 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Know which calls throw `ChatXdkException`](#exceptions)
 - [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -470,17 +471,174 @@ There's no code to change. If you built a library to run 0.5.x there,
 remove it: a 0.5.x build doesn't export the entry points 0.6.0 calls (see
 [C ABI](c-abi.md)).
 
-## Signed read receipts
+## Group actions should be signed
 
-`prepareMarkConversationRead` signs a read receipt for the newest event you
-read. It takes a `MarkConversationReadParams` (the conversation id, that
-event's sequence id, and an optional `seenAtMsec` that defaults to now) and
-returns a `PreparedAction`, one entry shaped as
+Apps should sign each group update below. The sender comes from
+`setIdentity`. Each returns `actionSignatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
-its `actionSignatures` as the `action_signatures` of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, whose path takes the conversation id
-in its hyphen form. A recipient's `decryptEvent` returns a signed receipt as
-a verified `ReadReceipt` event.
+those entries on the update's request.
+
+### Removing members
+
+`prepareGroupMembersRemove` removes `userIds` and rotates the conversation
+key for the members who stay. Pass their identity keys as `publicKeys`.
+The result is a `PreparedConversationChange`: the new conversation key,
+`conversationParticipantKeys` for those members, and `actionSignatures` in
+this order — the removal, then the conversation-key change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```java
+// 0.6.0
+GroupMembersRemoveParams removal = new GroupMembersRemoveParams(conversationId, userIds);
+removal.publicKeys = remainingPublicKeys;
+PreparedConversationChange prepared = chat.prepareGroupMembersRemove(removal);
+api.post("/2/chat/conversations/" + conversationId + "/members/remove", Map.of(
+        "user_ids", userIds,
+        "action_signatures", prepared.actionSignatures,
+        "group_key_rotation_data", Map.of(
+                "conversation_key_version", prepared.conversationKeyVersion,
+                "conversation_participant_keys", prepared.conversationParticipantKeys)));
+```
+
+### Leaving a group
+
+`prepareGroupLeave` signs the sender's removal and does not rotate the
+conversation key. `actionSignatures` are the removal, then a
+`GroupAdminAddChange` when `promoteAdminId` is set, then a
+`ConversationDeleteEvent`. It returns a `PreparedAction`.
+
+```java
+// 0.6.0
+GroupLeaveParams leave = new GroupLeaveParams(conversationId);
+leave.promoteAdminId = promoteAdminId;
+PreparedAction left = chat.prepareGroupLeave(leave);
+// left.actionSignatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`customTitle` is the ciphertext the request sends. The result is a
+`PreparedAction`; send its `actionSignatures` on the request.
+
+```java
+// 0.6.0
+PreparedAction title = chat.prepareGroupTitleChange(
+        new GroupTitleChangeParams(conversationId, conversationKeyVersion, customTitle));
+```
+
+### Changing the avatar
+
+```java
+// 0.6.0
+PreparedAction avatar = chat.prepareGroupAvatarChange(
+        new GroupAvatarChangeParams(conversationId, conversationKeyVersion, customAvatarUrl));
+```
+
+### Changing the description
+
+`customDescription` is the ciphertext the request sends.
+
+```java
+// 0.6.0
+PreparedAction description = chat.prepareGroupDescriptionChange(
+        new GroupDescriptionChangeParams(conversationId, conversationKeyVersion, customDescription));
+```
+
+### Adding admins
+
+```java
+// 0.6.0
+PreparedAction added = chat.prepareGroupAdminsAdd(new GroupAdminsAddParams(conversationId, userIds));
+```
+
+### Removing admins
+
+```java
+// 0.6.0
+PreparedAction removed = chat.prepareGroupAdminsRemove(
+        new GroupAdminsRemoveParams(conversationId, userIds));
+```
+
+### Enabling an invite
+
+A null `expiresAtMsec` or `affiliateId` signs `null`.
+
+```java
+// 0.6.0
+PreparedAction invite = chat.prepareGroupInviteEnable(
+        new GroupInviteEnableParams(conversationId, inviteUrl));
+```
+
+### Disabling an invite
+
+A null `disabledBy` uses the sender.
+
+```java
+// 0.6.0
+PreparedAction disabled = chat.prepareGroupInviteDisable(new GroupInviteDisableParams(conversationId));
+```
+
+### Requesting to join
+
+A null `requestingUserId` uses the sender. An invite token is not part of
+the signature.
+
+```java
+// 0.6.0
+PreparedAction request = chat.prepareGroupJoinRequest(new GroupJoinRequestParams(conversationId));
+```
+
+### Rejecting join requests
+
+```java
+// 0.6.0
+PreparedAction rejected = chat.prepareGroupJoinReject(
+        new GroupJoinRejectParams(conversationId, userIds));
+```
+
+### Changing the message TTL
+
+The signature covers `ttlMsec` only.
+
+```java
+// 0.6.0
+PreparedAction ttl = chat.prepareMessageTtlChange(
+        new MessageTtlChangeParams(conversationId, ttlMsec));
+```
+
+### Removing the message TTL
+
+```java
+// 0.6.0
+PreparedAction cleared = chat.prepareMessageTtlRemove(new MessageTtlRemoveParams(conversationId));
+```
+
+### Changing screen capture
+
+`change` is a `ScreenCaptureChange`: `BlockingEnabled`,
+`BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`.
+
+```java
+// 0.6.0
+PreparedAction capture = chat.prepareScreenCapture(
+        new ScreenCaptureParams(conversationId, ScreenCaptureChange.BlockingEnabled));
+```
+
+## Read receipts should be signed
+
+Apps should sign a read receipt with `prepareMarkConversationRead` and send
+the `PreparedAction`'s `actionSignatures` as the `action_signatures` of
+`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
+reject an unsigned receipt. The call takes a `MarkConversationReadParams`
+(the conversation id, the sequence id of the newest event read, and a
+`seenAtMsec` that defaults to now) and returns a `PreparedAction`, one entry
+shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. The
+path takes the conversation id in its hyphen form. A recipient's
+`decryptEvent` returns a signed receipt as a verified `ReadReceipt` event.
 
 ```java
 // 0.6.0

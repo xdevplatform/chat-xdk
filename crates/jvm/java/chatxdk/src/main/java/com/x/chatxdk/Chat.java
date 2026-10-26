@@ -609,10 +609,135 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    /**
+     * Sign a group member removal. When {@code publicKeys} names the members who
+     * stay, also rotates the conversation key and returns it.
+     */
+    public PreparedConversationChange prepareGroupMembersRemove(GroupMembersRemoveParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        return callPrepare(
+                buildPrepareGroupMembersRemoveJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_members_remove);
+    }
+
+    /** Sign leaving a group. Does not rotate the conversation key. */
+    public PreparedAction prepareGroupLeave(GroupLeaveParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupLeaveJson(parameters), ChatNative.INSTANCE::chat_xdk_prepare_group_leave);
+    }
+
+    /** Sign a group title change. {@code customTitle} is ciphertext. */
+    public PreparedAction prepareGroupTitleChange(GroupTitleChangeParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupTitleChangeJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_title_change);
+    }
+
+    /** Sign a group avatar change. */
+    public PreparedAction prepareGroupAvatarChange(GroupAvatarChangeParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupAvatarChangeJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_avatar_change);
+    }
+
+    /** Sign a group description change. {@code customDescription} is ciphertext. */
+    public PreparedAction prepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupDescriptionChangeJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_description_change);
+    }
+
+    /** Sign adding group admins. */
+    public PreparedAction prepareGroupAdminsAdd(GroupAdminsAddParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupAdminsAddJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_admins_add);
+    }
+
+    /** Sign removing group admins. */
+    public PreparedAction prepareGroupAdminsRemove(GroupAdminsRemoveParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupAdminsRemoveJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_admins_remove);
+    }
+
+    /** Sign enabling a group invite. */
+    public PreparedAction prepareGroupInviteEnable(GroupInviteEnableParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupInviteEnableJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_invite_enable);
+    }
+
+    /** Sign disabling a group invite. */
+    public PreparedAction prepareGroupInviteDisable(GroupInviteDisableParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupInviteDisableJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_invite_disable);
+    }
+
+    /** Sign a request to join a group. */
+    public PreparedAction prepareGroupJoinRequest(GroupJoinRequestParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupJoinRequestJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_join_request);
+    }
+
+    /** Sign rejecting group join requests. */
+    public PreparedAction prepareGroupJoinReject(GroupJoinRejectParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareGroupJoinRejectJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_group_join_reject);
+    }
+
+    /** Sign a message-TTL change. */
+    public PreparedAction prepareMessageTtlChange(MessageTtlChangeParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareMessageTtlChangeJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_message_ttl_change);
+    }
+
+    /** Sign clearing a conversation's message TTL. */
+    public PreparedAction prepareMessageTtlRemove(MessageTtlRemoveParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareMessageTtlRemoveJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_message_ttl_remove);
+    }
+
+    /** Sign one screen-capture setting change. */
+    public PreparedAction prepareScreenCapture(ScreenCaptureParams parameters) throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareScreenCaptureJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_screen_capture);
+    }
+
     private PreparedConversationChange callPrepare(String paramsJson, ParamsJsonFn fn) throws Exception {
         try (Memory j = FfiStrings.utf8(paramsJson)) {
             String resultJson = FfiStrings.consume(fn.apply(handle, j));
             return ChatJson.MAPPER.readValue(resultJson, PreparedConversationChange.class);
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    private PreparedAction callAction(String paramsJson, ParamsJsonFn fn) throws Exception {
+        try (Memory j = FfiStrings.utf8(paramsJson)) {
+            String resultJson = FfiStrings.consume(fn.apply(handle, j));
+            return ChatJson.MAPPER.readValue(resultJson, PreparedAction.class);
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -1113,6 +1238,146 @@ public final class Chat implements AutoCloseable {
         n.set("sequence_ids", ChatJson.MAPPER.valueToTree(
                 p.sequenceIds == null ? List.of() : p.sequenceIds));
         n.put("delete_for_all", p.deleteForAll);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static void putIds(ObjectNode n, String field, List<String> ids) {
+        n.set(field, ChatJson.MAPPER.valueToTree(ids == null ? List.of() : ids));
+    }
+
+    private static String buildPrepareGroupMembersRemoveJson(GroupMembersRemoveParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        putIds(n, "user_ids", p.userIds);
+        if (p.publicKeys != null) {
+            n.set("public_keys", ChatJson.MAPPER.valueToTree(p.publicKeys));
+        }
+        if (p.conversationKeyVersion != null) {
+            n.put("conversation_key_version", p.conversationKeyVersion);
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupLeaveJson(GroupLeaveParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        if (p.promoteAdminId != null) {
+            n.put("promote_admin_id", p.promoteAdminId);
+        }
+        if (p.conversationKeyVersion != null) {
+            n.put("conversation_key_version", p.conversationKeyVersion);
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupTitleChangeJson(GroupTitleChangeParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("conversation_key_version", p.conversationKeyVersion);
+        n.put("custom_title", p.customTitle);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupAvatarChangeJson(GroupAvatarChangeParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("conversation_key_version", p.conversationKeyVersion);
+        n.put("custom_avatar_url", p.customAvatarUrl);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupDescriptionChangeJson(GroupDescriptionChangeParams p)
+            throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("conversation_key_version", p.conversationKeyVersion);
+        n.put("custom_description", p.customDescription);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupAdminsAddJson(GroupAdminsAddParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        putIds(n, "user_ids", p.userIds);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupAdminsRemoveJson(GroupAdminsRemoveParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        putIds(n, "user_ids", p.userIds);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupInviteEnableJson(GroupInviteEnableParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("invite_url", p.inviteUrl);
+        if (p.expiresAtMsec != null) {
+            n.put("expires_at_msec", p.expiresAtMsec);
+        }
+        if (p.affiliateId != null) {
+            n.put("affiliate_id", p.affiliateId);
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupInviteDisableJson(GroupInviteDisableParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        if (p.disabledBy != null) {
+            n.put("disabled_by", p.disabledBy);
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupJoinRequestJson(GroupJoinRequestParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        if (p.requestingUserId != null) {
+            n.put("requesting_user_id", p.requestingUserId);
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareGroupJoinRejectJson(GroupJoinRejectParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        putIds(n, "user_ids", p.userIds);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareMessageTtlChangeJson(MessageTtlChangeParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("ttl_msec", p.ttlMsec);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareMessageTtlRemoveJson(MessageTtlRemoveParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareScreenCaptureJson(ScreenCaptureParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("change", p.change.name());
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

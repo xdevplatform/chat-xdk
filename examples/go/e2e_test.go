@@ -33,7 +33,8 @@ import (
 //	                      upload, then downloads and decrypts it back to the
 //	                      original bytes
 //	CHATXDK_E2E_GROUPS=1  also creates a group (two-signature create), sends a
-//	                      group message, and adds the 1:1 partner as a member
+//	                      group message, adds the 1:1 partner as a member, then
+//	                      removes that partner and rotates the key for who stays
 func TestE2ELive(t *testing.T) {
 	if os.Getenv("CHATXDK_E2E") != "1" {
 		t.Skip("set CHATXDK_E2E=1 to run the live e2e test")
@@ -450,6 +451,15 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 		}
 		t.Logf("group member add: %s added (key rotated to %s)", partnerID, mPrep.ConversationKeyVersion)
 	}
+
+	rPrep, err := core.PrepareGroupMembersRemove(myKeys, groupID, []string{partnerID})
+	if err != nil {
+		t.Fatalf("PrepareGroupMembersRemove: %v", err)
+	}
+	if _, err := api.RemoveGroupMembers(groupID, RemovalToRequest([]string{partnerID}, rPrep)); err != nil {
+		t.Fatalf("RemoveGroupMembers: %v", err)
+	}
+	t.Logf("group member remove: %s removed (key rotated to %s)", partnerID, rPrep.ConversationKeyVersion)
 }
 
 // groupBody assembles the group-create request: roster fields plus the

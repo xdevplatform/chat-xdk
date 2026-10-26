@@ -1126,6 +1126,631 @@ impl MessageDeleteParams {
     }
 }
 
+fn apply_identity(
+    sender_id: &mut Option<String>,
+    signing_key_version: &mut Option<String>,
+    sender: Option<String>,
+    version: Option<String>,
+) {
+    *sender_id = sender;
+    *signing_key_version = version;
+}
+
+/// Parameters for ``Chat.prepare_group_members_remove``.
+///
+/// ``public_keys`` are the identity keys of the members who stay. When set,
+/// the call rotates the conversation key for them. An empty list is the same
+/// as omitting them. ``conversation_key_version`` is bound into a removal
+/// that does not rotate; omit it to sign the literal ``null``.
+#[pyclass(get_all, set_all)]
+pub struct GroupMembersRemoveParams {
+    conversation_id: String,
+    user_ids: Py<PyAny>,
+    public_keys: Option<Py<PyAny>>,
+    conversation_key_version: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupMembersRemoveParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, user_ids, *, public_keys=None, conversation_key_version=None, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        user_ids: Py<PyAny>,
+        public_keys: Option<Py<PyAny>>,
+        conversation_key_version: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            user_ids,
+            public_keys,
+            conversation_key_version,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupMembersRemoveParams {
+    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::GroupMembersRemoveParams> {
+        let mut params = chat_xdk_core::GroupMembersRemoveParams::new(
+            self.conversation_id.as_str(),
+            extract_field(py, &self.user_ids, "user_ids")?,
+        );
+        params.public_keys = match &self.public_keys {
+            Some(keys) if !keys.bind(py).is_none() => Some(public_keys_field(py, keys)?),
+            _ => None,
+        };
+        params.conversation_key_version = self.conversation_key_version.clone();
+        apply_identity(
+            &mut params.sender_id,
+            &mut params.signing_key_version,
+            self.sender_id.clone(),
+            self.signing_key_version.clone(),
+        );
+        Ok(params)
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_leave``.
+///
+/// Leave removes the sender and does not rotate the conversation key.
+/// ``promote_admin_id`` adds an admin-promotion signature.
+#[pyclass(get_all, set_all)]
+pub struct GroupLeaveParams {
+    conversation_id: String,
+    promote_admin_id: Option<String>,
+    conversation_key_version: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupLeaveParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, *, promote_admin_id=None, conversation_key_version=None, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        promote_admin_id: Option<String>,
+        conversation_key_version: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            promote_admin_id,
+            conversation_key_version,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupLeaveParams {
+    fn to_core(&self) -> chat_xdk_core::GroupLeaveParams {
+        let mut params = chat_xdk_core::GroupLeaveParams::new(self.conversation_id.as_str());
+        params.promote_admin_id = self.promote_admin_id.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_title_change``.
+///
+/// ``custom_title`` is the ciphertext the request sends.
+#[pyclass(get_all, set_all)]
+pub struct GroupTitleChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_title: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupTitleChangeParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, conversation_key_version, custom_title, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        conversation_key_version: String,
+        custom_title: String,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            conversation_key_version,
+            custom_title,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupTitleChangeParams {
+    fn to_core(&self) -> chat_xdk_core::GroupTitleChangeParams {
+        let mut params = chat_xdk_core::GroupTitleChangeParams::new(
+            self.conversation_id.as_str(),
+            self.conversation_key_version.as_str(),
+            self.custom_title.as_str(),
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_avatar_change``.
+#[pyclass(get_all, set_all)]
+pub struct GroupAvatarChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_avatar_url: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupAvatarChangeParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, conversation_key_version, custom_avatar_url, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        conversation_key_version: String,
+        custom_avatar_url: String,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            conversation_key_version,
+            custom_avatar_url,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupAvatarChangeParams {
+    fn to_core(&self) -> chat_xdk_core::GroupAvatarChangeParams {
+        let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
+            self.conversation_id.as_str(),
+            self.conversation_key_version.as_str(),
+            self.custom_avatar_url.as_str(),
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_description_change``.
+///
+/// ``custom_description`` is the ciphertext the request sends.
+#[pyclass(get_all, set_all)]
+pub struct GroupDescriptionChangeParams {
+    conversation_id: String,
+    conversation_key_version: String,
+    custom_description: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupDescriptionChangeParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, conversation_key_version, custom_description, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        conversation_key_version: String,
+        custom_description: String,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            conversation_key_version,
+            custom_description,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupDescriptionChangeParams {
+    fn to_core(&self) -> chat_xdk_core::GroupDescriptionChangeParams {
+        let mut params = chat_xdk_core::GroupDescriptionChangeParams::new(
+            self.conversation_id.as_str(),
+            self.conversation_key_version.as_str(),
+            self.custom_description.as_str(),
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_admins_add``.
+#[pyclass(get_all, set_all)]
+pub struct GroupAdminsAddParams {
+    conversation_id: String,
+    user_ids: Py<PyAny>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupAdminsAddParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, user_ids, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        user_ids: Py<PyAny>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            user_ids,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupAdminsAddParams {
+    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::GroupAdminsAddParams> {
+        let mut params = chat_xdk_core::GroupAdminsAddParams::new(
+            self.conversation_id.as_str(),
+            extract_field(py, &self.user_ids, "user_ids")?,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        Ok(params)
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_admins_remove``.
+#[pyclass(get_all, set_all)]
+pub struct GroupAdminsRemoveParams {
+    conversation_id: String,
+    user_ids: Py<PyAny>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupAdminsRemoveParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, user_ids, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        user_ids: Py<PyAny>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            user_ids,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupAdminsRemoveParams {
+    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::GroupAdminsRemoveParams> {
+        let mut params = chat_xdk_core::GroupAdminsRemoveParams::new(
+            self.conversation_id.as_str(),
+            extract_field(py, &self.user_ids, "user_ids")?,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        Ok(params)
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_invite_enable``.
+///
+/// An empty ``affiliate_id`` and a negative ``expires_at_msec`` sign ``null``.
+#[pyclass(get_all, set_all)]
+pub struct GroupInviteEnableParams {
+    conversation_id: String,
+    invite_url: String,
+    expires_at_msec: Option<i64>,
+    affiliate_id: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupInviteEnableParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, invite_url, *, expires_at_msec=None, affiliate_id=None, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        invite_url: String,
+        expires_at_msec: Option<i64>,
+        affiliate_id: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            invite_url,
+            expires_at_msec,
+            affiliate_id,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupInviteEnableParams {
+    fn to_core(&self) -> chat_xdk_core::GroupInviteEnableParams {
+        let mut params = chat_xdk_core::GroupInviteEnableParams::new(
+            self.conversation_id.as_str(),
+            self.invite_url.as_str(),
+        );
+        params.expires_at_msec = self.expires_at_msec;
+        params.affiliate_id = self.affiliate_id.clone();
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_invite_disable``.
+///
+/// ``disabled_by`` defaults to the sender.
+#[pyclass(get_all, set_all)]
+pub struct GroupInviteDisableParams {
+    conversation_id: String,
+    disabled_by: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupInviteDisableParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, *, disabled_by=None, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        disabled_by: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            disabled_by,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupInviteDisableParams {
+    fn to_core(&self) -> chat_xdk_core::GroupInviteDisableParams {
+        let mut params =
+            chat_xdk_core::GroupInviteDisableParams::new(self.conversation_id.as_str());
+        params.disabled_by = self.disabled_by.clone();
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_join_request``.
+///
+/// ``requesting_user_id`` defaults to the sender. An invite token is not signed.
+#[pyclass(get_all, set_all)]
+pub struct GroupJoinRequestParams {
+    conversation_id: String,
+    requesting_user_id: Option<String>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupJoinRequestParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, *, requesting_user_id=None, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        requesting_user_id: Option<String>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            requesting_user_id,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupJoinRequestParams {
+    fn to_core(&self) -> chat_xdk_core::GroupJoinRequestParams {
+        let mut params = chat_xdk_core::GroupJoinRequestParams::new(self.conversation_id.as_str());
+        params.requesting_user_id = self.requesting_user_id.clone();
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_group_join_reject``.
+#[pyclass(get_all, set_all)]
+pub struct GroupJoinRejectParams {
+    conversation_id: String,
+    user_ids: Py<PyAny>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl GroupJoinRejectParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, user_ids, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        user_ids: Py<PyAny>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            user_ids,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl GroupJoinRejectParams {
+    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::GroupJoinRejectParams> {
+        let mut params = chat_xdk_core::GroupJoinRejectParams::new(
+            self.conversation_id.as_str(),
+            extract_field(py, &self.user_ids, "user_ids")?,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        Ok(params)
+    }
+}
+
+/// Parameters for ``Chat.prepare_message_ttl_change``.
+#[pyclass(get_all, set_all)]
+pub struct MessageTtlChangeParams {
+    conversation_id: String,
+    ttl_msec: i64,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl MessageTtlChangeParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, ttl_msec, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        ttl_msec: i64,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            ttl_msec,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl MessageTtlChangeParams {
+    fn to_core(&self) -> chat_xdk_core::MessageTtlChangeParams {
+        let mut params = chat_xdk_core::MessageTtlChangeParams::new(
+            self.conversation_id.as_str(),
+            self.ttl_msec,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_message_ttl_remove``.
+#[pyclass(get_all, set_all)]
+pub struct MessageTtlRemoveParams {
+    conversation_id: String,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl MessageTtlRemoveParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl MessageTtlRemoveParams {
+    fn to_core(&self) -> chat_xdk_core::MessageTtlRemoveParams {
+        let mut params = chat_xdk_core::MessageTtlRemoveParams::new(self.conversation_id.as_str());
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
+/// Parameters for ``Chat.prepare_screen_capture``.
+///
+/// ``change`` is a :class:`ScreenCaptureChange` value.
+#[pyclass(get_all, set_all)]
+pub struct ScreenCaptureParams {
+    conversation_id: String,
+    change: Py<PyAny>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl ScreenCaptureParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, change, *, sender_id=None, signing_key_version=None))]
+    fn new(
+        conversation_id: String,
+        change: Py<PyAny>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            change,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl ScreenCaptureParams {
+    fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::ScreenCaptureParams> {
+        let bound = self.change.bind(py);
+        // A str enum's str() is its qualified name; the value is the str it is.
+        let change = bound.extract::<String>().or_else(|_| {
+            bound
+                .str()
+                .and_then(|text| text.to_cow().map(|cow| cow.into_owned()))
+        })?;
+        let mut params = chat_xdk_core::ScreenCaptureParams::new(
+            self.conversation_id.as_str(),
+            chat_xdk_core::ScreenCaptureChange::parse(&change).map_err(to_py_err)?,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        Ok(params)
+    }
+}
+
 /// Parameters for ``Chat.set_identity``.
 #[pyclass(get_all, set_all)]
 pub struct SetIdentityParams {
@@ -2274,6 +2899,199 @@ impl Chat {
         prepared_action_to_pydict(py, &prepared)
     }
 
+    /// Sign a group member removal.
+    ///
+    /// Pass ``public_keys`` for the members who stay to rotate the
+    /// conversation key in this call. The result then carries the new key,
+    /// the remaining members' participant keys, and two action signatures:
+    /// the removal (bound to the new key version) and the key change.
+    /// Without ``public_keys`` the same dict has no ``conversation_key``,
+    /// empty participant keys, and only the removal signature.
+    fn prepare_group_members_remove(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupMembersRemoveParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let result = self
+            .inner
+            .prepare_group_members_remove(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        prepared_change_to_pydict(py, &result)
+    }
+
+    /// Sign leaving a group.
+    ///
+    /// The signatures are a removal of the sender, an admin add when
+    /// ``promote_admin_id`` is set, and a conversation delete. Leave does
+    /// not rotate the conversation key.
+    fn prepare_group_leave(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupLeaveParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_leave(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign a group title change.
+    fn prepare_group_title_change(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupTitleChangeParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_title_change(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign a group avatar change.
+    fn prepare_group_avatar_change(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupAvatarChangeParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_avatar_change(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign a group description change.
+    fn prepare_group_description_change(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupDescriptionChangeParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_description_change(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign adding group admins.
+    fn prepare_group_admins_add(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupAdminsAddParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_admins_add(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign removing group admins.
+    fn prepare_group_admins_remove(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupAdminsRemoveParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_admins_remove(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign enabling a group invite.
+    fn prepare_group_invite_enable(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupInviteEnableParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_invite_enable(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign disabling a group invite.
+    fn prepare_group_invite_disable(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupInviteDisableParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_invite_disable(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign a request to join a group.
+    fn prepare_group_join_request(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupJoinRequestParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_join_request(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign rejecting group join requests.
+    fn prepare_group_join_reject(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, GroupJoinRejectParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_group_join_reject(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign a message-TTL change.
+    fn prepare_message_ttl_change(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, MessageTtlChangeParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_message_ttl_change(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign clearing a conversation's message TTL.
+    fn prepare_message_ttl_remove(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, MessageTtlRemoveParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_message_ttl_remove(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign one screen-capture setting change.
+    fn prepare_screen_capture(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, ScreenCaptureParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_screen_capture(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
     /// Export private keys as raw bytes for secure storage.
     ///
     /// Warning: Handle with care — these are your secret keys!
@@ -2578,6 +3396,20 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<GroupMembersChangeParams>()?;
     m.add_class::<GroupCreateParams>()?;
     m.add_class::<MessageDeleteParams>()?;
+    m.add_class::<GroupMembersRemoveParams>()?;
+    m.add_class::<GroupLeaveParams>()?;
+    m.add_class::<GroupTitleChangeParams>()?;
+    m.add_class::<GroupAvatarChangeParams>()?;
+    m.add_class::<GroupDescriptionChangeParams>()?;
+    m.add_class::<GroupAdminsAddParams>()?;
+    m.add_class::<GroupAdminsRemoveParams>()?;
+    m.add_class::<GroupInviteEnableParams>()?;
+    m.add_class::<GroupInviteDisableParams>()?;
+    m.add_class::<GroupJoinRequestParams>()?;
+    m.add_class::<GroupJoinRejectParams>()?;
+    m.add_class::<MessageTtlChangeParams>()?;
+    m.add_class::<MessageTtlRemoveParams>()?;
+    m.add_class::<ScreenCaptureParams>()?;
     m.add_class::<SetIdentityParams>()?;
     m.add_class::<ImportKeysParams>()?;
     m.add_class::<MarkConversationReadParams>()?;

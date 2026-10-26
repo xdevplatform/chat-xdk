@@ -47,6 +47,8 @@
 //! | [`Chat::prepare_conversation_key_change`] | Generate, encrypt, and sign a key change |
 //! | [`Chat::prepare_group_create`] | Generate, encrypt, and sign a group create |
 //! | [`Chat::prepare_group_members_change`] | Generate, encrypt, and sign a member add |
+//! | [`Chat::prepare_group_members_remove`] | Sign a member removal, rotating the key when given the remaining members |
+//! | [`Chat::prepare_group_leave`] | Sign leaving a group |
 //! | [`Chat::decrypt_conversation_key`] | Decrypt a conversation key |
 //! | [`Chat::sign`] | Sign arbitrary data |
 //! | [`Chat::verify`] | Verify a signature |
@@ -68,8 +70,12 @@ use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, Registe
 use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
+    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
+    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
+    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
+    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
     SetIdentityParams,
 };
 #[cfg(feature = "juicebox")]
@@ -466,6 +472,105 @@ impl Chat {
         params: &GroupMembersChangeParams,
     ) -> Result<PreparedConversationChange, SdkError> {
         self.inner.prepare_group_members_change(params)
+    }
+    /// Sign a group member removal. See
+    /// [`crate::ChatCore::prepare_group_members_remove`].
+    pub fn prepare_group_members_remove(
+        &self,
+        params: &GroupMembersRemoveParams,
+    ) -> Result<PreparedConversationChange, SdkError> {
+        self.inner.prepare_group_members_remove(params)
+    }
+    /// Sign leaving a group. See [`crate::ChatCore::prepare_group_leave`].
+    pub fn prepare_group_leave(
+        &self,
+        params: &GroupLeaveParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_leave(params)
+    }
+    /// Sign a group title change.
+    pub fn prepare_group_title_change(
+        &self,
+        params: &GroupTitleChangeParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_title_change(params)
+    }
+    /// Sign a group avatar change.
+    pub fn prepare_group_avatar_change(
+        &self,
+        params: &GroupAvatarChangeParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_avatar_change(params)
+    }
+    /// Sign a group description change.
+    pub fn prepare_group_description_change(
+        &self,
+        params: &GroupDescriptionChangeParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_description_change(params)
+    }
+    /// Sign adding group admins.
+    pub fn prepare_group_admins_add(
+        &self,
+        params: &GroupAdminsAddParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_admins_add(params)
+    }
+    /// Sign removing group admins.
+    pub fn prepare_group_admins_remove(
+        &self,
+        params: &GroupAdminsRemoveParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_admins_remove(params)
+    }
+    /// Sign enabling a group invite.
+    pub fn prepare_group_invite_enable(
+        &self,
+        params: &GroupInviteEnableParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_invite_enable(params)
+    }
+    /// Sign disabling a group invite.
+    pub fn prepare_group_invite_disable(
+        &self,
+        params: &GroupInviteDisableParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_invite_disable(params)
+    }
+    /// Sign a request to join a group.
+    pub fn prepare_group_join_request(
+        &self,
+        params: &GroupJoinRequestParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_join_request(params)
+    }
+    /// Sign rejecting group join requests.
+    pub fn prepare_group_join_reject(
+        &self,
+        params: &GroupJoinRejectParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_group_join_reject(params)
+    }
+    /// Sign a message-TTL change.
+    pub fn prepare_message_ttl_change(
+        &self,
+        params: &MessageTtlChangeParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_message_ttl_change(params)
+    }
+    /// Sign clearing a conversation's message TTL.
+    pub fn prepare_message_ttl_remove(
+        &self,
+        params: &MessageTtlRemoveParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_message_ttl_remove(params)
+    }
+    /// Sign one screen-capture setting change.
+    pub fn prepare_screen_capture(
+        &self,
+        params: &ScreenCaptureParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_screen_capture(params)
     }
     /// Sign arbitrary data.
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SdkError> {

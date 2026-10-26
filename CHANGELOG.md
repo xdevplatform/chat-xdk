@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added
+
+Group and conversation-metadata actions should be signed before they are sent.
+Each call takes one params object and returns `action_signatures` for the
+request.
+
+`prepare_group_members_remove` signs a member removal at signature version
+11, binding the conversation-key version (or the literal `null` when the
+call does not name one). Pass the remaining members' public keys to rotate
+the conversation key in the same call. The result is a
+`PreparedConversationChange`: the new key, the remaining members'
+participant keys, and signatures for the removal and then the key change.
+Without those keys the same type comes back with only the removal signature.
+
+`prepare_group_leave` signs leaving a group: a removal of the sender, an
+admin add when `promote_admin_id` names the member to promote, and a
+conversation delete. Leave does not rotate the conversation key.
+
+Title, avatar, description, admin, invite, and join changes, message-TTL
+changes, and screen-capture setting changes each return a `PreparedAction`
+signed at signature version 7. Screen-capture blocking signs
+`EnableScreenCaptureBlocking` and `DisableScreenCaptureBlocking`. Detection
+signs `EnableScreenCaptureDetection` and `DisableScreenCaptureDetection`.
+
+A member-removal result that rotates a key carries the new conversation key
+and the remaining members' participant keys. It carries no ratchet tree and
+no rewrapped pin-key bundle. Sign a title, avatar, or description under the
+new key with that action's prepare call, and place the signature between the
+removal and the key change.
+
 To move code from 0.5.x, follow your binding's guide in
 [docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
 with before/after code, and [Why 0.6.0 changes](docs/migrating-0.6/why.md)
@@ -605,39 +635,41 @@ prepared = chat.prepare_conversation_key_change(
   message it edits.
 - Signatures verify at versions 8 through 11, in the payload layout of the
   version each carries. Versions above 11 are rejected.
-- Read receipts can be signed. `prepare_mark_conversation_read` takes
+- Read receipts should be signed. `prepare_mark_conversation_read` takes
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
-  (the sequence id of the newest event read) and an optional
-  `seen_at_msec`, which defaults to the current time. It returns a
-  `PreparedAction` whose `action_signatures` the mark-read request
-  (`POST /2/chat/conversations/{id}/read`) takes as they are, nested as the
-  conversation-change requests nest theirs.
-  Recipients' `decrypt_event` returns a signed receipt as a verified
-  `ReadReceipt`. The C ABI adds `chat_xdk_prepare_mark_conversation_read`.
+  (the sequence id of the newest event read) and a `seen_at_msec`, which
+  defaults to the current time. It returns a `PreparedAction`. Apps should
+  send its `action_signatures` on the mark-read request
+  (`POST /2/chat/conversations/{id}/read`) as they are, nested as the
+  conversation-change requests nest theirs. Recipients on the default policy
+  reject an unsigned receipt; `decrypt_event` returns a signed receipt as a
+  verified `ReadReceipt`. The C ABI adds
+  `chat_xdk_prepare_mark_conversation_read`.
 - The JVM jar and the .NET package bundle the native library for 64-bit ARM
   Linux (`linux-arm64`) too, so both bindings run there without a library of
   your own.
 
 ### Security
 
-- Juicebox realm requests (setup, unlock and key deletion) are sent by an
-  HTTP client in `chat-xdk-core` built on reqwest 0.12.28, rustls 0.23.46
-  (ring provider), rustls-webpki 0.103.16, webpki-roots 1.0.11 and h2 0.4.20.
-  juicebox-sdk's `reqwest` feature is no longer enabled, so reqwest 0.11.27,
-  rustls 0.21.12, rustls-webpki 0.101.7, webpki-roots 0.25.4 and h2 0.3.27 are
-  no longer built. This fixes CVE-2026-111943
+- Juicebox realm requests (setup, unlock, and key deletion) go out through an
+  HTTP client in `chat-xdk-core` on reqwest 0.12.28, rustls 0.23.46 (ring),
+  rustls-webpki 0.103.16, webpki-roots 1.0.11, and h2 0.4.20. juicebox-sdk's
+  `reqwest` feature stays off, so the build does not include reqwest 0.11.27,
+  rustls 0.21.12, rustls-webpki 0.101.7, webpki-roots 0.25.4, or h2 0.3.27.
+  That closes CVE-2026-111943
   ([RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381.html),
-  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html)),
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html))
+  along with
   [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346.html),
-  [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html)
+  [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html),
   and [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258.html).
   The client:
   - offers HTTP/2 and HTTP/1.1 over TLS (ALPN);
-  - verifies servers against the Mozilla roots bundled in webpki-roots 1.0.11,
-    which no longer include `emSign ECC Root CA - G3`;
+  - verifies servers against the Mozilla roots bundled in webpki-roots 1.0.11
+    (rustls-webpki 0.103.16 rejects the distrusted emSign intermediate keys);
   - takes proxies from `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY`,
     then from the system proxy settings on macOS and Windows;
-  - sends `X-Juicebox-Version` and `User-Agent: JuiceboxSdk-Rust/<version>`
-    with juicebox-sdk's version on every request;
+  - sends `X-Juicebox-Version: <juicebox version>` and
+    `User-Agent: juicebox_networking/<juicebox version>` on every request;
   - applies the timeout juicebox-sdk sets on each request, or 30 seconds when
     it sets none.

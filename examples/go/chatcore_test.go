@@ -270,6 +270,55 @@ func TestPrepToRequestMapsTheRESTShape(t *testing.T) {
 	}
 }
 
+func TestRemovalToRequestRotatesForMembersWhoStay(t *testing.T) {
+	core, v := loadedCore(t)
+	defer core.Close()
+	prep, err := core.PrepareGroupMembersRemove(fixtureKeys(v), "g123", []string{"2000"})
+	if err != nil {
+		t.Fatalf("PrepareGroupMembersRemove: %v", err)
+	}
+	data, err := json.Marshal(RemovalToRequest([]string{"2000"}, prep))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var body struct {
+		UserIDs                []string         `json:"user_ids"`
+		ActionSignatures       []map[string]any `json:"action_signatures"`
+		ConversationKeyVersion string           `json:"conversation_key_version"`
+		GroupKeyRotationData   struct {
+			ConversationKeyVersion      string           `json:"conversation_key_version"`
+			ConversationParticipantKeys []map[string]any `json:"conversation_participant_keys"`
+		} `json:"group_key_rotation_data"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.UserIDs) != 1 || body.UserIDs[0] != "2000" {
+		t.Errorf("user_ids: %v", body.UserIDs)
+	}
+	if len(body.ActionSignatures) != 2 {
+		t.Fatalf("expected 2 action signatures, got %d", len(body.ActionSignatures))
+	}
+	if body.ConversationKeyVersion != "" {
+		t.Errorf("top-level conversation_key_version %q", body.ConversationKeyVersion)
+	}
+	if body.GroupKeyRotationData.ConversationKeyVersion != prep.ConversationKeyVersion {
+		t.Errorf("rotation version: %s", body.GroupKeyRotationData.ConversationKeyVersion)
+	}
+	pks := body.GroupKeyRotationData.ConversationParticipantKeys
+	if len(pks) != 1 {
+		t.Fatalf("expected 1 participant key, got %d", len(pks))
+	}
+	if pks[0]["user_id"] != "1000" {
+		t.Errorf("participant user_id: %v", pks[0]["user_id"])
+	}
+	for _, field := range []string{"encrypted_conversation_key", "public_key_version", "user_id"} {
+		if pks[0][field] == "" {
+			t.Errorf("empty participant key field %q", field)
+		}
+	}
+}
+
 func TestPrepareGroupCreateYieldsTwoSignatures(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()

@@ -32,6 +32,7 @@ import socket as _socket
 import threading as _threading
 import time as _time
 import urllib.parse as _urllib_parse
+from enum import Enum
 from typing import Optional, TypedDict
 
 from chat_xdk import _native
@@ -51,9 +52,23 @@ from chat_xdk._native import (
     FileDecryptorParams,
     FileEncryptor,
     FileEncryptorParams,
+    GroupAdminsAddParams,
+    GroupAdminsRemoveParams,
+    GroupAvatarChangeParams,
     GroupCreateParams,
+    GroupDescriptionChangeParams,
+    GroupInviteDisableParams,
+    GroupInviteEnableParams,
+    GroupJoinRejectParams,
+    GroupJoinRequestParams,
+    GroupLeaveParams,
     GroupMembersChangeParams,
+    GroupMembersRemoveParams,
+    GroupTitleChangeParams,
     MarkConversationReadParams,
+    MessageTtlChangeParams,
+    MessageTtlRemoveParams,
+    ScreenCaptureParams,
     SetIdentityParams,
     ImportKeysParams,
     MessageDeleteParams,
@@ -70,6 +85,19 @@ from chat_xdk._native import (
     encrypted_file_size,
     hex_to_bytes,
 )
+
+class ScreenCaptureChange(str, Enum):
+    """A screen-capture setting signed by ``prepare_screen_capture``.
+
+    Blocking names are the events X clients sign. Detection names are the
+    events this SDK's verifier reconstructs.
+    """
+
+    BlockingEnabled = "BlockingEnabled"
+    BlockingDisabled = "BlockingDisabled"
+    DetectionEnabled = "DetectionEnabled"
+    DetectionDisabled = "DetectionDisabled"
+
 
 # Feature switches (GET /2/chat/features). A chat reads them once, when it is
 # created: the native core decides what to fetch and what an answer means, and
@@ -257,12 +285,27 @@ __all__ = [
     "FileDecryptorParams",
     "FileEncryptor",
     "FileEncryptorParams",
+    "GroupAdminsAddParams",
+    "GroupAdminsRemoveParams",
+    "GroupAvatarChangeParams",
     "GroupCreateParams",
+    "GroupDescriptionChangeParams",
+    "GroupInviteDisableParams",
+    "GroupInviteEnableParams",
+    "GroupJoinRejectParams",
+    "GroupJoinRequestParams",
+    "GroupLeaveParams",
     "GroupMembersChangeParams",
+    "GroupMembersRemoveParams",
+    "GroupTitleChangeParams",
     "MarkConversationReadParams",
+    "MessageDeleteParams",
+    "MessageTtlChangeParams",
+    "MessageTtlRemoveParams",
+    "ScreenCaptureChange",
+    "ScreenCaptureParams",
     "SetIdentityParams",
     "ImportKeysParams",
-    "MessageDeleteParams",
     "PublicKeyRegistration",
     "PublicKeyRegistrationPayload",
     "PublicKeys",

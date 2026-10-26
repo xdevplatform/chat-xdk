@@ -194,6 +194,17 @@ func (c *XChatClient) AddGroupMembers(conversationID string, body map[string]any
 	return out, nil
 }
 
+// RemoveGroupMembers removes members from a group. body carries user_ids,
+// both signatures, and group_key_rotation_data from RemovalToRequest.
+func (c *XChatClient) RemoveGroupMembers(conversationID string, body map[string]any) (map[string]any, error) {
+	path := fmt.Sprintf("/2/chat/conversations/%s/members/remove", url.PathEscape(conversationID))
+	var out map[string]any
+	if err := c.do(http.MethodPost, path, body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // -- Media (encrypted blobs) ----------------------------------------------------
 
 // uploadChunk is the append segment size for the three-step media upload.

@@ -29,7 +29,8 @@ change.
 - [ ] [Read `ConversationKeyVersion` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [Optional: sign read receipts](#signed-read-receipts)
+- [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
 
@@ -496,17 +497,223 @@ only)` or `too many attachments: at most 10 per message`, without an
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
-## Signed read receipts
+## Group actions should be signed
 
-`PrepareMarkConversationRead` signs a read receipt for the newest event you
-read. It takes a `MarkConversationReadParams` (`ConversationID`,
-`SeenUntilSequenceID`, that event's sequence id, and an optional
-`SeenAtMsec` that defaults to now) and returns a `*PreparedAction`, one
-entry shaped as [Action signatures come nested](#action-signatures-come-nested)
-shows. Send its `ActionSignatures` as the `action_signatures` of the
-mark-read request, `POST /2/chat/conversations/{id}/read`, whose path takes
-the conversation id in its hyphen form. A recipient's `DecryptEvent` returns
-a signed receipt as a verified `ReadReceipt` event.
+Apps should sign each group update below. The sender comes from `SetIdentity`.
+Each returns `ActionSignatures` shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. Send
+those entries on the update's request.
+
+### Removing members
+
+`PrepareGroupMembersRemove` removes `UserIDs` and rotates the conversation
+key for the members who stay. Pass their identity keys as `PublicKeys`. The
+result is a `*PreparedConversationChange`: the new conversation key,
+`ConversationParticipantKeys` for those members, and `ActionSignatures` in
+this order — the removal, then the conversation-key change.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+signatures, and `group_key_rotation_data` holding the new
+`conversation_key_version` and `conversation_participant_keys`.
+
+```go
+// 0.6.0
+prepared, err := chat.PrepareGroupMembersRemove(chatxdk.GroupMembersRemoveParams{
+	ConversationID: conversationID,
+	UserIDs:        userIDs,
+	PublicKeys:     remainingPublicKeys,
+})
+must(err)
+path := "/2/chat/conversations/" + conversationID + "/members/remove"
+_, err = api.Post(path, map[string]any{
+	"user_ids":          userIDs,
+	"action_signatures": prepared.ActionSignatures,
+	"group_key_rotation_data": map[string]any{
+		"conversation_key_version":      prepared.ConversationKeyVersion,
+		"conversation_participant_keys": prepared.ConversationParticipantKeys,
+	},
+})
+must(err)
+```
+
+### Leaving a group
+
+`PrepareGroupLeave` signs the sender's removal and does not rotate the
+conversation key. `ActionSignatures` are the removal, then a
+`GroupAdminAddChange` when `PromoteAdminID` is set, then a
+`ConversationDeleteEvent`. It returns a `*PreparedAction`.
+
+```go
+// 0.6.0
+left, err := chat.PrepareGroupLeave(chatxdk.GroupLeaveParams{
+	ConversationID: conversationID,
+	PromoteAdminID: promoteAdminID,
+})
+must(err)
+// left.ActionSignatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+```
+
+### Changing the title
+
+`CustomTitle` is the ciphertext the request sends. The result is a
+`*PreparedAction`; send its `ActionSignatures` on the request.
+
+```go
+// 0.6.0
+title, err := chat.PrepareGroupTitleChange(chatxdk.GroupTitleChangeParams{
+	ConversationID:         conversationID,
+	ConversationKeyVersion: conversationKeyVersion,
+	CustomTitle:            customTitle,
+})
+must(err)
+```
+
+### Changing the avatar
+
+```go
+// 0.6.0
+avatar, err := chat.PrepareGroupAvatarChange(chatxdk.GroupAvatarChangeParams{
+	ConversationID:         conversationID,
+	ConversationKeyVersion: conversationKeyVersion,
+	CustomAvatarURL:        customAvatarURL,
+})
+must(err)
+```
+
+### Changing the description
+
+`CustomDescription` is the ciphertext the request sends.
+
+```go
+// 0.6.0
+description, err := chat.PrepareGroupDescriptionChange(chatxdk.GroupDescriptionChangeParams{
+	ConversationID:         conversationID,
+	ConversationKeyVersion: conversationKeyVersion,
+	CustomDescription:      customDescription,
+})
+must(err)
+```
+
+### Adding admins
+
+```go
+// 0.6.0
+added, err := chat.PrepareGroupAdminsAdd(chatxdk.GroupAdminsAddParams{
+	ConversationID: conversationID,
+	UserIDs:        userIDs,
+})
+must(err)
+```
+
+### Removing admins
+
+```go
+// 0.6.0
+removed, err := chat.PrepareGroupAdminsRemove(chatxdk.GroupAdminsRemoveParams{
+	ConversationID: conversationID,
+	UserIDs:        userIDs,
+})
+must(err)
+```
+
+### Enabling an invite
+
+A nil `ExpiresAtMsec` or an empty `AffiliateID` signs `null`.
+
+```go
+// 0.6.0
+invite, err := chat.PrepareGroupInviteEnable(chatxdk.GroupInviteEnableParams{
+	ConversationID: conversationID,
+	InviteURL:      inviteURL,
+})
+must(err)
+```
+
+### Disabling an invite
+
+An empty `DisabledBy` uses the sender.
+
+```go
+// 0.6.0
+disabled, err := chat.PrepareGroupInviteDisable(chatxdk.GroupInviteDisableParams{
+	ConversationID: conversationID,
+})
+must(err)
+```
+
+### Requesting to join
+
+An empty `RequestingUserID` uses the sender. An invite token is not part of
+the signature.
+
+```go
+// 0.6.0
+request, err := chat.PrepareGroupJoinRequest(chatxdk.GroupJoinRequestParams{
+	ConversationID: conversationID,
+})
+must(err)
+```
+
+### Rejecting join requests
+
+```go
+// 0.6.0
+rejected, err := chat.PrepareGroupJoinReject(chatxdk.GroupJoinRejectParams{
+	ConversationID: conversationID,
+	UserIDs:        userIDs,
+})
+must(err)
+```
+
+### Changing the message TTL
+
+The signature covers `TTLMsec` only.
+
+```go
+// 0.6.0
+ttl, err := chat.PrepareMessageTtlChange(chatxdk.MessageTtlChangeParams{
+	ConversationID: conversationID,
+	TTLMsec:        ttlMsec,
+})
+must(err)
+```
+
+### Removing the message TTL
+
+```go
+// 0.6.0
+cleared, err := chat.PrepareMessageTtlRemove(chatxdk.MessageTtlRemoveParams{
+	ConversationID: conversationID,
+})
+must(err)
+```
+
+### Changing screen capture
+
+`Change` is a `ScreenCaptureChange`: `BlockingEnabled`,
+`BlockingDisabled`, `DetectionEnabled`, or `DetectionDisabled`.
+
+```go
+// 0.6.0
+capture, err := chat.PrepareScreenCapture(chatxdk.ScreenCaptureParams{
+	ConversationID: conversationID,
+	Change:         chatxdk.BlockingEnabled,
+})
+must(err)
+```
+
+## Read receipts should be signed
+
+Apps should sign a read receipt with `PrepareMarkConversationRead` and send
+the `PreparedAction`'s `ActionSignatures` as the `action_signatures` of
+`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
+reject an unsigned receipt. The call takes a `MarkConversationReadParams`
+(`ConversationID`, `SeenUntilSequenceID`, the sequence id of the newest
+event read, and a `SeenAtMsec` that defaults to now) and returns a
+`*PreparedAction`, one entry shaped as
+[Action signatures come nested](#action-signatures-come-nested) shows. The
+path takes the conversation id in its hyphen form. A recipient's
+`DecryptEvent` returns a signed receipt as a verified `ReadReceipt` event.
 
 ```go
 // 0.6.0

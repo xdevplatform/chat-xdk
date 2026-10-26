@@ -152,6 +152,14 @@ public sealed class XChatClient
     public Task<JsonElement> AddGroupMembersAsync(string conversationId, object body)
         => PostAsync($"/2/chat/conversations/{Uri.EscapeDataString(conversationId)}/members", body);
 
+    /// <summary>
+    /// POST /2/chat/conversations/{id}/members/remove.
+    /// <paramref name="body"/> carries <c>user_ids</c>, both signatures, and
+    /// <c>group_key_rotation_data</c> from <see cref="EventHelpers.RemovalToRequest"/>.
+    /// </summary>
+    public Task<JsonElement> RemoveGroupMembersAsync(string conversationId, object body)
+        => PostAsync($"/2/chat/conversations/{Uri.EscapeDataString(conversationId)}/members/remove", body);
+
     // -- Media (encrypted blobs) ---------------------------------------------
 
     private const int UploadChunk = 3 * 1024 * 1024;

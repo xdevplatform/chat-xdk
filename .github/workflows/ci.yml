@@ -74,6 +74,13 @@ jobs:
       - name: Lint (clippy)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # crates/core/fuzz is its own workspace, so the workspace build never
+      # typechecks it. Compile the targets only; fuzz.yml runs them.
+      # The shared target dir keeps this an incremental check.
+      - name: Check fuzz targets
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo check --manifest-path crates/core/fuzz/Cargo.toml --bins --target-dir target
+
       # License policy for third-party crates (see deny.toml + THIRD_PARTY_NOTICES.md).
       # Only on ubuntu to avoid doubling the install; graph is platform-agnostic enough.
       - name: Install cargo-deny

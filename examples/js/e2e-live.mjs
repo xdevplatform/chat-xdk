@@ -15,12 +15,13 @@
  * Optional extras: CHATXDK_E2E_MEDIA=1 also stream-encrypts a media blob,
  * uploads it, sends a message referencing it, then downloads and
  * stream-decrypts it back to the original bytes; CHATXDK_E2E_GROUPS=1 also
- * creates a group (two-signature create), sends a group message, and adds
- * the 1:1 partner as a member.
+ * creates a group (two-signature create), sends a group message, adds
+ * the 1:1 partner as a member, then removes that partner and rotates the
+ * key for who stays.
  *
  * Not part of `node --test` (kept outside test/ and without a .test suffix).
  */
-import { ChatCore, messageText, prepToRequest } from "./src/chat-core.mjs";
+import { ChatCore, messageText, prepToRequest, removalToRequest } from "./src/chat-core.mjs";
 import { XChatClient } from "./src/x-api.mjs";
 
 const need = (k) => {
@@ -404,6 +405,16 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       `group member add: ${partnerId} added (key rotated to ${mPrep.conversationKeyVersion})`,
     );
   }
+
+  const rPrep = core.prepareGroupMembersRemove({
+    publicKeys: myKeys,
+    conversationId: groupId,
+    userIds: [partnerId],
+  });
+  await api.removeGroupMembers(groupId, removalToRequest([partnerId], rPrep));
+  console.log(
+    `group member remove: ${partnerId} removed (key rotated to ${rPrep.conversationKeyVersion})`,
+  );
 }
 
 console.log("E2E JS: PASS");

@@ -261,6 +261,90 @@ func ffiPrepareMessageDelete(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_prepare_message_delete(h, c))
 }
 
+func ffiPrepareGroupMembersRemove(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_members_remove(h, c))
+}
+
+func ffiPrepareGroupLeave(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_leave(h, c))
+}
+
+func ffiPrepareGroupTitleChange(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_title_change(h, c))
+}
+
+func ffiPrepareGroupAvatarChange(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_avatar_change(h, c))
+}
+
+func ffiPrepareGroupDescriptionChange(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_description_change(h, c))
+}
+
+func ffiPrepareGroupAdminsAdd(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_admins_add(h, c))
+}
+
+func ffiPrepareGroupAdminsRemove(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_admins_remove(h, c))
+}
+
+func ffiPrepareGroupInviteEnable(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_invite_enable(h, c))
+}
+
+func ffiPrepareGroupInviteDisable(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_invite_disable(h, c))
+}
+
+func ffiPrepareGroupJoinRequest(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_join_request(h, c))
+}
+
+func ffiPrepareGroupJoinReject(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_group_join_reject(h, c))
+}
+
+func ffiPrepareMessageTtlChange(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_message_ttl_change(h, c))
+}
+
+func ffiPrepareMessageTtlRemove(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_message_ttl_remove(h, c))
+}
+
+func ffiPrepareScreenCapture(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_screen_capture(h, c))
+}
+
 func ffiPrepareMarkConversationRead(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))

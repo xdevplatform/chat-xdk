@@ -174,8 +174,12 @@ pub use crypto::encryption::{FileDecryptor, FileEncryptor};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
+    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
+    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
+    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
+    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
     SetIdentityParams,
 };
 pub use types::*;
@@ -222,6 +226,7 @@ pub mod js {
         JsReadReceiptEvent,
         JsReplyPreviewValidation,
         // Send/receive types
+        JsScreenCaptureChange,
         JsSendPayload,
         JsSettingsChange,
         JsSettingsChangeEvent,
@@ -246,8 +251,13 @@ pub mod prelude {
 
     pub use crate::params::{
         ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
-        EncryptReactionParams, EncryptReplyParams, GroupCreateParams, GroupMembersChangeParams,
-        ImportKeysParams, MarkConversationReadParams, MessageDeleteParams, SetIdentityParams,
+        EncryptReactionParams, EncryptReplyParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+        GroupAvatarChangeParams, GroupCreateParams, GroupDescriptionChangeParams,
+        GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,
+        GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
+        GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
+        MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+        MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
     };
 
     // Types (always available)

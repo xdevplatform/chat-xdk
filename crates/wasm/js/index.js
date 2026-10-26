@@ -506,6 +506,20 @@ export class ChatWithJuicebox {
   prepareConversationKeyChange(params) { return this.#inner.prepareConversationKeyChange(params); }
   prepareGroupMembersChange(params) { return this.#inner.prepareGroupMembersChange(params); }
   prepareGroupCreate(params) { return this.#inner.prepareGroupCreate(params); }
+  prepareGroupMembersRemove(params) { return this.#inner.prepareGroupMembersRemove(params); }
+  prepareGroupLeave(params) { return this.#inner.prepareGroupLeave(params); }
+  prepareGroupTitleChange(params) { return this.#inner.prepareGroupTitleChange(params); }
+  prepareGroupAvatarChange(params) { return this.#inner.prepareGroupAvatarChange(params); }
+  prepareGroupDescriptionChange(params) { return this.#inner.prepareGroupDescriptionChange(params); }
+  prepareGroupAdminsAdd(params) { return this.#inner.prepareGroupAdminsAdd(params); }
+  prepareGroupAdminsRemove(params) { return this.#inner.prepareGroupAdminsRemove(params); }
+  prepareGroupInviteEnable(params) { return this.#inner.prepareGroupInviteEnable(params); }
+  prepareGroupInviteDisable(params) { return this.#inner.prepareGroupInviteDisable(params); }
+  prepareGroupJoinRequest(params) { return this.#inner.prepareGroupJoinRequest(params); }
+  prepareGroupJoinReject(params) { return this.#inner.prepareGroupJoinReject(params); }
+  prepareMessageTtlChange(params) { return this.#inner.prepareMessageTtlChange(params); }
+  prepareMessageTtlRemove(params) { return this.#inner.prepareMessageTtlRemove(params); }
+  prepareScreenCapture(params) { return this.#inner.prepareScreenCapture(params); }
 
   /**
    * Release the WASM-side crypto engine: clears key material (`lock()`) and

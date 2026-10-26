@@ -14,7 +14,8 @@ Every example is a small bot: it reads incoming DMs, decrypts them, generates a
 reply (a simple echo), encrypts the reply, and sends it back.
 
 The bots deliberately stop at that messaging core. The rest of the SDK surface
-— group management (`prepareGroupCreate` / `prepareGroupMembersChange`),
+— group management (`prepareGroupCreate` / `prepareGroupMembersChange` /
+`prepareGroupMembersRemove`),
 reactions (`encryptAddReaction` / `encryptRemoveReaction`), and media files
 (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`) — is documented in
 [`../docs/API.md`](../docs/API.md), with tested reference call shapes in each
@@ -129,8 +130,10 @@ Each example ships **two** test paths:
   finishes the upload (append → finalize), sends the message, then downloads
   and decrypts the file back to the original bytes; `CHATXDK_E2E_GROUPS=1`
   additionally creates a
-  group (the two-signature create), sends a group message, and adds the 1:1
-  partner as a member (a key rotation); `CHAT_PIN=…` (Python only)
+  group (the two-signature create), sends a group message, adds the 1:1
+  partner as a member (a key rotation), then removes that partner and rotates
+  the key again for the members who stay (`group_key_rotation_data` plus both
+  signatures on `POST …/members/remove`); `CHAT_PIN=…` (Python only)
   additionally unlocks keys via live Juicebox and checks they match the
   blob-loaded ones. Live sends carry a `chat-xdk e2e [<lang>] <timestamp>`
   marker and the TTL keeps the test conversation from accumulating history.

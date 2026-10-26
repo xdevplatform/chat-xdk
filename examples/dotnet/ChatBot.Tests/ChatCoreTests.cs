@@ -187,6 +187,34 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void RemovalToRequest_Rotates_For_Members_Who_Stay()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("1000");
+        var prep = core.PrepareGroupMembersRemove(new[]
+        {
+            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+        }, "g123", new[] { "2000" });
+
+        using var doc = JsonDocument.Parse(
+            JsonSerializer.Serialize(EventHelpers.RemovalToRequest(new[] { "2000" }, prep)));
+        var body = doc.RootElement;
+
+        Assert.Equal("2000", Assert.Single(body.GetProperty("user_ids").EnumerateArray()).GetString());
+        Assert.Equal(2, body.GetProperty("action_signatures").GetArrayLength());
+        var rotation = body.GetProperty("group_key_rotation_data");
+        Assert.Equal(prep.ConversationKeyVersion, rotation.GetProperty("conversation_key_version").GetString());
+        var pk = Assert.Single(rotation.GetProperty("conversation_participant_keys").EnumerateArray());
+        Assert.Equal("1000", pk.GetProperty("user_id").GetString());
+        Assert.Equal(
+            new[] { "encrypted_conversation_key", "public_key_version", "user_id" },
+            pk.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        Assert.False(body.TryGetProperty("conversation_key_version", out _));
+        Assert.False(body.TryGetProperty("conversation_participant_keys", out _));
+    }
+
+    [Fact]
     public void PrepareGroupCreate_Yields_Two_Signatures()
     {
         var v = LoadVectors();

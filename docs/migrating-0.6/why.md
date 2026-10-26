@@ -215,20 +215,41 @@ rejected, since their layout is unknown
 ([CRYPTO.md](../CRYPTO.md#verifying-newer-versions)). There's no code to
 change.
 
-## Read receipts can be signed
+## Read receipts should be signed
 
-Under the default policy, `decrypt_event` rejects an unverified read
-receipt. `prepare_mark_conversation_read` signs one: its `PreparedAction`
-goes in the `action_signatures` of the mark-read request,
-`POST /2/chat/conversations/{id}/read`, and recipients' `decrypt_event`
+Recipients on the default policy reject an unsigned read receipt, so apps
+should sign one. `prepare_mark_conversation_read` signs it: send the
+`PreparedAction`'s `action_signatures` on
+`POST /2/chat/conversations/{id}/read`, and a recipient's `decrypt_event`
 returns the receipt as a verified `ReadReceipt`:
-[Rust](rust.md#signed-read-receipts),
-[Python](python.md#signed-read-receipts),
-[JavaScript](javascript.md#signed-read-receipts),
-[Go](go.md#signed-read-receipts),
-[JVM](jvm.md#signed-read-receipts),
-[.NET](dotnet.md#signed-read-receipts),
-[C ABI](c-abi.md#signed-read-receipts).
+[Rust](rust.md#read-receipts-should-be-signed),
+[Python](python.md#read-receipts-should-be-signed),
+[JavaScript](javascript.md#read-receipts-should-be-signed),
+[Go](go.md#read-receipts-should-be-signed),
+[JVM](jvm.md#read-receipts-should-be-signed),
+[.NET](dotnet.md#read-receipts-should-be-signed),
+[C ABI](c-abi.md#read-receipts-should-be-signed).
+
+## Group actions should be signed
+
+Apps should sign a group update with the signatures of the actions it
+performs. Removing members also rotates the conversation key for the
+members who stay:
+`prepare_group_members_remove` takes their public keys and returns a
+`PreparedConversationChange`, and
+`POST /2/chat/conversations/{id}/members/remove` sends
+`group_key_rotation_data` with both signatures. Leaving signs the sender's
+removal, then an admin add when `promote_admin_id` is set, then a
+conversation delete, and does not rotate the key. Title, avatar,
+description, admin, invite, and join changes, message-TTL changes, and
+screen-capture changes each return a `PreparedAction`:
+[Rust](rust.md#group-actions-should-be-signed),
+[Python](python.md#group-actions-should-be-signed),
+[JavaScript](javascript.md#group-actions-should-be-signed),
+[Go](go.md#group-actions-should-be-signed),
+[JVM](jvm.md#group-actions-should-be-signed),
+[.NET](dotnet.md#group-actions-should-be-signed),
+[C ABI](c-abi.md#group-actions-should-be-signed).
 
 ## Invalid input has its own error
 

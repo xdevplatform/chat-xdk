@@ -209,6 +209,19 @@ mod http_impl {
             self.post_json(&path, body)
         }
 
+        /// POST /2/chat/conversations/{id}/members/remove.
+        ///
+        /// `body` carries `user_ids`, both signatures, and
+        /// `group_key_rotation_data` from `chat_core::removal_to_request`.
+        pub fn remove_group_members(
+            &self,
+            conversation_id: &str,
+            body: &Value,
+        ) -> Result<Value, String> {
+            let path = format!("/2/chat/conversations/{conversation_id}/members/remove");
+            self.post_json(&path, body)
+        }
+
         // -- Media (encrypted blobs) -----------------------------------------
 
         /// Bytes per append segment when uploading media.
