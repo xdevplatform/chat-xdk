@@ -1489,6 +1489,50 @@ namespace ChatXdk.Tests
         // Failure events are unsigned by protocol: the fixture failure decodes
         // with no conversation or signing keys, and the JSON carries the
         // PascalCase discriminator values.
+        // Reactions and edits name their target by its sequence id; a v0 edit
+        // carries no target message id.
+        [Fact]
+        public void Vectors_ReactionsAndEdits_NameTheirTargetBySequenceId()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+
+            JsonElement Content(SendPayload payload)
+            {
+                var e = chat.DecryptEvent(new DecryptEventParams(payload.EventB64, ConversationKeys(v))
+                {
+                    SigningKeys = EventSigningKeys(v),
+                });
+                Assert.True(e.GetProperty("verified").GetBoolean());
+                return e.GetProperty("content");
+            }
+
+            var reaction = new EncryptReactionParams(v.EventMessageB64, "👍")
+            {
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            };
+            var added = Content(chat.EncryptAddReaction(reaction));
+            Assert.Equal("Reaction", added.GetProperty("content_type").GetString());
+            Assert.Equal("1", added.GetProperty("target_message_sequence_id").GetString());
+            var removed = Content(chat.EncryptRemoveReaction(reaction));
+            Assert.Equal("ReactionRemoved", removed.GetProperty("content_type").GetString());
+            Assert.Equal("1", removed.GetProperty("target_message_sequence_id").GetString());
+
+            var edited = Content(chat.EncryptEdit(new EncryptEditParams(v.EventMessageB64, "fixed")
+            {
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            }));
+            Assert.Equal("Edit", edited.GetProperty("content_type").GetString());
+            Assert.Equal("1", edited.GetProperty("target_message_sequence_id").GetString());
+            Assert.Equal("fixed", edited.GetProperty("updated_text").GetString());
+            Assert.False(edited.TryGetProperty("target_message_id", out _));
+        }
+
         // A signed group description change: DecryptEvent returns the
         // description decrypted under the fixture conversation key, and
         // without that key the change fails instead of coming back as

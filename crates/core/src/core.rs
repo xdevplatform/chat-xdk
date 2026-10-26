@@ -1661,7 +1661,7 @@ impl ChatCore {
                 Event::ReadReceipt(ReadReceiptEvent {
                     meta,
                     verified,
-                    seen_until_id: read_event.seen_until_sequence_id.clone(),
+                    seen_until_sequence_id: read_event.seen_until_sequence_id.clone(),
                     seen_at_msec: read_event.seen_at_millis,
                 })
             }
@@ -1672,7 +1672,7 @@ impl ChatCore {
                 Event::MarkedUnread(MarkedUnreadEvent {
                     meta,
                     verified,
-                    seen_until_id: unread_event.seen_until_sequence_id.clone(),
+                    seen_until_sequence_id: unread_event.seen_until_sequence_id.clone(),
                 })
             }
             MessageEventDetail::MessageDeleteEvent(del_event) => {
@@ -1687,7 +1687,7 @@ impl ChatCore {
                 Event::MessageDeleted(MessageDeletedEvent {
                     meta,
                     verified,
-                    message_ids: del_event.sequence_ids.clone().unwrap_or_default(),
+                    sequence_ids: del_event.sequence_ids.clone().unwrap_or_default(),
                     delete_for_all,
                 })
             }
@@ -4082,15 +4082,16 @@ pub(crate) fn parse_message_content(data: &[u8]) -> Result<ParsedMessageContent,
             }
             MessageEntryContents::ReactionAdd(r) => MessageContent::Reaction {
                 emoji: r.emoji.unwrap_or_default(),
-                target_message_id: r.message_sequence_id.unwrap_or_default(),
+                target_message_sequence_id: r.message_sequence_id.unwrap_or_default(),
             },
             MessageEntryContents::ReactionRemove(r) => MessageContent::ReactionRemoved {
                 emoji: r.emoji.unwrap_or_default(),
-                target_message_id: r.message_sequence_id.unwrap_or_default(),
+                target_message_sequence_id: r.message_sequence_id.unwrap_or_default(),
             },
             MessageEntryContents::MessageEdit(e) => MessageContent::Edit {
-                target_message_id: e.message_sequence_id.unwrap_or_default(),
-                new_text: e.updated_text.unwrap_or_default(),
+                target_message_sequence_id: e.message_sequence_id.unwrap_or_default(),
+                target_message_id: e.message_id,
+                updated_text: e.updated_text.unwrap_or_default(),
                 entities: map_rich_text_entities(e.entities.as_deref()),
             },
             MessageEntryContents::MarkConversationRead(_) => MessageContent::MarkRead,
@@ -4706,12 +4707,15 @@ mod tests {
                 assert!(msg.verified, "self-signed edit must verify");
                 match msg.content {
                     MessageContent::Edit {
+                        target_message_sequence_id,
                         target_message_id,
-                        new_text,
+                        updated_text,
                         entities,
                     } => {
-                        assert_eq!(target_message_id, "seq-orig");
-                        assert_eq!(new_text, "read https://example.com");
+                        assert_eq!(target_message_sequence_id, "seq-orig");
+                        // A v0 edit names its target by sequence id only.
+                        assert_eq!(target_message_id, None);
+                        assert_eq!(updated_text, "read https://example.com");
                         let entities = entities.expect("entities survive the round trip");
                         assert_eq!(entities.len(), 1);
                         assert_eq!(entities[0].start_index, Some(5));
@@ -5703,7 +5707,7 @@ mod tests {
             .unwrap();
         match event {
             Event::ReadReceipt(r) => {
-                assert_eq!(r.seen_until_id.as_deref(), Some("seq-50"));
+                assert_eq!(r.seen_until_sequence_id.as_deref(), Some("seq-50"));
                 assert_eq!(r.seen_at_msec, Some(1700000050000));
                 assert!(!r.verified);
                 assert_eq!(r.meta.sender_id.as_deref(), Some("910003"));
@@ -5726,7 +5730,7 @@ mod tests {
             .unwrap();
         match event {
             Event::MarkedUnread(u) => {
-                assert_eq!(u.seen_until_id.as_deref(), Some("seq-42"));
+                assert_eq!(u.seen_until_sequence_id.as_deref(), Some("seq-42"));
                 assert!(!u.verified);
             }
             other => panic!("Expected Event::MarkedUnread, got {:?}", other),
@@ -5751,7 +5755,7 @@ mod tests {
             .unwrap();
         match event {
             Event::MessageDeleted(md) => {
-                assert_eq!(md.message_ids, vec!["seq-10", "seq-11"]);
+                assert_eq!(md.sequence_ids, vec!["seq-10", "seq-11"]);
                 assert!(!md.delete_for_all);
                 assert!(!md.verified);
             }
@@ -5777,7 +5781,7 @@ mod tests {
             .unwrap();
         match event {
             Event::MessageDeleted(md) => {
-                assert_eq!(md.message_ids, vec!["seq-20"]);
+                assert_eq!(md.sequence_ids, vec!["seq-20"]);
                 assert!(md.delete_for_all);
             }
             other => panic!("Expected Event::MessageDeleted, got {:?}", other),
@@ -7782,7 +7786,10 @@ mod tests {
         {
             Event::ReadReceipt(read) => {
                 assert!(read.verified);
-                assert_eq!(read.seen_until_id.as_deref(), Some("2011626338877079553"));
+                assert_eq!(
+                    read.seen_until_sequence_id.as_deref(),
+                    Some("2011626338877079553")
+                );
                 assert_eq!(read.seen_at_msec, Some(1_700_000_000_123));
             }
             other => panic!("expected Event::ReadReceipt, got {:?}", other),
@@ -9195,10 +9202,10 @@ mod tests {
                 match &msg.content {
                     MessageContent::Reaction {
                         emoji,
-                        target_message_id,
+                        target_message_sequence_id,
                     } => {
                         assert_eq!(emoji, "thumbs");
-                        assert_eq!(target_message_id, "seq-42");
+                        assert_eq!(target_message_sequence_id, "seq-42");
                     }
                     other => panic!("expected Reaction, got {:?}", other),
                 }
@@ -9239,10 +9246,10 @@ mod tests {
                 match &msg.content {
                     MessageContent::ReactionRemoved {
                         emoji,
-                        target_message_id,
+                        target_message_sequence_id,
                     } => {
                         assert_eq!(emoji, "thumbs");
-                        assert_eq!(target_message_id, "seq-42");
+                        assert_eq!(target_message_sequence_id, "seq-42");
                     }
                     other => panic!("expected ReactionRemoved, got {:?}", other),
                 }
@@ -10161,10 +10168,10 @@ mod tests {
             Event::Message(msg) => match &msg.content {
                 MessageContent::Reaction {
                     emoji,
-                    target_message_id,
+                    target_message_sequence_id,
                 } => {
                     assert_eq!(emoji, "👍");
-                    assert_eq!(target_message_id, "seq-orig");
+                    assert_eq!(target_message_sequence_id, "seq-orig");
                 }
                 other => panic!("expected Reaction, got {:?}", other),
             },

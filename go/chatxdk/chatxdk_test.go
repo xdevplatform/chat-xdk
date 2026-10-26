@@ -2913,7 +2913,7 @@ func TestReadReceiptEventVerified(t *testing.T) {
 	rrJSON := `{
 		"type": "ReadReceipt",
 		"sender_id": "910004",
-		"seen_until_id": "seq-77",
+		"seen_until_sequence_id": "seq-77",
 		"verified": true
 	}`
 	var rr ReadReceiptEvent
@@ -2923,8 +2923,8 @@ func TestReadReceiptEventVerified(t *testing.T) {
 	if !rr.Verified {
 		t.Error("expected verified == true on the typed ReadReceiptEvent")
 	}
-	if rr.SeenUntilID == nil || *rr.SeenUntilID != "seq-77" {
-		t.Errorf("unexpected seen_until_id: %v", rr.SeenUntilID)
+	if rr.SeenUntilSequenceID == nil || *rr.SeenUntilSequenceID != "seq-77" {
+		t.Errorf("unexpected seen_until_sequence_id: %v", rr.SeenUntilSequenceID)
 	}
 }
 
@@ -2981,7 +2981,7 @@ func TestMessageContentReaction(t *testing.T) {
 		"content": {
 			"content_type": "Reaction",
 			"emoji": "\ud83d\udc4d",
-			"target_message_id": "msg-42"
+			"target_message_sequence_id": "seq-42"
 		},
 		"verified": false
 	}`
@@ -3002,8 +3002,8 @@ func TestMessageContentReaction(t *testing.T) {
 	if msg.Content.ReactionContent.Emoji != "\U0001F44D" {
 		t.Errorf("expected thumbs up emoji, got %q", msg.Content.ReactionContent.Emoji)
 	}
-	if msg.Content.ReactionContent.TargetMessageID != "msg-42" {
-		t.Errorf("expected target_message_id 'msg-42', got %q", msg.Content.ReactionContent.TargetMessageID)
+	if msg.Content.ReactionContent.TargetMessageSequenceID != "seq-42" {
+		t.Errorf("expected target_message_sequence_id 'seq-42', got %q", msg.Content.ReactionContent.TargetMessageSequenceID)
 	}
 	// Text() should return empty for a Reaction
 	if msg.Text() != "" {
@@ -3017,7 +3017,7 @@ func TestMessageContentReactionRemoved(t *testing.T) {
 		"content": {
 			"content_type": "ReactionRemoved",
 			"emoji": "\ud83d\udc4e",
-			"target_message_id": "msg-99"
+			"target_message_sequence_id": "seq-99"
 		},
 		"verified": false
 	}`
@@ -3698,6 +3698,20 @@ func TestEncryptReactionByTargetEvent(t *testing.T) {
 	}
 	if add.EncodedMessageCreateEvent == "" || add.MessageID == "" {
 		t.Errorf("incomplete add payload: %+v", add)
+	}
+	// The reaction names its target by the target event's sequence id.
+	event, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         add.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	if err != nil {
+		t.Fatalf("DecryptEvent of the reaction failed: %v", err)
+	}
+	reaction := event.AsMessage()
+	if reaction == nil || reaction.Content.ReactionContent == nil ||
+		reaction.Content.ReactionContent.TargetMessageSequenceID != "1" {
+		t.Fatalf("unexpected reaction: %+v", reaction)
 	}
 	// The same params value serves the matching remove.
 	if _, err := chat.EncryptRemoveReaction(params); err != nil {

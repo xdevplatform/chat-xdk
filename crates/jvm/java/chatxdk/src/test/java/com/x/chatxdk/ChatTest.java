@@ -1123,6 +1123,49 @@ class ChatTest {
     // Failure events are unsigned by protocol: the fixture failure decodes
     // with no conversation or signing keys, and the JSON carries the
     // PascalCase discriminator values.
+    // Reactions and edits name their target by its sequence id; a v0 edit
+    // carries no target message id.
+    @Test
+    void vectorsReactionsAndEditsNameTheirTargetBySequenceId() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            chat.setIdentity(new SetIdentityParams(
+                    v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
+            byte[] key = b64(v, "conversation_key_b64");
+            String version = v.get("event_conversation_key_version").asText();
+            String target = v.get("event_message_b64").asText();
+
+            EncryptReactionParams reaction = new EncryptReactionParams(target, "👍");
+            reaction.conversationKey = key;
+            reaction.conversationKeyVersion = version;
+            JsonNode added = decryptedContent(chat, v, chat.encryptAddReaction(reaction).eventB64);
+            assertEquals("Reaction", added.path("content_type").asText());
+            assertEquals("1", added.path("target_message_sequence_id").asText());
+            JsonNode removed = decryptedContent(chat, v, chat.encryptRemoveReaction(reaction).eventB64);
+            assertEquals("ReactionRemoved", removed.path("content_type").asText());
+            assertEquals("1", removed.path("target_message_sequence_id").asText());
+
+            EncryptEditParams edit = new EncryptEditParams(target, "fixed");
+            edit.conversationKey = key;
+            edit.conversationKeyVersion = version;
+            JsonNode edited = decryptedContent(chat, v, chat.encryptEdit(edit).eventB64);
+            assertEquals("Edit", edited.path("content_type").asText());
+            assertEquals("1", edited.path("target_message_sequence_id").asText());
+            assertEquals("fixed", edited.path("updated_text").asText());
+            assertTrue(edited.path("target_message_id").isMissingNode());
+        }
+    }
+
+    /** The content of a message this chat sent, decrypted and verified. */
+    private static JsonNode decryptedContent(Chat chat, JsonNode v, String eventB64) throws Exception {
+        DecryptEventParams params = new DecryptEventParams(eventB64, conversationKeys(v));
+        params.signingKeys = eventSigningKeys(v);
+        JsonNode event = chat.decryptEvent(params);
+        assertTrue(event.path("verified").asBoolean());
+        return event.path("content");
+    }
+
     @Test
     void vectorsGroupDescriptionChangeDecryptsOnReceive() throws Exception {
         JsonNode v = loadVectors();

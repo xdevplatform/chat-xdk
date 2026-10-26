@@ -548,24 +548,28 @@ pub enum MessageContent {
     Reaction {
         /// The emoji.
         emoji: String,
-        /// Sequence ID of the message being reacted to.
-        target_message_id: String,
+        /// The `sequence_id` of the message being reacted to.
+        target_message_sequence_id: String,
     },
 
     /// A reaction was removed.
     ReactionRemoved {
         /// The emoji.
         emoji: String,
-        /// Sequence ID of the message.
-        target_message_id: String,
+        /// The `sequence_id` of the message the reaction was on.
+        target_message_sequence_id: String,
     },
 
     /// A message was edited.
     Edit {
-        /// Sequence ID of the edited message.
-        target_message_id: String,
-        /// The new text.
-        new_text: String,
+        /// The `sequence_id` of the edited message.
+        target_message_sequence_id: String,
+        /// The signed message id of the edited message, which v1 edits
+        /// carry; `None` for v0 edits.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_message_id: Option<String>,
+        /// The replacement text.
+        updated_text: String,
         /// Rich text entities in the new text.
         #[serde(skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -814,8 +818,8 @@ pub struct MessageDeletedEvent {
     /// Whether the signature was verified.
     pub verified: bool,
 
-    /// IDs of deleted messages.
-    pub message_ids: Vec<String>,
+    /// The `sequence_id`s of the deleted messages.
+    pub sequence_ids: Vec<String>,
 
     /// Whether deleted for self only or for everyone.
     pub delete_for_all: bool,
@@ -862,8 +866,8 @@ pub struct ReadReceiptEvent {
     /// Whether the signature was verified.
     pub verified: bool,
 
-    /// Messages up to this ID were read.
-    pub seen_until_id: Option<String>,
+    /// The `sequence_id` of the newest event read.
+    pub seen_until_sequence_id: Option<String>,
 
     /// When the conversation was marked read (milliseconds).
     pub seen_at_msec: Option<i64>,
@@ -882,8 +886,9 @@ pub struct MarkedUnreadEvent {
     /// Whether the signature was verified.
     pub verified: bool,
 
-    /// Messages up to this ID were read.
-    pub seen_until_id: Option<String>,
+    /// The `sequence_id` of the newest event read before the conversation
+    /// was marked unread.
+    pub seen_until_sequence_id: Option<String>,
 }
 
 /// Message delivery failed.
@@ -1529,7 +1534,7 @@ mod tests {
             meta: EventMeta::default(),
             content: MessageContent::Reaction {
                 emoji: "👍".to_string(),
-                target_message_id: "seq-1".to_string(),
+                target_message_sequence_id: "seq-1".to_string(),
             },
             conversation_key_version: None,
             verified: true,
@@ -1550,7 +1555,7 @@ mod tests {
             meta: EventMeta::default(),
             content: MessageContent::ReactionRemoved {
                 emoji: "👎".to_string(),
-                target_message_id: "seq-2".to_string(),
+                target_message_sequence_id: "seq-2".to_string(),
             },
             conversation_key_version: None,
             verified: false,
@@ -1817,18 +1822,24 @@ mod tests {
 
         let reaction = MessageContent::Reaction {
             emoji: "👍".to_string(),
-            target_message_id: "seq-1".to_string(),
+            target_message_sequence_id: "seq-1".to_string(),
         };
         let json = serde_json::to_value(JsMessageContent::from(reaction)).unwrap();
-        assert_eq!(json["targetMessageId"], "seq-1");
+        assert_eq!(json["targetMessageSequenceId"], "seq-1");
 
         let edit = MessageContent::Edit {
-            target_message_id: "seq-1".to_string(),
-            new_text: "fixed".to_string(),
+            target_message_sequence_id: "seq-1".to_string(),
+            target_message_id: Some("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f".to_string()),
+            updated_text: "fixed".to_string(),
             entities: None,
         };
         let json = serde_json::to_value(JsMessageContent::from(edit)).unwrap();
-        assert_eq!(json["newText"], "fixed");
+        assert_eq!(json["targetMessageSequenceId"], "seq-1");
+        assert_eq!(
+            json["targetMessageId"],
+            "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f"
+        );
+        assert_eq!(json["updatedText"], "fixed");
 
         let change = GroupChange::TitleChanged {
             new_title: "New Name".to_string(),

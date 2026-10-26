@@ -983,6 +983,10 @@ export interface Event {
   failure?: FailureType;
   /** For rate-limit upsell failures: the account tier whose limit was reached. */
   rateLimitTier?: RateLimitTier;
+  /** For messageDeleted events: the `sequenceId`s of the deleted messages. */
+  sequenceIds?: string[];
+  /** For readReceipt and markedUnread events: the `sequenceId` of the newest event read. */
+  seenUntilSequenceId?: string;
   /** Index signature for additional event-specific fields. */
   [key: string]: any;
 }
@@ -990,7 +994,7 @@ export interface Event {
 /**
  * Decrypted message content. Permissive convenience shape: `contentType`
  * discriminates which fields are present (e.g. `text` on 'text' content,
- * `emoji`/`targetMessageId` on reactions, `newText` on edits).
+ * `emoji`/`targetMessageSequenceId` on reactions, `updatedText` on edits).
  */
 export interface MessageContent {
   /**
@@ -1000,11 +1004,16 @@ export interface MessageContent {
   contentType?: string;
   /** Present on 'text' content. */
   text?: string;
-  /** Present on 'edit' content. */
-  newText?: string;
+  /** Present on 'edit' content: the replacement text. */
+  updatedText?: string;
   /** Present on 'reaction' and 'reactionRemoved' content. */
   emoji?: string;
-  /** Present on 'reaction', 'reactionRemoved', and 'edit' content. */
+  /**
+   * Present on 'reaction', 'reactionRemoved', and 'edit' content: the
+   * `sequenceId` of the target message.
+   */
+  targetMessageSequenceId?: string;
+  /** Present on 'edit' content sent as v1: the target message's signed message id. */
   targetMessageId?: string;
   /** Present on 'text' and 'edit' content: rich-text entities. */
   entities?: unknown[];

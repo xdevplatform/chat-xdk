@@ -881,8 +881,9 @@ type TextContent struct {
 
 // ReactionContent contains the fields for a reaction message.
 type ReactionContent struct {
-	Emoji           string `json:"emoji"`
-	TargetMessageID string `json:"target_message_id"`
+	Emoji string `json:"emoji"`
+	// TargetMessageSequenceID is the sequence_id of the message reacted to.
+	TargetMessageSequenceID string `json:"target_message_sequence_id"`
 }
 
 // MediaHashReference is a reference to a media hash key found in attachments.
@@ -924,7 +925,8 @@ type TypingEvent struct {
 // ReadReceiptEvent indicates a conversation was marked as read.
 type ReadReceiptEvent struct {
 	EventMeta
-	SeenUntilID *string `json:"seen_until_id,omitempty"`
-	SeenAtMsec  *int64  `json:"seen_at_msec,omitempty"`
-	Verified    bool    `json:"verified"`
+	// SeenUntilSequenceID is the sequence_id of the newest event read.
+	SeenUntilSequenceID *string `json:"seen_until_sequence_id,omitempty"`
+	SeenAtMsec          *int64  `json:"seen_at_msec,omitempty"`
+	Verified            bool    `json:"verified"`
 }

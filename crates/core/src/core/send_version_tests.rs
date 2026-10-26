@@ -464,3 +464,50 @@ fn only_a_v1_edit_names_the_message_it_edits() {
         Some(original.message_id.as_str())
     );
 }
+
+#[test]
+fn a_decrypted_v1_edit_names_the_message_it_edits() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let target = frame(&delivered(&original, "100"));
+    let decrypted_edit = |party: &Party| {
+        let params = EncryptEditParams::new(target.clone(), "edited")
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        let edit = party.core.encrypt_edit(&params).unwrap();
+        let message = decrypt_message(
+            &ChatCore::new(),
+            &delivered(&edit, "200"),
+            &keys(KEY_VERSION, &ckey),
+            std::slice::from_ref(&party.entry),
+        )
+        .unwrap();
+        assert!(message.verified);
+        match message.content {
+            MessageContent::Edit {
+                target_message_sequence_id,
+                target_message_id,
+                updated_text,
+                ..
+            } => (target_message_sequence_id, target_message_id, updated_text),
+            other => panic!("expected an edit, got {:?}", other),
+        }
+    };
+
+    assert_eq!(
+        decrypted_edit(&party),
+        ("100".to_string(), None, "edited".to_string())
+    );
+    enable_v1_send(&party.core);
+    assert_eq!(
+        decrypted_edit(&party),
+        (
+            "100".to_string(),
+            Some(original.message_id.clone()),
+            "edited".to_string()
+        )
+    );
+}

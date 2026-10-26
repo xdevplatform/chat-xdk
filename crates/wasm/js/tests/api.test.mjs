@@ -560,6 +560,12 @@ async function main() {
   assert.ok(removePayload.encodedMessageCreateEvent.length > 0);
   assert.ok(removePayload.signature.length > 0);
   assert.ok(removePayload.encodedMessageEventSignature.length > 0);
+  assert.deepEqual(decryptOwn(addPayload), {
+    contentType: "reaction",
+    emoji: "\u{1F44D}",
+    targetMessageSequenceId: "seq-99",
+  });
+  assert.equal(decryptOwn(removePayload).targetMessageSequenceId, "seq-99");
 
   // 4c2. encryptEdit produces a signed payload that decrypts back to the
   // edit: updated text, target sequence id, and the [start, end, type]
@@ -579,8 +585,10 @@ async function main() {
   assert.ok(editPayload.encodedMessageEventSignature.length > 0);
   assert.ok(editPayload.messageId.length > 0);
   const decodedEdit = decryptOwn(editPayload);
-  assert.equal(decodedEdit.newText, "see https://example.com");
-  assert.equal(decodedEdit.targetMessageId, "seq-99");
+  assert.equal(decodedEdit.updatedText, "see https://example.com");
+  assert.equal(decodedEdit.targetMessageSequenceId, "seq-99");
+  // A v0 edit names its target by sequence id only.
+  assert.equal(decodedEdit.targetMessageId, undefined);
   assert.equal(decodedEdit.entities.length, 1);
   assert.equal(decodedEdit.entities[0].startIndex, 4);
   assert.equal(decodedEdit.entities[0].endIndex, 23);

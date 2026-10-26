@@ -352,6 +352,48 @@ class TestPythonSdkVectors(unittest.TestCase):
             )
         self.assertIn("Group description encrypted with key version", str(raised.exception))
 
+    def test_reactions_and_edits_name_their_target_by_sequence_id(self):
+        from chat_xdk import (
+            Chat,
+            DecryptEventParams,
+            EncryptEditParams,
+            EncryptReactionParams,
+            ImportKeysParams,
+            SetIdentityParams,
+        )
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
+        chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        version = v["event_conversation_key_version"]
+        key = dict(conversation_key=conv_key, conversation_key_version=version)
+
+        def content(payload):
+            event = chat.decrypt_event(
+                DecryptEventParams(
+                    payload.event_b64, {version: conv_key}, signing_keys=_fixture_signing_keys(v)
+                )
+            )
+            self.assertTrue(event["verified"])
+            return event["content"]
+
+        target = v["event_message_b64"]
+        self.assertEqual(
+            content(chat.encrypt_add_reaction(EncryptReactionParams(target, "👍", **key))),
+            {"content_type": "Reaction", "emoji": "👍", "target_message_sequence_id": "1"},
+        )
+        self.assertEqual(
+            content(chat.encrypt_remove_reaction(EncryptReactionParams(target, "👍", **key))),
+            {"content_type": "ReactionRemoved", "emoji": "👍", "target_message_sequence_id": "1"},
+        )
+        # A v0 edit names its target by sequence id only.
+        self.assertEqual(
+            content(chat.encrypt_edit(EncryptEditParams(target, "fixed", **key))),
+            {"content_type": "Edit", "target_message_sequence_id": "1", "updated_text": "fixed"},
+        )
+
     def test_failure_event_decodes_type_and_rate_limit_tier(self):
         from chat_xdk import Chat, DecryptEventParams
 
