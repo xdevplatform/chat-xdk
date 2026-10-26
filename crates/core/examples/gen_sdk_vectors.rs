@@ -33,6 +33,9 @@ const EVENT_REPLY_FORGED_PREVIEW_TEXT: &str = "forged preview text";
 const EVENT_GARBAGE: &str = "!!!not-an-event!!!";
 const EVENT_GROUP_ID: &str = "g1111";
 const EVENT_GROUP_DESCRIPTION: &str = "fixture group description, encrypted";
+const EVENT_GROUP_TITLE: &str = "fixture group title, encrypted";
+const EVENT_GROUP_AVATAR_URL: &str = "https://example.com/fixture-avatar.png";
+const EVENT_GROUP_CREATE_KEY_VERSION: &str = "1002";
 
 // Raw Thrift enum values embedded in the failure vector; suites assert the
 // decoded names ("RateLimitUpsell" / "Premium", camelCased in JS).
@@ -251,6 +254,37 @@ fn main() {
     )
     .expect("frame group description change");
 
+    // Group create vector: a signed create whose title and avatar URL are
+    // encrypted under the key the create seeds. The key is emitted with it,
+    // so every suite can check decrypt_event returns them decrypted.
+    let group_create = core
+        .prepare_group_create_with_version(
+            &chat_xdk_core::GroupCreateParams::new(
+                vec![chat_xdk_core::PublicKeyInput::new(
+                    EVENT_SENDER_ID,
+                    B64.encode(identity_kp.public.encoded()),
+                    EVENT_RECIPIENT_KEY_VERSION,
+                )],
+                EVENT_GROUP_ID,
+                vec![EVENT_SENDER_ID.to_string()],
+                vec![EVENT_SENDER_ID.to_string()],
+            )
+            .with_title(EVENT_GROUP_TITLE)
+            .with_avatar_url(EVENT_GROUP_AVATAR_URL),
+            EVENT_GROUP_CREATE_KEY_VERSION,
+        )
+        .expect("prepare group create");
+    let event_group_create_b64 = internals::frame_action_signature(
+        &group_create.action_signatures[1],
+        EVENT_SENDER_ID,
+        EVENT_GROUP_ID,
+    )
+    .expect("frame group create");
+    let group_create_key = group_create
+        .conversation_key
+        .as_ref()
+        .expect("group create key");
+
     // Failure vector: an unsigned RATE_LIMIT_UPSELL failure carrying the
     // PREMIUM tier, so every suite can pin the decoded failure metadata.
     let event_failure_b64 = internals::frame_failure_event(
@@ -456,6 +490,11 @@ fn main() {
         "event_group_description_b64": event_group_description_b64,
         "event_group_description": EVENT_GROUP_DESCRIPTION,
         "event_group_id": EVENT_GROUP_ID,
+        "event_group_create_b64": event_group_create_b64,
+        "event_group_create_conversation_key_b64": B64.encode(group_create_key.encoded()),
+        "event_group_create_conversation_key_version": EVENT_GROUP_CREATE_KEY_VERSION,
+        "event_group_title": EVENT_GROUP_TITLE,
+        "event_group_avatar_url": EVENT_GROUP_AVATAR_URL,
         "event_key_change_b64": event_key_change_b64,
         "event_message_b64": event_message_b64,
         "event_reply_valid_b64": event_reply_valid_b64,

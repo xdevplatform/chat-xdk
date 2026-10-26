@@ -230,9 +230,15 @@ class TestPreparedChanges(unittest.TestCase):
 
     def test_prepare_group_create_yields_two_signatures(self):
         core, keys = self._core_and_keys()
-        prep = core.prepare_group_create(keys, "g123", ["1000"], ["1000"])
+        title = "hello from the python example"
+        prep = core.prepare_group_create(keys, "g123", ["1000"], ["1000"], title=title)
         self.assertEqual(len(prep["action_signatures"]), 2)
         self.assertTrue(prep["conversation_key"])
+        # The title goes out encrypted under the new key: the group_name the
+        # create request sends, and the ciphertext the create signs.
+        encrypted_title = prep["encrypted_title"]
+        self.assertIn(encrypted_title, prep["action_signatures"][1]["signature_payload"])
+        self.assertEqual(core.decrypt(encrypted_title, bytes(prep["conversation_key"])), title)
 
     def test_encrypt_reaction_produces_sendable_payload(self):
         core, _ = self._core_and_keys()

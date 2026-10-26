@@ -224,9 +224,14 @@ test("prepareGroupCreate yields the two required signatures", async () => {
     conversationId: "g123",
     memberIds: [vectors.event_sender_id],
     adminIds: [vectors.event_sender_id],
+    title: "hello from the js example",
   });
   assert.equal(prep.actionSignatures.length, 2);
   assert.ok(prep.conversationKey?.length === 32);
+  // The title goes out encrypted under the new key: the group_name the
+  // create request sends, and the ciphertext the create signs.
+  assert.ok(prep.actionSignatures[1].signaturePayload.includes(prep.encryptedTitle));
+  assert.equal(core.decrypt(prep.encryptedTitle, prep.conversationKey), "hello from the js example");
 });
 
 test("encryptReaction targeting a raw event produces a sendable payload", async () => {

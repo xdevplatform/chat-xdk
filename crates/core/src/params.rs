@@ -1033,9 +1033,11 @@ impl GroupMembersChangeParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_create`].
 ///
-/// An empty string or negative TTL in an optional field is treated as unset,
-/// and an unset value signs the null sentinel, so every binding produces
-/// identical signed bytes.
+/// `title` and `avatar_url` are the group's plaintext title and avatar URL:
+/// the create encrypts each under the new conversation key and signs the
+/// ciphertext. An empty string or negative TTL in an optional field is
+/// treated as unset, and an unset value signs the null sentinel, so every
+/// binding produces identical signed bytes.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupCreateParams {
@@ -1054,9 +1056,9 @@ pub struct GroupCreateParams {
     /// Version of the signing key used to sign the create; resolves from the
     /// session identity when unset.
     pub signing_key_version: Option<String>,
-    /// The group's title, if set.
+    /// The group's title, as plaintext, if set.
     pub title: Option<String>,
-    /// The group's avatar URL, if set.
+    /// The group's avatar URL, as plaintext, if set.
     pub avatar_url: Option<String>,
     /// The group's message TTL in milliseconds, if set.
     pub ttl_msec: Option<i64>,
@@ -1083,13 +1085,13 @@ impl GroupCreateParams {
         }
     }
 
-    /// Set the group's title.
+    /// Set the group's title, as plaintext; the create encrypts it.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = non_empty(title);
         self
     }
 
-    /// Set the group's avatar URL.
+    /// Set the group's avatar URL, as plaintext; the create encrypts it.
     pub fn with_avatar_url(mut self, avatar_url: impl Into<String>) -> Self {
         self.avatar_url = non_empty(avatar_url);
         self
@@ -2423,18 +2425,16 @@ mod tests {
         via_fields.ttl_msec = Some(86_400_000);
         assert_eq!(via_builders, via_fields);
 
-        // Both constructions encode identical group-create event details for
-        // the same conversation-key version (the detail is deterministic).
-        let a = core
-            .prepare_group_create_with_version(&via_builders, "42")
-            .unwrap();
-        let b = core
-            .prepare_group_create_with_version(&via_fields, "42")
-            .unwrap();
-        assert_eq!(
-            a.action_signatures[1].encoded_message_event_detail,
-            b.action_signatures[1].encoded_message_event_detail,
-        );
+        // Each create encrypts the title under its own new key; both read
+        // back as the same plaintext.
+        for params in [&via_builders, &via_fields] {
+            let created = core
+                .prepare_group_create_with_version(params, "42")
+                .unwrap();
+            let key = created.conversation_key.as_ref().unwrap();
+            let title = created.encrypted_title.as_deref().unwrap();
+            assert_eq!(core.decrypt(title, key).unwrap(), "Team");
+        }
     }
 
     #[test]

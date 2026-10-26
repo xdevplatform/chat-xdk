@@ -933,9 +933,15 @@ class ChatTest {
             // Empty: the payload embeds the plaintext conversation key and is withheld.
             assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupCreate,"));
+            String payload = prepared.actionSignatures.get(1).signaturePayload;
+            assertTrue(payload.startsWith("GroupChangeEvent.GroupCreate,"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
+            // The title goes out encrypted under the new key, the value the request
+            // sends as group_name; the signature covers the ciphertext.
+            assertTrue(payload.contains(prepared.encryptedTitle), payload);
+            assertFalse(payload.contains("Test Group"), payload);
+            assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
+            assertNull(prepared.encryptedAvatarUrl);
         }
     }
 
@@ -1189,6 +1195,33 @@ class ChatTest {
             keyless.signingKeys = eventSigningKeys(v);
             ChatXdkException err = assertThrows(ChatXdkException.class, () -> chat.decryptEvent(keyless));
             assertTrue(err.getMessage().contains("Group description encrypted with key version"), err.getMessage());
+        }
+    }
+
+    @Test
+    void vectorsGroupCreateDecryptsItsTitleAndAvatarOnReceive() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            Map<String, byte[]> createKeys = Map.of(
+                    v.get("event_group_create_conversation_key_version").asText(),
+                    Base64.getDecoder().decode(v.get("event_group_create_conversation_key_b64").asText()));
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_group_create_b64").asText(), createKeys);
+            params.signingKeys = eventSigningKeys(v);
+            JsonNode event = chat.decryptEvent(params);
+            assertEquals("GroupChange", event.path("type").asText());
+            assertTrue(event.path("verified").asBoolean());
+            JsonNode change = event.path("change");
+            assertEquals("Created", change.path("change_type").asText());
+            assertEquals(v.get("event_group_title").asText(), change.path("title").asText());
+            assertEquals(v.get("event_group_avatar_url").asText(), change.path("avatar_url").asText());
+
+            // Without the key the create seeded, its title does not decrypt.
+            DecryptEventParams keyless =
+                    new DecryptEventParams(v.get("event_group_create_b64").asText(), Map.of());
+            keyless.signingKeys = eventSigningKeys(v);
+            ChatXdkException err = assertThrows(ChatXdkException.class, () -> chat.decryptEvent(keyless));
+            assertTrue(err.getMessage().contains("Group title encrypted with key version"), err.getMessage());
         }
     }
 
@@ -1878,14 +1911,16 @@ class ChatTest {
                 // Trailing slots: title, avatar_url, ttl — all unset → null sentinels.
                 assertTrue(payload.endsWith(",null,null,null"),
                         "title/avatar must sign as the null sentinel, got: " + payload);
+                assertNull(prepared.encryptedTitle);
+                assertNull(prepared.encryptedAvatarUrl);
             }
         }
     }
 
-    // Comma-injection rejection: the signature payload is comma-joined with
-    // no escaping, so a comma-containing title must fail.
+    // The plaintext never enters the comma-joined signature payload, only its
+    // base64 ciphertext does, so a title or avatar URL with a comma encrypts.
     @Test
-    void prepareGroupCreateCommaTitleThrows() throws Exception {
+    void prepareGroupCreateEncryptsACommaTitle() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
@@ -1897,7 +1932,12 @@ class ChatTest {
             p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Team, the sequel";
-            assertThrows(ChatXdkException.class, () -> chat.prepareGroupCreate(p));
+            p.avatarUrl = "https://img.example/a.png";
+            PreparedConversationChange prepared = chat.prepareGroupCreate(p);
+            assertEquals("Team, the sequel", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
+            assertEquals(
+                    "https://img.example/a.png",
+                    chat.decrypt(prepared.encryptedAvatarUrl, prepared.conversationKey));
         }
     }
 

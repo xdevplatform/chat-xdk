@@ -225,13 +225,18 @@ public class ChatCoreTests
         var v = LoadVectors();
         using var core = LoadedCore(v);
         core.SetIdentity("1000");
+        const string title = "hello from the dotnet example";
         var prep = core.PrepareGroupCreate(new[]
         {
             new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
-        }, "g123", new[] { "1000" }, new[] { "1000" });
+        }, "g123", new[] { "1000" }, new[] { "1000" }, title);
         Assert.Equal(2, prep.ActionSignatures.Count);
         Assert.NotNull(prep.ConversationKey);
         Assert.Equal(32, prep.ConversationKey.Length);
+        // The title goes out encrypted under the new key: the group_name the
+        // create request sends, and the ciphertext the create signs.
+        Assert.Contains(prep.EncryptedTitle!, prep.ActionSignatures[1].SignaturePayload);
+        Assert.Equal(title, core.Decrypt(prep.EncryptedTitle!, prep.ConversationKey));
     }
 
     [Fact]

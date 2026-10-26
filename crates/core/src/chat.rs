@@ -443,7 +443,10 @@ impl Chat {
     /// [`Self::prepare_group_members_change`].
     ///
     /// Emits two action signatures: a conversation-key change and the
-    /// group-create action the backend validates together.
+    /// group-create action the backend validates together. The plaintext
+    /// title and avatar URL are encrypted under the new conversation key and
+    /// returned as `encrypted_title` and `encrypted_avatar_url`; see
+    /// [`crate::ChatCore::prepare_group_create`].
     pub fn prepare_group_create(
         &self,
         params: &GroupCreateParams,

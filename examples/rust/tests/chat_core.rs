@@ -258,11 +258,26 @@ fn prepare_group_create_yields_two_signatures() {
     let v = load_vectors();
     let core = loaded_core(&v);
     let keys = fixture_public_keys(&v);
+    let title = "hello from the rust example";
     let prep = core
-        .prepare_group_create(&keys, "g123", &["1000".to_string()], &["1000".to_string()])
+        .prepare_group_create(
+            &keys,
+            "g123",
+            &["1000".to_string()],
+            &["1000".to_string()],
+            Some(title),
+        )
         .expect("prepare_group_create");
     assert_eq!(prep.action_signatures.len(), 2);
-    assert_eq!(prep.conversation_key.as_ref().unwrap().encoded().len(), 32);
+    let key = prep.conversation_key.as_ref().unwrap();
+    assert_eq!(key.encoded().len(), 32);
+    // The title goes out encrypted under the new key: the group_name the
+    // create request sends, and the ciphertext the create signs.
+    let encrypted_title = prep.encrypted_title.as_deref().expect("encrypted title");
+    assert!(prep.action_signatures[1]
+        .signature_payload
+        .contains(encrypted_title));
+    assert_eq!(core.decrypt(encrypted_title, key).expect("decrypt"), title);
 }
 
 #[test]

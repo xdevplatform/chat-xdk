@@ -30,7 +30,7 @@ change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -546,6 +546,69 @@ Apps should sign each group update below. The sender comes from `SetIdentity`.
 Each returns `ActionSignatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
+
+### Creating a group
+
+`PrepareGroupCreate` encrypts the group's title and avatar URL under the
+conversation key it creates, so set them as plaintext. The result is a
+`*PreparedConversationChange` that also carries them encrypted, as
+`EncryptedTitle` and `EncryptedAvatarURL` (nil when unset): send those as
+the create request's `group_name` and `group_avatar_url`, next to its
+participant keys and signatures. The create signs the encrypted values, so
+a title or avatar URL may contain a comma.
+
+```go
+// 0.5.x
+prepared, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
+	PublicKeys:     publicKeys,
+	ConversationID: conversationID,
+	MemberIDs:      memberIDs,
+	AdminIDs:       adminIDs,
+	Title:          title,
+})
+must(err)
+body := map[string]any{"group_name": title}
+
+// 0.6.0
+prepared, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
+	PublicKeys:     publicKeys,
+	ConversationID: conversationID,
+	MemberIDs:      memberIDs,
+	AdminIDs:       adminIDs,
+	Title:          title,
+})
+must(err)
+body := map[string]any{"group_name": prepared.EncryptedTitle}
+```
+
+`DecryptEvent` returns a received group create with its title and avatar
+URL decrypted under the key version the create names, from the call's key
+map or the key cache: a `Created` change's `title` and `avatar_url`, in the
+`Change` JSON, are plaintext.
+
+```go
+// 0.5.x
+var created struct {
+	ChangeType string `json:"change_type"`
+	Title      string `json:"title"`
+}
+must(json.Unmarshal(groupChange.Change, &created))
+if created.ChangeType == "Created" && created.Title != "" {
+	title, err := chat.Decrypt(created.Title, keys[conversationKeyVersion])
+	must(err)
+	showTitle(title)
+}
+
+// 0.6.0
+var created struct {
+	ChangeType string `json:"change_type"`
+	Title      string `json:"title"`
+}
+must(json.Unmarshal(groupChange.Change, &created))
+if created.ChangeType == "Created" && created.Title != "" {
+	showTitle(created.Title)
+}
+```
 
 ### Removing members
 

@@ -30,7 +30,7 @@ change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -515,6 +515,45 @@ Apps should sign each group update below. The sender comes from
 `set_identity`. Each returns `action_signatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
+
+### Creating a group
+
+`prepare_group_create` encrypts the group's title and avatar URL under the
+conversation key it creates, so pass them as plaintext. The result dict
+also carries them encrypted, as `encrypted_title` and
+`encrypted_avatar_url` (absent when unset): send those as the create
+request's `group_name` and `group_avatar_url`, next to its participant keys
+and signatures. The create signs the encrypted values, so a title or avatar
+URL may contain a comma.
+
+```python
+# 0.5.x
+prepared = chat.prepare_group_create(public_keys, conversation_id, member_ids, admin_ids, title=title)
+body = {"group_name": title}
+
+# 0.6.0
+prepared = chat.prepare_group_create(
+    GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids, title=title)
+)
+body = {"group_name": prepared["encrypted_title"]}
+```
+
+`decrypt_event` returns a received group create with its title and avatar
+URL decrypted under the key version the create names, from the call's key
+map or the key cache: a `Created` change's `title` and `avatar_url` are
+plaintext.
+
+```python
+# 0.5.x
+change = group_change["change"]
+if change["change_type"] == "Created" and change["title"]:
+    show_title(chat.decrypt(change["title"], keys[conversation_key_version]))
+
+# 0.6.0
+change = group_change["change"]
+if change["change_type"] == "Created" and change["title"]:
+    show_title(change["title"])
+```
 
 ### Removing members
 

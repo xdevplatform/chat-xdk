@@ -560,6 +560,10 @@ public final class Chat implements AutoCloseable {
      * {@link #prepareGroupMembersChange}.
      *
      * <p>Emits two action signatures: a conversation-key change and the group create.
+     * The title and avatar URL are plaintext: the call encrypts each under the new
+     * conversation key, signs the ciphertext, and returns it as
+     * {@code encryptedTitle} and {@code encryptedAvatarUrl}, the {@code group_name}
+     * and {@code group_avatar_url} the create request sends.
      */
     public PreparedConversationChange prepareGroupCreate(GroupCreateParams parameters)
             throws Exception {

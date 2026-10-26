@@ -439,7 +439,7 @@ class E2ELiveTest {
         // Create with the caller as sole member/admin so the member add below
         // exercises prepareGroupMembersChange with the partner.
         PreparedConversationChange prep =
-                core.prepareGroupCreate(myKeys, groupId, List.of(myId), List.of(myId));
+                core.prepareGroupCreate(myKeys, groupId, List.of(myId), List.of(myId), "chat-xdk e2e");
         List<String> members = List.of(myId);
         try {
             api.createConversation(groupCreateBody(groupId, members, myId, prep));
@@ -447,7 +447,7 @@ class E2ELiveTest {
             // Some deployments reject single-member groups; fall back to creating
             // with both participants (skipping the member-add below).
             prep = core.prepareGroupCreate(
-                    bothKeys, groupId, List.of(myId, partnerId), List.of(myId));
+                    bothKeys, groupId, List.of(myId, partnerId), List.of(myId), "chat-xdk e2e");
             members = List.of(myId, partnerId);
             api.createConversation(groupCreateBody(groupId, members, myId, prep));
         }
@@ -492,7 +492,7 @@ class E2ELiveTest {
         var groupMembers = body.putArray("group_members");
         members.forEach(groupMembers::add);
         body.putArray("group_admins").add(adminId);
-        body.put("group_name", "chat-xdk e2e");
+        body.put("group_name", prep.encryptedTitle);
         return body;
     }
 }

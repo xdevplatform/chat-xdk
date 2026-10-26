@@ -29,7 +29,7 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -40,7 +40,8 @@ keys loaded, and `keys`, `keys_len` and `keys_b64` are your saved private
 keys. `take(r)` stands for your error handling: it returns `r.data` (free it
 with `chat_xdk_free_string`) and handles `r.error`. The `*_json` and `*_b64`
 values are documents and base64 strings your code builds, `title`,
-`avatar_url`, `description` and `new_title` are UTF-8 strings it holds, and
+`avatar_url`, `description`, `new_title` and `created_title` are UTF-8
+strings it holds, and
 `encrypt_file_json(photo_message)` and `file_encryptor_json(photo_message)`
 stand for building a file's params from a send payload's `event_b64`.
 
@@ -362,6 +363,45 @@ Apps should sign each group update below. The sender comes from
 `action_signatures` are shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
+
+### Creating a group
+
+`chat_xdk_prepare_group_create` encrypts the group's title and avatar URL
+under the conversation key it creates, so pass them as plaintext. The
+result is a `PreparedConversationChange` that also carries them encrypted,
+as `encrypted_title` and `encrypted_avatar_url` (absent when unset): send
+those as the create request's `group_name` and `group_avatar_url`, next to
+its participant keys and signatures. The create signs the encrypted values,
+so a title or avatar URL may contain a comma.
+
+```c
+// 0.5.x
+// {"public_keys":[...],"conversation_id":"g1","member_ids":["111"],"admin_ids":["111"],"title":"Team"}
+char *prepared = take(chat_xdk_prepare_group_create(chat, create_json));
+// POST /2/chat/conversations/group {..., "group_name": "Team"}
+
+// 0.6.0
+// {"public_keys":[...],"conversation_id":"g1","member_ids":["111"],"admin_ids":["111"],"title":"Team"}
+char *prepared = take(chat_xdk_prepare_group_create(chat, create_json));
+// {..., "encrypted_title": "..."}
+// POST /2/chat/conversations/group {..., "group_name": <prepared.encrypted_title>}
+```
+
+The decrypt calls return a received group create with its title and avatar
+URL decrypted under the key version the create names, from the call's key
+map or the key cache: a `Created` change's `title` and `avatar_url` are
+plaintext.
+
+```c
+// 0.5.x
+// {"type":"GroupChange",...,"change":{"change_type":"Created",...,"title":"<ciphertext>"}}
+char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_json, signing_keys_json));
+char *title = take(chat_xdk_decrypt(chat, created_title, conversation_key_b64));
+
+// 0.6.0
+// {"type":"GroupChange",...,"change":{"change_type":"Created",...,"title":"Team"}}
+char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+```
 
 ### Removing members
 

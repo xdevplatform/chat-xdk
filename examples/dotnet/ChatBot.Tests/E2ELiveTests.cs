@@ -359,13 +359,13 @@ public class E2ELiveTests
 
         // Create with the caller as sole member/admin so the member add below
         // exercises PrepareGroupMembersChange with the partner.
-        var prep = core.PrepareGroupCreate(myKeys, groupId, new[] { myId }, new[] { myId });
+        var prep = core.PrepareGroupCreate(myKeys, groupId, new[] { myId }, new[] { myId }, "chat-xdk e2e");
         var members = new List<string> { myId };
         var body = EventHelpers.PrepToRequest(prep);
         body["conversation_id"] = groupId;
         body["group_members"] = members;
         body["group_admins"] = new[] { myId };
-        body["group_name"] = "chat-xdk e2e";
+        body["group_name"] = prep.EncryptedTitle;
         try
         {
             await api.CreateConversationAsync(body);
@@ -374,13 +374,13 @@ public class E2ELiveTests
         {
             // Some deployments reject single-member groups; fall back to creating
             // with both participants (skipping the member-add below).
-            prep = core.PrepareGroupCreate(bothKeys, groupId, new[] { myId, partnerId }, new[] { myId });
+            prep = core.PrepareGroupCreate(bothKeys, groupId, new[] { myId, partnerId }, new[] { myId }, "chat-xdk e2e");
             members = new List<string> { myId, partnerId };
             body = EventHelpers.PrepToRequest(prep);
             body["conversation_id"] = groupId;
             body["group_members"] = members;
             body["group_admins"] = new[] { myId };
-            body["group_name"] = "chat-xdk e2e";
+            body["group_name"] = prep.EncryptedTitle;
             await api.CreateConversationAsync(body);
         }
         var kv = prep.ConversationKeyVersion;

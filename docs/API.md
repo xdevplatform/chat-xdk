@@ -269,10 +269,12 @@ Two hygiene notes:
   contains only public fields).
 - **Optional group fields normalize in core.** An empty-string `title` or
   `avatarUrl` and a negative `ttlMsec` are treated as "not set", so every
-  binding signs identical bytes whether it can express an absent value or
-  only the FFI encodings of one. A `title` or `avatarUrl` containing a comma
-  is rejected at signing time (the signed payload is comma-joined with no
-  escaping, so it could never verify).
+  binding signs the same `null` whether it can express an absent value or
+  only the FFI encodings of one. A member add's `currentTitle` or
+  `currentAvatarUrl` containing a comma is rejected at signing time (the
+  signed payload is comma-joined with no escaping, so it could never
+  verify). A group create signs its title and avatar encrypted, as base64,
+  so a comma in them is fine.
 
 ---
 
@@ -363,8 +365,32 @@ change (`ConversationKeyChangeEvent`) and the group create
 (`GroupChangeEvent.GroupCreate`). Each signature's `encodedMessageEventDetail`
 carries the corresponding event, ready to POST.
 
-The signed payload is comma-joined without escaping, so `title` and `avatar_url`
-must not contain a comma — such a signature cannot be verified.
+`title` and `avatar_url` are plaintext. The call encrypts each under the new
+conversation key with XSalsa20-Poly1305, as
+[`prepare_group_title_change`](#prepare_group_title_change) encrypts a
+title, and the create signs and carries the ciphertext. The result adds them
+encrypted, base64, as `encrypted_title` and `encrypted_avatar_url`
+(`encryptedTitle`, `encryptedAvatarUrl` in JS), absent when unset: send them
+as the request's `group_name` and `group_avatar_url`.
+
+```python
+prepared = chat.prepare_group_create(
+    GroupCreateParams(public_keys, group_id, member_ids, admin_ids, title="Team")
+)
+api.post("/2/chat/conversations/group", {
+    "conversation_id": group_id,
+    "group_members": member_ids,
+    "group_admins": admin_ids,
+    "group_name": prepared["encrypted_title"],
+    "conversation_key_version": prepared["conversation_key_version"],
+    "conversation_participant_keys": prepared["conversation_participant_keys"],
+    "action_signatures": prepared["action_signatures"],
+})
+```
+
+A recipient's `decrypt_event` returns the create as `Created` with the
+plaintext `title` and `avatar_url`, decrypted with the conversation key
+version the create names (see [GroupChange](#groupchange)).
 
 ---
 
@@ -393,8 +419,8 @@ sentinel, not `false`.
 Like `prepare_group_create`, this returns **two** `actionSignatures`: a
 conversation-key change (`ConversationKeyChangeEvent`) and the member add
 (`GroupChangeEvent.GroupMemberAddChange`), each with its
-`encodedMessageEventDetail` populated. As with group create, the `title` and
-`avatar_url` fields must not contain a comma.
+`encodedMessageEventDetail` populated. The `current_title` and
+`current_avatar_url` fields must not contain a comma.
 
 ---
 
@@ -1452,10 +1478,11 @@ The X API returns a group's title, avatar URL and description (`group_name`,
 `group_avatar_url` and `group_description` on a conversation) encrypted
 under the conversation key. `decrypt(ciphertext_b64, key)` decrypts one with
 XSalsa20-Poly1305 under the raw key of the version it was encrypted under,
-and returns the UTF-8 plaintext. Group changes need no separate call:
-`prepare_group_title_change`, `prepare_group_avatar_change` and
-`prepare_group_description_change` encrypt the new value, and
-`decrypt_event` decrypts a received change.
+and returns the UTF-8 plaintext. Group creates and changes need no separate
+call: `prepare_group_create`, `prepare_group_title_change`,
+`prepare_group_avatar_change` and `prepare_group_description_change`
+encrypt the value, and `decrypt_event` decrypts a received create or
+change.
 
 Wire format: `base64(nonce[24B] || poly1305_tag[16B] || ciphertext)` — same as message content encryption.
 
@@ -2555,11 +2582,14 @@ type GroupChange =
   | { changeType: 'unknown' };
 ```
 
-A title, avatar or description change carries its value encrypted under the
-conversation key, and `decrypt_event` / `decrypt_events` return it
-decrypted: `newTitle`, `newAvatarUrl` and `newDescription` are plaintext.
-They decrypt with the key version the change names, from the call's key map
-or the key cache; without that key the event fails as a message does.
+A group create carries its title and avatar encrypted under the
+conversation key, and so does a title, avatar or description change;
+`decrypt_event` / `decrypt_events` return them decrypted: a `created`
+change's `title` and `avatarUrl`, and `newTitle`, `newAvatarUrl` and
+`newDescription`, are plaintext. They decrypt with the key version the
+event names, from the call's key map or the key cache (`decrypt_events`
+reads a create's key from the key change in the same batch); without that
+key the event fails as a message does.
 Rust's `GroupChange` is `#[non_exhaustive]`, as is each variant with named
 fields.
 

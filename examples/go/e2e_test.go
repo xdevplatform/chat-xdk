@@ -393,7 +393,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 
 	// Create with the caller as sole member/admin so the member add below
 	// exercises PrepareGroupMembersChange with the partner.
-	prep, err := core.PrepareGroupCreate(myKeys, groupID, []string{myID}, []string{myID})
+	prep, err := core.PrepareGroupCreate(myKeys, groupID, []string{myID}, []string{myID}, "chat-xdk e2e")
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate: %v", err)
 	}
@@ -401,7 +401,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 	if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep)); err != nil {
 		// Some deployments reject single-member groups; fall back to creating
 		// with both participants (skipping the member-add below).
-		prep, err = core.PrepareGroupCreate(bothKeys, groupID, []string{myID, partnerID}, []string{myID})
+		prep, err = core.PrepareGroupCreate(bothKeys, groupID, []string{myID, partnerID}, []string{myID}, "chat-xdk e2e")
 		if err != nil {
 			t.Fatalf("PrepareGroupCreate (fallback): %v", err)
 		}
@@ -462,14 +462,15 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 	t.Logf("group member remove: %s removed (key rotated to %s)", partnerID, rPrep.ConversationKeyVersion)
 }
 
-// groupBody assembles the group-create request: roster fields plus the
-// two-signature key change from PrepareGroupCreate.
+// groupBody assembles the group-create request: roster fields, the
+// two-signature key change from PrepareGroupCreate, and the title it
+// encrypted.
 func groupBody(groupID string, members []string, adminID string, prep *chatxdk.PreparedConversationChange) map[string]any {
 	body := PrepToRequest(prep)
 	body["conversation_id"] = groupID
 	body["group_members"] = members
 	body["group_admins"] = []string{adminID}
-	body["group_name"] = "chat-xdk e2e"
+	body["group_name"] = prep.EncryptedTitle
 	return body
 }
 

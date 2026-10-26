@@ -184,6 +184,8 @@ impl ChatCore {
             conversation_key_version: conversation_key_version.to_string(),
             conversation_participant_keys: participant_keys,
             action_signatures,
+            encrypted_title: None,
+            encrypted_avatar_url: None,
         })
     }
 
@@ -677,6 +679,19 @@ fn nullable_i64(value: Option<i64>) -> String {
 
 /// Encrypt `value` under `key` and sign it as a `field` change bound to
 /// `key_version`. Returns the base64 ciphertext and the signature.
+/// Encrypt a group title, avatar URL or description under `key`: the base64
+/// XSalsa20-Poly1305 ciphertext a group event carries and its signature
+/// covers.
+pub(super) fn encrypt_group_metadata(
+    key: &XChatConversationKey,
+    value: &str,
+) -> Result<String, SdkError> {
+    Ok(base64_encode(&crate::crypto::encryption::encrypt_message(
+        key,
+        value.as_bytes(),
+    )?))
+}
+
 fn sign_metadata(
     ctx: &ActionCtx,
     field: GroupMetadata,
@@ -684,10 +699,7 @@ fn sign_metadata(
     key: &XChatConversationKey,
     key_version: &str,
 ) -> Result<(String, ActionSignature), SdkError> {
-    let encrypted = base64_encode(&crate::crypto::encryption::encrypt_message(
-        key,
-        value.as_bytes(),
-    )?);
+    let encrypted = encrypt_group_metadata(key, value)?;
     let signature = sign_named(
         ctx,
         field.event_name(),
@@ -791,7 +803,9 @@ mod tests {
     use super::*;
     use crate::core::build_event_signature_payload;
     use crate::crypto::key_factory::KeyFactory;
-    use crate::params::{ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams};
+    use crate::params::{
+        ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, GroupCreateParams,
+    };
     use crate::protocol::safe_reader::BoundedProtocol;
     use crate::protocol::serialization::base64_decode;
     use crate::types::{
@@ -942,6 +956,124 @@ mod tests {
             core.get_public_keys().unwrap().identity,
             "1",
         )]
+    }
+
+    #[test]
+    fn group_create_encrypts_the_title_and_avatar_it_signs() {
+        let (core, signing_keys) = ready_core_and_signing_keys();
+        let (sender, version) = identity();
+        // The plaintext never enters the comma-joined payload, so a comma in
+        // it is fine.
+        let params = GroupCreateParams::new(
+            remaining_keys(&core, &sender),
+            "g100",
+            vec![sender.clone()],
+            vec![sender.clone()],
+        )
+        .with_identity(&sender, &version)
+        .with_title("Team, the sequel")
+        .with_avatar_url("https://img.example/a.png?size=1,2");
+        let created = core.prepare_group_create(&params).unwrap();
+        let encrypted_title = created.encrypted_title.clone().unwrap();
+        let encrypted_avatar_url = created.encrypted_avatar_url.clone().unwrap();
+        let create = &created.action_signatures[1];
+        assert!(create.signature_payload.contains(&encrypted_title));
+        assert!(create.signature_payload.contains(&encrypted_avatar_url));
+        assert!(!create.signature_payload.contains("Team"));
+
+        let event_b64 = signed_event_b64(create, &sender, "g100");
+        let keys = HashMap::from([(
+            created.conversation_key_version.clone(),
+            created.conversation_key.clone().unwrap(),
+        )]);
+        match decrypted_change(
+            core.decrypt_event_with(&event_b64, &keys, &signing_keys)
+                .unwrap(),
+        ) {
+            Change::Created {
+                title, avatar_url, ..
+            } => {
+                assert_eq!(title.as_deref(), Some("Team, the sequel"));
+                assert_eq!(
+                    avatar_url.as_deref(),
+                    Some("https://img.example/a.png?size=1,2")
+                );
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+
+        // Without the new key the create does not decrypt.
+        let err = core
+            .decrypt_event_with(&event_b64, &HashMap::new(), &signing_keys)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "Group title encrypted with key version '{}'",
+                created.conversation_key_version
+            )),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn decrypt_events_reads_a_group_create_with_the_key_change_it_carries() {
+        let (core, signing_keys) = ready_core_and_signing_keys();
+        let (sender, version) = identity();
+        let created = core
+            .prepare_group_create(
+                &GroupCreateParams::new(
+                    remaining_keys(&core, &sender),
+                    "g100",
+                    vec![sender.clone()],
+                    vec![sender.clone()],
+                )
+                .with_identity(&sender, &version)
+                .with_title("Board"),
+            )
+            .unwrap();
+        let events = created
+            .action_signatures
+            .iter()
+            .map(|signature| signed_event_b64(signature, &sender, "g100"))
+            .collect();
+
+        let batch =
+            core.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys));
+        assert!(batch.errors.is_empty(), "{:?}", batch.errors);
+        let titles: Vec<String> = batch
+            .messages
+            .into_iter()
+            .filter_map(|message| match message.event {
+                Event::GroupChange(change) => match change.change {
+                    Change::Created { title, .. } => title,
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles, ["Board"]);
+    }
+
+    #[test]
+    fn group_create_without_a_title_or_avatar_encrypts_nothing() {
+        let core = ready_core();
+        let (sender, version) = identity();
+        let created = core
+            .prepare_group_create(
+                &GroupCreateParams::new(
+                    remaining_keys(&core, &sender),
+                    "g100",
+                    vec![sender.clone()],
+                    vec![sender.clone()],
+                )
+                .with_identity(&sender, &version),
+            )
+            .unwrap();
+        assert_eq!(created.encrypted_title, None);
+        assert_eq!(created.encrypted_avatar_url, None);
+        assert!(created.action_signatures[1]
+            .signature_payload
+            .ends_with(",null,null,null"));
     }
 
     #[test]

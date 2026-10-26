@@ -320,12 +320,12 @@ def _groups_flow(
 
     # Create with the caller as sole member/admin so the member add below
     # exercises prepare_group_members_change with the partner.
-    prep = core.prepare_group_create(my_keys, group_id, [my_id], [my_id])
+    prep = core.prepare_group_create(my_keys, group_id, [my_id], [my_id], title="chat-xdk e2e")
     body = {
         "conversation_id": group_id,
         "group_members": [my_id],
         "group_admins": [my_id],
-        "group_name": "chat-xdk e2e",
+        "group_name": prep["encrypted_title"],
         **prep_to_request(prep),
     }
     try:
@@ -334,12 +334,14 @@ def _groups_flow(
     except Exception:
         # Some deployments reject single-member groups; fall back to creating
         # with both participants (skipping the member-add below).
-        prep = core.prepare_group_create(both_keys, group_id, [my_id, partner_id], [my_id])
+        prep = core.prepare_group_create(
+            both_keys, group_id, [my_id, partner_id], [my_id], title="chat-xdk e2e"
+        )
         body = {
             "conversation_id": group_id,
             "group_members": [my_id, partner_id],
             "group_admins": [my_id],
-            "group_name": "chat-xdk e2e",
+            "group_name": prep["encrypted_title"],
             **prep_to_request(prep),
         }
         api.create_conversation(body)

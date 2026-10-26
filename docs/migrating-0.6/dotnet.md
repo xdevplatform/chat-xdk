@@ -30,7 +30,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -508,6 +508,51 @@ Apps should sign each group update below. The sender comes from
 `SetIdentity`. Each returns `ActionSignatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
+
+### Creating a group
+
+`PrepareGroupCreate` encrypts the group's title and avatar URL under the
+conversation key it creates, so set them as plaintext. The result is a
+`PreparedConversationChange` that also carries them encrypted, as
+`EncryptedTitle` and `EncryptedAvatarUrl` (null when unset): send those as
+the create request's `group_name` and `group_avatar_url`, next to its
+participant keys and signatures. The create signs the encrypted values, so
+a title or avatar URL may contain a comma.
+
+```csharp
+// 0.5.x
+var prepared = chat.PrepareGroupCreate(
+    new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title });
+var body = new { group_name = title };
+
+// 0.6.0
+var prepared = chat.PrepareGroupCreate(
+    new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title });
+var body = new { group_name = prepared.EncryptedTitle };
+```
+
+`DecryptEvent` returns a received group create with its title and avatar
+URL decrypted under the key version the create names, from the call's key
+map or the key cache: a `Created` change's `title` and `avatar_url` are
+plaintext.
+
+```csharp
+// 0.5.x
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "Created"
+    && change.GetProperty("title").GetString() is string encryptedTitle)
+{
+    ShowTitle(chat.Decrypt(encryptedTitle, keys[conversationKeyVersion]));
+}
+
+// 0.6.0
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "Created"
+    && change.GetProperty("title").GetString() is string groupTitle)
+{
+    ShowTitle(groupTitle);
+}
+```
 
 ### Removing members
 

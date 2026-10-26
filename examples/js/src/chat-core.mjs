@@ -261,13 +261,18 @@ export class ChatCore {
 
   // -- Group management ------------------------------------------------------
 
-  /** Prepare a group creation: fresh key + the two required signatures. */
-  prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds }) {
+  /**
+   * Prepare a group creation: fresh key + the two required signatures. A
+   * plaintext `title` is encrypted under the new key; send the result's
+   * `encryptedTitle` as the request's group_name.
+   */
+  prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title }) {
     return this.#chat.prepareGroupCreate({
       publicKeys,
       conversationId,
       memberIds,
       adminIds,
+      title,
     });
   }
 

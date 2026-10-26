@@ -284,6 +284,24 @@ public final class Types {
         /** Action signatures authenticating the change, ready to POST. */
         @JsonProperty("action_signatures")
         public List<ActionSignature> actionSignatures = Collections.emptyList();
+
+        /**
+         * Set by {@link Chat#prepareGroupCreate} when the params carry a title: the
+         * title encrypted under the new conversation key, base64, the
+         * {@code group_name} the create request sends; otherwise {@code null}.
+         */
+        @JsonProperty("encrypted_title")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public String encryptedTitle;
+
+        /**
+         * Set by {@link Chat#prepareGroupCreate} when the params carry an avatar URL:
+         * the avatar URL encrypted under the new conversation key, base64, the
+         * {@code group_avatar_url} the create request sends; otherwise {@code null}.
+         */
+        @JsonProperty("encrypted_avatar_url")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public String encryptedAvatarUrl;
     }
 
     /**
@@ -992,10 +1010,10 @@ public final class Types {
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
-        /** Group title, if any. */
+        /** Group title, as plaintext, if any; the create encrypts it. */
         public String title;
 
-        /** Group avatar URL, if any. */
+        /** Group avatar URL, as plaintext, if any; the create encrypts it. */
         public String avatarUrl;
 
         /** Disappearing-message TTL in milliseconds, if any. */

@@ -278,19 +278,26 @@ impl ChatCore {
     // -- Group management -----------------------------------------------------
 
     /// Prepare a group creation: fresh key + the two required signatures.
+    /// A plaintext `title` is encrypted under the new key; send the result's
+    /// `encrypted_title` as the request's `group_name`.
     pub fn prepare_group_create(
         &self,
         public_keys: &[PublicKeyInput],
         conversation_id: &str,
         member_ids: &[String],
         admin_ids: &[String],
+        title: Option<&str>,
     ) -> Result<PreparedConversationChange, SdkError> {
-        self.inner.prepare_group_create(&GroupCreateParams::new(
+        let mut params = GroupCreateParams::new(
             public_keys.to_vec(),
             conversation_id,
             member_ids.to_vec(),
             admin_ids.to_vec(),
-        ))
+        );
+        if let Some(title) = title {
+            params = params.with_title(title);
+        }
+        self.inner.prepare_group_create(&params)
     }
 
     /// Prepare a member add: rotated key + the two required signatures.

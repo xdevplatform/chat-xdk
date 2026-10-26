@@ -352,7 +352,11 @@ func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*Prep
 // minted by the initialize endpoint). Later key rotations use
 // PrepareConversationKeyChange; roster additions use PrepareGroupMembersChange.
 //
-// Title and AvatarURL may be empty; leave TTLMsec nil when unset.
+// Title and AvatarURL are plaintext and may be empty; leave TTLMsec nil when
+// unset. The call encrypts a title and avatar URL under the new conversation
+// key, signs the ciphertext, and returns it as EncryptedTitle and
+// EncryptedAvatarURL: the group_name and group_avatar_url the create request
+// sends.
 func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	// Rosters are required fields; marshal nil slices as [] rather than null.

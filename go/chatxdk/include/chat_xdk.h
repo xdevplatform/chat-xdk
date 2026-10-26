@@ -295,7 +295,10 @@ struct FfiResult chat_xdk_prepare_group_members_change(const struct ChatHandle *
  * `params_json` — single JSON document: `public_keys` (for the roster),
  * `conversation_id`, `member_ids`, `admin_ids`, plus optional `sender_id` /
  * `signing_key_version` (unset resolves from the session identity),
- * `title`, `avatar_url`, and `ttl_msec`. Emits two action signatures.
+ * `title` and `avatar_url` (plaintext, encrypted under the new conversation
+ * key), and `ttl_msec`. Emits two action signatures; the result carries the
+ * encrypted title and avatar URL as `encrypted_title` and
+ * `encrypted_avatar_url`.
  */
 struct FfiResult chat_xdk_prepare_group_create(const struct ChatHandle *handle,
                                                const char *params_json);

@@ -469,6 +469,7 @@ fn groups_flow(
             &group_id,
             &[my_id.to_string()],
             &[my_id.to_string()],
+            Some("chat-xdk e2e"),
         )
         .expect("prepare_group_create");
     let mut members = vec![my_id.to_string()];
@@ -476,7 +477,7 @@ fn groups_flow(
     body["conversation_id"] = json!(group_id);
     body["group_members"] = json!(members);
     body["group_admins"] = json!([my_id]);
-    body["group_name"] = json!("chat-xdk e2e");
+    body["group_name"] = json!(prep.encrypted_title);
     if api.create_conversation(&body).is_err() {
         // Some deployments reject single-member groups; fall back to creating
         // with both participants (skipping the member-add below).
@@ -486,6 +487,7 @@ fn groups_flow(
                 &group_id,
                 &[my_id.to_string(), partner_id.to_string()],
                 &[my_id.to_string()],
+                Some("chat-xdk e2e"),
             )
             .expect("prepare_group_create fallback");
         members = vec![my_id.to_string(), partner_id.to_string()];
@@ -493,7 +495,7 @@ fn groups_flow(
         body["conversation_id"] = json!(group_id);
         body["group_members"] = json!(members);
         body["group_admins"] = json!([my_id]);
-        body["group_name"] = json!("chat-xdk e2e");
+        body["group_name"] = json!(prep.encrypted_title);
         api.create_conversation(&body).expect("create_conversation");
     }
     let kv = prep.conversation_key_version.clone();

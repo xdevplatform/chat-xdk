@@ -227,15 +227,21 @@ public final class ChatCore implements AutoCloseable {
 
     // -- Group management -----------------------------------------------------
 
-    /** Prepare a group creation: fresh key + the two required signatures. */
+    /**
+     * Prepare a group creation: fresh key + the two required signatures. A plaintext
+     * {@code title} (or {@code null}) is encrypted under the new key; send the
+     * result's {@code encryptedTitle} as the request's {@code group_name}.
+     */
     public PreparedConversationChange prepareGroupCreate(
             List<PublicKeyInput> publicKeys,
             String conversationId,
             List<String> memberIds,
-            List<String> adminIds)
+            List<String> adminIds,
+            String title)
             throws Exception {
-        return chat.prepareGroupCreate(
-                new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds));
+        GroupCreateParams params = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
+        params.title = title;
+        return chat.prepareGroupCreate(params);
     }
 
     /** Prepare a member add: rotated key + the two required signatures. */

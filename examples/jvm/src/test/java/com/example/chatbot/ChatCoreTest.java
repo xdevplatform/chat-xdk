@@ -213,11 +213,16 @@ class ChatCoreTest {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
             core.setIdentity("1000");
+            String title = "hello from the jvm example";
             PreparedConversationChange prep = core.prepareGroupCreate(
-                    fixtureKeys(v), "g123", List.of("1000"), List.of("1000"));
+                    fixtureKeys(v), "g123", List.of("1000"), List.of("1000"), title);
             assertEquals(2, prep.actionSignatures.size());
             assertNotNull(prep.conversationKey);
             assertEquals(32, prep.conversationKey.length);
+            // The title goes out encrypted under the new key: the group_name the
+            // create request sends, and the ciphertext the create signs.
+            assertTrue(prep.actionSignatures.get(1).signaturePayload.contains(prep.encryptedTitle));
+            assertEquals(title, core.decrypt(prep.encryptedTitle, prep.conversationKey));
         }
     }
 

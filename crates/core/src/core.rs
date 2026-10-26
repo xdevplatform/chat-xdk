@@ -752,6 +752,8 @@ impl ChatCore {
             conversation_key_version: conversation_key_version.to_string(),
             conversation_participant_keys: participant_keys,
             action_signatures: vec![signature],
+            encrypted_title: None,
+            encrypted_avatar_url: None,
         })
     }
 
@@ -785,9 +787,9 @@ impl ChatCore {
     /// Serialize the `GroupCreate` event the API persists and relays.
     ///
     /// Encoded as a base64 `MessageEventDetail` carrying the full group roster,
-    /// title, avatar, and conversation-key version. The backend matches on
-    /// `member_ids`, `admin_ids`, `title`, `avatar_url`, and
-    /// `conversation_key_version`, so all of them are populated.
+    /// the encrypted title and avatar, and the conversation-key version. The
+    /// backend matches on `member_ids`, `admin_ids`, `title`, `avatar_url`,
+    /// and `conversation_key_version`, so all of them are populated.
     #[allow(clippy::too_many_arguments)]
     fn encode_group_create_detail(
         member_ids: &[String],
@@ -870,6 +872,12 @@ impl ChatCore {
     /// every participant, and emits the two action signatures the backend
     /// requires: a conversation-key change and the group-create itself. The
     /// returned `conversation_key` is the raw key to store locally.
+    ///
+    /// `title` and `avatar_url` are plaintext. The call encrypts each under
+    /// the new conversation key, as [`Self::prepare_group_title_change`]
+    /// encrypts a title, signs the ciphertext, and returns it as
+    /// `encrypted_title` and `encrypted_avatar_url`: the `group_name` and
+    /// `group_avatar_url` the create request sends.
     pub fn prepare_group_create(
         &self,
         params: &GroupCreateParams,
@@ -901,6 +909,12 @@ impl ChatCore {
         crate::pipeline::validate_user_ids("member_ids", &params.member_ids)?;
         crate::pipeline::validate_user_ids("admin_ids", &params.admin_ids)?;
         let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
+        let encrypted_title = title
+            .map(|title| group_actions::encrypt_group_metadata(&ckey, title))
+            .transpose()?;
+        let encrypted_avatar_url = avatar_url
+            .map(|avatar_url| group_actions::encrypt_group_metadata(&ckey, avatar_url))
+            .transpose()?;
 
         // A group create needs two signed actions: the conversation-key change
         // that seeds the group's key, and the group-create action itself.
@@ -922,16 +936,16 @@ impl ChatCore {
             &create_message_id,
             &sender_id,
             &params.member_ids,
-            title,
-            avatar_url,
+            encrypted_title.as_deref(),
+            encrypted_avatar_url.as_deref(),
             conversation_key_version,
             None,
         )?;
         create_sig.encoded_message_event_detail = Self::encode_group_create_detail(
             &params.member_ids,
             &params.admin_ids,
-            title,
-            avatar_url,
+            encrypted_title.as_deref(),
+            encrypted_avatar_url.as_deref(),
             conversation_key_version,
             ttl_msec,
             None,
@@ -943,6 +957,8 @@ impl ChatCore {
             conversation_key_version: conversation_key_version.to_string(),
             conversation_participant_keys: participant_keys,
             action_signatures: vec![ckce_sig, create_sig],
+            encrypted_title,
+            encrypted_avatar_url,
         })
     }
 
@@ -1044,6 +1060,8 @@ impl ChatCore {
             conversation_key_version: conversation_key_version.to_string(),
             conversation_participant_keys: participant_keys,
             action_signatures: vec![ckce_sig, member_add_sig],
+            encrypted_title: None,
+            encrypted_avatar_url: None,
         })
     }
 
@@ -1859,12 +1877,19 @@ impl ChatCore {
                 value.as_deref(),
             )
         };
+        let decrypt_set = |field: &str, version: &Option<String>, value: &Option<String>| {
+            value
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|_| decrypt(field, version, value))
+                .transpose()
+        };
         Ok(match change {
             Some(GenGC::GroupCreate(c)) => GroupChange::Created {
                 member_ids: c.member_ids.clone().unwrap_or_default(),
                 admin_ids: c.admin_ids.clone().unwrap_or_default(),
-                title: c.title.clone(),
-                avatar_url: c.avatar_url.clone(),
+                title: decrypt_set("title", &c.conversation_key_version, &c.title)?,
+                avatar_url: decrypt_set("avatar URL", &c.conversation_key_version, &c.avatar_url)?,
             },
             Some(GenGC::GroupTitleChange(c)) => GroupChange::TitleChanged {
                 new_title: decrypt("title", &c.conversation_key_version, &c.custom_title)?,
@@ -6079,14 +6104,15 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let gc = ThriftGCE::new(
             Some(crate::thrift::event::GroupChange::GroupCreate(
                 GroupCreate::new(
                     Some(vec!["m1".to_string(), "m2".to_string()]),
                     Some(vec!["a1".to_string()]),
-                    Some("Test Group".to_string()),
-                    Some("https://avatar.url".to_string()),
-                    Some("v1".to_string()),
+                    Some(encrypted_metadata(&key, "Test Group")),
+                    Some(encrypted_metadata(&key, "https://avatar.url")),
+                    Some("1".to_string()),
                     None::<bool>,
                     None::<i64>,
                     None,
@@ -6096,8 +6122,18 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let event = core
+        // Without the key the create was encrypted under, it does not decrypt.
+        let err = core
             .decrypt_event_with(&event_b64, &Default::default(), &[])
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Group title encrypted with key version '1'"),
+            "got: {err}"
+        );
+
+        let event = core
+            .decrypt_event_with(&event_b64, &HashMap::from([("1".to_string(), key)]), &[])
             .unwrap();
         match event {
             Event::GroupChange(gc) => match gc.change {
@@ -7352,8 +7388,24 @@ mod tests {
                         gc.admin_ids.as_deref(),
                         Some(["910004".to_string()].as_slice())
                     );
-                    assert_eq!(gc.title.as_deref(), Some("Squad"));
-                    assert_eq!(gc.avatar_url.as_deref(), Some("https://img/a.png"));
+                    // The title and avatar go out encrypted under the new
+                    // key, as the result returns them for the request.
+                    let key = result.conversation_key.as_ref().unwrap();
+                    assert_eq!(gc.title, result.encrypted_title);
+                    assert_eq!(gc.avatar_url, result.encrypted_avatar_url);
+                    assert_eq!(
+                        core.decrypt(gc.title.as_deref().unwrap(), key).unwrap(),
+                        "Squad"
+                    );
+                    assert_eq!(
+                        core.decrypt(gc.avatar_url.as_deref().unwrap(), key)
+                            .unwrap(),
+                        "https://img/a.png"
+                    );
+                    assert!(create
+                        .signature_payload
+                        .contains(gc.title.as_deref().unwrap()));
+                    assert!(!create.signature_payload.contains("Squad"));
                     assert_eq!(
                         gc.conversation_key_version.as_deref(),
                         Some(result.conversation_key_version.as_str())
@@ -7836,25 +7888,6 @@ mod tests {
             assert!(signed["signature"].as_str().is_some_and(|s| !s.is_empty()));
             assert!(entry.get("signature").is_none());
         }
-    }
-
-    #[test]
-    fn prepare_group_create_rejects_comma_in_title() {
-        let core = ChatCore::new();
-        core.generate_keypairs().unwrap();
-        let pk = core.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
-
-        let params = crate::GroupCreateParams::new(
-            input,
-            "g999",
-            vec!["910004".to_string()],
-            vec!["910004".to_string()],
-        )
-        .with_identity("910004", "1")
-        .with_title("Team, the sequel");
-        let result = core.prepare_group_create(&params);
-        assert!(matches!(result, Err(SdkError::Parse(_))));
     }
 
     #[test]

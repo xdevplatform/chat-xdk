@@ -629,6 +629,11 @@ namespace ChatXdk
         /// <see cref="PrepareConversationKeyChange"/>; roster additions use
         /// <see cref="PrepareGroupMembersChange"/>.
         /// Emits two action signatures: a conversation-key change and the group create.
+        /// The title and avatar URL are plaintext: the call encrypts each under the new
+        /// conversation key, signs the ciphertext, and returns it as
+        /// <see cref="PreparedConversationChange.EncryptedTitle"/> and
+        /// <see cref="PreparedConversationChange.EncryptedAvatarUrl"/>, the <c>group_name</c>
+        /// and <c>group_avatar_url</c> the create request sends.
         /// </summary>
         public PreparedConversationChange PrepareGroupCreate(GroupCreateParams parameters)
         {

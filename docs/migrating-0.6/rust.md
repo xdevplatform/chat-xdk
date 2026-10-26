@@ -30,7 +30,7 @@ change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#changing-the-title)
+- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -582,6 +582,46 @@ Apps should sign each group update below. The sender comes from
 `set_identity`. Each returns `action_signatures` shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
+
+### Creating a group
+
+`prepare_group_create` encrypts the group's title and avatar URL under the
+conversation key it creates, so pass them as plaintext. The result is a
+`PreparedConversationChange` that also carries them encrypted, as
+`encrypted_title` and `encrypted_avatar_url` (`None` when unset): send
+those as the create request's `group_name` and `group_avatar_url`, next to
+its participant keys and signatures. The create signs the encrypted values,
+so a title or avatar URL may contain a comma.
+
+```rust
+// 0.5.x
+let mut create = GroupCreateParams::new(public_keys, conversation_id, member_ids, admin_ids);
+create.title = Some(title.to_string());
+let prepared = chat.prepare_group_create(create)?;
+let body = serde_json::json!({ "group_name": title });
+
+// 0.6.0
+let create = GroupCreateParams::new(public_keys, conversation_id, member_ids, admin_ids).with_title(title);
+let prepared = chat.prepare_group_create(&create)?;
+let body = serde_json::json!({ "group_name": prepared.encrypted_title });
+```
+
+`decrypt_event` returns a received group create with its title and avatar
+URL decrypted under the key version the create names, from the call's key
+map or the key cache: `GroupChange::Created`'s `title` and `avatar_url` are
+plaintext.
+
+```rust
+// 0.5.x
+if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
+    show_title(&chat.decrypt(title, &keys[conversation_key_version])?);
+}
+
+// 0.6.0
+if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
+    show_title(title);
+}
+```
 
 ### Removing members
 

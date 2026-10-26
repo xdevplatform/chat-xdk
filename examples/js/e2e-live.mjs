@@ -335,6 +335,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
     conversationId: groupId,
     memberIds: [myId],
     adminIds: [myId],
+    title: "chat-xdk e2e",
   });
   let members = [myId];
   try {
@@ -342,7 +343,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       conversationId: groupId,
       groupMembers: members,
       groupAdmins: [myId],
-      groupName: "chat-xdk e2e",
+      groupName: gPrep.encryptedTitle,
       ...prepToRequest(gPrep),
     });
   } catch {
@@ -353,13 +354,14 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       conversationId: groupId,
       memberIds: [myId, partnerId],
       adminIds: [myId],
+      title: "chat-xdk e2e",
     });
     members = [myId, partnerId];
     await api.createConversation({
       conversationId: groupId,
       groupMembers: members,
       groupAdmins: [myId],
-      groupName: "chat-xdk e2e",
+      groupName: gPrep.encryptedTitle,
       ...prepToRequest(gPrep),
     });
   }

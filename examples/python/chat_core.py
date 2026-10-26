@@ -338,13 +338,16 @@ class ChatCore:
         conversation_id: str,
         member_ids: list[str],
         admin_ids: list[str],
+        title: str | None = None,
     ) -> dict[str, Any]:
         """Prepare a group creation: fresh key + the two required signatures.
 
-        Signed with the ``set_identity`` session identity.
+        Signed with the ``set_identity`` session identity. A plaintext
+        ``title`` is encrypted under the new key; send the result's
+        ``encrypted_title`` as the request's ``group_name``.
         """
         return self.chat.prepare_group_create(
-            GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids)
+            GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids, title=title)
         )
 
     def prepare_group_members_change(

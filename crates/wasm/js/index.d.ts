@@ -231,6 +231,18 @@ export interface PreparedConversationChange {
   conversationParticipantKeys: ConversationParticipantKey[];
   /** Action signatures authenticating the change, ready to POST to the API. */
   actionSignatures: ActionSignature[];
+  /**
+   * prepareGroupCreate only, when the params set a title: the title encrypted
+   * under the new conversation key, base64 — the `group_name` the create
+   * request sends.
+   */
+  encryptedTitle?: string;
+  /**
+   * prepareGroupCreate only, when the params set an avatar URL: the avatar URL
+   * encrypted under the new conversation key, base64 — the `group_avatar_url`
+   * the create request sends.
+   */
+  encryptedAvatarUrl?: string;
 }
 
 /**
@@ -738,8 +750,9 @@ export interface GroupMembersChangeParams {
 /**
  * Parameters for prepareGroupCreate.
  *
- * An unset optional signs the null sentinel, so every binding produces
- * identical signed bytes.
+ * `title` and `avatarUrl` are plaintext: the create encrypts each under the
+ * new conversation key and signs the ciphertext. An unset optional signs the
+ * null sentinel, so every binding produces identical signed bytes.
  */
 export interface GroupCreateParams {
   /** Identity public keys for every participant of the new group. */
@@ -754,9 +767,9 @@ export interface GroupCreateParams {
   senderId?: string | null;
   /** Version of the signing key used to sign the create; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
-  /** The group's title, if set. */
+  /** The group's title, as plaintext, if set. */
   title?: string | null;
-  /** The group's avatar URL, if set. */
+  /** The group's avatar URL, as plaintext, if set. */
   avatarUrl?: string | null;
   /** The group's message TTL in milliseconds, if set. */
   ttlMsec?: number | null;
@@ -1377,8 +1390,13 @@ interface ChatCrypto {
    * prepareConversationKeyChange; roster additions use
    * prepareGroupMembersChange.
    *
-   * @returns PreparedConversationChange with two action signatures: the
-   * conversation-key change and the group create
+   * `title` and `avatarUrl` are plaintext: the call encrypts each under the
+   * new conversation key and signs the ciphertext.
+   *
+   * @returns PreparedConversationChange with two action signatures (the
+   * conversation-key change and the group create), and `encryptedTitle` and
+   * `encryptedAvatarUrl` for a title and avatar URL the params set: the
+   * `group_name` and `group_avatar_url` the create request sends
    */
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
 

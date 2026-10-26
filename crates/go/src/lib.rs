@@ -939,6 +939,14 @@ fn json_prepared_change(
         "action_signatures".into(),
         serde_json::to_value(&res.action_signatures)?,
     );
+    for (name, value) in [
+        ("encrypted_title", &res.encrypted_title),
+        ("encrypted_avatar_url", &res.encrypted_avatar_url),
+    ] {
+        if let Some(value) = value {
+            out.insert(name.into(), serde_json::Value::String(value.clone()));
+        }
+    }
     serde_json::to_string(&serde_json::Value::Object(out))
 }
 
@@ -1455,7 +1463,10 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
 /// `params_json` — single JSON document: `public_keys` (for the roster),
 /// `conversation_id`, `member_ids`, `admin_ids`, plus optional `sender_id` /
 /// `signing_key_version` (unset resolves from the session identity),
-/// `title`, `avatar_url`, and `ttl_msec`. Emits two action signatures.
+/// `title` and `avatar_url` (plaintext, encrypted under the new conversation
+/// key), and `ttl_msec`. Emits two action signatures; the result carries the
+/// encrypted title and avatar URL as `encrypted_title` and
+/// `encrypted_avatar_url`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_create(
     handle: *const ChatHandle,

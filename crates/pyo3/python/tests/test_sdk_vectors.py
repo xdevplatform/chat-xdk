@@ -352,6 +352,42 @@ class TestPythonSdkVectors(unittest.TestCase):
             )
         self.assertIn("Group description encrypted with key version", str(raised.exception))
 
+    def test_group_create_decrypts_its_title_and_avatar_on_receive(self):
+        from chat_xdk import Chat, DecryptEventParams
+
+        v = _load_vectors()
+        chat = Chat()
+        keys = {
+            v["event_group_create_conversation_key_version"]: base64.b64decode(
+                v["event_group_create_conversation_key_b64"]
+            )
+        }
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_create_b64"], keys, signing_keys=_fixture_signing_keys(v)
+            )
+        )
+        self.assertEqual(event["type"], "GroupChange")
+        self.assertTrue(event["verified"])
+        self.assertEqual(
+            event["change"],
+            {
+                "change_type": "Created",
+                "member_ids": [v["event_sender_id"]],
+                "admin_ids": [v["event_sender_id"]],
+                "title": v["event_group_title"],
+                "avatar_url": v["event_group_avatar_url"],
+            },
+        )
+        # Without the key the create seeded, its title does not decrypt.
+        with self.assertRaises(ValueError) as raised:
+            chat.decrypt_event(
+                DecryptEventParams(
+                    v["event_group_create_b64"], {}, signing_keys=_fixture_signing_keys(v)
+                )
+            )
+        self.assertIn("Group title encrypted with key version", str(raised.exception))
+
     def test_reactions_and_edits_name_their_target_by_sequence_id(self):
         from chat_xdk import (
             Chat,

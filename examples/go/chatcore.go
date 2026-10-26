@@ -267,13 +267,16 @@ func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conve
 // -- Group management ---------------------------------------------------------
 
 // PrepareGroupCreate prepares a group creation under the session identity:
-// fresh key + the two required signatures.
-func (c *ChatCore) PrepareGroupCreate(publicKeys []chatxdk.PublicKeyInput, conversationID string, memberIDs, adminIDs []string) (*chatxdk.PreparedConversationChange, error) {
+// fresh key + the two required signatures. A plaintext title (empty for
+// none) is encrypted under the new key; send the result's EncryptedTitle as
+// the request's group_name.
+func (c *ChatCore) PrepareGroupCreate(publicKeys []chatxdk.PublicKeyInput, conversationID string, memberIDs, adminIDs []string, title string) (*chatxdk.PreparedConversationChange, error) {
 	return c.chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
 		PublicKeys:     publicKeys,
 		ConversationID: conversationID,
 		MemberIDs:      memberIDs,
 		AdminIDs:       adminIDs,
+		Title:          title,
 	})
 }
 

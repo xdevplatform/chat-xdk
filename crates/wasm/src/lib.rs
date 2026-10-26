@@ -1007,10 +1007,12 @@ impl Chat {
     /// Takes a single params object with camelCase keys: `publicKeys` (for
     /// the new roster), `conversationId`, `memberIds`, `adminIds`, plus
     /// optional `senderId` / `signingKeyVersion` (resolved from the session
-    /// identity when omitted), `title`, `avatarUrl`, and `ttlMsec`. Emits
-    /// two action signatures (a conversation-key change and the group
-    /// create). Returns the same shape as
-    /// [`Chat::prepare_conversation_key_change`].
+    /// identity when omitted), `title` and `avatarUrl` (plaintext, encrypted
+    /// under the new conversation key), and `ttlMsec`. Emits two action
+    /// signatures (a conversation-key change and the group create). Returns
+    /// the same shape as [`Chat::prepare_conversation_key_change`], plus
+    /// `encryptedTitle` and `encryptedAvatarUrl` for a title and avatar URL
+    /// the params set.
     #[wasm_bindgen(js_name = prepareGroupCreate)]
     pub fn prepare_group_create(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupCreateParams = from_js_params("prepareGroupCreate", params)?;
@@ -1109,6 +1111,15 @@ fn prepared_change_to_js(
         &JsValue::from_str(&result.conversation_key_version),
     )
     .map_err(|_| JsError::new("Failed to set conversationKeyVersion"))?;
+    for (name, value) in [
+        ("encryptedTitle", &result.encrypted_title),
+        ("encryptedAvatarUrl", &result.encrypted_avatar_url),
+    ] {
+        if let Some(value) = value {
+            js_sys::Reflect::set(&obj, &name.into(), &JsValue::from_str(value))
+                .map_err(|_| JsError::new(&format!("Failed to set {name}")))?;
+        }
+    }
 
     let js_prepared: JsPreparedConversationChange = result.into();
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();

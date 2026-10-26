@@ -326,15 +326,28 @@ func TestRemovalToRequestRotatesForMembersWhoStay(t *testing.T) {
 func TestPrepareGroupCreateYieldsTwoSignatures(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
-	prep, err := core.PrepareGroupCreate(fixtureKeys(v), "g123", []string{"1000"}, []string{"1000"})
+	title := "hello from the go example"
+	prep, err := core.PrepareGroupCreate(fixtureKeys(v), "g123", []string{"1000"}, []string{"1000"}, title)
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate: %v", err)
 	}
 	if len(prep.ActionSignatures) != 2 {
-		t.Errorf("expected 2 action signatures, got %d", len(prep.ActionSignatures))
+		t.Fatalf("expected 2 action signatures, got %d", len(prep.ActionSignatures))
 	}
 	if len(prep.ConversationKey) != 32 {
 		t.Errorf("expected a 32-byte conversation key, got %d bytes", len(prep.ConversationKey))
+	}
+	// The title goes out encrypted under the new key: the group_name the
+	// create request sends, and the ciphertext the create signs.
+	if prep.EncryptedTitle == nil {
+		t.Fatal("expected an encrypted title")
+	}
+	if !strings.Contains(prep.ActionSignatures[1].SignaturePayload, *prep.EncryptedTitle) {
+		t.Errorf("the create must sign the encrypted title: %q", prep.ActionSignatures[1].SignaturePayload)
+	}
+	got, err := core.Decrypt(*prep.EncryptedTitle, prep.ConversationKey)
+	if err != nil || got != title {
+		t.Errorf("encrypted title decrypts to %q, %v", got, err)
 	}
 }
 

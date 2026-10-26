@@ -263,6 +263,28 @@ async function main() {
   assert.ok(groupPrep.actionSignatures[0].encodedMessageEventDetail.length > 0);
   assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
   assert.ok(groupPrep.actionSignatures[1].encodedMessageEventDetail.length > 0);
+  // The title goes out encrypted under the new key, the value the request
+  // sends as group_name; the signature covers the ciphertext.
+  assert.equal(typeof groupPrep.encryptedTitle, "string");
+  assert.ok(groupPrep.actionSignatures[1].signaturePayload.includes(groupPrep.encryptedTitle));
+  assert.ok(!groupPrep.actionSignatures[1].signaturePayload.includes("My Group"));
+  assert.equal(chat.decrypt(groupPrep.encryptedTitle, groupPrep.conversationKey), "My Group");
+  assert.equal("encryptedAvatarUrl" in groupPrep, false);
+  const commaPrep = chat.prepareGroupCreate({
+    senderId: "910002",
+    signingKeyVersion: "1",
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    conversationId: "g-1",
+    memberIds: ["910002"],
+    adminIds: ["910002"],
+    title: "Team, the sequel",
+    avatarUrl: "https://img.example/a.png",
+  });
+  assert.equal(chat.decrypt(commaPrep.encryptedTitle, commaPrep.conversationKey), "Team, the sequel");
+  assert.equal(
+    chat.decrypt(commaPrep.encryptedAvatarUrl, commaPrep.conversationKey),
+    "https://img.example/a.png",
+  );
 
   // 2c. An empty title is the "not set" encoding: it signs the null
   // sentinel, exactly like omitting the field.
@@ -281,6 +303,8 @@ async function main() {
       p.actionSignatures[1].signaturePayload.endsWith(",null,null,null"),
       `title/avatar must sign as the null sentinel, got: ${p.actionSignatures[1].signaturePayload}`,
     );
+    assert.equal("encryptedTitle" in p, false);
+    assert.equal("encryptedAvatarUrl" in p, false);
   }
 
   const convKey = b64ToBytes(v.conversation_key_b64);

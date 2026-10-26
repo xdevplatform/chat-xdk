@@ -847,6 +847,38 @@ class TestApiShapes(unittest.TestCase):
             create["signature_payload"].startswith("GroupChangeEvent.GroupCreate,")
         )
         self.assertTrue(create["encoded_message_event_detail"])
+        # The title goes out encrypted under the new key, the value the
+        # request sends as group_name; the signature covers the ciphertext.
+        encrypted_title = result["encrypted_title"]
+        self.assertNotIn("Team", create["signature_payload"])
+        self.assertIn(encrypted_title, create["signature_payload"])
+        self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
+        self.assertNotIn("encrypted_avatar_url", result)
+
+    def test_prepare_group_create_encrypts_a_title_with_a_comma(self):
+        from chat_xdk import GroupCreateParams
+
+        chat, v = self._unlocked_chat()
+        public_keys = [
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+        ]
+        result = chat.prepare_group_create(
+            GroupCreateParams(
+                public_keys,
+                "g123",
+                ["910002"],
+                ["910002"],
+                sender_id="910002",
+                signing_key_version="1",
+                title="Team, the sequel",
+                avatar_url="https://img.example/a.png",
+            )
+        )
+        key = result["conversation_key"]
+        self.assertEqual(chat.decrypt(result["encrypted_title"], key), "Team, the sequel")
+        self.assertEqual(
+            chat.decrypt(result["encrypted_avatar_url"], key), "https://img.example/a.png"
+        )
 
     def test_prepare_group_create_empty_title_signs_as_omitted(self):
         from chat_xdk import GroupCreateParams
@@ -886,6 +918,8 @@ class TestApiShapes(unittest.TestCase):
                 payload.endswith(",null,null,null"),
                 f"title/avatar must sign as the null sentinel, got: {payload}",
             )
+            self.assertNotIn("encrypted_title", result)
+            self.assertNotIn("encrypted_avatar_url", result)
 
     def test_group_actions_sign_the_verifier_payloads(self):
         from chat_xdk import (

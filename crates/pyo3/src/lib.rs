@@ -294,6 +294,12 @@ fn prepared_change_to_pydict(
         "action_signatures",
         action_signatures_to_pylist(py, &result.action_signatures)?,
     )?;
+    if let Some(encrypted_title) = &result.encrypted_title {
+        outer.set_item("encrypted_title", encrypted_title)?;
+    }
+    if let Some(encrypted_avatar_url) = &result.encrypted_avatar_url {
+        outer.set_item("encrypted_avatar_url", encrypted_avatar_url)?;
+    }
 
     Ok(outer.into())
 }
@@ -1030,9 +1036,9 @@ pub struct GroupCreateParams {
     /// Your registered signing public key version; defaults to the
     /// ``set_identity`` value.
     signing_key_version: Option<String>,
-    /// Group title, if set.
+    /// Group title, as plaintext, if set; the create encrypts it.
     title: Option<String>,
-    /// Group avatar URL, if set.
+    /// Group avatar URL, as plaintext, if set; the create encrypts it.
     avatar_url: Option<String>,
     /// Disappearing-message TTL in milliseconds, if set.
     ttl_msec: Option<i64>,
@@ -2848,10 +2854,15 @@ impl Chat {
     /// Args:
     ///     params: A ``GroupCreateParams``.
     ///
+    /// ``title`` and ``avatar_url`` are plaintext: the call encrypts each
+    /// under the new conversation key and signs the ciphertext.
+    ///
     /// Returns:
     ///     The same dict shape as ``prepare_conversation_key_change``, with
-    ///     two action signatures: the conversation-key change and the
-    ///     group create.
+    ///     two action signatures (the conversation-key change and the group
+    ///     create) and, for a title or avatar URL the params set,
+    ///     ``encrypted_title`` and ``encrypted_avatar_url``: the
+    ///     ``group_name`` and ``group_avatar_url`` the create request sends.
     fn prepare_group_create(
         &self,
         py: Python<'_>,

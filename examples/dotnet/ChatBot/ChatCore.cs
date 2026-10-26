@@ -171,13 +171,21 @@ public sealed class ChatCore : IDisposable
 
     // -- Group management -----------------------------------------------------
 
-    /// <summary>Prepare a group creation: fresh key + the two required signatures.</summary>
+    /// <summary>
+    /// Prepare a group creation: fresh key + the two required signatures. A plaintext
+    /// <paramref name="title"/> is encrypted under the new key; send the result's
+    /// <c>EncryptedTitle</c> as the request's <c>group_name</c>.
+    /// </summary>
     public PreparedConversationChange PrepareGroupCreate(
         IReadOnlyList<PublicKeyInput> publicKeys,
         string conversationId,
         IReadOnlyList<string> memberIds,
-        IReadOnlyList<string> adminIds)
-        => _chat.PrepareGroupCreate(new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds));
+        IReadOnlyList<string> adminIds,
+        string? title = null)
+        => _chat.PrepareGroupCreate(new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds)
+        {
+            Title = title,
+        });
 
     /// <summary>Prepare a member add: rotated key + the two required signatures.</summary>
     public PreparedConversationChange PrepareGroupMembersChange(

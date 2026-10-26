@@ -591,11 +591,19 @@ prepared = chat.prepare_conversation_key_change(
   (`updatedText` in JS). Each binding's
   [migration guide](docs/migrating-0.6/README.md) shows the lines to change.
 - Group titles, avatars and descriptions are plaintext in the API, and the
-  SDK encrypts and decrypts them: their prepare calls and a member removal
-  take the plaintext, and a decrypted `TitleChanged` or `AvatarChanged`
-  change carries the plaintext `new_title` or `new_avatar_url` (`newTitle`
-  or `newAvatarUrl` in JS), decrypted with the conversation key version the
-  change names. `decrypt` opens the encrypted `group_name`,
+  SDK encrypts and decrypts them. `prepare_group_create` encrypts its title
+  and avatar URL under the conversation key it creates, signs the
+  ciphertext, and returns it on its `PreparedConversationChange` as
+  `encrypted_title` and `encrypted_avatar_url` (`encryptedTitle` and
+  `encryptedAvatarUrl` in JS, `EncryptedTitle` and `EncryptedAvatarURL` in
+  Go): the `group_name` and `group_avatar_url` the create request sends.
+  Since the create signs base64 ciphertext, its title and avatar URL may
+  contain a comma. The title, avatar and description prepare calls and a
+  member removal take the plaintext too. A decrypted `Created` change
+  carries the plaintext `title` and `avatar_url`, and a `TitleChanged` or
+  `AvatarChanged` change the plaintext `new_title` or `new_avatar_url`
+  (`newTitle` or `newAvatarUrl` in JS), decrypted with the conversation key
+  version the event names. `decrypt` opens the encrypted `group_name`,
   `group_avatar_url` and `group_description` the X API returns with a
   conversation.
 - Rust: every encrypt and prepare method takes its params by reference:

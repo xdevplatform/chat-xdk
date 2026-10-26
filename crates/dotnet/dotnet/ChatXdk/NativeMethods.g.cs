@@ -281,7 +281,10 @@ namespace ChatXdk
         ///  `params_json` — single JSON document: `public_keys` (for the roster),
         ///  `conversation_id`, `member_ids`, `admin_ids`, plus optional `sender_id` /
         ///  `signing_key_version` (absent resolves from the session identity),
-        ///  `title`, `avatar_url`, and `ttl_msec`. Emits two action signatures.
+        ///  `title` and `avatar_url` (plaintext, encrypted under the new conversation
+        ///  key), and `ttl_msec`. Emits two action signatures; the result carries the
+        ///  encrypted title and avatar URL as `encrypted_title` and
+        ///  `encrypted_avatar_url`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_create", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_create(ChatHandle* handle, byte* params_json);

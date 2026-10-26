@@ -340,6 +340,35 @@ async function main() {
     /Group description encrypted with key version/,
   );
 
+  // A signed group create: decryptEvent returns its title and avatar URL
+  // decrypted under the key the create seeded, and without that key the
+  // create fails instead of coming back as ciphertext.
+  const createKeys = {
+    [v.event_group_create_conversation_key_version]: b64ToBytes(v.event_group_create_conversation_key_b64),
+  };
+  const created = chat.decryptEvent({
+    eventB64: v.event_group_create_b64,
+    conversationKeys: createKeys,
+    signingKeys,
+  });
+  assert.equal(created.type, "groupChange");
+  assert.equal(created.verified, true);
+  assert.deepEqual(created.change, {
+    changeType: "created",
+    memberIds: [v.event_sender_id],
+    adminIds: [v.event_sender_id],
+    title: v.event_group_title,
+    avatarUrl: v.event_group_avatar_url,
+  });
+  assert.throws(
+    () => chat.decryptEvent({
+      eventB64: v.event_group_create_b64,
+      conversationKeys: {},
+      signingKeys,
+    }),
+    /Group title encrypted with key version/,
+  );
+
   // Failure events are unsigned by protocol: the fixture failure decodes with
   // no keys, and JS camelCases the discriminator values and the tier field.
   const failure = chat.decryptEvent({ eventB64: v.event_failure_b64, conversationKeys: {} });

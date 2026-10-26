@@ -188,7 +188,7 @@ output = K_1 || K_2 || ... truncated to key_length
 
 ## 5. Message Encryption — XSalsa20-Poly1305
 
-Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title, avatar URL and description are encrypted the same way under the conversation key: `prepare_group_title_change`, `prepare_group_avatar_change`, `prepare_group_description_change` and `prepare_group_members_remove` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received change, and `decrypt` opens the values the X API returns with a conversation.
+Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title, avatar URL and description are encrypted the same way under the conversation key: `prepare_group_create` (under the key it seeds), `prepare_group_title_change`, `prepare_group_avatar_change`, `prepare_group_description_change` and `prepare_group_members_remove` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received create or change, and `decrypt` opens the values the X API returns with a conversation.
 
 ### Algorithm
 
@@ -514,9 +514,12 @@ comma-separated payloads (`signatures.rs`):
   ```
   "GroupChangeEvent.GroupCreate,{message_id},{sender_id},{conversation_key_version},{member_ids...},{is_legacy_group_upgrade},{title},{avatar_url}"
   ```
-  The conversation id, admin ids, and TTL are carried in the event detail but
-  are **not** part of the signed payload; absent `is_legacy_group_upgrade`,
-  `title`, and `avatar_url` render as the literal `null`.
+  `title` and `avatar_url` are the group's title and avatar URL encrypted
+  under the conversation key the create seeds, as the event detail carries
+  them. The conversation id, admin ids, and TTL are carried in the event
+  detail but are **not** part of the signed payload; absent
+  `is_legacy_group_upgrade`, `title`, and `avatar_url` render as the literal
+  `null`.
 - **GroupMemberAdd** (from `prepare_group_members_change`, v7 field layout):
   ```
   "GroupChangeEvent.GroupMemberAddChange,{message_id},{sender_id},{conversation_id},{new_member_ids...},{current_member_ids...},{current_admin_ids...},{title},{avatar_url},{ttl_msec},{conversation_key_version},{screen_capture_blocking}"
@@ -589,9 +592,10 @@ Unset optional components render as `null`, so a v10 message without a
 message key signs `null` where the SDK's messages sign `1`.
 
 These payloads are comma-joined with no escaping, and the verifier rejects any
-component containing a comma. String fields signed inline — group `title` and
-`avatar_url` for GroupCreate/GroupMemberAdd — must therefore not contain a `,`,
-or the resulting signature is unverifiable.
+component containing a comma. String fields signed inline — a GroupMemberAdd's
+`title` and `avatar_url` — must therefore not contain a `,`, or the resulting
+signature is unverifiable. Encrypted values are base64, which has no comma, so
+any plaintext title, avatar URL or description can be encrypted and signed.
 
 ### Base64 Conventions
 
@@ -603,8 +607,8 @@ base64 **without** padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
 `encoded_message_create_event`, `encoded_message_event_signature`, and
 `ActionSignature.encoded_message_event_detail` — use standard base64 **with**
 padding (`base64_encode` in `protocol/serialization.rs`), and so does an
-encrypted group title, avatar URL or description, which its change event
-carries and its signature covers as the same string; decoding accepts
+encrypted group title, avatar URL or description, which its create or change
+event carries and its signature covers as the same string; decoding accepts
 either form (`DecodePaddingMode::Indifferent`), but producers must not swap
 conventions.
 

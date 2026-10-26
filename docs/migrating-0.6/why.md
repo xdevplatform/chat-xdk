@@ -255,13 +255,16 @@ removal, then an admin add when `promote_admin_id` is set, then a
 conversation delete, and does not rotate the key.
 
 A group's title, avatar and description are encrypted under the
-conversation key, and the SDK encrypts them: their prepare calls take the
-plaintext, resolve the key as `encrypt_message` does, and return the
-encrypted value with its signature, so an app never encrypts a value itself
-and no plaintext reaches the X API. A removal re-encrypts the ones the app
-passes under the new key and signs them between the removal and the key
-change, in the order the request takes them. `decrypt_event` decrypts a
-received title, avatar or description change. Admin, invite, and join
+conversation key, and the SDK encrypts them: a group create, the title,
+avatar and description changes, and a removal take the plaintext and return
+the encrypted values with their signatures, so an app never encrypts a value
+itself and no plaintext reaches the X API. A create encrypts its title and
+avatar under the key it creates, and returns them as the `group_name` and
+`group_avatar_url` its request sends. The changes resolve the key as
+`encrypt_message` does. A removal re-encrypts the ones the app passes under
+the new key and signs them between the removal and the key change, in the
+order the request takes them. `decrypt_event` decrypts a received create and
+a received title, avatar or description change. Admin, invite, and join
 changes, message-TTL changes, and screen-capture changes each return a
 `PreparedAction`:
 [Rust](rust.md#group-actions-should-be-signed),

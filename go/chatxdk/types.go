@@ -127,6 +127,14 @@ type PreparedConversationChange struct {
 	ConversationKeyVersion      string                       `json:"conversation_key_version"`
 	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
 	ActionSignatures            []ActionSignature            `json:"action_signatures"`
+	// EncryptedTitle is set by PrepareGroupCreate when the params carry a
+	// title: the title encrypted under the new conversation key, base64, the
+	// group_name the create request sends.
+	EncryptedTitle *string `json:"encrypted_title,omitempty"`
+	// EncryptedAvatarURL is set by PrepareGroupCreate when the params carry an
+	// avatar URL: the avatar URL encrypted under the new conversation key,
+	// base64, the group_avatar_url the create request sends.
+	EncryptedAvatarURL *string `json:"encrypted_avatar_url,omitempty"`
 }
 
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.
@@ -159,7 +167,8 @@ type GroupMembersChangeParams struct {
 
 // GroupCreateParams are the parameters for PrepareGroupCreate.
 // SenderID and SigningKeyVersion are optional overrides: empty resolves from
-// the session identity set via SetIdentity.
+// the session identity set via SetIdentity. Title and AvatarURL are
+// plaintext: the create encrypts each under the new conversation key.
 type GroupCreateParams struct {
 	SenderID          string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion string           `json:"signing_key_version,omitempty"` // empty = session identity

@@ -26,6 +26,11 @@ struct Vectors {
     event_group_description_b64: String,
     event_group_description: String,
     event_group_id: String,
+    event_group_create_b64: String,
+    event_group_create_conversation_key_b64: String,
+    event_group_create_conversation_key_version: String,
+    event_group_title: String,
+    event_group_avatar_url: String,
     event_key_change_b64: String,
     event_message_b64: String,
     event_reply_valid_b64: String,
@@ -323,6 +328,63 @@ fn vectors_group_description_change_decrypts_on_receive() {
         err.to_string().contains(&format!(
             "Group description encrypted with key version '{}'",
             v.event_conversation_key_version
+        )),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn vectors_group_create_decrypts_its_title_and_avatar_on_receive() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    let conversation_keys = std::collections::HashMap::from([(
+        v.event_group_create_conversation_key_version.clone(),
+        XChatConversationKey::from_bytes(
+            B64.decode(&v.event_group_create_conversation_key_b64)
+                .unwrap(),
+        )
+        .unwrap(),
+    )]);
+    let event = core
+        .decrypt_event(
+            DecryptEventParams::new(v.event_group_create_b64.clone(), conversation_keys)
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => {
+            assert!(change.verified);
+            match change.change {
+                chat_xdk_core::GroupChange::Created {
+                    member_ids,
+                    title,
+                    avatar_url,
+                    ..
+                } => {
+                    assert_eq!(member_ids, std::slice::from_ref(&v.event_sender_id));
+                    assert_eq!(title.as_deref(), Some(v.event_group_title.as_str()));
+                    assert_eq!(
+                        avatar_url.as_deref(),
+                        Some(v.event_group_avatar_url.as_str())
+                    );
+                }
+                other => panic!("Expected Created, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+
+    // Without the key the create seeded, its title does not decrypt.
+    let err = core
+        .decrypt_event(
+            DecryptEventParams::new(v.event_group_create_b64.clone(), Default::default())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "Group title encrypted with key version '{}'",
+            v.event_group_create_conversation_key_version
         )),
         "got: {err}"
     );

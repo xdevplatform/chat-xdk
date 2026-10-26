@@ -279,6 +279,24 @@ namespace ChatXdk
         /// <summary>Action signatures authenticating the change, ready to POST.</summary>
         [JsonPropertyName("action_signatures")]
         public List<ActionSignature> ActionSignatures { get; init; } = new();
+
+        /// <summary>
+        /// Set by <see cref="Chat.PrepareGroupCreate"/> when the params carry a title: the
+        /// title encrypted under the new conversation key, base64, the <c>group_name</c>
+        /// the create request sends; otherwise null.
+        /// </summary>
+        [JsonPropertyName("encrypted_title")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? EncryptedTitle { get; init; }
+
+        /// <summary>
+        /// Set by <see cref="Chat.PrepareGroupCreate"/> when the params carry an avatar URL:
+        /// the avatar URL encrypted under the new conversation key, base64, the
+        /// <c>group_avatar_url</c> the create request sends; otherwise null.
+        /// </summary>
+        [JsonPropertyName("encrypted_avatar_url")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? EncryptedAvatarUrl { get; init; }
     }
 
     /// <summary>
@@ -929,9 +947,9 @@ namespace ChatXdk
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
-        /// <summary>Group title, if set.</summary>
+        /// <summary>Group title, as plaintext, if set; the create encrypts it.</summary>
         public string? Title { get; init; }
-        /// <summary>Group avatar URL, if set.</summary>
+        /// <summary>Group avatar URL, as plaintext, if set; the create encrypts it.</summary>
         public string? AvatarUrl { get; init; }
         /// <summary>Disappearing-message TTL in milliseconds, if set.</summary>
         public long? TtlMsec { get; init; }

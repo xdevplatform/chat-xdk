@@ -869,7 +869,8 @@ pub struct GroupChangeEvent {
 #[serde(tag = "change_type")]
 #[non_exhaustive]
 pub enum GroupChange {
-    /// Group was created.
+    /// Group was created. `title` and `avatar_url` are the decrypted title
+    /// and avatar URL, when the create set them.
     #[non_exhaustive]
     Created {
         member_ids: Vec<String>,
@@ -1674,6 +1675,18 @@ pub struct PreparedConversationChange {
     /// Action signatures authenticating the change, ready to POST to the API.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub action_signatures: Vec<ActionSignature>,
+
+    /// The group's title encrypted under the new conversation key, base64:
+    /// the `group_name` a group create's request sends. Set by
+    /// `prepare_group_create` when its params carry a title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_title: Option<String>,
+
+    /// The group's avatar URL encrypted under the new conversation key,
+    /// base64: the `group_avatar_url` a group create's request sends. Set by
+    /// `prepare_group_create` when its params carry an avatar URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_avatar_url: Option<String>,
 }
 
 /// A signed group title, avatar, or description change, ready to send to
@@ -2105,6 +2118,8 @@ mod tests {
                 public_key_version: "1".to_string(),
             }],
             action_signatures: vec![],
+            encrypted_title: None,
+            encrypted_avatar_url: None,
         }
     }
 
@@ -2120,6 +2135,15 @@ mod tests {
             }])
         );
         assert_eq!(json["conversation_key_version"], "5");
+        assert!(json.get("encrypted_title").is_none());
+        assert!(json.get("encrypted_avatar_url").is_none());
+
+        let mut created = prepared_change();
+        created.encrypted_title = Some("ZW5jcnlwdGVkIHRpdGxl".to_string());
+        created.encrypted_avatar_url = Some("ZW5jcnlwdGVkIGF2YXRhcg==".to_string());
+        let json = serde_json::to_value(created).unwrap();
+        assert_eq!(json["encrypted_title"], "ZW5jcnlwdGVkIHRpdGxl");
+        assert_eq!(json["encrypted_avatar_url"], "ZW5jcnlwdGVkIGF2YXRhcg==");
     }
 
     #[cfg(feature = "js")]
