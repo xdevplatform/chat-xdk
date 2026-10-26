@@ -1117,7 +1117,7 @@ impl GroupCreateParams {
 ///
 /// `public_keys` are the identity keys of the members who stay: the call
 /// rotates the conversation key and encrypts the new key for them, so the
-/// removed members cannot read what the group sends next.
+/// removed members don't receive the key the group encrypts under next.
 ///
 /// `title`, `avatar_url` and `description` are the group's plaintext title,
 /// avatar URL and description. Each one set is encrypted under the new key
