@@ -206,8 +206,9 @@ unset or empty key fields and fall back to two opt-in session stores:
   the returned key map to `decrypt_event` explicitly.
 
 An explicit non-empty value always wins over the stores. The stores do not
-change the two decrypt contracts: `decrypt_events` never throws (per-event
-errors are collected in the result) and `decrypt_event` throws on failure.
+change the two decrypt contracts: `decrypt_events` collects per-event errors
+in the result and throws only for invalid params, and `decrypt_event` throws
+on failure.
 
 ---
 
@@ -954,7 +955,7 @@ if (eventJson.GetProperty("type").GetString() == "Message")
 | **Input** | 1 event (`string`) | N events (`string[]`) |
 | **Conversation keys** | Caller provides (`ConversationKeyMap`); empty ⇒ opt-in key cache (`setCacheKeys`) | SDK extracts from KeyChange events internally |
 | **Signing keys** | For the **sender only**, matched by `publicKeyVersion`; unset ⇒ `setSigningKeys` store | For **all participants**, SDK filters by `userId` per event; unset ⇒ `setSigningKeys` store |
-| **Error handling** | **Throws** on failure | **Never throws** — errors collected in `result.errors` |
+| **Error handling** | **Throws** on failure | Per-event errors collected in `result.errors`; throws only for invalid params |
 | **Return type** | `Event` (flat) | `DecryptEventsResult` wrapping `DecryptedMessage[]` |
 | **Returns original b64** | No | Yes (`originalB64` on each message) |
 | **Returns conv keys** | No | Yes (`conversationKeys` with `latestVersion`) |
