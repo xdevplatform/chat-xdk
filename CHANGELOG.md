@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+In every binding the feature-switch request sends and stores no cookies and
+follows no redirect. A cookie the endpoint sets never reaches a later chat's
+request, and a redirect counts as an answer other than 200, so the chat's
+sends stay v0.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.
