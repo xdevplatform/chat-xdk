@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+`chat-xdk-core`'s build script watches only the `CHAT_XDK_BINDINGS`
+variable it reads, so Cargo rebuilds the crate only when its sources or that
+variable change, in this repository and in crates that depend on it.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.
