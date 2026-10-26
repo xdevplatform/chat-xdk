@@ -416,8 +416,8 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Export private keys as raw bytes for a secure backup.
-        /// Returns <see langword="null"/> if the SDK is locked.
+        /// Export private keys as raw bytes (32 or 64) for a secure backup.
+        /// Returns <see langword="null"/> when no identity key is loaded.
         /// Warning: These are raw secret key bytes — store with extreme care.
         /// </summary>
         public byte[]? ExportKeys()

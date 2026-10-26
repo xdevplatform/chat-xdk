@@ -367,8 +367,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Export private keys as raw bytes for a secure backup.
-     * Returns {@code null} if the SDK is locked.
+     * Export private keys as raw bytes (32 or 64) for a secure backup.
+     * Returns {@code null} when no identity key is loaded.
      * These are raw secret key bytes — store with extreme care.
      */
     public byte[] exportKeys() {
