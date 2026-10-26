@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+The Python type stub names the byte parameter of `bytes_to_base64`,
+`bytes_to_hex`, `detect_mime_type` and `detect_image_dimensions` `bytes`, as
+the functions take it, so a type checker accepts exactly the keyword the call
+accepts.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.

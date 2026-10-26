@@ -160,6 +160,35 @@ class TestParams(unittest.TestCase):
 
         keep_offline()
 
+    def test_stub_parameter_names_match_the_native_code(self):
+        """A keyword argument the stub names must be one the native call takes."""
+        import ast
+        import inspect
+
+        import chat_xdk
+
+        stub_path = os.path.join(os.path.dirname(chat_xdk.__file__), "__init__.pyi")
+        with open(stub_path, "r", encoding="utf-8") as f:
+            stub = ast.parse(f.read())
+
+        def names(fn):
+            return [a.arg for a in fn.args.args + fn.args.kwonlyargs if a.arg != "self"]
+
+        def native(obj):
+            return [name for name in inspect.signature(obj).parameters if name != "self"]
+
+        checked = 0
+        for node in stub.body:
+            if isinstance(node, ast.FunctionDef) and hasattr(chat_xdk, node.name):
+                self.assertEqual(names(node), native(getattr(chat_xdk, node.name)), node.name)
+                checked += 1
+            if isinstance(node, ast.ClassDef) and node.name == "Chat":
+                for fn in node.body:
+                    if isinstance(fn, ast.FunctionDef) and not fn.name.startswith("__"):
+                        self.assertEqual(names(fn), native(getattr(chat_xdk.Chat, fn.name)), fn.name)
+                        checked += 1
+        self.assertGreater(checked, 50)
+
     def test_every_params_class_is_exported(self):
         import chat_xdk
 
