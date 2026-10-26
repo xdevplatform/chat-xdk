@@ -757,6 +757,43 @@ async function main() {
     /seen_until_sequence_id is empty/,
   );
 
+  // A millisecond field takes a finite number within the safe integer range:
+  // NaN, an infinity or a number past that range names no instant or
+  // duration and is rejected. A fraction is truncated toward zero.
+  const identity = { senderId: "111", signingKeyVersion: "1" };
+  const invalidMsec = /a millisecond value must be a finite number within the safe integer range/;
+  for (const bad of [NaN, Infinity, -Infinity, 2 ** 53, -(2 ** 60)]) {
+    assert.throws(
+      () => chat.prepareMarkConversationRead({ ...identity, conversationId: "g999", seenUntilSequenceId: "seq-1", seenAtMsec: bad }),
+      invalidMsec,
+    );
+    assert.throws(() => chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: bad }), invalidMsec);
+    assert.throws(
+      () =>
+        chat.encryptMessage({
+          ...identity,
+          conversationId: "111:222",
+          text: "hi",
+          ttlMsec: bad,
+          conversationKey: b64ToBytes(v.conversation_key_b64),
+          conversationKeyVersion: "1",
+        }),
+      invalidMsec,
+    );
+    assert.throws(
+      () => chat.prepareGroupInviteEnable({ ...identity, conversationId: "g999", inviteUrl: "https://x.com/i/chat/i", expiresAtMsec: bad }),
+      invalidMsec,
+    );
+  }
+  assert.throws(
+    () => chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: -Infinity }),
+    /got -Infinity$/,
+  );
+  const fractionalTtl = onlyAction(chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: 86400000.9 }));
+  assert.ok(fractionalTtl.signaturePayload.endsWith(",g999,86400000"));
+  const largestTtl = onlyAction(chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: 2 ** 53 - 1 }));
+  assert.ok(largestTtl.signaturePayload.endsWith(`,g999,${2 ** 53 - 1}`));
+
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({

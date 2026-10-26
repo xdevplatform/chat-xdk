@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+In JavaScript, a millisecond field (`ttlMsec`, `currentTtlMsec`,
+`seenAtMsec`, `expiresAtMsec`) takes a finite number within the safe integer
+range. NaN, an infinity or a number past that range names no instant or
+duration, so the call throws an `Invalid <method> params` error rather than
+signing some other value. A fraction is truncated toward zero.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.
