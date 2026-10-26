@@ -486,13 +486,14 @@ showReaction(message.Content.ReactionContent.TargetMessageSequenceID, message.Co
 seenUntil := *receipt.SeenUntilSequenceID
 ```
 
-Events and content without a Go type keep the same names in their JSON,
-which `Event.Raw` returns: an edit names its target
+Events and content without a Go type follow the same rule in their JSON,
+which `Event.Raw` returns: an `Edit` content names its target
 `target_message_sequence_id` and its text `updated_text`, as
-`EncryptEditParams` does, a deletion names its messages `sequence_ids`, as
-`MessageDeleteParams` does, and a markedUnread event names its position
-`seen_until_sequence_id`. A v1 edit also carries the signed message id of
-the message it edits as `target_message_id`, absent for a v0 edit:
+`EncryptEditParams` does, a `MessageDeleted` event names its messages
+`sequence_ids`, as `MessageDeleteParams` does, and a `MarkedUnread` event
+names its position `seen_until_sequence_id`. A v1 edit also carries the
+signed message id of the message it edits as `target_message_id`, absent
+for a v0 edit:
 
 ```go
 // 0.5.x
