@@ -112,6 +112,20 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(chat.verify(v["signing_public_b64"], sig_bytes, v["message_utf8"].encode("utf-8")))
         self.assertFalse(chat.verify(v["signing_public_b64"], sig_bytes, (v["message_utf8"] + "!").encode("utf-8")))
 
+    def test_sign_refuses_data_only_the_sdk_signs(self):
+        from chat_xdk import Chat, ImportKeysParams
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
+
+        key_change = b"ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5"
+        for data in (key_change, base64.b64decode(v["identity_public_b64"])):
+            with self.assertRaisesRegex(ValueError, "only the SDK signs"):
+                chat.sign(data)
+        # Data that only resembles a payload is application data.
+        self.assertEqual(len(chat.sign(b" " + key_change)), 64)
+
     def test_ecies_conversation_key_roundtrip(self):
         from chat_xdk import Chat, ConversationKeyChangeParams, ImportKeysParams
 

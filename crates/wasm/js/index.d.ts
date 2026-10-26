@@ -1202,7 +1202,10 @@ interface ChatCrypto {
    */
   decryptEvent(params: DecryptEventParams): Event;
 
-  /** Sign data. Returns raw signature bytes (64 bytes). */
+  /**
+   * Sign application data. Returns raw signature bytes (64 bytes). Throws for
+   * an event signature payload or a public key, which only the SDK signs.
+   */
   sign(data: Uint8Array): Uint8Array;
 
   /** Verify a signature. */

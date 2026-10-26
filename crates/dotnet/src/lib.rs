@@ -2677,9 +2677,10 @@ pub extern "C" fn chat_xdk_file_decryptor_free(handle: *mut FileDecryptorHandle)
 
 // Signing / verification
 
-/// Sign arbitrary data with the signing key.
+/// Sign application data with the signing key.
 ///
-/// Returns a base64-encoded ECDSA signature (64 bytes).
+/// Returns a base64-encoded ECDSA signature (64 bytes), or an error for an
+/// event signature payload or a public key, which only the SDK signs.
 #[no_mangle]
 pub extern "C" fn chat_xdk_sign(
     handle: *const ChatHandle,

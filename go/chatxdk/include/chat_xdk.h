@@ -699,7 +699,9 @@ struct FfiResult chat_xdk_file_decryptor_finish(struct FileDecryptorHandle *hand
 void chat_xdk_file_decryptor_free(struct FileDecryptorHandle *handle);
 
 /**
- * Sign data with the signing key. Returns base64-encoded signature.
+ * Sign application data with the signing key. Returns base64-encoded
+ * signature, or an error for an event signature payload or a public key,
+ * which only the SDK signs.
  */
 struct FfiResult chat_xdk_sign(const struct ChatHandle *handle,
                                const uint8_t *data,

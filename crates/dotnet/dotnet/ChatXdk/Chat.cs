@@ -994,7 +994,8 @@ namespace ChatXdk
         // Signing / verification
 
         /// <summary>
-        /// Sign arbitrary data with the signing key.
+        /// Sign application data with the signing key. Throws <see cref="ChatXdkException"/>
+        /// for an event signature payload or a public key, which only the SDK signs.
         /// </summary>
         /// <param name="data">Bytes to sign. May be empty but not null.</param>
         /// <returns>64-byte ECDSA P-256 signature.</returns>

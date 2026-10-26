@@ -50,7 +50,7 @@
 //! | [`Chat::prepare_group_members_remove`] | Sign a member removal, rotating the key when given the remaining members |
 //! | [`Chat::prepare_group_leave`] | Sign leaving a group |
 //! | [`Chat::decrypt_conversation_key`] | Decrypt a conversation key |
-//! | [`Chat::sign`] | Sign arbitrary data |
+//! | [`Chat::sign`] | Sign application data |
 //! | [`Chat::verify`] | Verify a signature |
 //! | [`Chat::export_keys`] | Export keys for backup |
 //! | [`Chat::import_keys`] | Import keys from backup |
@@ -572,7 +572,8 @@ impl Chat {
     ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_screen_capture(params)
     }
-    /// Sign arbitrary data.
+    /// Sign application data; see [`crate::ChatCore::sign`] for the data it
+    /// refuses.
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SdkError> {
         self.inner.sign(data)
     }

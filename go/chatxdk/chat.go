@@ -860,8 +860,9 @@ func (d *FileDecryptor) Close() {
 	}
 }
 
-// Sign signs arbitrary data with the signing key.
-// Returns the raw 64-byte ECDSA P-256 signature.
+// Sign signs application data with the signing key.
+// Returns the raw 64-byte ECDSA P-256 signature, or an error for an event
+// signature payload or a public key, which only the SDK signs.
 func (c *Chat) Sign(data []byte) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	sigB64, err := ffiSign(c.h, data)
