@@ -237,7 +237,7 @@ pub enum JuiceboxError {
     DeleteFailed(String),
 
     /// Generic Juicebox error.
-    #[error("Juicebox error: {0}")]
+    #[error("{0}")]
     Other(String),
 }
 

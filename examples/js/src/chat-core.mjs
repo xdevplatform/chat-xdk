@@ -14,20 +14,13 @@
  * and the conversation-key cache (setCacheKeys) are set once, so the
  * per-message calls need only the conversation id and text.
  */
-import { readFile } from "node:fs/promises";
-
-import init, {
-  Chat,
+import {
   base64ToBytes,
   bytesToBase64,
+  createChat,
   encryptedFileSize,
-} from "../../../crates/wasm/pkg/chat_xdk_wasm.js";
+} from "../../../crates/wasm/js/index.js";
 
-// The WASM public API does not expose raw key import/export, so the local-blob
-// example drives the lower-level WASM Chat directly. That Chat doesn't read the
-// X API's feature switches, so this example sends v0 messages; a chat from
-// createChat reads them once, when it is created.
-let wasmReady;
 /** Concatenate Uint8Array chunks into one buffer. */
 function concatBytes(parts) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -39,17 +32,6 @@ function concatBytes(parts) {
   return out;
 }
 
-function ensureWasm() {
-  if (!wasmReady) {
-    const wasmUrl = new URL(
-      "../../../crates/wasm/pkg/chat_xdk_wasm_bg.wasm",
-      import.meta.url,
-    );
-    wasmReady = readFile(wasmUrl).then((bytes) => init({ module_or_path: bytes }));
-  }
-  return wasmReady;
-}
-
 export class ChatCore {
   #chat;
   signingKeyVersion = null;
@@ -58,10 +40,12 @@ export class ChatCore {
     this.#chat = chat;
   }
 
-  /** Async factory — the WASM module must be initialized before use. */
+  /**
+   * Async factory. The keys live in a local blob rather than Juicebox, so the
+   * chat is created without getAuthToken.
+   */
   static async create() {
-    await ensureWasm();
-    return new ChatCore(new Chat());
+    return new ChatCore(await createChat());
   }
 
   /** The size of a file once encrypted: the size its upload declares. */

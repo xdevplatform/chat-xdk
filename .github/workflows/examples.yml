@@ -73,7 +73,7 @@ jobs:
         with:
           tool: wasm-pack
       - name: Build wasm pkg
-        run: cd crates/wasm && wasm-pack build --target web --release
+        run: make wasm
 
       - name: Build Python extension into the in-repo package
         env:

@@ -220,6 +220,62 @@ async function aReadInFlightNeverKeepsNodeRunning(server) {
   assert.ok(elapsed < limitMs, `the process exited after ${elapsed} ms`);
 }
 
+/**
+ * Where fetch() performs the read, the body is capped while it streams, and
+ * a body the runtime cannot stream is never read whole: either way the read
+ * fails and sends stay v0.
+ */
+async function theFetchReadCapsTheBodyWhileItStreams(v) {
+  const getBuiltinModule = process.getBuiltinModule;
+  const realFetch = globalThis.fetch;
+  process.getBuiltinModule = undefined;
+  const enabled = '{"features":{"v1_send":true}}';
+  let pulled = 0;
+  let readWhole = 0;
+  const streamed = (chunks) => ({
+    status: 200,
+    body: new ReadableStream({
+      pull(controller) {
+        pulled += 1;
+        const chunk = chunks.shift();
+        if (chunk === undefined) controller.close();
+        else controller.enqueue(new TextEncoder().encode(chunk));
+      },
+    }),
+    arrayBuffer: async () => {
+      readWhole += 1;
+      return new ArrayBuffer(0);
+    },
+  });
+  const unstreamable = {
+    status: 200,
+    body: undefined,
+    arrayBuffer: async () => {
+      readWhole += 1;
+      return new TextEncoder().encode(enabled).buffer;
+    },
+  };
+  try {
+    const cases = [
+      ["a body that fits", () => streamed([enabled]), "10"],
+      ["an oversized body", () => streamed([enabled, ...Array(200).fill(" ".repeat(1024))]), "7"],
+      ["a body that cannot stream", () => unstreamable, "7"],
+    ];
+    for (const [label, response, expected] of cases) {
+      globalThis.fetch = async () => response();
+      const chat = newChat(v, "http://127.0.0.1:9/features", { timeoutMs: 1000 });
+      await sleep(300);
+      assert.equal(send(chat, v), expected, label);
+      chat.free();
+    }
+    assert.ok(pulled < 100, `the oversized body was read to its end (${pulled} reads)`);
+    assert.equal(readWhole, 0, "a body was read whole");
+  } finally {
+    process.getBuiltinModule = getBuiltinModule;
+    globalThis.fetch = realFetch;
+  }
+}
+
 async function main() {
   const wasmUrl = new URL("../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
   await init({ module_or_path: await fs.readFile(wasmUrl) });
@@ -234,6 +290,7 @@ async function main() {
     (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
     (server) => theAnswerHoldsForTheChatsLifetime(v, server),
     () => anyFailureLeavesSendsOnV0(v),
+    () => theFetchReadCapsTheBodyWhileItStreams(v),
     (server) => anUnreachableEndpointLeavesSendsOnV0(v, server),
     (server) => aRequestStillOpenAtItsTimeoutFails(v, server),
     (server) => aRequestEndsSafelyForAFreedChat(v, server),

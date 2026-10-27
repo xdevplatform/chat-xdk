@@ -1101,62 +1101,32 @@ async function main() {
     /the key for version 'keys' in the conversation key map is not 32 bytes/,
   );
 
-  // 6. Juicebox guess-budget parity with the native bindings: the config's
-  // max_guess_count applies, defaults are shape-dependent (sdk_config and
-  // key_store_token_map_json → 20, bare token_map → 5), and the explicit
-  // option is an override only.
-  const { resolveMaxGuessCount } = await import("../index.js");
-  const sdkConfigShape = { sdk_config: '{"realms":[]}', tokens: {} };
-  const tokenMapShape = { token_map: [] };
-  const xApiShape = { key_store_token_map_json: '{"realms":[]}', token_map: [] };
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 7 }), 7);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }), 7);
-  assert.equal(resolveMaxGuessCount({ ...xApiShape, max_guess_count: 7 }), 7);
-  assert.equal(resolveMaxGuessCount(sdkConfigShape), 20);
-  assert.equal(resolveMaxGuessCount(tokenMapShape), 5);
-  assert.equal(resolveMaxGuessCount(xApiShape), 20);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 7 }, 9), 9);
-  // Edge semantics match Rust's `as_u64`: a present integer (0 included) is
-  // used as-is; fractional, negative, or non-numeric values fall back to the
-  // shape default.
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 0 }), 0);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 0 }), 0);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 7.5 }), 20);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7.5 }), 5);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: -3 }), 20);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: -3 }), 5);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: "9" }), 20);
-  // The explicit override obeys the same integer rule (0 valid, 7.5 not).
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }, 0), 0);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }, 7.5), 7);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }, -1), 7);
-
-  // 7. Config-shape parity with the native bindings: every shape
-  // from_x_api_json accepts must be usable here, with the same realm
-  // derivation (register = all, recover = majority).
-  const { juiceboxClientConfig } = await import("../index.js");
-  assert.equal(juiceboxClientConfig(sdkConfigShape), '{"realms":[]}');
-  const derived = juiceboxClientConfig({
-    token_map: [
-      { key: "r1", value: { address: "https://r1.example", token: "t1" } },
-      { key: "r2", value: { address: "https://r2.example", token: "t2" } },
-      { key: "r3", value: { address: "https://r3.example", token: "t3" } },
-    ],
-  });
-  assert.deepEqual(derived.realms, [
-    { id: "r1", address: "https://r1.example" },
-    { id: "r2", address: "https://r2.example" },
-    { id: "r3", address: "https://r3.example" },
-  ]);
-  assert.equal(derived.register_threshold, 3);
-  assert.equal(derived.recover_threshold, 2);
-  assert.equal(derived.pin_hashing_mode, "Standard2019");
-  const rawRealms = { realms: [{ id: "r1", address: "https://r1.example" }] };
-  assert.equal(juiceboxClientConfig(rawRealms), rawRealms);
-  assert.throws(
-    () => juiceboxClientConfig({ token_map: [{ key: "r1" }] }),
-    /Invalid token_map entry/,
+  // 6. Every error carries its kind, named as in every binding. Before the
+  // wrapper registers its ChatXdkError class, the module throws Errors with
+  // the same name and fields.
+  const thrown = (fn) => {
+    try {
+      fn();
+    } catch (e) {
+      return e;
+    }
+    return assert.fail("expected an error");
+  };
+  const badIdentity = thrown(() => chat.setIdentity({ userId: "user-1", signingKeyVersion: "1" }));
+  assert.ok(badIdentity instanceof Error);
+  assert.equal(badIdentity.name, "ChatXdkError");
+  assert.equal(badIdentity.kind, "invalidInput");
+  assert.equal(badIdentity.guessesRemaining, null);
+  assert.equal(
+    thrown(() => chat.decryptEvent({ eventB64: v.event_garbage_b64, conversationKeys: {} })).kind,
+    "parse",
   );
+  assert.equal(thrown(() => chat.decryptEvents({ events: "AAAA" })).kind, "invalidInput");
+  assert.equal(thrown(() => encryptedFileSize(-1)).kind, "invalidInput");
+  const locked = new Chat();
+  assert.equal(thrown(() => locked.exportKeys()).kind, "invalidState");
+  assert.equal(thrown(() => locked.importKeys({ keys: new Uint8Array(5) })).kind, "invalidInput");
+  locked.free();
 
   console.log("api.test.mjs: all assertions passed");
 }

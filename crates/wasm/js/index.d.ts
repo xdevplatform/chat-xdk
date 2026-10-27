@@ -297,6 +297,45 @@ export interface SetIdentityParams {
   signingKeyVersion: string;
 }
 
+/** Params for `importKeys`. */
+export interface ImportKeysParams {
+  /** The private keys, as `exportKeys` returns them. */
+  keys: Uint8Array;
+  /**
+   * The `public_key_version` the X API returned when the keys were
+   * registered; key-change entries for other versions of your keys are
+   * skipped.
+   */
+  signingKeyVersion?: string | null;
+}
+
+/**
+ * What kind of failure a `ChatXdkError` is; every binding names the same
+ * failure the same way.
+ */
+export type ChatXdkErrorKind =
+  | 'invalidInput'
+  | 'invalidState'
+  | 'parse'
+  | 'decryption'
+  | 'verification'
+  | 'invalidPin'
+  | 'juicebox'
+  | 'internal';
+
+/** The error every SDK call throws. */
+export declare class ChatXdkError extends Error {
+  constructor(kind: ChatXdkErrorKind, message: string, guessesRemaining?: number | null);
+  /** What kind of failure this is. */
+  readonly kind: ChatXdkErrorKind;
+  /**
+   * The PIN attempts left after an `invalidPin` failure, when Juicebox
+   * reports them: 0 means the guess budget is exhausted and the stored keys
+   * are locked. Null for every other failure.
+   */
+  readonly guessesRemaining: number | null;
+}
+
 /**
  * Parameters for encryptMessage.
  */
@@ -1086,7 +1125,7 @@ export interface AttachmentInfo {
 }
 
 /**
- * Options for creating a Chat instance with Juicebox integration.
+ * Options for creating a Chat instance.
  */
 export interface CreateChatOptions {
   /** 
@@ -1116,9 +1155,11 @@ export interface CreateChatOptions {
   /**
    * Async function to get a Juicebox auth token for a realm.
    *
-   * Required even when `juiceboxConfig` is omitted: the first Juicebox
-   * operation after `updateConfig()` (typically first-boot `setup`) needs it.
-   * 
+   * Required to use Juicebox (`updateConfig`, `setup`, `unlock`,
+   * `changePin`, `delete`), even when `juiceboxConfig` is omitted at first
+   * boot. A chat created without it loads no juicebox-sdk and keeps its keys
+   * with `importKeys` / `exportKeys`.
+   *
    * @param realmId - Hex-encoded realm ID
    * @returns Promise resolving to the auth token string
    * 
@@ -1130,17 +1171,7 @@ export interface CreateChatOptions {
    *   return response.text();
    * }
    */
-  getAuthToken: (realmId: string) => Promise<string>;
-
-  /**
-   * Optional override for the number of PIN guesses allowed before lockout.
-   * A non-negative integer wins over the config, including across later
-   * `updateConfig()` calls. When omitted, the config's `max_guess_count`
-   * applies when it is a non-negative integer (0 included), defaulting to
-   * 20 for the `sdk_config` and `key_store_token_map_json` shapes and 5
-   * otherwise.
-   */
-  maxGuessCount?: number;
+  getAuthToken?: (realmId: string) => Promise<string>;
 }
 
 /**
@@ -1224,6 +1255,19 @@ interface ChatCrypto {
    * the previous set.
    */
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
+
+  /**
+   * Load private keys, as `exportKeys` returns them. The SDK's copy of the
+   * bytes is zeroized after import; zero your own with `fill(0)`.
+   */
+  importKeys(params: ImportKeysParams): void;
+
+  /**
+   * The loaded private keys, unencrypted: store them only where private
+   * keys belong, and zero the bytes with `fill(0)` once done. Throws when
+   * no identity key is loaded.
+   */
+  exportKeys(): Uint8Array;
 
   /** Get current public keys. */
   getPublicKeys(): PublicKeys;
@@ -1471,13 +1515,7 @@ declare class Chat implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
-  /**
-   * Import private keys from raw bytes. When `version` is given it also
-   * records the public key version the keys were registered under. The
-   * input bytes are zeroized after import.
-   */
-  importKeys(keys: Uint8Array, version?: string): void;
-  /** Export private keys as raw bytes. */
+  importKeys(params: ImportKeysParams): void;
   exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
@@ -1549,8 +1587,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   changePin(oldPin: string | Uint8Array, newPin: string | Uint8Array): Promise<void>;
   /**
    * (Re-)create the Juicebox client from a config (e.g. refreshed auth
-   * tokens) and re-resolve the PIN guess budget from it; an explicit
-   * createChat `maxGuessCount` override keeps winning. On an instance
+   * tokens), with the PIN guess budget the config sets. On an instance
    * created without `juiceboxConfig`, this is the first-boot step that
    * enables `setup`/`unlock`/`changePin`/`delete`.
    */
@@ -1561,6 +1598,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
+  importKeys(params: ImportKeysParams): void;
+  exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1614,11 +1653,14 @@ export declare class ChatWithJuicebox implements ChatCrypto {
 }
 
 /**
- * Create a Chat instance with integrated Juicebox key storage.
+ * Create a Chat instance, with Juicebox key storage when `getAuthToken` is
+ * given.
  *
  * `juiceboxConfig` is optional: on first boot (no `juicebox_config` on the
  * account yet) create with just `getAuthToken`, `generateKeypairs()`, POST
- * the payload, then `updateConfig()` + `setup(pin)`.
+ * the payload, then `updateConfig()` + `setup(pin)`. Without
+ * `getAuthToken`, the chat keeps its keys with `importKeys` / `exportKeys`
+ * and needs no juicebox-sdk.
  *
  * Each call creates an independent instance with its own Juicebox client.
  * The Juicebox auth-token callback is a process-wide global that each
@@ -1626,16 +1668,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
  * instances is fine but concurrent Juicebox operations across instances in
  * one process are not supported.
  */
-export declare function createChat(options: CreateChatOptions): Promise<ChatWithJuicebox>;
+export declare function createChat(options?: CreateChatOptions): Promise<ChatWithJuicebox>;
 
 // Utility Functions
-
-/**
- * Remaining PIN attempts from an invalid-PIN unlock()/changePin() failure,
- * or null when the error carries no count. 0 means the guess budget is
- * exhausted and the stored keys are locked.
- */
-export declare function guessesRemaining(err: unknown): number | null;
 
 /** Return the exact size of a file once encrypted: the size its upload declares before the file is encrypted. */
 export declare function encryptedFileSize(plaintextSize: number): number;
