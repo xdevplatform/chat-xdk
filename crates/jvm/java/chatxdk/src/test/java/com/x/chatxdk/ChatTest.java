@@ -1501,6 +1501,20 @@ class ChatTest {
         }
     }
 
+    // Verifying needs no loaded keys, and its error names the input, not the lock state.
+    @Test
+    void verifyNeedsNoLoadedKeys() throws Exception {
+        try (Chat signer = createUnlocked(); Chat verifier = new Chat()) {
+            byte[] data = {(byte) 0xAA, (byte) 0xBB};
+            byte[] signature = signer.sign(data);
+            assertTrue(verifier.verify(signer.getPublicKeys().signing, signature, data));
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> verifier.verify("notAPublicKey", signature, data));
+            assertTrue(e.getMessage().contains("public key"), e.getMessage());
+            assertFalse(e.getMessage().contains("unlocked"), e.getMessage());
+        }
+    }
+
     // A message with files is built first; each file is then encrypted from the returned
     // eventB64 and the media hash key its attachment names.
 
