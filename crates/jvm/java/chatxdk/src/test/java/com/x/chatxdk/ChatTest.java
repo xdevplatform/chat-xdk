@@ -14,8 +14,10 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -853,6 +855,70 @@ class ChatTest {
         }
     }
 
+    /** One signed action and the fields it signs after the sender. */
+    private record SignedAction(ActionSignature action, String fields) {}
+
+    /** One signed action: the event its payload names and the prepare call. */
+    private record GroupActionCase(String event, Callable<SignedAction> prepare) {}
+
+    // The group and conversation-metadata actions each sign one action at signature version 7 over
+    // the event name, the action's message id, the sender, the conversation and the signed fields,
+    // and the signature verifies with the signer's signing key.
+    @Test
+    void groupActionsSignEachAction() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("111", "1"));
+            String signingKey = chat.getPublicKeys().signing;
+            GroupDescriptionChangeParams description = new GroupDescriptionChangeParams("g100", "Ships the app");
+            description.conversationKey = new byte[32];
+            description.conversationKeyVersion = "4";
+            Map<String, GroupActionCase> cases = new LinkedHashMap<>();
+            cases.put("avatar", new GroupActionCase("GroupChangeEvent.GroupAvatarUrlChange",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupAvatarChange(
+                            new GroupAvatarChangeParams("g100", "https://img/a.png", "4"))), ",g100,4,https://img/a.png")));
+            cases.put("description", new GroupActionCase("GroupChangeEvent.GroupDescriptionChange", () -> {
+                PreparedGroupMetadataChange changed = chat.prepareGroupDescriptionChange(description);
+                assertEquals(1, changed.actionSignatures.size());
+                return new SignedAction(changed.actionSignatures.get(0), ",g100,4," + changed.encryptedValue);
+            }));
+            cases.put("admins add", new GroupActionCase("GroupChangeEvent.GroupAdminAddChange",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupAdminsAdd(
+                            new GroupAdminsAddParams("g100", List.of("910008", "910009")))), ",g100,910008,910009")));
+            cases.put("admins remove", new GroupActionCase("GroupChangeEvent.GroupAdminRemoveChange",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupAdminsRemove(
+                            new GroupAdminsRemoveParams("g100", List.of("910008")))), ",g100,910008")));
+            cases.put("invite enable", new GroupActionCase("GroupChangeEvent.GroupInviteEnable",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupInviteEnable(
+                            new GroupInviteEnableParams("g100", "https://x.com/i/invite/abc"))),
+                            ",g100,https://x.com/i/invite/abc,null,null")));
+            cases.put("invite disable", new GroupActionCase("GroupChangeEvent.GroupInviteDisable",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupInviteDisable(
+                            new GroupInviteDisableParams("g100"))), ",g100,111")));
+            cases.put("join request", new GroupActionCase("GroupChangeEvent.GroupJoinRequest",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupJoinRequest(
+                            new GroupJoinRequestParams("g100"))), ",g100,111")));
+            cases.put("join reject", new GroupActionCase("GroupChangeEvent.GroupJoinReject",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupJoinReject(
+                            new GroupJoinRejectParams("g100", List.of("910010")))), ",g100,910010")));
+            cases.put("ttl change", new GroupActionCase("ConversationMetadataChangeEvent.MessageDurationChange",
+                    () -> new SignedAction(onlyAction(chat.prepareMessageTtlChange(
+                            new MessageTtlChangeParams("g100", 86400000L))), ",g100,86400000")));
+            cases.put("ttl remove", new GroupActionCase("ConversationMetadataChangeEvent.MessageDurationRemove",
+                    () -> new SignedAction(onlyAction(chat.prepareMessageTtlRemove(
+                            new MessageTtlRemoveParams("g100"))), ",g100")));
+            for (Map.Entry<String, GroupActionCase> entry : cases.entrySet()) {
+                String name = entry.getKey();
+                GroupActionCase c = entry.getValue();
+                SignedAction signed = c.prepare().call();
+                MessageEventSignature sig = signed.action().messageEventSignature;
+                assertEquals("7", sig.signatureVersion, name);
+                assertEquals(signingKey, sig.signingPublicKey, name);
+                String payload = c.event() + "," + signed.action().messageId + ",111" + signed.fields();
+                assertTrue(signs(chat, signed.action(), payload), name + ": " + payload);
+            }
+        }
+    }
+
     @Test
     void prepareMarkConversationReadSignsCanonicalPayload() throws Exception {
         try (Chat chat = createUnlocked()) {
@@ -984,6 +1050,40 @@ class ChatTest {
             assertEquals(
                     prepared.conversationParticipantKeys.get(0).encryptedConversationKey,
                     entry.get("encrypted_conversation_key").asText());
+        }
+    }
+
+    // The conversation key is secret: a prepared change carries it, but its JSON,
+    // the shape a request body is built from, never does.
+    @Test
+    void preparedChangeJsonLeavesOutTheConversationKey() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("910002", "1"));
+            List<PublicKeyInput> publicKeys =
+                    List.of(new PublicKeyInput("910002", chat.getPublicKeys().identity, "1"));
+
+            ConversationKeyChangeParams keyChange = new ConversationKeyChangeParams(publicKeys);
+            keyChange.conversationId = "910002:910005";
+            GroupMembersRemoveParams removal = new GroupMembersRemoveParams(publicKeys, "g123", List.of("910005"));
+            List<PreparedConversationChange> prepared = List.of(
+                    chat.prepareConversationKeyChange(keyChange),
+                    chat.prepareGroupCreate(new GroupCreateParams(
+                            publicKeys, "g123", List.of("910002", "910005"), List.of("910002"))),
+                    chat.prepareGroupMembersRemove(removal));
+
+            for (PreparedConversationChange change : prepared) {
+                assertEquals(32, change.conversationKey.length);
+                for (ObjectMapper mapper : List.of(ChatJson.MAPPER, new ObjectMapper())) {
+                    JsonNode json = mapper.readTree(mapper.writeValueAsString(change));
+                    assertFalse(json.has("conversation_key"), "JSON carries the key: " + json);
+                    List<String> fields = new ArrayList<>();
+                    json.fieldNames().forEachRemaining(fields::add);
+                    assertEquals(
+                            List.of("conversation_id", "conversation_key_version",
+                                    "conversation_participant_keys", "action_signatures"),
+                            fields);
+                }
+            }
         }
     }
 
@@ -1180,6 +1280,22 @@ class ChatTest {
                     v.get("signing_public_b64").asText(),
                     signature,
                     (v.get("message_utf8").asText() + "!").getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    // sign refuses data only the SDK signs: an event signature payload and a public key.
+    // Data that only resembles a payload is application data.
+    @Test
+    void signRefusesDataOnlyTheSdkSigns() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            String keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+            for (byte[] data : List.of(keyChange.getBytes(StandardCharsets.UTF_8), b64(v, "identity_public_b64"))) {
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.sign(data));
+                assertTrue(e.getMessage().contains("only the SDK signs"), e.getMessage());
+            }
+            assertEquals(64, chat.sign((" " + keyChange).getBytes(StandardCharsets.UTF_8)).length);
         }
     }
 
@@ -1732,6 +1848,20 @@ class ChatTest {
         }
     }
 
+    // Verifying needs no loaded keys, and its error names the input, not the lock state.
+    @Test
+    void verifyNeedsNoLoadedKeys() throws Exception {
+        try (Chat signer = createUnlocked(); Chat verifier = new Chat()) {
+            byte[] data = {(byte) 0xAA, (byte) 0xBB};
+            byte[] signature = signer.sign(data);
+            assertTrue(verifier.verify(signer.getPublicKeys().signing, signature, data));
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> verifier.verify("notAPublicKey", signature, data));
+            assertTrue(e.getMessage().contains("public key"), e.getMessage());
+            assertFalse(e.getMessage().contains("unlocked"), e.getMessage());
+        }
+    }
+
     // A message with files is built first; each file is then encrypted from the returned
     // eventB64 and the media hash key its attachment names.
 
@@ -2045,15 +2175,33 @@ class ChatTest {
         }
     }
 
-    // JNA plumbing smokes only: the values cross the boundary without a crash.
-    // The behaviors themselves are pinned by
-    // vectorsDecryptEventsBatchAndSingleEventContracts and the Rust core suite.
+    // The session identity signs a call that names no identity of its own, and
+    // setRejectUnverified decides whether a message from a sender whose signing
+    // key the chat lacks is rejected or returned unverified.
     @Test
-    void setIdentityAndSetRejectUnverifiedSmoke() throws Exception {
-        try (Chat chat = createUnlocked()) {
+    void setIdentityAndSetRejectUnverifiedTakeEffect() throws Exception {
+        try (Chat chat = createUnlocked(); Chat sender = createUnlocked()) {
             chat.setIdentity(new SetIdentityParams("910004", "12345"));
+            ActionSignature action = onlyAction(chat.prepareMessageTtlRemove(new MessageTtlRemoveParams("g100")));
+            assertTrue(signs(chat, action,
+                    "ConversationMetadataChangeEvent.MessageDurationRemove," + action.messageId + ",910004,g100"));
+            assertEquals("12345", action.messageEventSignature.publicKeyVersion);
+
+            byte[] conversationKey = new byte[32];
+            EncryptMessageParams send = new EncryptMessageParams("910004:910005", "hi");
+            send.senderId = "910005";
+            send.signingKeyVersion = "1";
+            send.conversationKey = conversationKey;
+            send.conversationKeyVersion = "1";
+            DecryptEventParams received =
+                    new DecryptEventParams(sender.encryptMessage(send).eventB64, Map.of("1", conversationKey));
+            assertThrows(ChatXdkException.class, () -> chat.decryptEvent(received));
             chat.setRejectUnverified(false);
+            JsonNode unverified = chat.decryptEvent(received);
+            assertEquals("hi", unverified.path("content").path("text").asText());
+            assertFalse(unverified.path("verified").asBoolean());
             chat.setRejectUnverified(true);
+            assertThrows(ChatXdkException.class, () -> chat.decryptEvent(received));
         }
     }
 

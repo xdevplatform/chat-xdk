@@ -11,7 +11,13 @@ namespace ChatXdk
     /// </summary>
     internal static class FeatureFetch
     {
-        private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+        // The read is anonymous: it stores and sends no cookies, and it follows no redirect, so a
+        // 3xx answer reaches the core as a failed read rather than as a request to another URL.
+        private static readonly HttpClient Http =
+            new(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
 
         /// <summary>
         /// Start <paramref name="chat"/>'s one read of the feature switches: nothing to do when

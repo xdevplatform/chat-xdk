@@ -27,7 +27,7 @@ public final class Types {
 
     /**
      * Registration fields expected by the X API
-     * ({@code POST /2/chat/keys}).
+     * ({@code POST /2/users/{id}/public_keys}).
      */
     public static final class PublicKeyRegistration {
         /** Base64-encoded raw r||s signature over the identity public key. */
@@ -175,8 +175,11 @@ public final class Types {
     }
 
     /**
-     * A signed message delete or read receipt: the {@code action_signatures} a
-     * request carries for it, one entry.
+     * Signed actions for a request that does not rotate a conversation key: the
+     * {@code action_signatures} it carries. Returned by {@link Chat#prepareMessageDelete},
+     * {@link Chat#prepareMarkConversationRead}, and the group-action prepares other than
+     * {@link Chat#prepareGroupMembersRemove}; {@link Chat#prepareGroupLeave} returns one
+     * entry per signed event.
      */
     public static final class PreparedAction {
         /** The signed action, as the request's {@code action_signatures} entries. */
@@ -279,9 +282,10 @@ public final class Types {
 
         /**
          * Raw 32-byte conversation key the call generated. Unlike a String, the array
-         * can be zeroed once no longer needed.
+         * can be zeroed once no longer needed. It is secret, so serializing this object to JSON
+         * leaves it out.
          */
-        @JsonProperty("conversation_key")
+        @JsonProperty(value = "conversation_key", access = JsonProperty.Access.WRITE_ONLY)
         public byte[] conversationKey;
 
         /** Version assigned to the conversation key. */

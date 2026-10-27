@@ -18,7 +18,7 @@ namespace ChatXdk
 
     /// <summary>
     /// Registration fields expected by the X API
-    /// (<c>POST /2/chat/keys</c>).
+    /// (<c>POST /2/users/{id}/public_keys</c>).
     /// </summary>
     public sealed class PublicKeyRegistration
     {
@@ -165,8 +165,11 @@ namespace ChatXdk
     }
 
     /// <summary>
-    /// A signed message delete or read receipt: the <c>action_signatures</c> a request
-    /// carries for it, one entry.
+    /// Signed actions for a request that does not rotate a conversation key: the
+    /// <c>action_signatures</c> it carries. Returned by <see cref="Chat.PrepareMessageDelete"/>,
+    /// <see cref="Chat.PrepareMarkConversationRead"/>, and the group-action prepares other than
+    /// <see cref="Chat.PrepareGroupMembersRemove"/>; <see cref="Chat.PrepareGroupLeave"/> returns
+    /// one entry per signed event.
     /// </summary>
     public sealed class PreparedAction
     {
@@ -252,11 +255,22 @@ namespace ChatXdk
         public string ConversationId { get; init; } = "";
 
         /// <summary>
-        /// Raw 32-byte conversation key the call generated.
-        /// (JSON carries it base64-encoded; <see cref="byte"/> arrays map to that natively.)
+        /// Raw 32-byte conversation key the call generated. It is secret, so serializing this
+        /// object to JSON leaves it out.
         /// </summary>
-        [JsonPropertyName("conversation_key")]
+        [JsonIgnore]
         public byte[] ConversationKey { get; init; } = Array.Empty<byte>();
+
+        // Reads the key from the native result; never written, so the key stays out of the
+        // JSON this object serializes to.
+        [JsonInclude]
+        [JsonPropertyName("conversation_key")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        private byte[]? NativeConversationKey
+        {
+            get => null;
+            init => ConversationKey = value ?? Array.Empty<byte>();
+        }
 
         /// <summary>Version assigned to the conversation key.</summary>
         [JsonPropertyName("conversation_key_version")]

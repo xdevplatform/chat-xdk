@@ -242,8 +242,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Store signing keys to use when a decrypt call omits its {@code signingKeys}
-     * argument. Only this explicit call populates the store — a key carried inside
+     * Store signing keys to use when a decrypt call's params leave {@code signingKeys}
+     * null (or empty). Only this explicit call populates the store — a key carried inside
      * an event is never trusted for verification. Each call replaces the previous set.
      */
     public void setSigningKeys(List<SigningKeyEntry> keys) throws Exception {
@@ -1045,7 +1045,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Sign arbitrary data with the signing key.
+     * Sign application data with the signing key. Throws {@link ChatXdkException} for an
+     * event signature payload or a public key, which only the SDK signs.
      *
      * @param data Bytes to sign. May be empty but not null.
      * @return 64-byte ECDSA P-256 signature.
@@ -1078,7 +1079,8 @@ public final class Chat implements AutoCloseable {
      * @param data The original signed data.
      * @return {@code true} if the signature is valid, {@code false} if invalid.
      * @throws ChatXdkException of kind {@link ChatXdkException.Kind#INVALID_INPUT} for a malformed
-     *     public key or signature. Verifying needs no loaded keys.
+     *     public key or signature, never returned as a {@code false} result. Verifying needs no
+     *     loaded keys.
      */
     public boolean verify(String publicKeyB64, byte[] signature, byte[] data) {
         throwIfDisposed();

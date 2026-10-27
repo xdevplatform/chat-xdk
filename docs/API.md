@@ -131,7 +131,7 @@ user id. After registering the keys from `generate_keypairs`, call
 
 `set_identity` stores the **session identity**.
 Every method with optional `sender_id` / `signing_key_version` fields — the
-`encrypt_*` family and the three `prepare_*` methods — resolves omitted values
+`encrypt_*` family and every `prepare_*` method — resolves omitted values
 from it. An explicit per-call value always overrides, and an omitted value and
 its explicit equivalent produce byte-identical signed output for the same
 logical inputs. Calling a signing method with neither a per-call value nor a
@@ -199,7 +199,7 @@ attribute. Field names follow each language's idiom: `snake_case` in
 Rust/Python (`sender_id`), `camelCase` in JS/JVM (`senderId`), `PascalCase` in
 Go/.NET (`SenderID` / `SenderId`).
 
-On all three prepare methods, `sender_id` / `signing_key_version` are optional
+On every prepare method, `sender_id` / `signing_key_version` are optional
 overrides: omitted values (unset / `None` / `null` / empty string) resolve
 from the session identity set via `set_identity`.
 
@@ -359,20 +359,20 @@ interface PreparedConversationChange {
 
 ```typescript
 // 1. App fetches public keys (self + recipient) from X API
-const publicKeys = await api.getPublicKeys([myId, recipientId]);
+//    (GET /2/users/{id}/public_keys for each user)
+const publicKeys: PublicKeyInput[] = await fetchPublicKeys([myId, recipientId]);
 
 // 2. SDK generates, encrypts, and signs the change (id derived for a 1:1;
 //    the sender identity resolves from setIdentity — set senderId /
 //    signingKeyVersion on the params to override)
 const result = chat.prepareConversationKeyChange({ publicKeys });
 
-// 3. App POSTs to X API
-await fetch(`/api/conversations/${result.conversationId}/keys`, {
-  body: JSON.stringify({
-    conversationKeyVersion: result.conversationKeyVersion,
-    conversationParticipantKeys: result.conversationParticipantKeys,
-    actionSignatures: result.actionSignatures,
-  })
+// 3. App POSTs to X API (request bodies take snake_case keys; URL paths take
+//    the conversation id in its hyphen form)
+await api.post(`/2/chat/conversations/${result.conversationId.replaceAll(":", "-")}/keys`, {
+  conversation_key_version: result.conversationKeyVersion,
+  conversation_participant_keys: result.conversationParticipantKeys,
+  action_signatures: result.actionSignatures,
 });
 
 // 4. App stores the conversation key locally
@@ -547,11 +547,11 @@ const prepared = chat.prepareGroupMembersRemove({
   title,
 });
 await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
-  userIds: ["222"],
-  actionSignatures: prepared.actionSignatures,
-  groupKeyRotationData: {
-    conversationKeyVersion: prepared.conversationKeyVersion,
-    conversationParticipantKeys: prepared.conversationParticipantKeys,
+  user_ids: ["222"],
+  action_signatures: prepared.actionSignatures,
+  group_key_rotation_data: {
+    conversation_key_version: prepared.conversationKeyVersion,
+    conversation_participant_keys: prepared.conversationParticipantKeys,
   },
 });
 ```
@@ -805,7 +805,7 @@ Scans an array of raw events for KeyChange events and decrypts the conversation 
 // JS
 interface ConversationKeyResult {
   keys: { [version: string]: Uint8Array };  // version → raw conversation key
-  latestVersion: string | null;             // highest version (for encrypting)
+  latestVersion: string | null;             // highest version; signatures are not checked
 }
 ```
 
@@ -911,7 +911,7 @@ for (const dm of result.events) {
   }
 }
 
-// Cache conversation keys for later decryptEvent calls
+// Keep the conversation keys for later decryptEvent calls
 const cachedKeys = result.conversationKeys;
 console.log(cachedKeys.latestVersion); // "3": the newest verified key change, null until one verifies
 ```
@@ -1220,7 +1220,7 @@ no numbers for them: ids pass 2^53, where JS numbers stop being exact.
 
 **Every key version is a string of digits**, as the X API returns it: the
 signing-key version (`signing_key_version` in `set_identity`,
-`import_keys` and per call, and each public key's `key_version`) and the
+`import_keys` and per call, and each public key's `public_key_version`) and the
 `conversation_key_version`. Both kinds take the same check, a non-negative
 integer written without a sign or leading zeros, and anything else fails
 with an error naming the field.
@@ -1229,6 +1229,10 @@ The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings read in the background once, when a chat
 is created (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
+Every switch is off until the answer arrives, so a chat whose switch is on
+sends v0 first and v1 from then on. Files encrypted from a v0 build of a
+message don't open with a v1 build of it, so encrypt each file from the
+payload you send.
 **The Rust crate and the C ABI never fetch it:** a Rust app or a C caller
 makes the request and hands a chat the answer, with `set_feature_switches`
 or `chat_xdk_set_feature_switches` (see
@@ -2370,19 +2374,22 @@ validated original. The validation contract is specified in
 ### MessageContent
 
 The `content` field of a Message. Uses `contentType` (JS) / `content_type` (Python) for discrimination.
+The JS typings declare `MessageContent` as one permissive interface with
+these fields optional; the shapes below show which fields each
+`contentType` carries.
 
 ```typescript
 // JS/WASM
 type MessageContent =
   | { contentType: 'text';
       text: string;
-      entities?: RichTextEntity[];
-      attachments?: MessageAttachment[];
-      replyingToPreview?: ReplyingToPreview;
-      forwardedMessage?: ForwardedMessage;
-      sentFrom?: SentFromSurface;
+      entities?: unknown[];
+      attachments?: unknown[];
+      replyingToPreview?: unknown;
+      forwardedMessage?: unknown;
+      sentFrom?: string | number;
       quickReply?: QuickReply;
-      ctas?: CallToAction[];
+      ctas?: unknown[];
     }
   | { contentType: 'reaction'; emoji: string; targetMessageSequenceId: string }
   | { contentType: 'reactionRemoved'; emoji: string; targetMessageSequenceId: string }

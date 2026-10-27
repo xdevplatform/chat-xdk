@@ -83,26 +83,41 @@ func waitForV1(t *testing.T, chat *Chat) {
 }
 
 // featureServer is a local GET /2/chat/features that records each request's
-// query string.
+// query string and headers. Its redirectTarget path answers that v1_send is
+// on, for the tests that check a redirect to it is not followed.
 type featureServer struct {
 	*httptest.Server
-	id      int64
-	mu      sync.Mutex
-	status  int
-	body    string
-	delay   time.Duration
-	queries []string
+	id        int64
+	mu        sync.Mutex
+	status    int
+	body      string
+	delay     time.Duration
+	location  string
+	setCookie string
+	queries   []string
+	headers   []http.Header
+	followed  int
 }
+
+const redirectTarget = "/followed/2/chat/features"
 
 func newFeatureServer(t *testing.T) *featureServer {
 	t.Helper()
 	s := &featureServer{id: featureServerIDs.Add(1), status: http.StatusOK, body: `{"features":{"v1_send":true}}`}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == redirectTarget {
+			s.mu.Lock()
+			s.followed++
+			s.mu.Unlock()
+			_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
+			return
+		}
 		// The answer is fixed when the request is recorded, so a test that
 		// sees the request can change the next answer.
 		s.mu.Lock()
 		s.queries = append(s.queries, r.URL.RawQuery)
-		status, body, delay := s.status, s.body, s.delay
+		s.headers = append(s.headers, r.Header.Clone())
+		status, body, delay, location, setCookie := s.status, s.body, s.delay, s.location, s.setCookie
 		s.mu.Unlock()
 		if delay > 0 {
 			select {
@@ -110,6 +125,12 @@ func newFeatureServer(t *testing.T) *featureServer {
 			case <-r.Context().Done():
 				return
 			}
+		}
+		if setCookie != "" {
+			w.Header().Set("Set-Cookie", setCookie)
+		}
+		if location != "" {
+			w.Header().Set("Location", location)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -144,6 +165,18 @@ func (s *featureServer) seen() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.queries...)
+}
+
+func (s *featureServer) seenHeaders() []http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]http.Header(nil), s.headers...)
+}
+
+func (s *featureServer) followedRedirects() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.followed
 }
 
 // featureChat is a keyed chat that reads its feature switches from endpoint,
@@ -410,5 +443,42 @@ func TestARequestEndsSafelyForAClosedOrCollectedChat(t *testing.T) {
 	waitFor(t, "v1 for the chat still open", func() bool { return sendVersion(t, kept, v) == "10" })
 	if got := server.seen(); len(got) != 1 {
 		t.Fatalf("requests: %d, want 1", len(got))
+	}
+}
+
+func TestTheReadSendsNoCookiesOrCredentials(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.mu.Lock()
+	server.setCookie = "session=from-the-first-answer; Path=/"
+	server.mu.Unlock()
+	first := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "the first answer", func() bool { return sendVersion(t, first, v) == "10" })
+	second := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "the second request", func() bool { return len(server.seen()) == 2 })
+	waitFor(t, "the second answer", func() bool { return sendVersion(t, second, v) == "10" })
+	for i, header := range server.seenHeaders() {
+		for _, name := range []string{"Cookie", "Authorization"} {
+			if got := header.Get(name); got != "" {
+				t.Errorf("request %d carries %s: %q", i, name, got)
+			}
+		}
+	}
+}
+
+func TestARedirectIsNotFollowed(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.mu.Lock()
+	server.status, server.location = http.StatusFound, server.URL+redirectTarget
+	server.mu.Unlock()
+	chat := featureChat(t, v, server.endpoint(), 500*time.Millisecond)
+	waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
+	time.Sleep(700 * time.Millisecond)
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7: a redirect is a failed read", got)
+	}
+	if got := server.followedRedirects(); got != 0 {
+		t.Fatalf("the redirect was followed %d times", got)
 	}
 }

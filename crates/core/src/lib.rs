@@ -4,10 +4,20 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # #[cfg(feature = "juicebox")]
+//! # async fn quick_start(
+//! #     juicebox_config: chat_xdk_core::keys::juicebox::JuiceboxConfig,
+//! #     signing_key_version: &str,
+//! #     signing_keys: Vec<chat_xdk_core::SigningKeyEntry>,
+//! #     events: Vec<String>,
+//! #     event_b64: String,
+//! #     photo: Vec<u8>,
+//! #     media_hash_key: String,
+//! # ) -> Result<(), chat_xdk_core::error::SdkError> {
 //! use chat_xdk_core::{
 //!     Chat, DecryptEventParams, DecryptEventsParams, EncryptFileParams, EncryptMessageParams,
-//!     Event,
+//!     Event, SetIdentityParams,
 //! };
 //!
 //! // Create client
@@ -43,6 +53,8 @@
 //!     payload.event_b64.clone(),
 //!     media_hash_key,
 //! ))?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## Core API
@@ -77,7 +89,7 @@
 //!
 //! For more control, import from the submodules:
 //!
-//! ```rust,ignore
+//! ```rust
 //! use chat_xdk_core::crypto::encryption::{encrypt_message, decrypt_message};
 //! use chat_xdk_core::crypto::key_factory::KeyFactory;
 //! use chat_xdk_core::keys::juicebox::JuiceboxConfig;
@@ -253,7 +265,7 @@ pub mod js {
 
 /// Convenient imports for power users.
 ///
-/// ```rust,ignore
+/// ```rust
 /// use chat_xdk_core::prelude::*;
 /// ```
 pub mod prelude {

@@ -140,13 +140,14 @@ chat.set_identity(SetIdentityParams(user_id, signing_key_version))
 ## `import_keys` takes `ImportKeysParams`
 
 Pass the saved key bytes, and optionally the signing-key version they were
-registered under as the keyword argument `signing_key_version`. Without a
-version, call `set_identity` before the first signed call.
+registered under as the keyword argument `signing_key_version` (the
+`version` keyword of 0.5.x's `import_keys`). Without a version, call
+`set_identity` before the first signed call.
 
 ```python
 # 0.5.x
 chat.import_keys(private_keys)
-chat.import_keys(private_keys, signing_key_version)
+chat.import_keys(private_keys, version=signing_key_version)
 
 # 0.6.0
 chat.import_keys(ImportKeysParams(private_keys))
@@ -446,18 +447,24 @@ plaintext = chat.decrypt_file(DecryptFileParams(downloaded, file_event_b64, keys
 `file_encryptor` and `file_decryptor` take the same values as
 `encrypt_file` and `decrypt_file`, without the file bytes, and return a
 `FileEncryptor` or a `FileDecryptor`; `push` and `finish` are unchanged.
+The classes are named `FileEncryptor` and `FileDecryptor` in imports and
+type hints too, where 0.5.x had `StreamEncryptor` and `StreamDecryptor`.
 Size an upload with `encrypted_file_size`.
 
 ```python
 # 0.5.x
+from chat_xdk import StreamDecryptor, StreamEncryptor
+
 size = encrypted_stream_size(len(photo))
-encryptor = chat.stream_encryptor(conversation_key)
-decryptor = chat.stream_decryptor(keys[conversation_key_version])
+encryptor: StreamEncryptor = chat.stream_encryptor(conversation_key)
+decryptor: StreamDecryptor = chat.stream_decryptor(keys[conversation_key_version])
 
 # 0.6.0
+from chat_xdk import FileDecryptor, FileEncryptor
+
 size = encrypted_file_size(len(photo))
-encryptor = chat.file_encryptor(FileEncryptorParams(payload.event_b64, media_hash_key))
-decryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_hash_key))
+encryptor: FileEncryptor = chat.file_encryptor(FileEncryptorParams(payload.event_b64, media_hash_key))
+decryptor: FileDecryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_hash_key))
 ```
 
 ## Action signatures come nested

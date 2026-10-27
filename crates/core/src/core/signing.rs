@@ -5,8 +5,22 @@ use super::*;
 impl ChatCore {
     // Signing
 
-    /// Sign arbitrary data.
+    /// Sign application data with the signing key.
+    ///
+    /// Refuses data that only the SDK signs: a payload recipients verify as a
+    /// signed event (a message, key change, group or conversation change,
+    /// delete or read receipt) and a P-256 public key, whose signature by
+    /// the signing key binds it as an identity key. The SDK signs those on
+    /// its own path, so a signature from this method never stands in for
+    /// one.
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SdkError> {
+        if crate::signatures::is_sdk_signed_data(data) {
+            return Err(SdkError::InvalidInput(
+                "data is an event signature payload or a public key, which only the SDK \
+                 signs: pass your application's own data"
+                    .into(),
+            ));
+        }
         let signing = self.keypair_manager.get_signing_keypair()?;
         let signature = KeyFactory::sign(&signing.private, data)?;
         Ok(signature)

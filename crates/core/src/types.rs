@@ -443,20 +443,24 @@ pub struct CallToAction {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use chat_xdk_core::Event;
+/// # fn handle(event: Event, my_user_id: &str) {
 /// match event {
 ///     Event::Message(msg) => {
-///         println!("{}: {}", msg.sender_id, msg.text());
+///         let sender = msg.meta.sender_id.as_deref().unwrap_or("");
+///         println!("{}: {}", sender, msg.text().unwrap_or(""));
 ///     }
 ///     Event::KeyChange(kc) => {
-///         // Store the new conversation key
-///         let my_key = kc.find_key_for_user(&my_user_id);
+///         // This user's entry of the new conversation key
+///         let my_key = kc.find_key_for_user(my_user_id);
 ///     }
 ///     Event::GroupChange(gc) => {
 ///         println!("Group updated: {:?}", gc.change);
 ///     }
 ///     _ => {}
 /// }
+/// # }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
@@ -1619,11 +1623,12 @@ pub struct DecryptEventsResult {
     pub errors: std::collections::HashMap<usize, String>,
 }
 
-/// A public key input entry for `prepare_conversation_key_change` /
-/// `prepare_group_members_change`.
+/// A public key input entry for `prepare_conversation_key_change`,
+/// `prepare_group_create`, `prepare_group_members_change` and
+/// `prepare_group_members_remove`.
 ///
 /// Represents a single public key version for a user, as returned by the X API
-/// `GET /2/dm/encryption/public_keys` endpoint. Pass the full array; the SDK
+/// `GET /2/users/{id}/public_keys` endpoint. Pass the full array; the SDK
 /// will group by user and pick the latest version per user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]

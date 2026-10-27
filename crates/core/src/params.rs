@@ -6,12 +6,20 @@
 //! be added without breaking existing callers. The fields stay public to
 //! read and to assign:
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # use chat_xdk_core::{ChatCore, EncryptMessageParams, SetIdentityParams};
+//! # fn example(
+//! #     chat: &ChatCore,
+//! #     signing_key_version: &str,
+//! #     conversation_id: &str,
+//! # ) -> Result<(), chat_xdk_core::error::SdkError> {
 //! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! let params = EncryptMessageParams::new(conversation_id, "Hello").with_ttl_msec(86_400_000);
 //! // The SDK generates the message id; read it back from the result.
 //! let payload = chat.encrypt_message(&params)?;
 //! let message_id = payload.message_id;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! A message with files is built before its files are encrypted: each file's

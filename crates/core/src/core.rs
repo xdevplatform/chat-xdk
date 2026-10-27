@@ -1830,4 +1830,7 @@ mod send_version_tests;
 mod compat_v05_tests;
 
 #[cfg(test)]
+mod sign_tests;
+
+#[cfg(test)]
 mod tests;

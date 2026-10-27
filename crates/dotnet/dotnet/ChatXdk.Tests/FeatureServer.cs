@@ -52,7 +52,9 @@ namespace ChatXdk.Tests
     }
 
     /// <summary>
-    /// A local GET /2/chat/features that records each request's query string. It speaks just
+    /// A local GET /2/chat/features that records each request's query string and head. Its
+    /// <see cref="RedirectTarget"/> path answers that v1_send is on, for the tests that check a
+    /// redirect to it is not followed. It speaks just
     /// enough HTTP over a <see cref="TcpListener"/> for one request per connection, and
     /// handles a client that gives up mid-request itself.
     /// </summary>
@@ -62,9 +64,15 @@ namespace ChatXdk.Tests
         private readonly CancellationTokenSource _stop = new();
         private readonly object _sync = new();
         private readonly List<string> _queries = new();
+        private readonly List<string> _heads = new();
         private int _status = 200;
         private string _body;
         private int _delayMs;
+        private string? _location;
+        private string? _setCookie;
+        private int _followed;
+
+        internal const string RedirectTarget = "/followed/2/chat/features";
 
         // Each server gets an endpoint of its own: chats created while a GET
         // for their endpoint is in flight share it, and a server can get the
@@ -99,6 +107,39 @@ namespace ChatXdk.Tests
             }
         }
 
+        /// <summary>The request line and headers of each request to the endpoint.</summary>
+        public List<string> RequestHeads
+        {
+            get
+            {
+                lock (_sync) return new List<string>(_heads);
+            }
+        }
+
+        /// <summary>How many requests reached <see cref="RedirectTarget"/>.</summary>
+        public int FollowedRedirects
+        {
+            get
+            {
+                lock (_sync) return _followed;
+            }
+        }
+
+        /// <summary>Answer each request with a redirect to <see cref="RedirectTarget"/> on this server.</summary>
+        public void Redirect()
+        {
+            lock (_sync)
+            {
+                _status = 302;
+                _location = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}{RedirectTarget}";
+            }
+        }
+
+        public void SetCookie(string cookie)
+        {
+            lock (_sync) _setCookie = cookie;
+        }
+
         private async Task AcceptAsync()
         {
             while (!_stop.IsCancellationRequested)
@@ -123,7 +164,14 @@ namespace ChatXdk.Tests
                 try
                 {
                     var stream = client.GetStream();
-                    var target = (await ReadRequestHeadAsync(stream)).Split(' ')[1];
+                    var requestHead = await ReadRequestHeadAsync(stream);
+                    var target = requestHead.Split(' ')[1];
+                    if (target == RedirectTarget)
+                    {
+                        lock (_sync) _followed++;
+                        await WriteResponseAsync(stream, 200, "{\"features\":{\"v1_send\":true}}", "");
+                        return;
+                    }
                     var queryStart = target.IndexOf('?');
                     var query = queryStart >= 0 ? target[(queryStart + 1)..] : "";
                     // The answer is fixed when the request is recorded, so a test that sees the
@@ -131,25 +179,34 @@ namespace ChatXdk.Tests
                     int status;
                     string body;
                     int delayMs;
+                    var extraHeaders = "";
                     lock (_sync)
                     {
                         _queries.Add(query);
+                        _heads.Add(requestHead);
                         status = _status;
                         body = _body;
                         delayMs = _delayMs;
+                        if (_location != null) extraHeaders += $"Location: {_location}\r\n";
+                        if (_setCookie != null) extraHeaders += $"Set-Cookie: {_setCookie}\r\n";
                     }
                     if (delayMs > 0) await Task.Delay(delayMs, _stop.Token);
-                    var bytes = Encoding.UTF8.GetBytes(body);
-                    var head = $"HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\n"
-                        + $"Content-Length: {bytes.Length}\r\nConnection: close\r\n\r\n";
-                    await stream.WriteAsync(Encoding.ASCII.GetBytes(head), _stop.Token);
-                    await stream.WriteAsync(bytes, _stop.Token);
+                    await WriteResponseAsync(stream, status, body, extraHeaders);
                 }
                 catch (Exception)
                 {
                     // The client gave up (timeout or Dispose), or the server stopped.
                 }
             }
+        }
+
+        private async Task WriteResponseAsync(NetworkStream stream, int status, string body, string extraHeaders)
+        {
+            var bytes = Encoding.UTF8.GetBytes(body);
+            var head = $"HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\n{extraHeaders}"
+                + $"Content-Length: {bytes.Length}\r\nConnection: close\r\n\r\n";
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(head), _stop.Token);
+            await stream.WriteAsync(bytes, _stop.Token);
         }
 
         /// <summary>The request line and headers, up to the blank line that ends them.</summary>

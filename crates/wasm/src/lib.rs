@@ -48,8 +48,6 @@ use chat_xdk_core::js::{
 /// declares before the file is encrypted.
 #[wasm_bindgen(js_name = encryptedFileSize)]
 pub fn encrypted_file_size(plaintext_size: f64) -> Result<f64, JsValue> {
-    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-
     if !plaintext_size.is_finite()
         || plaintext_size < 0.0
         || plaintext_size.fract() != 0.0
@@ -445,7 +443,7 @@ impl Chat {
     ///
     /// Returns a `ConversationKeyResult` with:
     /// - `keys`: Object mapping key version strings to `Uint8Array` conversation keys
-    /// - `latestVersion`: The highest key version (use for encrypting new messages)
+    /// - `latestVersion`: The highest key version; signatures are not checked
     #[wasm_bindgen(js_name = extractConversationKeys)]
     pub fn extract_conversation_keys(&self, events: Vec<String>) -> Result<JsValue, JsValue> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
@@ -633,7 +631,7 @@ impl Chat {
         core_params.attachments = p.attachments;
         core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
-        core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
+        core_params.ttl_msec = p.ttl_msec;
         let payload = self
             .inner
             .encrypt_message(&core_params)
@@ -676,7 +674,7 @@ impl Chat {
         core_params.reply_to_attachments = p.reply_to_attachments;
         core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
-        core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
+        core_params.ttl_msec = p.ttl_msec;
         let payload = self.inner.encrypt_reply(&core_params).map_err(sdk_error)?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
@@ -985,7 +983,7 @@ impl Chat {
     /// `encrypted`, which is fed to the decryptor.
     #[wasm_bindgen(js_name = fileDecryptor)]
     pub fn file_decryptor(&self, params: JsValue) -> Result<FileDecryptor, JsValue> {
-        let p: JsFileParams = from_js_params("fileDecryptor", params)?;
+        let p: JsFileDecryptorParams = from_js_params("fileDecryptor", params)?;
         let core_params = chat_xdk_core::FileDecryptorParams::new(
             p.event_b64,
             js_to_conv_keys("fileDecryptor", p.conversation_keys)?,
@@ -1067,7 +1065,7 @@ impl Chat {
         core_params.current_title = p.current_title;
         core_params.current_avatar_url = p.current_avatar_url;
         core_params.current_description = p.current_description;
-        core_params.current_ttl_msec = p.current_ttl_msec.map(|t| t as i64);
+        core_params.current_ttl_msec = p.current_ttl_msec;
         core_params.current_screen_capture_blocking_enabled =
             p.current_screen_capture_blocking_enabled;
 
@@ -1102,7 +1100,7 @@ impl Chat {
         core_params.sender_id = p.sender_id;
         core_params.signing_key_version = p.signing_key_version;
         core_params.title = p.title;
-        core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
+        core_params.ttl_msec = p.ttl_msec;
 
         let result = self
             .inner
@@ -1363,6 +1361,39 @@ fn reply_to_sender_id_string<'de, D: serde::Deserializer<'de>>(
     }
 }
 
+/// `Number.MAX_SAFE_INTEGER`: the largest integer a JS number holds exactly.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// A millisecond count from JS: a finite number no larger in magnitude than
+/// `Number.MAX_SAFE_INTEGER`, truncated toward zero. NaN, an infinity or a
+/// number past that range names no instant or duration, so it is rejected
+/// rather than signed as some other value.
+fn checked_msec<E: serde::de::Error>(value: f64) -> Result<i64, E> {
+    if value.is_finite() && value.abs() <= MAX_SAFE_INTEGER {
+        return Ok(value as i64);
+    }
+    let shown = match value {
+        f64::INFINITY => "Infinity".to_string(),
+        f64::NEG_INFINITY => "-Infinity".to_string(),
+        _ => value.to_string(),
+    };
+    Err(E::custom(format!(
+        "a millisecond value must be a finite number within the safe integer range, got {shown}"
+    )))
+}
+
+fn msec<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    checked_msec(<f64 as serde::Deserialize>::deserialize(deserializer)?)
+}
+
+fn optional_msec<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error> {
+    <Option<f64> as serde::Deserialize>::deserialize(deserializer)?
+        .map(checked_msec)
+        .transpose()
+}
+
 /// Convert entity tuples `[start, end, "type"]` into core descriptors.
 fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<chat_xdk_core::EntityDescriptor> {
     tuples
@@ -1404,7 +1435,8 @@ struct JsEncryptMessageParams {
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
-    ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1429,7 +1461,8 @@ struct JsEncryptReplyParams {
     reply_to_attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
-    ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1520,7 +1553,8 @@ impl JsMessageDeleteParams {
 struct JsMarkConversationReadParams {
     conversation_id: String,
     seen_until_sequence_id: String,
-    seen_at_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    seen_at_msec: Option<i64>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1533,7 +1567,10 @@ impl JsMarkConversationReadParams {
             self.conversation_id,
             self.seen_until_sequence_id,
         );
-        params.seen_at_msec = Some(self.seen_at_msec.unwrap_or_else(js_sys::Date::now) as i64);
+        params.seen_at_msec = Some(
+            self.seen_at_msec
+                .unwrap_or_else(|| js_sys::Date::now() as i64),
+        );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
@@ -1702,7 +1739,8 @@ impl JsGroupAdminsRemoveParams {
 struct JsGroupInviteEnableParams {
     conversation_id: String,
     invite_url: String,
-    expires_at_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    expires_at_msec: Option<i64>,
     affiliate_id: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
@@ -1712,7 +1750,7 @@ impl JsGroupInviteEnableParams {
     fn into_core(self) -> chat_xdk_core::GroupInviteEnableParams {
         let mut params =
             chat_xdk_core::GroupInviteEnableParams::new(self.conversation_id, self.invite_url);
-        params.expires_at_msec = self.expires_at_msec.map(|msec| msec as i64);
+        params.expires_at_msec = self.expires_at_msec;
         params.affiliate_id = self.affiliate_id;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
@@ -1781,7 +1819,8 @@ impl JsGroupJoinRejectParams {
 #[serde(rename_all = "camelCase")]
 struct JsMessageTtlChangeParams {
     conversation_id: String,
-    ttl_msec: f64,
+    #[serde(deserialize_with = "msec")]
+    ttl_msec: i64,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1789,7 +1828,7 @@ struct JsMessageTtlChangeParams {
 impl JsMessageTtlChangeParams {
     fn into_core(self) -> chat_xdk_core::MessageTtlChangeParams {
         let mut params =
-            chat_xdk_core::MessageTtlChangeParams::new(self.conversation_id, self.ttl_msec as i64);
+            chat_xdk_core::MessageTtlChangeParams::new(self.conversation_id, self.ttl_msec);
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
@@ -1859,7 +1898,8 @@ struct JsGroupMembersChangeParams {
     current_title: Option<String>,
     current_avatar_url: Option<String>,
     current_description: Option<String>,
-    current_ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    current_ttl_msec: Option<i64>,
     current_screen_capture_blocking_enabled: Option<bool>,
 }
 
@@ -1873,7 +1913,8 @@ struct JsGroupCreateParams {
     sender_id: Option<String>,
     signing_key_version: Option<String>,
     title: Option<String>,
-    ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1929,7 +1970,7 @@ struct JsDecryptFileParams {
 /// The params of `fileDecryptor`.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JsFileParams {
+struct JsFileDecryptorParams {
     event_b64: String,
     #[serde(with = "serde_wasm_bindgen::preserve")]
     conversation_keys: JsValue,

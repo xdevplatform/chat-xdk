@@ -86,7 +86,7 @@ type SigningKeyEntry struct {
 	IdentityPublicKeySignature string `json:"identity_public_key_signature"`
 }
 
-// PublicKeyInput is one row from GET /2/dm/encryption/public_keys, passed to the prepare methods.
+// PublicKeyInput is one row from GET /2/users/{id}/public_keys, passed to the prepare methods.
 type PublicKeyInput struct {
 	UserID string `json:"user_id"`
 	// IdentityPublicKey is the base64 identity public key (SEC1 or SPKI):
@@ -128,7 +128,8 @@ type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey             []byte                       `json:"conversation_key"`
+	// It is secret, so it never appears in the JSON of this struct.
+	ConversationKey             []byte                       `json:"-"`
 	ConversationKeyVersion      string                       `json:"conversation_key_version"`
 	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
 	ActionSignatures            []ActionSignature            `json:"action_signatures"`
@@ -715,8 +716,11 @@ type MessageEventSignature struct {
 	SigningPublicKey string `json:"signing_public_key"`
 }
 
-// PreparedAction is a signed message delete or read receipt: the
-// action_signatures a request carries for it, one entry.
+// PreparedAction holds the signed actions for a request that does not rotate a
+// conversation key: the action_signatures it carries. Returned by
+// PrepareMessageDelete, PrepareMarkConversationRead, and the group-action
+// prepares other than PrepareGroupMembersRemove; PrepareGroupLeave returns one
+// entry per signed event.
 type PreparedAction struct {
 	ActionSignatures []ActionSignature `json:"action_signatures"`
 }

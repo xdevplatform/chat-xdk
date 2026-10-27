@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Fixed
+
+The documentation matches the code: API.md, the migration guides, the
+READMEs and the doc comments in every binding. Their code examples compile
+against the 0.6.0 API, and the Rust crate's examples build as doctests.
+
+A `verify` error names the input that failed, in every binding: the public
+key, which must be a base64 P-256 public key, or the signature, which must be
+the 64-byte raw signature. Verifying needs no loaded keys.
+
+In JavaScript, a millisecond field (`ttlMsec`, `currentTtlMsec`,
+`seenAtMsec`, `expiresAtMsec`) takes a finite number within the safe integer
+range. NaN, an infinity or a number past that range names no instant or
+duration, so the call throws an `Invalid <method> params` error rather than
+signing some other value. A fraction is truncated toward zero.
+
+In every binding the feature-switch request sends and stores no cookies and
+follows no redirect. A cookie the endpoint sets never reaches a later chat's
+request, and a redirect counts as an answer other than 200, so the chat's
+sends stay v0.
+
+The Python type stub names the byte parameter of `bytes_to_base64`,
+`bytes_to_hex`, `detect_mime_type` and `detect_image_dimensions` `bytes`, as
+the functions take it, so a type checker accepts exactly the keyword the call
+accepts.
+
+`chat-xdk-core`'s build script watches only the `CHAT_XDK_BINDINGS`
+variable it reads, so Cargo rebuilds the crate only when its sources or that
+variable change, in this repository and in crates that depend on it.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.
@@ -548,7 +578,8 @@ juicebox-sdk.
   `PUT /2/chat/conversations/{id}`), so apps pass the keys through
   unchanged. A decrypted `KeyChange` event carries its keys under the same
   names, as Thrift's `ConversationKeyChangeEvent` does, and one type,
-  `ConversationParticipantKey`, holds them in both directions. The names are
+  `ConversationParticipantKey`, holds them in both directions (Python
+  returns dicts with those keys). The names are
   `conversationParticipantKeys` / `encryptedConversationKey` in JS and the
   JVM, and `ConversationParticipantKeys` / `EncryptedConversationKey` in Go
   and .NET.
@@ -721,6 +752,16 @@ juicebox-sdk.
 - JS: where `fetch` performs the feature-switch request, the body is read as
   a stream and capped while it streams; a body the runtime can't stream is
   never read whole, and the request fails.
+- The JSON of a prepared conversation change leaves out its conversation
+  key in the Go, JavaScript, JVM and .NET bindings, so a request body
+  serialized from the returned object never carries the key. The key stays
+  on the object (`ConversationKey` / `conversationKey`) for the app to keep.
+  The X API requests that take a prepared change read its participant keys,
+  key version and action signatures, never the key itself. Rust, whose
+  `PreparedConversationChange` never serialized the key, and Python, whose
+  result is a dict that `json.dumps` refuses to encode because the key is
+  bytes, are unchanged. The C ABI returns the key in its JSON result, as the
+  only way it hands the key to the caller.
 - Juicebox realm requests (setup, unlock, and key deletion) go out through an
   HTTP client in `chat-xdk-core` on reqwest 0.12.28, rustls 0.23.46 (ring),
   rustls-webpki 0.103.16, webpki-roots 1.0.11, and h2 0.4.20. juicebox-sdk's
@@ -743,3 +784,17 @@ juicebox-sdk.
     `User-Agent: juicebox_networking/<juicebox version>` on every request;
   - applies the timeout juicebox-sdk sets on each request, or 30 seconds when
     it sets none.
+- `sign` refuses data that only the SDK signs: a payload recipients verify
+  as a signed event (a message, conversation-key change, group or
+  conversation-metadata change, delete or read receipt), and a P-256 public
+  key, whose signature by the signing key binds it as an identity key. An
+  app that signed data an attacker chose could otherwise hand back a
+  signature that verifies as one of those events, such as a key change to a
+  key the attacker knows. The refusal is the invalid-input error each
+  binding raises for a bad argument (`SdkError::InvalidInput` in Rust,
+  `InvalidInputError` in Python, a `ChatXdkError` of kind `invalidInput` in
+  JS, an error of kind `ErrorKindInvalidInput` in Go, a `ChatXdkException`
+  of kind `InvalidInput` / `INVALID_INPUT` in .NET and the JVM, and an
+  `invalid_input` error document in the C ABI).
+  Any other data signs to the same signature bytes, and the SDK signs events
+  on its own path, which this does not touch.

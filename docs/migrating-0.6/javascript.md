@@ -260,7 +260,9 @@ decrypting, but never becomes the version you encrypt with.
 Pass `{ eventB64, conversationKeys, signingKeys }`. Both key fields are
 optional: without them, the conversation keys come from the key cache
 (`setCacheKeys(true)`) and the signing keys from `setSigningKeys`. The call
-still throws on failure.
+still throws on failure. A `conversationKeys` entry that is not a 32-byte
+`Uint8Array` throws an error naming its version, where 0.5.x skipped it:
+pass the `keys` map `decryptEvents` or `extractConversationKeys` returns.
 
 ```js
 // 0.5.x
@@ -963,7 +965,7 @@ reject an unsigned receipt. It takes `{ conversationId, seenUntilSequenceId }`
 to now, and returns a `PreparedAction`, one entry shaped as
 [Action signatures come nested](#action-signatures-come-nested) shows. The
 path takes the conversation id in its hyphen form. A recipient's
-`decryptEvent` returns a signed receipt as a verified `ReadReceipt` event.
+`decryptEvent` returns a signed receipt as a verified `readReceipt` event.
 
 ```js
 // 0.6.0

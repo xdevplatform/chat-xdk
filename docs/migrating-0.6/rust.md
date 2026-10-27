@@ -532,13 +532,14 @@ every request that takes them (`POST /2/chat/conversations/{id}/keys`,
 `conversation_participant_keys`, each entry a `ConversationParticipantKey`
 with `user_id`, `encrypted_conversation_key` and `public_key_version`, the
 type a received key change uses too
-(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
-and pass them through as returned:
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)).
+The 0.5.x entry type, `EncryptedKeyForRecipient`, is removed. Drop the
+renaming and pass the keys through as returned:
 
 ```rust
 // 0.5.x
-let conversation_participant_keys: Vec<serde_json::Value> = prepared
-    .participant_keys
+let participant_keys: &[EncryptedKeyForRecipient] = &prepared.participant_keys;
+let conversation_participant_keys: Vec<serde_json::Value> = participant_keys
     .iter()
     .map(|key| {
         serde_json::json!({
@@ -550,7 +551,7 @@ let conversation_participant_keys: Vec<serde_json::Value> = prepared
     .collect();
 
 // 0.6.0
-let conversation_participant_keys = &prepared.conversation_participant_keys;
+let conversation_participant_keys: &[ConversationParticipantKey] = &prepared.conversation_participant_keys;
 ```
 
 ## Received participant keys take the same names

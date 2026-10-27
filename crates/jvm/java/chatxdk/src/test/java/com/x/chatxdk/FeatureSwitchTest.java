@@ -2,6 +2,7 @@ package com.x.chatxdk;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.sun.net.httpserver.Headers;
 import com.x.chatxdk.Types.*;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -230,6 +231,37 @@ class FeatureSwitchTest {
             try (Chat kept = newChat(server.endpoint)) {
                 waitFor("v1", () -> sendVersion(kept).equals("10"));
                 assertEquals(1, server.queries().size());
+            }
+        }
+    }
+
+    @Test
+    void theReadSendsNoCookiesOrCredentials() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.setCookie("session=from-the-first-answer; Path=/");
+            try (Chat first = newChat(server.endpoint)) {
+                waitFor("the first answer", () -> sendVersion(first).equals("10"));
+            }
+            try (Chat second = newChat(server.endpoint)) {
+                waitFor("the second request", () -> server.queries().size() == 2);
+                waitFor("the second answer", () -> sendVersion(second).equals("10"));
+            }
+            for (Headers headers : server.headers()) {
+                assertNull(headers.getFirst("Cookie"), "the read sends no cookie");
+                assertNull(headers.getFirst("Authorization"), "the read sends no credentials");
+            }
+        }
+    }
+
+    @Test
+    void aRedirectIsNotFollowed() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.redirect();
+            try (Chat chat = newChat(server.endpoint, 500)) {
+                waitFor("the request", () -> server.queries().size() == 1);
+                Thread.sleep(700);
+                assertEquals("7", sendVersion(chat), "a redirect is a failed read");
+                assertEquals(0, server.followedRedirects(), "the redirect is not followed");
             }
         }
     }

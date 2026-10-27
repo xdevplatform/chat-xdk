@@ -48,7 +48,11 @@ The bindings read the switches with one anonymous request,
 credentials and no query parameters. Each chat reads the switches once, when
 it is created, and keeps the answer for its lifetime, so a change to a switch
 reaches the chats created after it; chats created while a request is in
-flight share it. The request never delays or fails a call, and any failure
+flight share it. Every switch is off until the answer arrives, so a chat
+whose `v1_send` switch is on sends v0 first and v1 from then on. Files
+encrypted from a v0 build of a message don't open with a v1 build of it, so
+encrypt each file from the payload you send. The request never delays or
+fails a call, and any failure
 leaves every switch off for the chat's lifetime, so its sends stay in v0, the
 format every reader opens. The SDK decides what an answer means in one
 place, its Rust core: a binding only performs the request, and a body is

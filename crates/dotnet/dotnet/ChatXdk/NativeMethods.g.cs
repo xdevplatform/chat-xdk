@@ -242,8 +242,8 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_internal_feature_set_default_endpoint(byte* endpoint);
 
         /// <summary>
-        ///  Store signing keys used when a decrypt call passes an empty
-        ///  `signing_keys_json`.
+        ///  Store signing keys used when a decrypt call's params document leaves out
+        ///  `signing_keys` (or passes an empty array).
         ///
         ///  `signing_keys_json` takes the same array shape as
         ///  `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
@@ -776,7 +776,9 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_mark_conversation_read(ChatHandle* handle, byte* params_json);
 
         /// <summary>
-        ///  Sign data with the signing key. Returns base64-encoded signature.
+        ///  Sign application data with the signing key. Returns base64-encoded
+        ///  signature, or an error for an event signature payload or a public key,
+        ///  which only the SDK signs.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_sign", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_sign(ChatHandle* handle, byte* data, nuint data_len);

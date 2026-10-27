@@ -185,6 +185,25 @@ async function loadJuiceboxSdkOnce() {
   return await import("juicebox-sdk");
 }
 
+// The conversation key is secret: JSON.stringify leaves it out of a prepared
+// change. toJSON is non-enumerable, so keys, spreads and copies are unaffected.
+function preparedChangeToJson() {
+  const { conversationKey: _secret, ...json } = this;
+  return json;
+}
+
+function keepKeyOutOfJson(prepared) {
+  if (prepared !== null && typeof prepared === "object") {
+    Object.defineProperty(prepared, "toJSON", {
+      value: preparedChangeToJson,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return prepared;
+}
+
 // ChatWithJuicebox — JS wrapper that owns both a WasmChat and a Juicebox client
 
 /**
@@ -391,10 +410,10 @@ export class ChatWithJuicebox {
   decryptFile(params) { return this.#inner.decryptFile(params); }
   fileDecryptor(params) { return this.#inner.fileDecryptor(params); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
-  prepareConversationKeyChange(params) { return this.#inner.prepareConversationKeyChange(params); }
-  prepareGroupMembersChange(params) { return this.#inner.prepareGroupMembersChange(params); }
-  prepareGroupCreate(params) { return this.#inner.prepareGroupCreate(params); }
-  prepareGroupMembersRemove(params) { return this.#inner.prepareGroupMembersRemove(params); }
+  prepareConversationKeyChange(params) { return keepKeyOutOfJson(this.#inner.prepareConversationKeyChange(params)); }
+  prepareGroupMembersChange(params) { return keepKeyOutOfJson(this.#inner.prepareGroupMembersChange(params)); }
+  prepareGroupCreate(params) { return keepKeyOutOfJson(this.#inner.prepareGroupCreate(params)); }
+  prepareGroupMembersRemove(params) { return keepKeyOutOfJson(this.#inner.prepareGroupMembersRemove(params)); }
   prepareGroupLeave(params) { return this.#inner.prepareGroupLeave(params); }
   prepareGroupTitleChange(params) { return this.#inner.prepareGroupTitleChange(params); }
   prepareGroupAvatarChange(params) { return this.#inner.prepareGroupAvatarChange(params); }
@@ -513,8 +532,12 @@ async function getWithFetch(url, timeoutMs, maxBytes) {
   const request = new AbortController();
   const timer = unrefTimer(setTimeout(() => request.abort(), timeoutMs));
   try {
+    // The read is anonymous: it sends no cookies, and it follows no redirect,
+    // so a 3xx answer fails the read rather than reaching another URL.
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
+      credentials: "omit",
+      redirect: "error",
       signal: request.signal,
     });
     const body = await readCappedBody(response, maxBytes);

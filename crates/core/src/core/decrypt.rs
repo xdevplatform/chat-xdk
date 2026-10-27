@@ -10,7 +10,7 @@ impl ChatCore {
     /// Parses each event, attempts to decrypt participant keys using the loaded
     /// identity key, and returns a `ConversationKeyResult` with:
     /// - `keys`: Map of key version → conversation key
-    /// - `latest_version`: The highest key version (for encryption)
+    /// - `latest_version`: The highest key version
     ///
     /// Events that are not `KeyChange` events, or whose keys can't be decrypted
     /// by this identity key, are silently skipped.

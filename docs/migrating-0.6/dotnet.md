@@ -226,16 +226,21 @@ a `DecryptEventsParams`, and the signing keys as `SigningKeys`. Left
 `null`, the keys `SetSigningKeys` stored verify the events. Per-event errors
 are still collected in the result, and the call throws only for invalid
 params. The result holds the decrypted events, of every event type, in
-`Events`, each a `DecryptedEvent`:
+`Events`, each a `DecryptedEvent`. The events of `DecryptEvents` and the
+signing keys of both decrypt calls are `IReadOnlyList`s, where 0.5.x took any
+`IEnumerable`, so call `ToList()` on a LINQ query (`signingKeyQuery` below is
+an `IEnumerable<SigningKeyEntry>`):
 
 ```csharp
 // 0.5.x
 var result = chat.DecryptEvents(events, signingKeys);
 foreach (var decrypted in result.Messages) ShowEvent(decrypted.Event);
+var fromQuery = chat.DecryptEvents(events, signingKeyQuery);
 
 // 0.6.0
 var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys });
 foreach (var decrypted in result.Events) ShowEvent(decrypted.Event);
+var fromQuery = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeyQuery.ToList() });
 ```
 
 `result.ConversationKeys.LatestVersion`, the version to encrypt with, is
@@ -413,19 +418,21 @@ var plaintext = chat.DecryptFile(new DecryptFileParams(downloaded, fileEventB64,
 
 `FileEncryptor` and `FileDecryptor` take the same values as `EncryptFile`
 and `DecryptFile`, without the file bytes, and return a `FileEncryptor` or
-a `FileDecryptor`; `Push`, `Finish` and `Dispose` are unchanged. Size an
-upload with `ChatXdkUtilities.EncryptedFileSize`.
+a `FileDecryptor`; `Push`, `Finish` and `Dispose` are unchanged. The
+returned classes are named `FileEncryptor` and `FileDecryptor` too, where
+0.5.x had `StreamEncryptor` and `StreamDecryptor`. Size an upload with
+`ChatXdkUtilities.EncryptedFileSize`.
 
 ```csharp
 // 0.5.x
 var size = ChatXdkUtilities.EncryptedStreamSize((ulong)photo.Length);
-using var encryptor = chat.StreamEncryptor(conversationKey);
-using var decryptor = chat.StreamDecryptor(keys[conversationKeyVersion]);
+using StreamEncryptor encryptor = chat.StreamEncryptor(conversationKey);
+using StreamDecryptor decryptor = chat.StreamDecryptor(keys[conversationKeyVersion]);
 
 // 0.6.0
 var size = ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length);
-using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, mediaHashKey));
-using var decryptor = chat.FileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
+using FileEncryptor encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, mediaHashKey));
+using FileDecryptor decryptor = chat.FileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
 ```
 
 ## Action signatures come nested

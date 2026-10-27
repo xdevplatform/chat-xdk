@@ -1033,6 +1033,63 @@ namespace ChatXdk.Tests
                 $"ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{blocking.MessageId},111,g100"));
         }
 
+        // The group and conversation-metadata actions each sign one action at signature
+        // version 7 over the event name, the action's message id, the sender, the
+        // conversation and the signed fields, and the signature verifies with the signer's
+        // signing key.
+        [Fact]
+        public void GroupActions_SignEachAction()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("111", "1"));
+            var signingKey = chat.GetPublicKeys().Signing;
+            (ActionSignature, string) Action(PreparedAction prepared, string fields) => (OnlyAction(prepared), fields);
+            var cases = new (string Name, string Event, Func<(ActionSignature Action, string Fields)> Prepare)[]
+            {
+                ("avatar", "GroupChangeEvent.GroupAvatarUrlChange",
+                    () => Action(chat.PrepareGroupAvatarChange(new GroupAvatarChangeParams("g100", "https://img/a.png", "4")),
+                        ",g100,4,https://img/a.png")),
+                ("description", "GroupChangeEvent.GroupDescriptionChange", () =>
+                {
+                    var changed = chat.PrepareGroupDescriptionChange(new GroupDescriptionChangeParams("g100", "Ships the app")
+                    {
+                        ConversationKey = new byte[32],
+                        ConversationKeyVersion = "4",
+                    });
+                    return (Assert.Single(changed.ActionSignatures), ",g100,4," + changed.EncryptedValue);
+                }),
+                ("admins add", "GroupChangeEvent.GroupAdminAddChange",
+                    () => Action(chat.PrepareGroupAdminsAdd(new GroupAdminsAddParams("g100", new[] { "910008", "910009" })),
+                        ",g100,910008,910009")),
+                ("admins remove", "GroupChangeEvent.GroupAdminRemoveChange",
+                    () => Action(chat.PrepareGroupAdminsRemove(new GroupAdminsRemoveParams("g100", new[] { "910008" })),
+                        ",g100,910008")),
+                ("invite enable", "GroupChangeEvent.GroupInviteEnable",
+                    () => Action(chat.PrepareGroupInviteEnable(new GroupInviteEnableParams("g100", "https://x.com/i/invite/abc")),
+                        ",g100,https://x.com/i/invite/abc,null,null")),
+                ("invite disable", "GroupChangeEvent.GroupInviteDisable",
+                    () => Action(chat.PrepareGroupInviteDisable(new GroupInviteDisableParams("g100")), ",g100,111")),
+                ("join request", "GroupChangeEvent.GroupJoinRequest",
+                    () => Action(chat.PrepareGroupJoinRequest(new GroupJoinRequestParams("g100")), ",g100,111")),
+                ("join reject", "GroupChangeEvent.GroupJoinReject",
+                    () => Action(chat.PrepareGroupJoinReject(new GroupJoinRejectParams("g100", new[] { "910010" })),
+                        ",g100,910010")),
+                ("ttl change", "ConversationMetadataChangeEvent.MessageDurationChange",
+                    () => Action(chat.PrepareMessageTtlChange(new MessageTtlChangeParams("g100", 86400000)), ",g100,86400000")),
+                ("ttl remove", "ConversationMetadataChangeEvent.MessageDurationRemove",
+                    () => Action(chat.PrepareMessageTtlRemove(new MessageTtlRemoveParams("g100")), ",g100")),
+            };
+            foreach (var (name, eventName, prepare) in cases)
+            {
+                var (action, fields) = prepare();
+                var sig = action.MessageEventSignature;
+                Assert.Equal("7", sig.SignatureVersion);
+                Assert.Equal(signingKey, sig.SigningPublicKey);
+                var payload = $"{eventName},{action.MessageId},111{fields}";
+                Assert.True(Signs(chat, action, payload), $"{name}: {payload}");
+            }
+        }
+
         [Fact]
         public void PrepareMessageDelete_ForSelf()
         {
@@ -1143,6 +1200,43 @@ namespace ChatXdk.Tests
 
             var decrypted = chat.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
             Assert.Equal(prepared.ConversationKey, decrypted);
+        }
+
+        // The conversation key is secret: a prepared change carries it, but its JSON, the shape
+        // a request body is built from, never does.
+        [Fact]
+        public void PreparedConversationChange_JsonLeavesOutTheKey()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("910002", "1"));
+            var publicKeys = new[]
+            {
+                new PublicKeyInput { UserId = "910002", IdentityPublicKey = chat.GetPublicKeys().Identity, PublicKeyVersion = "1" },
+            };
+
+            var prepared = new[]
+            {
+                chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(publicKeys)
+                {
+                    ConversationId = "910002:910005",
+                }),
+                chat.PrepareGroupCreate(new GroupCreateParams(
+                    publicKeys, "g123", new[] { "910002", "910005" }, new[] { "910002" })),
+                chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(publicKeys, "g123", new[] { "910005" })),
+            };
+
+            foreach (var change in prepared)
+            {
+                Assert.Equal(32, change.ConversationKey.Length);
+                foreach (var options in new[] { new JsonSerializerOptions(), new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull } })
+                {
+                    var json = JsonSerializer.SerializeToElement(change, options);
+                    Assert.False(json.TryGetProperty("conversation_key", out _), json.GetRawText());
+                    Assert.Equal(
+                        new[] { "conversation_id", "conversation_key_version", "conversation_participant_keys", "action_signatures" },
+                        json.EnumerateObject().Select(p => p.Name).ToArray());
+                }
+            }
         }
 
         // File encrypt / decrypt
@@ -1550,16 +1644,30 @@ namespace ChatXdk.Tests
                 Assert.Throws<ChatXdkException>(() => chat.ExportKeys()).Kind);
         }
 
-        // P/Invoke plumbing smoke only: the flag crosses the boundary without a
-        // crash. The policy's behavior is pinned by
-        // Vectors_DecryptEvents_BatchAndSingleEventContracts (default reject)
-        // and the Rust core suite.
+        // SetRejectUnverified decides whether a message from a sender whose signing key the
+        // chat lacks is rejected or returned unverified.
         [Fact]
-        public void SetRejectUnverified_DoesNotThrow()
+        public void SetRejectUnverified_DecidesWhetherUnverifiedMessagesAreRejected()
         {
             using var chat = CreateUnlocked();
-            chat.SetRejectUnverified(true);
+            using var sender = CreateUnlocked();
+            var conversationKey = new byte[32];
+            var payload = sender.EncryptMessage(new EncryptMessageParams("910004:910005", "hi")
+            {
+                SenderId = "910005",
+                SigningKeyVersion = "1",
+                ConversationKey = conversationKey,
+                ConversationKeyVersion = "1",
+            });
+            var received = new DecryptEventParams(
+                payload.EventB64, new Dictionary<string, byte[]> { ["1"] = conversationKey });
+            Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(received));
             chat.SetRejectUnverified(false);
+            var unverified = chat.DecryptEvent(received);
+            Assert.Equal("hi", unverified.GetProperty("content").GetProperty("text").GetString());
+            Assert.False(unverified.GetProperty("verified").GetBoolean());
+            chat.SetRejectUnverified(true);
+            Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(received));
         }
 
         // Deterministic cross-binding fixture pins (tests/fixtures/sdk_vectors.json)
@@ -1584,6 +1692,24 @@ namespace ChatXdk.Tests
             Assert.True(chat.Verify(v.SigningPublicB64, signature, message));
             Assert.False(chat.Verify(v.SigningPublicB64, signature,
                 System.Text.Encoding.UTF8.GetBytes(v.MessageUtf8 + "!")));
+        }
+
+        // Sign refuses data only the SDK signs: an event signature payload and a public key.
+        // Data that only resembles a payload is application data.
+        [Fact]
+        public void Sign_RefusesDataOnlyTheSdkSigns()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+
+            const string keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+            foreach (var data in new[] { System.Text.Encoding.UTF8.GetBytes(keyChange), Convert.FromBase64String(v.IdentityPublicB64) })
+            {
+                var ex = Assert.Throws<ChatXdkException>(() => chat.Sign(data));
+                Assert.Contains("only the SDK signs", ex.Message);
+            }
+            Assert.Equal(64, chat.Sign(System.Text.Encoding.UTF8.GetBytes(" " + keyChange)).Length);
         }
 
         [Fact]
@@ -2249,6 +2375,21 @@ namespace ChatXdk.Tests
             // "notAPublicKey" is not valid base64 SEC1/SPKI — Rust returns -1.
             Assert.Throws<ChatXdkException>(() =>
                 chat.Verify("notAPublicKey", sig, data));
+        }
+
+        // Verifying needs no loaded keys, and its error names the input, not the lock state.
+        [Fact]
+        public void Verify_NeedsNoLoadedKeys()
+        {
+            using var signer = CreateUnlocked();
+            using var verifier = new Chat();
+            var data = System.Text.Encoding.UTF8.GetBytes("data");
+            var sig = signer.Sign(data);
+
+            Assert.True(verifier.Verify(signer.GetPublicKeys().Signing, sig, data));
+            var ex = Assert.Throws<ChatXdkException>(() => verifier.Verify("notAPublicKey", sig, data));
+            Assert.Contains("public key", ex.Message);
+            Assert.DoesNotContain("unlocked", ex.Message);
         }
 
         // Finalizer: the native handle must be freed without explicit Dispose().

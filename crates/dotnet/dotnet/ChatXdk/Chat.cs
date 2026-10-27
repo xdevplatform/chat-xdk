@@ -274,8 +274,8 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Store signing keys to use when a decrypt call omits its <c>signingKeys</c>
-        /// argument. Only this explicit call populates the store — a key carried inside
+        /// Store signing keys to use when a decrypt call's params leave <c>SigningKeys</c>
+        /// null (or empty). Only this explicit call populates the store — a key carried inside
         /// an event is never trusted for verification. Each call replaces the previous set.
         /// </summary>
         public void SetSigningKeys(IReadOnlyList<SigningKeyEntry> keys)
@@ -1031,7 +1031,8 @@ namespace ChatXdk
         // Signing / verification
 
         /// <summary>
-        /// Sign arbitrary data with the signing key.
+        /// Sign application data with the signing key. Throws <see cref="ChatXdkException"/>
+        /// for an event signature payload or a public key, which only the SDK signs.
         /// </summary>
         /// <param name="data">Bytes to sign. May be empty but not null.</param>
         /// <returns>64-byte ECDSA P-256 signature.</returns>
@@ -1063,7 +1064,8 @@ namespace ChatXdk
         /// <returns><see langword="true"/> if the signature is valid, <see langword="false"/> if invalid.</returns>
         /// <exception cref="ChatXdkException">
         /// Thrown, of kind <see cref="ChatXdkErrorKind.InvalidInput"/>, for a malformed public key
-        /// or signature. Verifying needs no loaded keys.
+        /// or signature, never returned as a <see langword="false"/> result. Verifying needs no
+        /// loaded keys.
         /// </exception>
         public bool Verify(string publicKeyB64, byte[] signature, byte[] data)
         {

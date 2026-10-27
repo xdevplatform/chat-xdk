@@ -192,6 +192,16 @@ signing_key_version is not set: pass it explicitly or call set_identity()
 first`. `chat_xdk_get_public_keys` returns the two public keys,
 `{"identity": "...", "signing": "..."}`.
 
+```c
+// 0.5.x
+// {"public_key":{...},"version":"...","generate_version":...}
+char *registration = take(chat_xdk_generate_keypairs(chat));
+
+// 0.6.0
+// {"public_key":{...}}
+char *registration = take(chat_xdk_generate_keypairs(chat));
+```
+
 ## Set the identity with a params document
 
 `chat_xdk_set_identity` takes the user id and the signing-key version as
@@ -234,6 +244,16 @@ and `conversation_key_version`. Anything else fails with an error that
 names the field, such as
 `Invalid sender_id 'user-1': pass a numeric user id (digits only)`.
 
+```c
+// 0.5.x
+// {"conversation_id":"...","text":"pong","reply_to_sender_id":4201,...}
+char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
+
+// 0.6.0
+// {"conversation_id":"...","text":"pong","reply_to_sender_id":"4201",...}
+char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
+```
+
 ## Decrypt with params documents
 
 `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` each take one
@@ -270,6 +290,19 @@ they are, along with the payload's `xdk_version`, the version of the SDK
 that built it. The payload also carries `event_b64`, the message as
 recipients receive it: keep it to encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
+
+```c
+// 0.5.x
+// {"message_id":"...","encrypted_content":"...","signature":"...",
+//  "encoded_event_signature":"...",...}
+char *payload = take(chat_xdk_encrypt_message(chat, message_json));
+
+// 0.6.0
+// {"message_id":"...","event_b64":"...","encoded_message_create_event":"...",
+//  "signature":"...","encoded_message_event_signature":"...",
+//  "xdk_version":"...",...}
+char *payload = take(chat_xdk_encrypt_message(chat, message_json));
+```
 
 ## Encrypt a file from its message
 
