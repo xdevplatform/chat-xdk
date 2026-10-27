@@ -511,3 +511,42 @@ fn a_decrypted_v1_edit_names_the_message_it_edits() {
         )
     );
 }
+
+#[test]
+fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
+    let ckey = key(1);
+    let send = |party: &Party| {
+        party
+            .core
+            .encrypt_message(&message_params("hi", &ckey))
+            .unwrap()
+            .signature_info
+            .signature_version
+    };
+
+    let party = author();
+    assert_eq!(send(&party), "7", "no answer: v0");
+    party
+        .core
+        .set_feature_switches(200, br#"{"features":{"v1_send":true}}"#);
+    assert_eq!(send(&party), "10");
+    party
+        .core
+        .set_feature_switches(200, br#"{"features":{"v1_send":false}}"#);
+    assert_eq!(send(&party), "10", "a chat takes one answer");
+    assert_eq!(party.core.start_features(), None, "nor reads the switches again");
+
+    let on = br#"{"features":{"v1_send":true}}"#;
+    let mut oversized = on.to_vec();
+    oversized.resize(crate::FEATURES_MAX_BODY + 1, b' ');
+    for (status, body) in [
+        (404, on.as_slice()),
+        (200, b"not json".as_slice()),
+        (200, br#"{"features":{"v1_send":"true"}}"#.as_slice()),
+        (200, oversized.as_slice()),
+    ] {
+        let party = author();
+        party.core.set_feature_switches(status, body);
+        assert_eq!(send(&party), "7", "{status} {}", body.len());
+    }
+}

@@ -175,6 +175,11 @@ impl Chat {
     pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.set_signing_keys(entries);
     }
+    /// Set this chat's feature switches from the answer to `GET
+    /// /2/chat/features`; see [`crate::ChatCore::set_feature_switches`].
+    pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
+        self.inner.set_feature_switches(status, body);
+    }
     /// The engine underneath, for the language bindings (see
     /// `crate::bindings`).
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]

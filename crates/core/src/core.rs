@@ -463,7 +463,27 @@ impl ChatCore {
         self.keypair_manager.clear();
     }
 
-    // Feature switches (see `crate::features`); none of this is public API.
+    // Feature switches (see `crate::features`).
+
+    /// Set this instance's feature switches from the answer to `GET
+    /// /2/chat/features` ([`crate::FEATURES_ENDPOINT`]): the response's HTTP
+    /// status and body. The SDK never makes the request: GET it yourself
+    /// once, when you create the instance, without credentials or query
+    /// parameters, within [`crate::FEATURES_TIMEOUT_MS`], reading at most
+    /// [`crate::FEATURES_MAX_BODY`] plus one byte of the body.
+    ///
+    /// Sends are v0 (the format 0.5.x sends) until the answer turns
+    /// `v1_send` on, then v1 (per-message keys). Every switch stays off when
+    /// the status is not 200 or the body is longer than
+    /// [`crate::FEATURES_MAX_BODY`] or is not a `{"features": {...}}` object;
+    /// a switch whose value is not `true` reads off. An instance takes one
+    /// answer for its lifetime: later calls change nothing.
+    pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
+        self.features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .answer(status, body);
+    }
 
     /// Whether the feature switch `name` is on for this instance.
     pub(crate) fn feature_enabled(&self, name: &str) -> bool {

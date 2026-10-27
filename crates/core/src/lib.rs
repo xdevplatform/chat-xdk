@@ -95,10 +95,19 @@
 //!
 //! ## Send format
 //!
-//! Encrypted sends from this crate are always v0, the format 0.5.x sends.
-//! The language bindings move sends to v1 (per-message keys) when the X API's
-//! `v1_send` feature switch turns on, but this crate never fetches the
-//! switches. It reads v1 sends like every binding.
+//! Encrypted sends are v0, the format 0.5.x sends, until the X API's
+//! `v1_send` feature switch turns on, then v1 (per-message keys). The
+//! language bindings read the switches themselves when a chat is created;
+//! this crate never makes the request. GET [`FEATURES_ENDPOINT`] when you
+//! create a chat and hand the answer to [`ChatCore::set_feature_switches`]
+//! (or [`Chat::set_feature_switches`]); without an answer every switch is
+//! off. Every chat reads v1 sends.
+//!
+//! ```rust,ignore
+//! let core = ChatCore::new();
+//! let response = http_get(FEATURES_ENDPOINT, FEATURES_TIMEOUT_MS)?; // your HTTP client
+//! core.set_feature_switches(response.status, &response.body);
+//! ```
 //!
 //! ## What This SDK Does NOT Do
 //!
@@ -171,6 +180,7 @@ pub mod keys;
 pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{FileDecryptor, FileEncryptor};
+pub use features::{FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_TIMEOUT_MS};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,

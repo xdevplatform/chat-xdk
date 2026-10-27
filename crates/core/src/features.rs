@@ -1,15 +1,16 @@
 //! Feature switches served by `GET /2/chat/features`.
 //!
-//! Internal: none of this is public API. The endpoint answers a flat map of
-//! booleans, `{"features": {"v1_send": true}}`.
+//! The endpoint answers a flat map of booleans,
+//! `{"features": {"v1_send": true}}`.
 //!
 //! Each chat reads the switches once, when it is created, and keeps the answer
 //! for its lifetime. This module decides what to fetch and what an answer
 //! means; it never performs a request. In this repository's language bindings
 //! a chat's constructor starts its GET and the binding performs it with its
-//! own HTTP stack (see `crate::bindings`); anywhere else no request is made
-//! and every flag reads off. A chat created while a GET for its endpoint is in
-//! flight takes that GET's answer instead of starting another.
+//! own HTTP stack (see `crate::bindings`); a Rust caller performs the GET and
+//! hands the answer to `ChatCore::set_feature_switches`. A chat created while
+//! a GET for its endpoint is in flight takes that GET's answer instead of
+//! starting another.
 //!
 //! Every flag is off until the answer turns it on. A request that fails, takes
 //! longer than its timeout (2 s), answers a status other than 200 or a body
@@ -28,14 +29,16 @@ use crate::error::SdkError;
 /// the conversation key) to v1 (per-message keys).
 pub const V1_SEND: &str = "v1_send";
 
-/// URL of the feature-switch endpoint.
+/// The URL of the X API's feature switches, `GET /2/chat/features`. Request
+/// it without credentials or query parameters.
 pub const FEATURES_ENDPOINT: &str = "https://api.x.com/2/chat/features";
 
 /// Largest response body accepted, in bytes.
-const MAX_BODY: usize = 64 * 1024;
+pub const FEATURES_MAX_BODY: usize = 64 * 1024;
 
-/// How long a request may take, body included.
-const TIMEOUT_MS: u64 = 2_000;
+/// How long a request may take, body included, in milliseconds.
+pub const FEATURES_TIMEOUT_MS: u64 = 2_000;
+
 
 /// A GET for a language binding to perform.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -94,7 +97,7 @@ impl Requests {
             id,
             url: url.to_string(),
             timeout_ms,
-            max_bytes: MAX_BODY,
+            max_bytes: FEATURES_MAX_BODY,
         })
     }
 
@@ -115,26 +118,28 @@ impl Requests {
         if now >= request.deadline {
             return;
         }
-        let Some(flags) = parse_answer(status, body) else {
+        let Some(on) = parse_answer(status, body) else {
             return;
         };
-        let on: HashSet<String> = flags
-            .into_iter()
-            .filter_map(|(name, enabled)| enabled.then_some(name))
-            .collect();
         for chat in request.chats.iter().filter_map(Weak::upgrade) {
             *chat.write().unwrap_or_else(PoisonError::into_inner) = on.clone();
         }
     }
 }
 
-/// The flags of a 200 response whose body is a features object no larger than
-/// [`MAX_BODY`].
-fn parse_answer(status: u16, body: &[u8]) -> Option<HashMap<String, bool>> {
-    if status != 200 || body.len() > MAX_BODY {
+/// The flags a 200 response turns on, when its body is a features object no
+/// larger than [`FEATURES_MAX_BODY`].
+fn parse_answer(status: u16, body: &[u8]) -> Option<HashSet<String>> {
+    if status != 200 || body.len() > FEATURES_MAX_BODY {
         return None;
     }
-    parse_features(std::str::from_utf8(body).ok()?).ok()
+    let flags = parse_features(std::str::from_utf8(body).ok()?).ok()?;
+    Some(
+        flags
+            .into_iter()
+            .filter_map(|(name, enabled)| enabled.then_some(name))
+            .collect(),
+    )
 }
 
 /// Parse a features response: a JSON object whose `features` member is an
@@ -160,7 +165,7 @@ pub(crate) fn parse_features(json: &str) -> Result<HashMap<String, bool>, SdkErr
 pub(crate) struct ChatFeatures {
     /// The endpoint this chat reads; the process default when unset.
     endpoint: Option<String>,
-    /// The timeout of its GET; [`TIMEOUT_MS`] when unset.
+    /// The timeout of its GET; [`FEATURES_TIMEOUT_MS`] when unset.
     timeout_ms: Option<u64>,
     started: bool,
     flags: Arc<Flags>,
@@ -198,11 +203,22 @@ impl ChatFeatures {
         #[cfg(feature = "bindings")]
         return shared::join(
             self.endpoint.as_deref(),
-            self.timeout_ms.unwrap_or(TIMEOUT_MS),
+            self.timeout_ms.unwrap_or(FEATURES_TIMEOUT_MS),
             &self.flags,
         );
         #[cfg(not(feature = "bindings"))]
         None
+    }
+
+    /// Take `status` and `body`, the answer to a GET the caller performed,
+    /// unless this chat has started its read already.
+    pub(crate) fn answer(&mut self, status: u16, body: &[u8]) {
+        if std::mem::replace(&mut self.started, true) {
+            return;
+        }
+        if let Some(on) = parse_answer(status, body) {
+            *self.flags.write().unwrap_or_else(PoisonError::into_inner) = on;
+        }
     }
 
     /// Read exactly `on` as on, without any fetch.
@@ -306,7 +322,7 @@ mod tests {
 
     fn start(requests: &mut Requests, chat: &Arc<Flags>, now: u64) -> Fetch {
         requests
-            .join(URL, TIMEOUT_MS, chat, now)
+            .join(URL, FEATURES_TIMEOUT_MS, chat, now)
             .expect("a GET to perform")
     }
 
@@ -360,7 +376,7 @@ mod tests {
         let others: Vec<Arc<Flags>> = (0..9).map(|_| chat()).collect();
         for other in &others {
             assert_eq!(
-                requests.join(URL, TIMEOUT_MS, other, 10),
+                requests.join(URL, FEATURES_TIMEOUT_MS, other, 10),
                 None,
                 "no second GET"
             );
@@ -374,9 +390,9 @@ mod tests {
     #[test]
     fn each_endpoint_has_its_own_get() {
         let mut requests = Requests::default();
-        let a = requests.join(URL, TIMEOUT_MS, &chat(), 0).unwrap();
+        let a = requests.join(URL, FEATURES_TIMEOUT_MS, &chat(), 0).unwrap();
         let b = requests
-            .join("https://elsewhere.test/features", TIMEOUT_MS, &chat(), 0)
+            .join("https://elsewhere.test/features", FEATURES_TIMEOUT_MS, &chat(), 0)
             .unwrap();
         assert_ne!(a.id, b.id);
         assert_eq!(b.url, "https://elsewhere.test/features");
@@ -483,7 +499,7 @@ mod tests {
         let dropped = chat();
         let fetch = start(&mut requests, &dropped, 0);
         let kept = chat();
-        assert_eq!(requests.join(URL, TIMEOUT_MS, &kept, 1), None);
+        assert_eq!(requests.join(URL, FEATURES_TIMEOUT_MS, &kept, 1), None);
         drop(dropped);
         requests.complete(fetch.id, 200, V1_ON, 10);
         assert!(on(&kept, V1_SEND));
