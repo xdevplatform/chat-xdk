@@ -1510,7 +1510,7 @@ char *signature_version = json_get(sent, "signature_info.signature_version");
 if (strcmp(signature_version, "7") != 0 && strcmp(signature_version, "10") != 0) {
     abort();
 }
-if (strcmp(json_get(sent, "xdk_version"), "0.7.0") != 0) {
+if (strncmp(json_get(sent, "xdk_version"), "0.7.", 4) != 0) {
     abort();
 }
 chat_xdk_free(alice);
@@ -1519,7 +1519,8 @@ chat_xdk_free(bob);
 
 `signature_info.signature_version` is `"7"` for a v0 send and `"10"` for
 v1, as the `v1_send` switch you hand the chat decides. `xdk_version` is the
-version the X API receives with each send.
+version of the library that built the send, a 0.7 release, which the X API
+receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

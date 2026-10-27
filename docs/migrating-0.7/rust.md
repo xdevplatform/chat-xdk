@@ -1649,12 +1649,13 @@ let Event::Message(message) = event else {
 assert!(message.verified);
 assert_eq!(message.text(), Some("hello"));
 assert!(["7", "10"].contains(&payload.signature_info.signature_version.as_str()));
-assert_eq!(payload.xdk_version, "0.7.0");
+assert!(payload.xdk_version.starts_with("0.7."));
 ```
 
 `signature_version` is `"7"` for a v0 send and `"10"` for v1, as the
-`v1_send` switch decides. `xdk_version` is the version the X API receives
-with each send.
+`v1_send` switch decides. `xdk_version` is the version of `chat-xdk-core`
+that built the send, a 0.7 release, which the X API receives with each
+send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

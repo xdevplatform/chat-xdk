@@ -1571,15 +1571,15 @@ try (Chat alice = new Chat(); Chat bob = new Chat()) {
     if (!List.of("7", "10").contains(sent.signatureInfo.signatureVersion)) {
         throw new IllegalStateException("unknown format " + sent.signatureInfo.signatureVersion);
     }
-    if (!sent.xdkVersion.equals("0.7.0")) {
+    if (!sent.xdkVersion.startsWith("0.7.")) {
         throw new IllegalStateException("xdk version " + sent.xdkVersion);
     }
 }
 ```
 
 `signatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
-`v1_send` switch decides. `xdkVersion` is the version the X API receives
-with each send.
+`v1_send` switch decides. `xdkVersion` is the version of the library that
+built the send, a 0.7 release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

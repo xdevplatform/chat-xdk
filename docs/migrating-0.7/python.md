@@ -1525,6 +1525,8 @@ registers both, starts a conversation, sends a message and decrypts it with
 
 ```python
 # 0.7.0
+import chat_xdk
+
 alice, bob = Chat(), Chat()
 alice_keys = alice.generate_keypairs().public_key
 bob_keys = bob.generate_keypairs().public_key
@@ -1555,12 +1557,13 @@ event = bob.decrypt_event(DecryptEventParams(
 ))
 assert event["verified"] and event["content"]["text"] == "hello"
 assert payload.signature_info.signature_version in ("7", "10")
-assert payload.xdk_version == "0.7.0"
+assert payload.xdk_version == chat_xdk.__version__
 ```
 
 `signature_version` is `"7"` for a v0 send and `"10"` for v1, as the
-`v1_send` switch decides. `xdk_version` is the version the X API receives
-with each send.
+`v1_send` switch decides. `xdk_version` is the version of the package that
+built the send, `chat_xdk.__version__`, which the X API receives with each
+send: check that it's the 0.7 release you installed.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

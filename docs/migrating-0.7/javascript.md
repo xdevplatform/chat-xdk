@@ -1608,12 +1608,12 @@ const event = bob.decryptEvent({
 });
 if (!event.verified || event.content?.text !== "hello") throw new Error("round trip failed");
 if (!["7", "10"].includes(payload.signatureInfo.signatureVersion)) throw new Error("unknown format");
-if (payload.xdkVersion !== "0.7.0") throw new Error(`xdkVersion ${payload.xdkVersion}`);
+if (!payload.xdkVersion.startsWith("0.7.")) throw new Error(`xdkVersion ${payload.xdkVersion}`);
 ```
 
 `signatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
-`v1_send` switch decides. `xdkVersion` is the version the X API receives
-with each send.
+`v1_send` switch decides. `xdkVersion` is the version of the package that
+built the send, a 0.7 release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

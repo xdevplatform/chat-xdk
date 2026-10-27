@@ -1778,14 +1778,14 @@ if message == nil || !message.Verified || message.Text() != "hello" {
 if v := payload.SignatureInfo.SignatureVersion; v != "7" && v != "10" {
 	panic("unknown format " + v)
 }
-if payload.XdkVersion != "0.7.0" {
+if !strings.HasPrefix(payload.XdkVersion, "0.7.") {
 	panic("xdk version " + payload.XdkVersion)
 }
 ```
 
 `SignatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
-`v1_send` switch decides. `XdkVersion` is the version the X API receives
-with each send.
+`v1_send` switch decides. `XdkVersion` is the version of the module that
+built the send, a 0.7 release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,
