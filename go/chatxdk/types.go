@@ -264,7 +264,7 @@ type AttachmentDescriptor struct {
 	Filename       string  `json:"filename"`
 	MediaType      *int32  `json:"media_type,omitempty"`
 	DurationMillis *int64  `json:"duration_millis,omitempty"`
-	URL            string  `json:"url,omitempty"`
+	URL            string  `json:"url"`
 	DisplayTitle   *string `json:"display_title,omitempty"`
 	// Optional encrypted preview images for "url" attachments. Supplying a
 	// display title plus a banner image makes receiving clients render a

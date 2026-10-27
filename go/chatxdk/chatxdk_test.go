@@ -3413,6 +3413,60 @@ func TestEncryptMessageRejectsAnUnknownEntityType(t *testing.T) {
 	}
 }
 
+// TestEncryptMessageRejectsInvalidOffsetsLinksPostsAndDimensions checks the
+// core's invalid-input errors for entity offsets that aren't a range of the
+// text's UTF-8 bytes, a URL card without a url, a post without an id or URL,
+// and a negative width or height.
+func TestEncryptMessageRejectsInvalidOffsetsLinksPostsAndDimensions(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "910002", SigningKeyVersion: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(text string, entities []EntityTuple, attachments []AttachmentDescriptor) error {
+		_, err := chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         "conv-1",
+			Text:                   text,
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: "1",
+			Entities:               entities,
+			Attachments:            attachments,
+		})
+		return err
+	}
+	negative := int64(-1)
+	photo := AttachmentDescriptor{AttachmentType: "media", MediaHashKey: "photo", Width: -1, Height: 100, FilesizeBytes: 1000, Filename: "photo.jpg"}
+	banner := &URLAttachmentImageDescriptor{MediaHashKey: "banner", FilesizeBytes: 1000, Filename: "b.png", Height: &negative}
+	cases := []struct {
+		entities    []EntityTuple
+		attachments []AttachmentDescriptor
+		want        string
+	}{
+		{[]EntityTuple{NewEntity(-1, 4, "mention")}, nil, "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0"},
+		{[]EntityTuple{NewEntity(5, 3, "mention")}, nil, "Invalid entity offsets 5..3: end is before start"},
+		{[]EntityTuple{NewEntity(3, 8, "mention")}, nil, "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8"},
+		{nil, []AttachmentDescriptor{{AttachmentType: "url"}}, "a URL card's url is empty: pass the link the card shows"},
+		{nil, []AttachmentDescriptor{{AttachmentType: "post"}}, "a post attachment has neither rest_id nor post_url: pass the post's id or its URL"},
+		{nil, []AttachmentDescriptor{photo}, "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more"},
+		{nil, []AttachmentDescriptor{{AttachmentType: "url", URL: "https://example.com", BannerImage: banner}}, "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more"},
+	}
+	for _, c := range cases {
+		err := send("hi @bob", c.entities, c.attachments)
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput || chatErr.Message != c.want {
+			t.Errorf("got %v, want %q", err, c.want)
+		}
+	}
+	// Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+	if err := send("é @bob", []EntityTuple{NewEntity(3, 7, "mention")}, nil); err != nil {
+		t.Errorf("UTF-8 byte offsets: %v", err)
+	}
+}
+
 func TestNewEntityHelper(t *testing.T) {
 	e := NewEntity(0, 5, "bold")
 	if e[0] != 0 || e[1] != 5 || e[2] != "bold" {

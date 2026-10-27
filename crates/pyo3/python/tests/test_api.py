@@ -1559,6 +1559,68 @@ class TestApiShapes(unittest.TestCase):
             self.assertEqual(ctx.exception.kind, "invalid_input")
             self.assertEqual(str(ctx.exception), message)
 
+    def test_invalid_offsets_links_posts_and_dimensions_fail_with_invalid_input(self):
+        from chat_xdk import EncryptMessageParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+
+        def send(text="hi @bob", **fields):
+            return chat.encrypt_message(
+                EncryptMessageParams(
+                    "123:456",
+                    text,
+                    sender_id="123",
+                    signing_key_version="1",
+                    conversation_key=bytes(32),
+                    conversation_key_version="1",
+                    **fields,
+                )
+            )
+
+        banner = {"media_hash_key": "banner", "filesize_bytes": 1000, "filename": "b.png"}
+        cases = [
+            (
+                {"entities": [(-1, 4, "mention")]},
+                "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0",
+            ),
+            ({"entities": [(5, 3, "mention")]}, "Invalid entity offsets 5..3: end is before start"),
+            (
+                {"entities": [(3, 8, "mention")]},
+                "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes "
+                "of UTF-8",
+            ),
+            (
+                {"attachments": [{"attachment_type": "url", "url": ""}]},
+                "a URL card's url is empty: pass the link the card shows",
+            ),
+            (
+                {"attachments": [{"attachment_type": "post"}]},
+                "a post attachment has neither rest_id nor post_url: pass the post's id or its URL",
+            ),
+            (
+                {"attachments": [{**_media("photo"), "width": -1}]},
+                "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more",
+            ),
+            (
+                {
+                    "attachments": [
+                        {
+                            "attachment_type": "url",
+                            "url": "https://example.com",
+                            "banner_image": {**banner, "height": -1},
+                        }
+                    ]
+                },
+                "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more",
+            ),
+        ]
+        for fields, message in cases:
+            with self.assertRaises(InvalidInputError) as ctx:
+                send(**fields)
+            self.assertEqual(str(ctx.exception), message)
+        # Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+        send(text="é @bob", entities=[(3, 7, "mention")])
+
     def test_an_unknown_or_empty_entity_type_fails_with_invalid_input(self):
         from chat_xdk import EncryptMessageParams, InvalidInputError
 

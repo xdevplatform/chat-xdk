@@ -997,18 +997,21 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         let entities = vec![
-            EntityDescriptor::new(0, 5, "url"),
-            EntityDescriptor::new(6, 10, "mention"),
-            EntityDescriptor::new(11, 15, "hashtag"),
-            EntityDescriptor::new(16, 20, "cashtag"),
-            EntityDescriptor::new(21, 30, "email"),
+            EntityDescriptor::new(0, 7, "url"),
+            EntityDescriptor::new(8, 13, "mention"),
+            EntityDescriptor::new(14, 18, "hashtag"),
+            EntityDescriptor::new(19, 23, "cashtag"),
+            EntityDescriptor::new(24, 30, "email"),
             EntityDescriptor::new(31, 40, "address"),
             EntityDescriptor::new(41, 50, "phone_number"),
         ];
-        let params = EncryptMessageParams::new("conv-1", "text with all entity types")
-            .with_identity("4201", "66")
-            .with_conversation_key(ckey.to_bytes(), "1")
-            .with_entities(entities);
+        let params = EncryptMessageParams::new(
+            "conv-1",
+            "x.com/a @user #tag $TAG a@b.co 1 Main St +15550100",
+        )
+        .with_identity("4201", "66")
+        .with_conversation_key(ckey.to_bytes(), "1")
+        .with_entities(entities);
         let payload = chat.encrypt_message(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
     }

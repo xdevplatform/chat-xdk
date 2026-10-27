@@ -1119,6 +1119,43 @@ async function main() {
       ),
     );
   }
+  for (const [extra, message] of [
+    [
+      { entities: [[-1, 4, "mention"]] },
+      "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0",
+    ],
+    [{ entities: [[5, 3, "mention"]] }, "Invalid entity offsets 5..3: end is before start"],
+    [
+      { entities: [[3, 8, "mention"]] },
+      "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8",
+    ],
+    [
+      { attachments: [{ attachment_type: "url", url: "" }] },
+      "a URL card's url is empty: pass the link the card shows",
+    ],
+    [
+      { attachments: [{ attachment_type: "post" }] },
+      "a post attachment has neither rest_id nor post_url: pass the post's id or its URL",
+    ],
+    [
+      { attachments: [{ ...photo, width: -1 }] },
+      "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more",
+    ],
+    [
+      {
+        attachments: [
+          card({
+            banner_image: { media_hash_key: "banner", filesize_bytes: 1000, filename: "b.png", height: -1 },
+          }),
+        ],
+      },
+      "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more",
+    ],
+  ]) {
+    assert.throws(() => send(extra), invalidInput(message));
+  }
+  // Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+  send({ text: "é @bob", entities: [[3, 7, "mention"]] });
 
   // 5. decryptEvents / decryptEvent throw on a malformed (3-field) signingKeys entry
   const malformedSigningKeys = [

@@ -751,6 +751,162 @@ fn every_send_rejects_an_unknown_or_empty_entity_type() {
 }
 
 #[test]
+fn entity_offsets_are_a_range_of_the_texts_utf8_bytes() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+    core.set_identity(&SetIdentityParams::new("4001", "61"))
+        .unwrap();
+    let ckey = core.generate_conversation_key().unwrap();
+    // "héllo @bob" is 11 bytes of UTF-8 (10 characters); "@bob" is bytes 7..11.
+    let text = "héllo @bob";
+    let mention = |start: i32, end: i32| vec![EntityDescriptor::new(start, end, "mention")];
+    let message = |entities| {
+        crate::EncryptMessageParams::new("conv-1", text)
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_entities(entities)
+    };
+    let reply = |entities| {
+        crate::EncryptReplyParams::new("conv-1", text, "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-1")
+            .with_entities(entities)
+    };
+    let preview = |entities| {
+        crate::EncryptReplyParams::new("conv-1", "hi", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-1")
+            .with_reply_to_text(text)
+            .with_reply_to_entities(entities)
+    };
+    let edit = |entities| {
+        let mut edit = crate::EncryptEditParams::new("", text)
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_entities(entities);
+        edit.conversation_id = Some("conv-1".into());
+        edit.target_message_sequence_id = Some("seq-1".into());
+        edit
+    };
+
+    core.encrypt_message(&message(mention(7, 11))).unwrap();
+    core.encrypt_reply(&reply(mention(7, 11))).unwrap();
+    core.encrypt_edit(&edit(mention(7, 11))).unwrap();
+    // A preview quotes the start of the original, whose entities may index
+    // past the preview's own text.
+    core.encrypt_reply(&preview(mention(7, 40))).unwrap();
+
+    let past_the_end = "Invalid entity offsets 7..12: end is past the end of the text, which is \
+                        11 bytes of UTF-8";
+    for err in [
+        core.encrypt_message(&message(mention(7, 12))).unwrap_err(),
+        core.encrypt_reply(&reply(mention(7, 12))).unwrap_err(),
+        core.encrypt_edit(&edit(mention(7, 12))).unwrap_err(),
+    ] {
+        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), past_the_end);
+    }
+    for (start, end, problem) in [
+        (-1, 4, "offsets count bytes of the UTF-8 text, from 0"),
+        (0, -1, "offsets count bytes of the UTF-8 text, from 0"),
+        (5, 3, "end is before start"),
+    ] {
+        let expected = format!("Invalid entity offsets {start}..{end}: {problem}");
+        for err in [
+            core.encrypt_message(&message(mention(start, end)))
+                .unwrap_err(),
+            core.encrypt_reply(&reply(mention(start, end))).unwrap_err(),
+            core.encrypt_reply(&preview(mention(start, end)))
+                .unwrap_err(),
+            core.encrypt_edit(&edit(mention(start, end))).unwrap_err(),
+        ] {
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput);
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+}
+
+#[test]
+fn every_send_rejects_an_empty_link_a_post_without_an_id_and_negative_dimensions() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+    core.set_identity(&SetIdentityParams::new("4001", "61"))
+        .unwrap();
+    let ckey = core.generate_conversation_key().unwrap();
+    let media = |width: i64, height: i64| crate::AttachmentDescriptor::Media {
+        media_hash_key: "photo".into(),
+        width,
+        height,
+        filesize_bytes: 1000,
+        filename: "photo.jpg".into(),
+        media_type: Some(1),
+        duration_millis: None,
+    };
+    let card = |url: &str, banner: Option<UrlAttachmentImageDescriptor>| {
+        crate::AttachmentDescriptor::Url {
+            url: url.into(),
+            display_title: None,
+            banner_image: banner,
+            favicon_image: None,
+        }
+    };
+    let post = |rest_id: Option<&str>, post_url: Option<&str>| crate::AttachmentDescriptor::Post {
+        rest_id: rest_id.map(str::to_string),
+        post_url: post_url.map(str::to_string),
+    };
+    let banner = |width: i64, height: i64| {
+        UrlAttachmentImageDescriptor::new("banner", 1000, "banner.png")
+            .with_dimensions(width, height)
+    };
+    let no_url = "a URL card's url is empty: pass the link the card shows";
+    let no_post =
+        "a post attachment has neither rest_id nor post_url: pass the post's id or its URL";
+    let negative = |key: &str, side: &str, value: i64| {
+        format!("media_hash_key '{key}' has {side} {value}: pass the {side} in pixels, 0 or more")
+    };
+    let cases = [
+        (card("", None), no_url.to_string()),
+        (post(None, None), no_post.to_string()),
+        (post(Some(""), Some("")), no_post.to_string()),
+        (media(-1, 100), negative("photo", "width", -1)),
+        (media(100, -2), negative("photo", "height", -2)),
+        (
+            card("https://example.com", Some(banner(-5, 100))),
+            negative("banner", "width", -5),
+        ),
+        (
+            card("https://example.com", Some(banner(100, -5))),
+            negative("banner", "height", -5),
+        ),
+    ];
+    for (attachment, expected) in cases {
+        let message = crate::EncryptMessageParams::new("conv-1", "hi")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_attachments(vec![attachment.clone()]);
+        let reply = crate::EncryptReplyParams::new("conv-1", "hi", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-1")
+            .with_attachments(vec![attachment]);
+        for err in [
+            core.encrypt_message(&message).unwrap_err(),
+            core.encrypt_reply(&reply).unwrap_err(),
+        ] {
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput);
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+    for attachment in [
+        post(Some("1"), None),
+        post(None, Some("https://x.com/a/status/1")),
+        media(0, 0),
+        card("https://example.com", Some(banner(0, 0))),
+    ] {
+        let message = crate::EncryptMessageParams::new("conv-1", "hi")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_attachments(vec![attachment]);
+        core.encrypt_message(&message).unwrap();
+    }
+}
+
+#[test]
 fn every_send_rejects_a_file_without_a_name_or_a_size() {
     let core = ChatCore::new();
     core.generate_keypairs().unwrap();

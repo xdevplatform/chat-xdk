@@ -29,11 +29,11 @@ impl ChatCore {
         let thrift_entities = params
             .entities
             .as_deref()
-            .map(crate::pipeline::build_thrift_entities)
+            .map(|entities| crate::pipeline::build_thrift_entities(entities, Some(&params.text)))
             .transpose()?;
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
-            crate::pipeline::validate_files(a)?;
+            crate::pipeline::validate_attachment_fields(a)?;
         }
         let send_version = self.send_version();
         let message_id = Self::outgoing_message_id(
@@ -95,11 +95,11 @@ impl ChatCore {
         let thrift_entities = params
             .entities
             .as_deref()
-            .map(crate::pipeline::build_thrift_entities)
+            .map(|entities| crate::pipeline::build_thrift_entities(entities, Some(&params.text)))
             .transpose()?;
         if let Some(a) = params.attachments.as_deref() {
             crate::pipeline::validate_attachment_descriptors(a)?;
-            crate::pipeline::validate_files(a)?;
+            crate::pipeline::validate_attachment_fields(a)?;
         }
         let send_version = self.send_version();
         let message_id = Self::outgoing_message_id(
@@ -670,10 +670,13 @@ impl ChatCore {
         outer_key: &XChatConversationKey,
         outer_version: &str,
     ) -> Result<crate::thrift::product::ReplyingToPreview, SdkError> {
+        // A preview's entities index the quoted message's text, which the
+        // preview may carry only the start of, so their end isn't bounded by
+        // the preview's text.
         let thrift_reply_entities = params
             .reply_to_entities
             .as_deref()
-            .map(crate::pipeline::build_thrift_entities)
+            .map(|entities| crate::pipeline::build_thrift_entities(entities, None))
             .transpose()?
             .map(|v| v.into_iter().map(|b| *b).collect::<Vec<_>>());
         // The attachment-combination guard deliberately does not apply here:

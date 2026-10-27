@@ -447,6 +447,48 @@ class ChatTest {
     }
 
     @Test
+    void invalidOffsetsLinksPostsAndDimensionsFailWithInvalidInput() throws Exception {
+        record Case(List<EntityDescriptor> entities, List<Types.AttachmentDescriptor> attachments, String message) {}
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
+            byte[] ckey = newConvKey(chat);
+            Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor("banner", 1000, "b.png");
+            banner.height = -1L;
+            List<Case> cases = List.of(
+                    new Case(List.of(new EntityDescriptor(-1, 4, "mention")), null,
+                            "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0"),
+                    new Case(List.of(new EntityDescriptor(5, 3, "mention")), null,
+                            "Invalid entity offsets 5..3: end is before start"),
+                    new Case(List.of(new EntityDescriptor(3, 8, "mention")), null,
+                            "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.urlCard("", null)),
+                            "a URL card's url is empty: pass the link the card shows"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.post(null, null)),
+                            "a post attachment has neither rest_id nor post_url: pass the post's id or its URL"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.media("photo", -1, 100, 1000, "photo.jpg", 1, null)),
+                            "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.urlCard("https://example.com", null, banner, null)),
+                            "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more"));
+            for (Case c : cases) {
+                EncryptMessageParams p = new EncryptMessageParams("conv-1", "hi @bob");
+                p.conversationKey = ckey;
+                p.conversationKeyVersion = "1";
+                p.entities = c.entities();
+                p.attachments = c.attachments();
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals(c.message(), e.getMessage());
+            }
+            // Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+            EncryptMessageParams utf8 = new EncryptMessageParams("conv-1", "é @bob");
+            utf8.conversationKey = ckey;
+            utf8.conversationKeyVersion = "1";
+            utf8.entities = List.of(new EntityDescriptor(3, 7, "mention"));
+            chat.encryptMessage(utf8);
+        }
+    }
+
+    @Test
     void anUnknownOrEmptyEntityTypeFailsWithInvalidInput() throws Exception {
         try (Chat chat = createUnlocked()) {
             chat.setIdentity(new SetIdentityParams("1001", "66"));

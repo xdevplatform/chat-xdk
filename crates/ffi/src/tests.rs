@@ -131,7 +131,7 @@ fn a_caller_hands_a_chat_its_feature_switches_once() {
 }
 
 #[test]
-fn unknown_entity_types_and_files_without_a_name_or_size_fail_with_invalid_input() {
+fn invalid_entities_and_attachments_fail_with_invalid_input() {
     let chat = new_chat();
     let encrypt = |fields: serde_json::Value| {
         let mut params = serde_json::json!({
@@ -162,6 +162,20 @@ fn unknown_entity_types_and_files_without_a_name_or_size_fail_with_invalid_input
             ))
         );
     }
+    for (start, end, problem) in [
+        (-1, 4, "offsets count bytes of the UTF-8 text, from 0"),
+        (5, 3, "end is before start"),
+        (
+            3,
+            8,
+            "end is past the end of the text, which is 7 bytes of UTF-8",
+        ),
+    ] {
+        assert_eq!(
+            encrypt(serde_json::json!({ "entities": [[start, end, "mention"]] })),
+            invalid_input(format!("Invalid entity offsets {start}..{end}: {problem}"))
+        );
+    }
     let photo = |filesize_bytes: i64, filename: &str| {
         serde_json::json!({
             "attachment_type": "media",
@@ -177,6 +191,8 @@ fn unknown_entity_types_and_files_without_a_name_or_size_fail_with_invalid_input
         "url": "https://example.com",
         "banner_image": { "media_hash_key": "banner", "filesize_bytes": 0, "filename": "b.png" },
     });
+    let mut negative_width = photo(1000, "photo.jpg");
+    negative_width["width"] = (-1).into();
     for (attachment, message) in [
         (
             photo(1000, ""),
@@ -186,6 +202,18 @@ fn unknown_entity_types_and_files_without_a_name_or_size_fail_with_invalid_input
             banner,
             "media_hash_key 'banner' has filesize_bytes 0: pass the encrypted file's size, \
              which encrypted_file_size gives",
+        ),
+        (
+            negative_width,
+            "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more",
+        ),
+        (
+            serde_json::json!({ "attachment_type": "url", "url": "" }),
+            "a URL card's url is empty: pass the link the card shows",
+        ),
+        (
+            serde_json::json!({ "attachment_type": "post" }),
+            "a post attachment has neither rest_id nor post_url: pass the post's id or its URL",
         ),
     ] {
         assert_eq!(

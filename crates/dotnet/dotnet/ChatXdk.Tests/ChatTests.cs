@@ -511,6 +511,51 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public void EncryptMessage_InvalidOffsetsLinksPostsAndDimensions_FailWithInvalidInput()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+            EncryptMessageParams Params(
+                string text,
+                IReadOnlyList<EntityDescriptor>? entities,
+                IReadOnlyList<AttachmentDescriptor>? attachments) => new(conversationId: "conv-1", text)
+            {
+                SenderId = "1001",
+                SigningKeyVersion = "66",
+                ConversationKey = ckey,
+                ConversationKeyVersion = "1",
+                Entities = entities,
+                Attachments = attachments,
+            };
+            var banner = new UrlAttachmentImageDescriptor("banner", 1000, "b.png") { Height = -1 };
+            var cases = new (EntityDescriptor[]? Entities, AttachmentDescriptor[]? Attachments, string Message)[]
+            {
+                (new[] { new EntityDescriptor(-1, 4, "mention") }, null,
+                    "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0"),
+                (new[] { new EntityDescriptor(5, 3, "mention") }, null,
+                    "Invalid entity offsets 5..3: end is before start"),
+                (new[] { new EntityDescriptor(3, 8, "mention") }, null,
+                    "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8"),
+                (null, new[] { AttachmentDescriptor.UrlCard("") },
+                    "a URL card's url is empty: pass the link the card shows"),
+                (null, new[] { AttachmentDescriptor.Post() },
+                    "a post attachment has neither rest_id nor post_url: pass the post's id or its URL"),
+                (null, new[] { AttachmentDescriptor.Media("photo", -1, 100, 1000, "photo.jpg") },
+                    "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more"),
+                (null, new[] { AttachmentDescriptor.UrlCard("https://example.com", bannerImage: banner) },
+                    "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more"),
+            };
+            foreach (var (entities, attachments, message) in cases)
+            {
+                var e = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(Params("hi @bob", entities, attachments)));
+                Assert.Equal(ChatXdkErrorKind.InvalidInput, e.Kind);
+                Assert.Equal(message, e.Message);
+            }
+            // Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+            chat.EncryptMessage(Params("é @bob", new[] { new EntityDescriptor(3, 7, "mention") }, null));
+        }
+
+        [Fact]
         public void EncryptMessage_UnknownOrEmptyEntityType_FailsWithInvalidInput()
         {
             using var chat = CreateUnlocked();
