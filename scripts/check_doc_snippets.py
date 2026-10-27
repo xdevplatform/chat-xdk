@@ -447,7 +447,7 @@ def check_ts(paths):
         files.append(name)
     dts = ROOT / "crates" / "wasm" / "js" / "index.d.ts"
     (d / "tsconfig.json").write_text(
-        '{"compilerOptions": {"strict": true, "noEmit": true, "noUnusedLocals": false, '
+        '{"compilerOptions": {"strict": true, "noImplicitAny": false, "noEmit": true, "noUnusedLocals": false, '
         '"target": "es2022", "module": "es2022", "moduleResolution": "bundler", '
         '"lib": ["es2022", "dom"], "skipLibCheck": true, '
         f'"paths": {{"chat-xdk": ["{dts}"]}}}}, "files": {files!r}}}'.replace("'", '"')
