@@ -10,13 +10,18 @@ stand-in names the guides' "About the snippets" sections define, and the
 binding's compiler checks the result: cargo (Rust), tsc (against
 index.d.ts), go vet, javac, dotnet build and gcc (against chat_xdk.h).
 Python runs each half with the real params classes and a `chat` whose
-methods are mocked, so a wrong argument raises. A snippet that drifts from
-the API fails the run.
+methods are mocked, so a wrong argument raises. The C check also passes
+every params document a 0.6.0 half shows, in the comment above a call or
+inline, to that call in the native library, and fails on one the library
+can't parse. A snippet that drifts from the API fails the run.
 
 Tools come from PATH, or from TSC (tsc), JAVA_CLASSPATH (the JVM binding's
-dependency classpath) and DOTNET_BUILD_ARGS (extra `dotnet build` arguments).
+dependency classpath), DOTNET_BUILD_ARGS (extra `dotnet build` arguments)
+and CHAT_XDK_LIB_DIR (the directory holding the chat_xdk_ffi shared
+library, built with cargo when it's missing).
 """
 
+import json
 import os
 import pathlib
 import re
@@ -721,7 +726,7 @@ C_PARAMS = [
     ("data_len", "size_t"),
 ] + [(n, "const char *") for n in [
     "user_id", "my_user_id", "signing_key_version", "conversation_id", "path_id", "event_b64",
-    "title", "avatar_url", "description", "public_key_b64", "signature_b64",
+    "title", "avatar_url", "description", "public_key_b64", "signature_b64", "prepared",
 ]]
 
 C_PRELUDE = """#define CHAT_XDK_JUICEBOX
@@ -734,16 +739,111 @@ C_PRELUDE = """#define CHAT_XDK_JUICEBOX
 #include "chat_xdk.h"
 
 char *take(struct FfiResult result);
-char *take_error(struct FfiResult result);
+char *json_get(const char *json, const char *path);
+char *api_post(const char *path, const char *body_json);
+char *api_put(const char *path, const char *body_json);
+char *api_delete(const char *path, const char *body_json);
 int32_t http_get(const char *url, uint32_t timeout_ms, size_t max_bytes, uint8_t **body, size_t *body_len);
 void handle(const char *event_json);
 void log_skipped(const char *event_b64, const char *error_json);
 void store_conversation_key(const char *conversation_id, const char *prepared_json);
 """
 
+C_DOC_CALL = re.compile(
+    r'chat_xdk_(\w+)\(chat, (?:keys, keys_len, )?(\w+_json|"(?:[^"\\]|\\.)*")(?:, &(encryptor|decryptor))?\)'
+)
+
+C_RUNNER = """#define CHAT_XDK_JUICEBOX
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "chat_xdk.h"
+
+static int failures = 0;
+
+/* A document the library can't parse fails with serde's wording; any other
+   error comes after the document parsed. */
+static void check(const char *where, struct FfiResult r) {
+    if (r.error != NULL && (strstr(r.error, "Invalid params JSON") || strstr(r.error, "missing field")
+                            || strstr(r.error, "invalid type") || strstr(r.error, "unknown variant"))) {
+        printf("%s: %s\\n", where, r.error);
+        failures++;
+    }
+    if (r.data != NULL) chat_xdk_free_string(r.data);
+    if (r.error != NULL) chat_xdk_free_string(r.error);
+}
+
+int main(void) {
+    struct ChatHandle *chat = NULL;
+    struct FfiResult created = chat_xdk_new(NULL, &chat);
+    if (chat == NULL) {
+        printf("chat_xdk_new: %s\\n", created.error);
+        return 1;
+    }
+    static const uint8_t keys[64] = {0};
+    const size_t keys_len = sizeof keys;
+    struct FileEncryptorHandle *encryptor = NULL;
+    struct FileDecryptorHandle *decryptor = NULL;
+    (void)keys;
+    (void)keys_len;
+@CALLS@
+    if (encryptor != NULL) chat_xdk_file_encryptor_free(encryptor);
+    if (decryptor != NULL) chat_xdk_file_decryptor_free(decryptor);
+    chat_xdk_free(chat);
+    return failures ? 1 : 0;
+}
+"""
+
+
+def c_documents(path, line, code):
+    """(where, call) for each call a 0.6.0 half passes a params document:
+    a `*_json` variable whose document is the JSON in the comment block
+    directly above the call, or a document written inline. A comment block
+    above such a call that isn't JSON is an error."""
+    calls, errors = [], []
+    lines = code.splitlines()
+    for i, text in enumerate(lines):
+        for m in C_DOC_CALL.finditer(text):
+            fn, arg, out = m.groups()
+            where = f"{path}:{line} chat_xdk_{fn}"
+            if arg.startswith('"'):
+                doc = json.loads(arg)
+            else:
+                j = i
+                while j > 0 and lines[j - 1].strip().startswith("//"):
+                    j -= 1
+                comment = [l.strip()[2:] for l in lines[j:i]]
+                if not comment:
+                    continue
+                try:
+                    doc = json.dumps(json.loads("\n".join(comment)), ensure_ascii=False)
+                except json.JSONDecodeError as e:
+                    errors.append(f"{where}: the comment above the call isn't a JSON document: {e}")
+                    continue
+            literal = json.dumps(doc, ensure_ascii=False)
+            args = ["chat", "keys, keys_len" if fn == "import_keys" else None, literal, f"&{out}" if out else None]
+            calls.append(f'    check("{where}", chat_xdk_{fn}({", ".join(a for a in args if a)}));')
+    return calls, errors
+
+
+def run_c_documents(calls, d):
+    lib_dir = pathlib.Path(os.environ.get("CHAT_XDK_LIB_DIR", ROOT / "target" / "release"))
+    if not any((lib_dir / f"libchat_xdk_ffi.{ext}").exists() for ext in ("so", "dylib")):
+        if run(["cargo", "build", "--quiet", "-p", "chat-xdk-ffi", "--release"], cwd=ROOT):
+            return 1
+    (d / "documents.c").write_text(C_RUNNER.replace("@CALLS@", "\n".join(calls)))
+    binary = d / "documents"
+    if run(["gcc", "-std=c11", "-Wall", "-Werror", "-I", str(ROOT / "go" / "chatxdk" / "include"),
+            str(d / "documents.c"), "-L", str(lib_dir), "-lchat_xdk_ffi", f"-Wl,-rpath,{lib_dir}",
+            "-o", str(binary)]):
+        return 1
+    print(f"{len(calls)} C params documents")
+    return run([str(binary)])
+
 
 def check_c(paths):
     out = [C_PRELUDE]
+    calls, errors = [], []
     count = 0
     for path, line, code in snippets("c", paths):
         count += 1
@@ -753,13 +853,19 @@ def check_c(paths):
         params += [(n, "const char *") for n in sorted(used) if n not in names and n not in dict(params)]
         sig = ", ".join(f"{t} {n}" for n, t in params) or "void"
         out.append(f"\n// {path}:{line}\nvoid s{line}({sig}) {{\n{code}\n}}\n")
+        found, bad = c_documents(path, line, code)
+        calls += found
+        errors += bad
     d = OUT / "c"
     d.mkdir(parents=True, exist_ok=True)
     (d / "snippets.c").write_text("".join(out))
     print(f"{count} C snippets")
-    return run(["gcc", "-std=c11", "-fsyntax-only", "-Wall", "-Wno-unused-variable",
-                "-Wno-unused-but-set-variable", "-Werror", "-I", str(ROOT / "go" / "chatxdk" / "include"),
-                str(d / "snippets.c")])
+    for error in errors:
+        print(error)
+    compiled = run(["gcc", "-std=c11", "-fsyntax-only", "-Wall", "-Wno-unused-variable",
+                    "-Wno-unused-but-set-variable", "-Werror", "-I", str(ROOT / "go" / "chatxdk" / "include"),
+                    str(d / "snippets.c")])
+    return compiled or bool(errors) or run_c_documents(calls, d)
 
 
 CHECKS = {
