@@ -46,7 +46,11 @@ The bindings read the switches with one anonymous request,
 credentials and no query parameters. Each chat reads the switches once, when
 it is created, and keeps the answer for its lifetime, so a change to a switch
 reaches the chats created after it; chats created while a request is in
-flight share it. The request never delays or fails a call, and any failure
+flight share it. Every switch is off until the answer arrives, so a chat
+whose `v1_send` switch is on sends v0 first and v1 from then on. Files
+encrypted from a v0 build of a message don't open with a v1 build of it, so
+encrypt each file from the payload you send. The request never delays or
+fails a call, and any failure
 leaves every switch off for the chat's lifetime, so its sends stay in v0, the
 format every reader opens:
 [Python](python.md#the-feature-switch-request),
@@ -117,9 +121,9 @@ Every call with more than one input takes one params value, with the same
 name and fields in every binding (`SetIdentityParams`,
 `DecryptEventsParams`, `EncryptFileParams` and so on), so the bindings stay
 symmetric, and optional inputs are named fields that fall back to the chat's
-state (identity, key cache, signing keys) when unset. Rust takes every
-params value by reference, and Python takes a params class for every encrypt
-and prepare method:
+state (identity, key cache, signing keys) when unset. Rust takes params by
+reference, except in the decrypt and file-decrypt calls, which take them by
+value, and Python takes a params class for every encrypt and prepare method:
 [Rust](rust.md#set_identity-takes-setidentityparams),
 [Python](python.md#set_identity-takes-setidentityparams),
 [JavaScript](javascript.md#setidentity-takes-a-params-object),
@@ -233,12 +237,13 @@ returns the receipt as a verified `ReadReceipt`:
 ## Group actions should be signed
 
 Apps should sign a group update with the signatures of the actions it
-performs. Removing members also rotates the conversation key for the
-members who stay:
-`prepare_group_members_remove` takes their public keys and returns a
-`PreparedConversationChange`, and
-`POST /2/chat/conversations/{id}/members/remove` sends
-`group_key_rotation_data` with both signatures. Leaving signs the sender's
+performs. Given the public keys of the members who stay,
+`prepare_group_members_remove` also rotates the conversation key for them
+and returns a `PreparedConversationChange` with the removal and key-change
+signatures, and `POST /2/chat/conversations/{id}/members/remove` sends
+`group_key_rotation_data` with both. Without those keys it signs the removal
+alone, and the removed members can still decrypt later messages, so pass
+them on every removal. Leaving signs the sender's
 removal, then an admin add when `promote_admin_id` is set, then a
 conversation delete, and does not rotate the key. Title, avatar,
 description, admin, invite, and join changes, message-TTL changes, and

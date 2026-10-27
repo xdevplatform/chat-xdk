@@ -4,13 +4,25 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
-//! use chat_xdk_core::{Chat, DecryptEventsParams, EncryptMessageParams, EncryptReplyParams};
+//! ```rust,no_run
+//! # #[cfg(feature = "juicebox")]
+//! # async fn quick_start(
+//! #     juicebox_config: chat_xdk_core::keys::juicebox::JuiceboxConfig,
+//! #     user_id: &str,
+//! #     signing_key_version: &str,
+//! #     signing_keys: Vec<chat_xdk_core::SigningKeyEntry>,
+//! #     events: Vec<String>,
+//! #     conversation_id: &str,
+//! #     event_b64: &str,
+//! # ) -> Result<(), chat_xdk_core::error::SdkError> {
+//! use chat_xdk_core::{
+//!     Chat, DecryptEventsParams, EncryptMessageParams, EncryptReplyParams, SetIdentityParams,
+//! };
 //!
 //! // Create, unlock, and set the session identity once
 //! let chat = Chat::new(juicebox_config);
 //! chat.unlock(b"2580").await?;
-//! chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version)).unwrap();
+//! chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version))?;
 //! chat.set_cache_keys(true);
 //! chat.set_signing_keys(signing_keys);
 //!
@@ -22,6 +34,8 @@
 //! // conversation key resolve from the session and cache.
 //! let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "Hello!"))?;
 //! let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "Hi!", event_b64))?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## API Levels
@@ -50,7 +64,7 @@
 //! | [`Chat::prepare_group_members_remove`] | Sign a member removal, rotating the key when given the remaining members |
 //! | [`Chat::prepare_group_leave`] | Sign leaving a group |
 //! | [`Chat::decrypt_conversation_key`] | Decrypt a conversation key |
-//! | [`Chat::sign`] | Sign arbitrary data |
+//! | [`Chat::sign`] | Sign application data |
 //! | [`Chat::verify`] | Verify a signature |
 //! | [`Chat::export_keys`] | Export keys for backup |
 //! | [`Chat::import_keys`] | Import keys from backup |
@@ -96,8 +110,21 @@ use zeroize::Zeroize;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use chat_xdk_core::{Chat, Event, EncryptMessageParams};
+/// ```rust,no_run
+/// # use std::collections::HashMap;
+/// # use chat_xdk_core::crypto::keys::XChatConversationKey;
+/// # async fn example(
+/// #     juicebox_config: chat_xdk_core::keys::juicebox::JuiceboxConfig,
+/// #     user_id: &str,
+/// #     signing_key_version: &str,
+/// #     signing_keys: Vec<chat_xdk_core::SigningKeyEntry>,
+/// #     event_b64: String,
+/// #     conversation_keys: HashMap<String, XChatConversationKey>,
+/// #     conversation_id: &str,
+/// # ) -> Result<(), chat_xdk_core::error::SdkError> {
+/// use chat_xdk_core::{
+///     Chat, DecryptEventParams, EncryptMessageParams, Event, SetIdentityParams,
+/// };
 ///
 /// // First-time setup: generate keys, then register them in Juicebox
 /// let chat = Chat::new(juicebox_config);
@@ -107,14 +134,15 @@ use zeroize::Zeroize;
 ///
 /// // On subsequent startups
 /// chat.unlock(b"2580").await?;
-/// chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version)).unwrap();
+/// chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version))?;
 /// chat.set_cache_keys(true);
 /// chat.set_signing_keys(signing_keys);
 ///
 /// // Handle incoming webhook (signatures verify with the stored signing keys)
 /// let event = chat.decrypt_event(DecryptEventParams::new(event_b64, conversation_keys))?;
 /// if let Event::Message(msg) = event {
-///     println!("{}: {}", msg.meta.sender_id.unwrap_or_default(), msg.text().unwrap_or(""));
+///     let sender = msg.meta.sender_id.as_deref().unwrap_or("");
+///     println!("{}: {}", sender, msg.text().unwrap_or(""));
 /// }
 ///
 /// // Send a message. The SDK generates the message id and returns it in the
@@ -122,6 +150,8 @@ use zeroize::Zeroize;
 /// // conversation key resolve from the session and cache.
 /// let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "Hello!"))?;
 /// // POST payload to API
+/// # Ok(())
+/// # }
 /// ```
 #[cfg(feature = "juicebox")]
 pub struct Chat {
@@ -572,7 +602,8 @@ impl Chat {
     ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_screen_capture(params)
     }
-    /// Sign arbitrary data.
+    /// Sign application data; see [`crate::ChatCore::sign`] for the data it
+    /// refuses.
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SdkError> {
         self.inner.sign(data)
     }

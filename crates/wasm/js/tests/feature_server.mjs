@@ -31,16 +31,33 @@ export async function waitFor(what, predicate, timeoutMs = 10_000) {
 // came before it.
 let lastServerId = 0;
 
-/** A local GET /2/chat/features that records each request's query string. */
+/** The path of a featureServer that answers that v1_send is on. */
+export const REDIRECT_TARGET = "/followed/2/chat/features";
+
+/**
+ * A local GET /2/chat/features that records each request's query string and
+ * headers. Set `location` to answer with a redirect there; requests that reach
+ * REDIRECT_TARGET are counted in `followed`.
+ */
 export async function featureServer(body = '{"features":{"v1_send":true}}') {
-  const state = { status: 200, body, delayMs: 0, queries: [] };
+  const state = { status: 200, body, delayMs: 0, location: null, setCookie: null, queries: [], headers: [], followed: 0 };
   const server = http.createServer((req, res) => {
+    if (new URL(req.url, "http://localhost").pathname === REDIRECT_TARGET) {
+      state.followed++;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"features":{"v1_send":true}}');
+      return;
+    }
     // The answer is fixed before the request is recorded, so a test that
     // sees the request can change the next answer.
-    const { status, body, delayMs } = state;
+    const { status, body, delayMs, location, setCookie } = state;
     state.queries.push(new URL(req.url, "http://localhost").search);
+    state.headers.push({ ...req.headers });
     const reply = () => {
-      res.writeHead(status, { "Content-Type": "application/json" });
+      const headers = { "Content-Type": "application/json" };
+      if (location) headers.Location = location;
+      if (setCookie) headers["Set-Cookie"] = setCookie;
+      res.writeHead(status, headers);
       res.end(body);
     };
     if (delayMs > 0) {
@@ -51,7 +68,8 @@ export async function featureServer(body = '{"features":{"v1_send":true}}') {
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  state.endpoint = `http://127.0.0.1:${server.address().port}/${++lastServerId}/2/chat/features`;
+  state.origin = `http://127.0.0.1:${server.address().port}`;
+  state.endpoint = `${state.origin}/${++lastServerId}/2/chat/features`;
   state.unref = () => server.unref();
   state.close = () =>
     new Promise((resolve) => {

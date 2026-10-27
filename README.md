@@ -43,8 +43,8 @@ Python/Rust, PascalCase in .NET/Go):
    per-call key plumbing.
 3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
-   keys by user automatically. Never throws; per-event errors are collected in
-   the result. The events endpoint returns the `KeyChange` events in
+   keys by user automatically. Per-event errors are collected in the result;
+   only invalid params throw. The events endpoint returns the `KeyChange` events in
    `meta.conversation_key_events`, separate from `data` — pass both together.
 4. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
    decrypts one event (webhook / poll). Throws on failure.

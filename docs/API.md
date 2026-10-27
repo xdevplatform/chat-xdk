@@ -58,9 +58,9 @@ accounts keep passing `juiceboxConfig` at creation, unchanged.
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 4 | **setup** | `async setup(pin: &[u8]) → PublicKeys` | `setup(pin: string \| Uint8Array) → Promise<PublicKeys>` | `setup(pin: str) → PublicKeys` | `Setup(pin []byte, configJSON string) (*PublicKeys, error)` | `setup(String pin, String configJson)` | `Setup(string pin, string configJson)` |
-| 5 | **unlock** | `async unlock(pin: &[u8])` | `unlock(pin: string \| Uint8Array) → Promise<void>` | `unlock(pin: str)` | `Unlock(pin []byte, configJSON string) error` | `unlock(String pin, String configJson)` | `Unlock(string pin, string configJson)` |
-| 6 | **change_pin** | `async change_pin(old: &[u8], new: &[u8])` | `changePin(old: string \| Uint8Array, new: string \| Uint8Array) → Promise<void>` | `change_pin(old_pin: str, new_pin: str)` | `ChangePin(oldPin, newPin []byte) error` | `changePin(String oldPin, String newPin)` | `ChangePin(string oldPin, string newPin)` |
+| 4 | **setup** | `async setup(pin: &[u8]) → PublicKeys` | `setup(pin: string \| Uint8Array) → Promise<PublicKeys>` | `setup(pin: str \| bytes \| bytearray) → PublicKeys` | `Setup(pin []byte, configJSON string) (*PublicKeys, error)` | `setup(String pin, String configJson)` | `Setup(string pin, string configJson)` |
+| 5 | **unlock** | `async unlock(pin: &[u8])` | `unlock(pin: string \| Uint8Array) → Promise<void>` | `unlock(pin: str \| bytes \| bytearray)` | `Unlock(pin []byte, configJSON string) error` | `unlock(String pin, String configJson)` | `Unlock(string pin, string configJson)` |
+| 6 | **change_pin** | `async change_pin(old: &[u8], new: &[u8])` | `changePin(old: string \| Uint8Array, new: string \| Uint8Array) → Promise<void>` | `change_pin(old_pin: str \| bytes \| bytearray, new_pin: str \| bytes \| bytearray)` | `ChangePin(oldPin, newPin []byte) error` | `changePin(String oldPin, String newPin)` | `ChangePin(string oldPin, string newPin)` |
 | 7 | **delete** | `async delete()` | `delete() → Promise<void>` | `delete()` | `Delete() error` | `delete()` | `Delete()` |
 | 8 | **lock** | `lock()` | `lock()` | `lock()` | `Lock()` | `lock()` | `Lock()` |
 | 9 | **is_unlocked** | `is_unlocked() → bool` | `isUnlocked() → boolean` | `is_unlocked() → bool` | `IsUnlocked() bool` | `isUnlocked()` | `IsUnlocked { get; }` |
@@ -101,26 +101,30 @@ user id. After registering the keys from `generate_keypairs`, call
 
 `set_identity` stores the **session identity**.
 Every method with optional `sender_id` / `signing_key_version` fields — the
-`encrypt_*` family and the three `prepare_*` methods — resolves omitted values
+`encrypt_*` family and every `prepare_*` method — resolves omitted values
 from it. An explicit per-call value always overrides, and an omitted value and
 its explicit equivalent produce byte-identical signed output for the same
 logical inputs. Calling a signing method with neither a per-call value nor a
 session identity is an error.
 
-`decrypt_events`
-reports `latest_version` (the version to encrypt with) as the newest key
-change with a valid signature and holds it monotonic for the lifetime of the
-instance, so a replayed older key cannot downgrade what you encrypt with.
-This applies to key changes with signature version ≥ 6 (whose signed payload
-embeds the plaintext key); for a conversation seen only through older key
-changes, `latest_version` falls back to the batch's highest version.
+`decrypt_events` reports a `latest_version` for each batch. Once the chat
+has verified a key change of a conversation in the batch (signature version
+≥ 6, whose signed payload embeds the plaintext key), `latest_version` is the
+newest verified version, held monotonic for the lifetime of the instance, so
+a replayed older key cannot lower it. Until then it is the highest version
+among the keys the batch adopted, which can come from key changes the SDK
+did not verify: those signed below version 6, and those whose sequence is
+below the point where key-change signatures are enforced. To encrypt only
+under keys whose key change verified, turn on the key cache
+(`set_cache_keys(true)`) and leave the conversation key unset: the cache
+holds only verified keys.
 
 PINs passed to `setup`/`change_pin` must be at least 4 characters and must
 not be a single repeated character or a sequential digit run; `unlock`
 performs no validation so existing registrations stay recoverable. The
 Rust core takes PINs as `&[u8]` and Go takes `[]byte` so callers can
 zeroize their buffers; the JS wrapper additionally accepts `Uint8Array`
-PINs for the same reason.
+PINs, and Python `bytes` and `bytearray` PINs, for the same reason.
 
 A wrong PIN fails `unlock` (and `change_pin`, which unlocks with the old PIN
 first) with an invalid-PIN error whose message carries the stable token
@@ -166,7 +170,7 @@ attribute. Field names follow each language's idiom: `snake_case` in
 Rust/Python (`sender_id`), `camelCase` in JS/JVM (`senderId`), `PascalCase` in
 Go/.NET (`SenderID` / `SenderId`).
 
-On all three prepare methods, `sender_id` / `signing_key_version` are optional
+On every prepare method, `sender_id` / `signing_key_version` are optional
 overrides: omitted values (unset / `None` / `null` / empty string) resolve
 from the session identity set via `set_identity`.
 
@@ -202,8 +206,9 @@ unset or empty key fields and fall back to two opt-in session stores:
   the returned key map to `decrypt_event` explicitly.
 
 An explicit non-empty value always wins over the stores. The stores do not
-change the two decrypt contracts: `decrypt_events` never throws (per-event
-errors are collected in the result) and `decrypt_event` throws on failure.
+change the two decrypt contracts: `decrypt_events` collects per-event errors
+in the result and throws only for invalid params, and `decrypt_event` throws
+on failure.
 
 ---
 
@@ -326,20 +331,20 @@ interface PreparedConversationChange {
 
 ```typescript
 // 1. App fetches public keys (self + recipient) from X API
-const publicKeys = await api.getPublicKeys([myId, recipientId]);
+//    (GET /2/users/{id}/public_keys for each user)
+const publicKeys: PublicKeyInput[] = await fetchPublicKeys([myId, recipientId]);
 
 // 2. SDK generates, encrypts, and signs the change (id derived for a 1:1;
 //    the sender identity resolves from setIdentity — set senderId /
 //    signingKeyVersion on the params to override)
 const result = chat.prepareConversationKeyChange({ publicKeys });
 
-// 3. App POSTs to X API
-await fetch(`/api/conversations/${result.conversationId}/keys`, {
-  body: JSON.stringify({
-    conversationKeyVersion: result.conversationKeyVersion,
-    conversationParticipantKeys: result.conversationParticipantKeys,
-    actionSignatures: result.actionSignatures,
-  })
+// 3. App POSTs to X API (request bodies take snake_case keys; URL paths take
+//    the conversation id in its hyphen form)
+await api.post(`/2/chat/conversations/${result.conversationId.replaceAll(":", "-")}/keys`, {
+  conversation_key_version: result.conversationKeyVersion,
+  conversation_participant_keys: result.conversationParticipantKeys,
+  action_signatures: result.actionSignatures,
 });
 
 // 4. App stores the conversation key locally
@@ -413,8 +418,8 @@ Send that result as `POST /2/chat/conversations/{id}/members/remove`.
 `user_ids` are the members being removed. `action_signatures` is both
 signatures, the removal and then the key change. `group_key_rotation_data`
 carries the new `conversation_key_version` and
-`conversation_participant_keys` (JS: `groupKeyRotationData`,
-`conversationKeyVersion`, `conversationParticipantKeys`).
+`conversation_participant_keys` (the JS result names them
+`conversationKeyVersion` and `conversationParticipantKeys`).
 
 ```python
 prepared = chat.prepare_group_members_remove(
@@ -437,18 +442,19 @@ const prepared = chat.prepareGroupMembersRemove({
   publicKeys: remainingPublicKeys,
 });
 await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
-  userIds: ["222"],
-  actionSignatures: prepared.actionSignatures,
-  groupKeyRotationData: {
-    conversationKeyVersion: prepared.conversationKeyVersion,
-    conversationParticipantKeys: prepared.conversationParticipantKeys,
+  user_ids: ["222"],
+  action_signatures: prepared.actionSignatures,
+  group_key_rotation_data: {
+    conversation_key_version: prepared.conversationKeyVersion,
+    conversation_participant_keys: prepared.conversationParticipantKeys,
   },
 });
 ```
 
 Without `public_keys`, the same return type comes back with no new key,
-empty participant keys, and only the removal signature.
-`conversation_key_version` on that result is the version bound into the
+empty participant keys, and only the removal signature, and the removed
+members can still decrypt later messages, so pass `public_keys` on every
+removal. `conversation_key_version` on that result is the version bound into the
 removal, or empty when the signature carries the literal `null`. Pass
 `conversation_key_version` on the params to bind a version without rotating;
 an empty or omitted version signs `null`. A rotation ignores that field and
@@ -661,7 +667,7 @@ Scans an array of raw events for KeyChange events and decrypts the conversation 
 // JS
 interface ConversationKeyResult {
   keys: { [version: string]: Uint8Array };  // version → raw conversation key
-  latestVersion: string | null;             // highest version (for encrypting)
+  latestVersion: string | null;             // highest version; signatures are not checked
 }
 ```
 
@@ -688,7 +694,9 @@ Decrypts multiple events in one call. Handles everything internally:
 | events | `events: string[]` | `events: list[str]` | `events: Vec<String>` | `Events []string` | `List<String> events` | `IReadOnlyList<string> Events` | All base64-encoded raw events. **Must include KeyChange events** — without them, messages depending on those keys will land in `errors`. The events endpoint returns KeyChange events in **`meta.conversation_key_events`**, separate from the `data` array; concatenate both into this field. |
 | signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **all participants**. The SDK extracts each event's `senderId` internally and filters to the matching keys. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
-**Returns: `DecryptEventsResult`** — never throws/raises. Errors are collected.
+**Returns: `DecryptEventsResult`.** An event that fails is collected in
+`errors` rather than thrown; the call throws (raises) only for invalid params,
+such as a malformed signing key entry.
 
 ```typescript
 // JS
@@ -761,9 +769,9 @@ for (const dm of result.messages) {
   }
 }
 
-// Cache conversation keys for later decryptEvent calls
+// Keep the conversation keys for later decryptEvent calls
 const cachedKeys = result.conversationKeys;
-console.log(cachedKeys.latestVersion); // "3" — use for encrypting replies
+console.log(cachedKeys.latestVersion); // "3"
 ```
 
 **Python example:**
@@ -947,7 +955,7 @@ if (eventJson.GetProperty("type").GetString() == "Message")
 | **Input** | 1 event (`string`) | N events (`string[]`) |
 | **Conversation keys** | Caller provides (`ConversationKeyMap`); empty ⇒ opt-in key cache (`setCacheKeys`) | SDK extracts from KeyChange events internally |
 | **Signing keys** | For the **sender only**, matched by `publicKeyVersion`; unset ⇒ `setSigningKeys` store | For **all participants**, SDK filters by `userId` per event; unset ⇒ `setSigningKeys` store |
-| **Error handling** | **Throws** on failure | **Never throws** — errors collected in `result.errors` |
+| **Error handling** | **Throws** on failure | Per-event errors collected in `result.errors`; throws only for invalid params |
 | **Return type** | `Event` (flat) | `DecryptEventsResult` wrapping `DecryptedMessage[]` |
 | **Returns original b64** | No | Yes (`originalB64` on each message) |
 | **Returns conv keys** | No | Yes (`conversationKeys` with `latestVersion`) |
@@ -1078,6 +1086,10 @@ The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings read in the background once, when a chat
 is created (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
+Every switch is off until the answer arrives, so a chat whose switch is on
+sends v0 first and v1 from then on. Files encrypted from a v0 build of a
+message don't open with a v1 build of it, so encrypt each file from the
+payload you send.
 **The Rust crate never fetches it, so `ChatCore` and `Chat` always send
 v0.** They read v1 sends like every binding. The fetch logs nothing; to see
 which format a send used, read the payload's
@@ -2182,23 +2194,26 @@ validated original. The validation contract is specified in
 ### MessageContent
 
 The `content` field of a Message. Uses `contentType` (JS) / `content_type` (Python) for discrimination.
+The JS typings declare `MessageContent` as one permissive interface with
+these fields optional; the shapes below show which fields each
+`contentType` carries.
 
 ```typescript
 // JS/WASM
 type MessageContent =
   | { contentType: 'text';
       text: string;
-      entities?: RichTextEntity[];
-      attachments?: MessageAttachment[];
-      replyingToPreview?: ReplyingToPreview;
-      forwardedMessage?: ForwardedMessage;
-      sentFrom?: SentFromSurface;
+      entities?: unknown[];
+      attachments?: unknown[];
+      replyingToPreview?: unknown;
+      forwardedMessage?: unknown;
+      sentFrom?: string | number;
       quickReply?: QuickReply;
-      ctas?: CallToAction[];
+      ctas?: unknown[];
     }
   | { contentType: 'reaction'; emoji: string; targetMessageId: string }
   | { contentType: 'reactionRemoved'; emoji: string; targetMessageId: string }
-  | { contentType: 'edit'; targetMessageId: string; newText: string; entities?: RichTextEntity[] }
+  | { contentType: 'edit'; targetMessageId: string; newText: string; entities?: unknown[] }
   | { contentType: 'markRead' }
   | { contentType: 'markUnread' }
   | { contentType: 'unknown'; typeId?: number };

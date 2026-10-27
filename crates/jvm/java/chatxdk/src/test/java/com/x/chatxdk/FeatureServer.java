@@ -2,6 +2,7 @@ package com.x.chatxdk;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpServer;
 import com.x.chatxdk.Types.EncryptMessageParams;
 
@@ -14,7 +15,11 @@ import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** A local GET /2/chat/features that records each request's query string. */
+/**
+ * A local GET /2/chat/features that records each request's query string and headers. Its
+ * {@link #REDIRECT_TARGET} path answers that v1_send is on, for the tests that check a redirect to it
+ * is not followed.
+ */
 final class FeatureServer implements AutoCloseable {
 
     /**
@@ -22,6 +27,8 @@ final class FeatureServer implements AutoCloseable {
      * switches from this endpoint, fails, and stays on v0.
      */
     static final String OFFLINE = "http://127.0.0.1:9/2/chat/features";
+
+    static final String REDIRECT_TARGET = "/followed/2/chat/features";
 
     private static FeatureServer v1Server;
 
@@ -33,9 +40,13 @@ final class FeatureServer implements AutoCloseable {
 
     private final HttpServer server;
     private final List<String> queries = new ArrayList<>();
+    private final List<Headers> headers = new ArrayList<>();
     private int status = 200;
     private String body;
     private long delayMs;
+    private String location;
+    private String setCookie;
+    private int followed;
     final String endpoint;
 
     FeatureServer() throws Exception {
@@ -45,6 +56,18 @@ final class FeatureServer implements AutoCloseable {
     FeatureServer(String body) throws Exception {
         this.body = body;
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext(REDIRECT_TARGET, exchange -> {
+            synchronized (this) {
+                followed++;
+            }
+            byte[] bytes = "{\"features\":{\"v1_send\":true}}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            } finally {
+                exchange.close();
+            }
+        });
         server.createContext("/", exchange -> {
             String query = exchange.getRequestURI().getRawQuery();
             // The answer is fixed when the request is recorded, so a test that sees the request
@@ -52,11 +75,18 @@ final class FeatureServer implements AutoCloseable {
             int replyStatus;
             String replyBody;
             long replyDelay;
+            String replyLocation;
+            String replyCookie;
             synchronized (this) {
                 queries.add(query == null ? "" : query);
+                Headers seen = new Headers();
+                seen.putAll(exchange.getRequestHeaders());
+                headers.add(seen);
                 replyStatus = status;
                 replyBody = this.body;
                 replyDelay = delayMs;
+                replyLocation = location;
+                replyCookie = setCookie;
             }
             try {
                 if (replyDelay > 0) {
@@ -64,6 +94,12 @@ final class FeatureServer implements AutoCloseable {
                 }
                 byte[] bytes = replyBody.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
+                if (replyLocation != null) {
+                    exchange.getResponseHeaders().add("Location", replyLocation);
+                }
+                if (replyCookie != null) {
+                    exchange.getResponseHeaders().add("Set-Cookie", replyCookie);
+                }
                 exchange.sendResponseHeaders(replyStatus, bytes.length == 0 ? -1 : bytes.length);
                 try (OutputStream out = exchange.getResponseBody()) {
                     out.write(bytes);
@@ -92,6 +128,25 @@ final class FeatureServer implements AutoCloseable {
 
     synchronized List<String> queries() {
         return new ArrayList<>(queries);
+    }
+
+    synchronized List<Headers> headers() {
+        return new ArrayList<>(headers);
+    }
+
+    /** Answer each request with a redirect to {@link #REDIRECT_TARGET} on this server. */
+    synchronized void redirect() {
+        status = 302;
+        location = "http://127.0.0.1:" + server.getAddress().getPort() + REDIRECT_TARGET;
+    }
+
+    synchronized void setCookie(String cookie) {
+        setCookie = cookie;
+    }
+
+    /** How many requests reached {@link #REDIRECT_TARGET}. */
+    synchronized int followedRedirects() {
+        return followed;
     }
 
     @Override

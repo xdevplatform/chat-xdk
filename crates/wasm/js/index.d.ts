@@ -37,8 +37,8 @@ export interface PublicKeyRegistrationPayload {
 }
 
 /**
- * Result from encryptMessage, encryptReply, encryptAddReaction, and
- * encryptRemoveReaction.
+ * Result from encryptMessage, encryptReply, encryptAddReaction,
+ * encryptRemoveReaction, and encryptEdit.
  */
 export interface SendPayload {
   /**
@@ -102,8 +102,10 @@ export interface MessageEventSignature {
 }
 
 /**
- * A signed message delete or read receipt: the `actionSignatures` a request
- * carries for it, one entry.
+ * Signed actions for a request that does not rotate a conversation key: the
+ * `actionSignatures` it carries. Returned by prepareMessageDelete,
+ * prepareMarkConversationRead, and the group-action prepares other than
+ * prepareGroupMembersRemove; prepareGroupLeave returns one entry per signed event.
  */
 export interface PreparedAction {
   actionSignatures: ActionSignature[];
@@ -136,7 +138,7 @@ export type ConversationKeyMap = { [version: string]: Uint8Array };
 export interface ConversationKeyResult {
   /** Map of key version → raw conversation key bytes. */
   keys: ConversationKeyMap;
-  /** The latest (highest) key version, for encrypting new messages. */
+  /** The latest key version. */
   latestVersion: string | null;
 }
 
@@ -183,10 +185,11 @@ export interface ConversationParticipantKey {
 }
 
 /**
- * A public key input for prepareConversationKeyChange / prepareGroupMembersChange.
+ * A public key input for prepareConversationKeyChange, prepareGroupCreate,
+ * prepareGroupMembersChange and prepareGroupMembersRemove.
  *
  * Represents a single public key version for a user, as returned by the
- * X API `GET /2/dm/encryption/public_keys` endpoint.
+ * X API `GET /2/users/{id}/public_keys` endpoint.
  *
  * Pass the full array — the SDK groups by userId and picks the latest
  * version per user automatically.
@@ -201,7 +204,8 @@ export interface PublicKeyInput {
 }
 
 /**
- * Result from prepareConversationKeyChange / prepareGroupMembersChange.
+ * Result from prepareConversationKeyChange, prepareGroupCreate,
+ * prepareGroupMembersChange and prepareGroupMembersRemove.
  *
  * Contains everything needed to POST the change to the X API: the new key
  * (to keep locally), the per-participant encrypted copies, and the action
@@ -210,7 +214,10 @@ export interface PublicKeyInput {
 export interface PreparedConversationChange {
   /** Conversation id the change applies to (derived for a one-to-one, or the id you passed). */
   conversationId: string;
-  /** Raw conversation key bytes (32 bytes). Store locally for encrypting messages. */
+  /**
+   * Raw conversation key bytes (32 bytes). Store locally for encrypting
+   * messages. It is secret, so JSON.stringify leaves it out of this object.
+   */
   conversationKey: Uint8Array;
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;
@@ -1202,7 +1209,10 @@ interface ChatCrypto {
    */
   decryptEvent(params: DecryptEventParams): Event;
 
-  /** Sign data. Returns raw signature bytes (64 bytes). */
+  /**
+   * Sign application data. Returns raw signature bytes (64 bytes). Throws for
+   * an event signature payload or a public key, which only the SDK signs.
+   */
   sign(data: Uint8Array): Uint8Array;
 
   /** Verify a signature. */
@@ -1386,11 +1396,11 @@ declare class Chat implements ChatCrypto {
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   /**
-   * Import private keys from raw bytes. When `version` is given it also
-   * records the public key version the keys were registered under. The
-   * input bytes are zeroized after import.
+   * Import private keys from `keys` (32 or 64 bytes). When
+   * `signingKeyVersion` is given it also records the public key version the
+   * keys were registered under.
    */
-  importKeys(keys: Uint8Array, version?: string): void;
+  importKeys(params: { keys: Uint8Array; signingKeyVersion?: string | null }): void;
   /** Export private keys as raw bytes. */
   exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;

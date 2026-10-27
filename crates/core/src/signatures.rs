@@ -425,6 +425,52 @@ pub(crate) fn sign_action(
     })
 }
 
+/// Events whose signed payload a recipient rebuilds and verifies, each
+/// payload starting with the name followed by a comma (see
+/// `build_event_signature_payload`).
+const SIGNED_EVENT_NAMES: &[&str] = &[
+    "MessageCreateEvent",
+    "ConversationKeyChangeEvent",
+    "MessageDeleteEvent",
+    "ConversationDeleteEvent",
+    "MarkConversationReadEvent",
+    "MarkConversationUnreadEvent",
+];
+
+/// Event families whose payloads start with the family, a dot and the change
+/// name: every group change and conversation-metadata change.
+const SIGNED_EVENT_FAMILIES: &[&str] = &["GroupChangeEvent.", "ConversationMetadataChangeEvent."];
+
+/// Whether `data` is something only the SDK signs with the signing key.
+///
+/// That is a payload a recipient verifies as a signed event, or a P-256
+/// public key: the signing key's signature over an identity public key is
+/// the binding recipients check before trusting the pair. A verifier rebuilds
+/// a payload byte for byte from the event and checks the signature over those
+/// bytes only, and every rebuilt payload starts with an event name above, so
+/// the prefix match covers every payload whose signature would verify; data
+/// that differs in its first bytes (case, spacing, another encoding) yields a
+/// signature no event verifies with. The key check covers every encoding the
+/// SDK reads an identity key from: a SEC1 point, compressed or not, and SPKI
+/// DER.
+pub(crate) fn is_sdk_signed_data(data: &[u8]) -> bool {
+    let names = SIGNED_EVENT_NAMES
+        .iter()
+        .any(|name| data.starts_with(name.as_bytes()) && data.get(name.len()) == Some(&b','));
+    let families = SIGNED_EVENT_FAMILIES
+        .iter()
+        .any(|family| data.starts_with(family.as_bytes()));
+    names || families || is_public_key_encoding(data)
+}
+
+fn is_public_key_encoding(data: &[u8]) -> bool {
+    use p256::pkcs8::DecodePublicKey;
+    // The SDK reads a 91-byte key as SPKI by dropping its 26-byte header.
+    let point = if data.len() == 91 { &data[26..] } else { data };
+    p256::PublicKey::from_sec1_bytes(point).is_ok()
+        || p256::PublicKey::from_public_key_der(data).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
