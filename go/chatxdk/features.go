@@ -13,7 +13,12 @@ import (
 // fetch and what an answer means; a new Chat performs its one GET here, in the
 // background. Nothing here is API.
 
-var featureClient = &http.Client{}
+// featureClient keeps the read anonymous: with no Jar it stores and sends no
+// cookies, and it follows no redirect, so a 3xx answer reaches the core as a
+// failed read rather than as a request to another URL.
+var featureClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 // featureFetch is a GET the core hands out.
 type featureFetch struct {

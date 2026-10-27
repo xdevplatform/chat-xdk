@@ -1,4 +1,4 @@
-# Manual CI: build libchat_xdk_go.a per OS/arch and upload workflow artifacts (temporary downloads).
+# Manual CI: build libchat_xdk_ffi.a per OS/arch and upload workflow artifacts (temporary downloads).
 # Actions → "Go binding prebuilts" → Run workflow.
 #
 # For versioned GitHub Releases, use go-bindings-release.yml (push tag go/v*).
@@ -67,8 +67,8 @@ jobs:
 
       # No rust-cache: artifacts must match the clean builds verified by
       # go-prebuilt-linux.yml / go-prebuilt-darwin.yml.
-      - name: Clean chat-xdk-go release for target
-        run: cargo clean -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+      - name: Clean chat-xdk-ffi release for target
+        run: cargo clean -p chat-xdk-ffi --release --target "${{ matrix.rust_target }}"
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -76,21 +76,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ${{ matrix.extra_apt }}
 
-      - name: Build static library (chat-xdk-go)
+      - name: Build static library (chat-xdk-ffi)
         run: |
-          cargo build -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+          cargo build -p chat-xdk-ffi --release --target "${{ matrix.rust_target }}"
 
       - name: Strip debug symbols (Linux)
         if: runner.os == 'Linux'
-        run: strip --strip-debug "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+        run: strip --strip-debug "target/${{ matrix.rust_target }}/release/libchat_xdk_ffi.a"
 
       - name: Strip debug symbols (macOS)
         if: runner.os == 'macOS'
-        run: strip -S "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+        run: strip -S "target/${{ matrix.rust_target }}/release/libchat_xdk_ffi.a"
 
-      - name: Upload libchat_xdk_go.a
+      - name: Upload libchat_xdk_ffi.a
         uses: actions/upload-artifact@v4
         with:
-          name: libchat_xdk_go-${{ matrix.lib_subdir }}
-          path: chat-xdk/target/${{ matrix.rust_target }}/release/libchat_xdk_go.a
+          name: libchat_xdk_ffi-${{ matrix.lib_subdir }}
+          path: chat-xdk/target/${{ matrix.rust_target }}/release/libchat_xdk_ffi.a
           if-no-files-found: error

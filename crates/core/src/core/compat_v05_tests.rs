@@ -83,7 +83,7 @@ fn sends_from_0_5_decrypt_and_verify() {
             assert_eq!(text(send, "signature_version"), "7", "{version} {kind}");
             let event = ChatCore::new()
                 .decrypt_event(
-                    DecryptEventParams::new(
+                    &DecryptEventParams::new(
                         frame(&relayed(&fixture, send)),
                         conversation_keys(&fixture),
                     )
@@ -136,11 +136,7 @@ fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
         "message_with_entities" => {
             let mut params = EncryptMessageParams::new(conversation.clone(), "see https://x.com")
                 .with_conversation_key(key.clone(), version);
-            params.entities = Some(vec![EntityDescriptor {
-                start: 4,
-                end: 17,
-                entity_type: "url".to_string(),
-            }]);
+            params.entities = Some(vec![EntityDescriptor::new(4, 17, "url")]);
             core.encrypt_message(&params)
         }
         "reaction_add" => core.encrypt_add_reaction(&reaction("\u{1f44d}")),

@@ -18,8 +18,8 @@
 //!
 //! // Batch decrypt — handles key extraction + signing key matching
 //! const result = chat.decryptEvents({ events: rawEvents, signingKeys });
-//! for (const dm of result.messages) {
-//!   console.log(dm.event.type, dm.event.content?.text);
+//! for (const { event } of result.events) {
+//!   console.log(event.type, event.content?.text);
 //! }
 //!
 //! // Single event with cached keys
@@ -27,16 +27,19 @@
 //! const event = chat.decryptEvent({ eventB64: newEventB64, conversationKeys, signingKeys });
 //! ```
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
+use chat_xdk_core::error::{ErrorKind, SdkError};
 
 // Import generated camelCase JS types from core
 use chat_xdk_core::js::{
-    JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPublicKeyInput,
-    JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
+    JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPreparedGroupMetadataChange,
+    JsPublicKeyInput, JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
 };
 
 // Utility Functions (free functions, not methods)
@@ -44,23 +47,21 @@ use chat_xdk_core::js::{
 /// Return the exact size of a file once encrypted: the size its upload
 /// declares before the file is encrypted.
 #[wasm_bindgen(js_name = encryptedFileSize)]
-pub fn encrypted_file_size(plaintext_size: f64) -> Result<f64, JsError> {
-    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-
+pub fn encrypted_file_size(plaintext_size: f64) -> Result<f64, JsValue> {
     if !plaintext_size.is_finite()
         || plaintext_size < 0.0
         || plaintext_size.fract() != 0.0
         || plaintext_size > MAX_SAFE_INTEGER
     {
-        return Err(JsError::new(
+        return Err(invalid_input(
             "Plaintext size must be a non-negative safe integer",
         ));
     }
 
     let encrypted_size = chat_xdk_core::utils::encrypted_file_size(plaintext_size as u64)
-        .ok_or_else(|| JsError::new("Encrypted file size overflow"))?;
+        .ok_or_else(|| invalid_input("Encrypted file size overflow"))?;
     if encrypted_size > MAX_SAFE_INTEGER as u64 {
-        return Err(JsError::new(
+        return Err(invalid_input(
             "Encrypted file size exceeds Number.MAX_SAFE_INTEGER",
         ));
     }
@@ -152,6 +153,109 @@ pub fn feature_set_default_endpoint(endpoint: Option<String>) {
     bindings::set_default_endpoint(endpoint.as_deref());
 }
 
+// Errors. Every error this module throws is a `ChatXdkError`, the class the
+// JS wrapper registers once the module is loaded.
+
+thread_local! {
+    static ERROR_CLASS: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
+}
+
+/// Register the class of the errors this module throws. Not API.
+#[wasm_bindgen(js_name = __setErrorClass, skip_typescript)]
+pub fn set_error_class(class: js_sys::Function) {
+    ERROR_CLASS.with(|current| *current.borrow_mut() = Some(class));
+}
+
+/// An error of `kind`, with the PIN attempts Juicebox reports left after an
+/// invalid PIN: a `ChatXdkError`, or an `Error` with the same fields before
+/// the wrapper registers that class.
+fn js_error(kind: ErrorKind, message: &str, guesses_remaining: Option<u16>) -> JsValue {
+    let kind = JsValue::from_str(kind_name(kind));
+    let guesses_remaining = guesses_remaining.map_or(JsValue::NULL, JsValue::from);
+    let registered = ERROR_CLASS.with(|class| {
+        let args = js_sys::Array::of3(&kind, &message.into(), &guesses_remaining);
+        class
+            .borrow()
+            .as_ref()
+            .and_then(|class| js_sys::Reflect::construct(class, &args).ok())
+    });
+    registered.unwrap_or_else(|| {
+        let error = js_sys::Error::new(message);
+        error.set_name("ChatXdkError");
+        js_sys::Reflect::set(&error, &"kind".into(), &kind).ok();
+        js_sys::Reflect::set(&error, &"guessesRemaining".into(), &guesses_remaining).ok();
+        error.into()
+    })
+}
+
+/// The name `ChatXdkError.kind` gives an error kind.
+fn kind_name(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::InvalidInput => "invalidInput",
+        ErrorKind::InvalidState => "invalidState",
+        ErrorKind::Parse => "parse",
+        ErrorKind::Decryption => "decryption",
+        ErrorKind::Verification => "verification",
+        ErrorKind::InvalidPin => "invalidPin",
+        ErrorKind::Juicebox => "juicebox",
+        _ => "internal",
+    }
+}
+
+fn sdk_error(error: impl Into<SdkError>) -> JsValue {
+    let error = error.into();
+    js_error(error.kind(), &error.to_string(), error.guesses_remaining())
+}
+
+/// An invalid argument, rejected in this layer.
+fn invalid_input(message: impl AsRef<str>) -> JsValue {
+    js_error(ErrorKind::InvalidInput, message.as_ref(), None)
+}
+
+/// A result that failed to convert to JS.
+fn internal_error(message: impl AsRef<str>) -> JsValue {
+    js_error(ErrorKind::Internal, message.as_ref(), None)
+}
+
+// Juicebox. The JS wrapper runs the Juicebox client; the core sets the PIN
+// rule, reads the client config and words the errors. None of this is API.
+
+/// Check a new PIN under the rule `setup` and `changePin` apply.
+#[wasm_bindgen(js_name = __validateNewPin, skip_typescript)]
+pub fn validate_new_pin(pin: Vec<u8>) -> Result<(), JsValue> {
+    let pin = Zeroizing::new(pin);
+    bindings::validate_new_pin(&pin).map_err(sdk_error)
+}
+
+/// The Juicebox client config and PIN guess budget of an X API Juicebox
+/// config: `{ sdkConfig, maxGuessCount }`.
+#[wasm_bindgen(js_name = __juiceboxClientConfig, skip_typescript)]
+pub fn juicebox_client_config(config_json: &str) -> Result<JsValue, JsValue> {
+    let (sdk_config, max_guess_count) =
+        bindings::juicebox_client_config(config_json).map_err(sdk_error)?;
+    let result = js_sys::Object::new();
+    js_sys::Reflect::set(&result, &"sdkConfig".into(), &sdk_config.into()).ok();
+    js_sys::Reflect::set(&result, &"maxGuessCount".into(), &max_guess_count.into()).ok();
+    Ok(result.into())
+}
+
+/// The error a Juicebox call throws on a chat without a Juicebox config.
+#[wasm_bindgen(js_name = __noJuiceboxConfig, skip_typescript)]
+pub fn no_juicebox_config() -> JsValue {
+    sdk_error(bindings::no_juicebox_config())
+}
+
+/// The error a Juicebox `operation` (`register`, `recover` or `delete`)
+/// that failed for `reason` throws.
+#[wasm_bindgen(js_name = __juiceboxError, skip_typescript)]
+pub fn juicebox_error(operation: &str, reason: &str, guesses_remaining: Option<u16>) -> JsValue {
+    sdk_error(bindings::juicebox_error(
+        operation,
+        reason,
+        guesses_remaining,
+    ))
+}
+
 /// Initialize panic hook for better error messages in console.
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -198,21 +302,16 @@ impl Chat {
 
     /// Generate new keypairs and return the registration payload.
     #[wasm_bindgen(js_name = generateKeypairs)]
-    pub fn generate_keypairs_impl(&mut self) -> Result<JsValue, JsError> {
-        let payload = self
-            .inner
-            .generate_keypairs()
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+    pub fn generate_keypairs_impl(&mut self) -> Result<JsValue, JsValue> {
+        let payload = self.inner.generate_keypairs().map_err(sdk_error)?;
         let js_payload: JsPublicKeyRegistrationPayload = payload.into();
         to_js_value(&js_payload)
     }
 
     /// Export private keys as raw bytes (`Uint8Array`).
     #[wasm_bindgen(js_name = exportKeys)]
-    pub fn export_keys(&self) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .export_keys()
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn export_keys(&self) -> Result<Vec<u8>, JsValue> {
+        self.inner.export_keys().map_err(sdk_error)
     }
 
     /// Import private keys: `{ keys, signingKeyVersion? }`, where `keys` is
@@ -221,27 +320,25 @@ impl Chat {
     /// records the public key version the keys were registered under
     /// (participant-key filtering plus the session `signingKeyVersion`).
     #[wasm_bindgen(js_name = importKeys)]
-    pub fn import_keys(&mut self, params: JsValue) -> Result<(), JsError> {
+    pub fn import_keys(&mut self, params: JsValue) -> Result<(), JsValue> {
         let mut p: JsImportKeysParams = from_js_params("importKeys", params)?;
         let mut core_params = chat_xdk_core::ImportKeysParams::new(std::mem::take(&mut p.keys));
         core_params.signing_key_version = p.signing_key_version.take().filter(|v| !v.is_empty());
-        self.inner
-            .import_keys(&core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+        self.inner.import_keys(&core_params).map_err(sdk_error)
     }
 
     /// Set the session identity: `{ userId, signingKeyVersion }`, used as
     /// defaults wherever a params object omits `senderId` /
     /// `signingKeyVersion`.
     #[wasm_bindgen(js_name = setIdentity)]
-    pub fn set_identity(&self, params: JsValue) -> Result<(), JsError> {
+    pub fn set_identity(&self, params: JsValue) -> Result<(), JsValue> {
         let p: JsSetIdentityParams = from_js_params("setIdentity", params)?;
         self.inner
             .set_identity(&chat_xdk_core::SetIdentityParams::new(
                 p.user_id,
                 p.signing_key_version,
             ))
-            .map_err(|e| JsError::new(&format!("{}", e)))
+            .map_err(sdk_error)
     }
 
     /// Enable or disable the conversation-key cache (off by default).
@@ -289,19 +386,16 @@ impl Chat {
     /// call populates the store — a key carried inside an event is never
     /// trusted for verification. Each call replaces the previous set.
     #[wasm_bindgen(js_name = setSigningKeys)]
-    pub fn set_signing_keys(&self, signing_keys: JsValue) -> Result<(), JsError> {
+    pub fn set_signing_keys(&self, signing_keys: JsValue) -> Result<(), JsValue> {
         self.inner
-            .set_signing_keys(js_to_signing_keys(signing_keys)?);
+            .set_signing_keys(&js_to_signing_keys(signing_keys)?);
         Ok(())
     }
 
     /// Get current public keys.
     #[wasm_bindgen(js_name = getPublicKeys)]
-    pub fn get_public_keys(&self) -> Result<JsValue, JsError> {
-        let keys = self
-            .inner
-            .get_public_keys()
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+    pub fn get_public_keys(&self) -> Result<JsValue, JsValue> {
+        let keys = self.inner.get_public_keys().map_err(sdk_error)?;
         to_js_value(&keys)
     }
 
@@ -311,10 +405,8 @@ impl Chat {
     /// out-of-band (e.g. in person or over a trusted channel) to
     /// verify key authenticity.
     #[wasm_bindgen(js_name = getPublicKeyFingerprint)]
-    pub fn get_public_key_fingerprint(&self) -> Result<String, JsError> {
-        self.inner
-            .get_public_key_fingerprint()
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn get_public_key_fingerprint(&self) -> Result<String, JsValue> {
+        self.inner.get_public_key_fingerprint().map_err(sdk_error)
     }
 
     /// Returns `true` when both identity and signing keys are loaded.
@@ -339,11 +431,11 @@ impl Chat {
 impl Chat {
     /// Decrypt an encrypted conversation key (ECIES).
     #[wasm_bindgen(js_name = decryptConversationKey)]
-    pub fn decrypt_conversation_key(&self, encrypted_key_b64: &str) -> Result<Vec<u8>, JsError> {
+    pub fn decrypt_conversation_key(&self, encrypted_key_b64: &str) -> Result<Vec<u8>, JsValue> {
         let ckey = self
             .inner
             .decrypt_conversation_key(encrypted_key_b64)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         Ok(ckey.encoded().to_vec())
     }
 
@@ -351,9 +443,9 @@ impl Chat {
     ///
     /// Returns a `ConversationKeyResult` with:
     /// - `keys`: Object mapping key version strings to `Uint8Array` conversation keys
-    /// - `latestVersion`: The highest key version (use for encrypting new messages)
+    /// - `latestVersion`: The highest key version; signatures are not checked
     #[wasm_bindgen(js_name = extractConversationKeys)]
-    pub fn extract_conversation_keys(&self, events: Vec<String>) -> Result<JsValue, JsError> {
+    pub fn extract_conversation_keys(&self, events: Vec<String>) -> Result<JsValue, JsValue> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
         let result = self.inner.extract_conversation_keys(&refs);
 
@@ -365,11 +457,11 @@ impl Chat {
         for (version, key) in &result.keys {
             let arr = js_sys::Uint8Array::from(key.encoded());
             js_sys::Reflect::set(&keys_obj, &JsValue::from_str(version), &arr.into())
-                .map_err(|_| JsError::new("Failed to build conversation key map"))?;
+                .map_err(|_| internal_error("Failed to build conversation key map"))?;
         }
 
         js_sys::Reflect::set(&obj, &"keys".into(), &keys_obj.into())
-            .map_err(|_| JsError::new("Failed to set keys"))?;
+            .map_err(|_| internal_error("Failed to set keys"))?;
 
         js_sys::Reflect::set(
             &obj,
@@ -379,7 +471,7 @@ impl Chat {
                 .map(|v| JsValue::from_str(&v))
                 .unwrap_or(JsValue::NULL),
         )
-        .map_err(|_| JsError::new("Failed to set latestVersion"))?;
+        .map_err(|_| internal_error("Failed to set latestVersion"))?;
 
         Ok(obj.into())
     }
@@ -398,36 +490,35 @@ impl Chat {
     /// through). Omitting `signingKeys` falls back to the keys stored via
     /// `setSigningKeys`.
     ///
-    /// Returns `{ messages, conversationKeys, errors }`.
+    /// Returns `{ events, conversationKeys, errors }`.
     #[wasm_bindgen(js_name = decryptEvents)]
-    pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventsParams = from_js_params("decryptEvents", params)?;
         let mut core_params = chat_xdk_core::DecryptEventsParams::new(p.events);
         core_params.signing_keys = p
             .signing_keys
             .map(|keys| keys.into_iter().map(Into::into).collect());
 
-        let result = self.inner.decrypt_events(core_params);
+        let result = self.inner.decrypt_events(&core_params);
 
         // Build JS result object
         let obj = js_sys::Object::new();
 
-        // Convert messages
-        let messages_arr = js_sys::Array::new();
-        for dm in result.messages {
-            let msg_obj = js_sys::Object::new();
-            let js_event: JsEvent = dm.event.into();
+        let events = js_sys::Array::new();
+        for decrypted in result.events {
+            let entry = js_sys::Object::new();
+            let js_event: JsEvent = decrypted.event.into();
             let event_val = to_js_value(&js_event)?;
-            js_sys::Reflect::set(&msg_obj, &"event".into(), &event_val)
-                .map_err(|_| JsError::new("Failed to set event"))?;
-            if let Some(b64) = dm.original_b64 {
-                js_sys::Reflect::set(&msg_obj, &"originalB64".into(), &JsValue::from_str(&b64))
-                    .map_err(|_| JsError::new("Failed to set originalB64"))?;
+            js_sys::Reflect::set(&entry, &"event".into(), &event_val)
+                .map_err(|_| internal_error("Failed to set event"))?;
+            if let Some(b64) = decrypted.original_b64 {
+                js_sys::Reflect::set(&entry, &"originalB64".into(), &JsValue::from_str(&b64))
+                    .map_err(|_| internal_error("Failed to set originalB64"))?;
             }
-            messages_arr.push(&msg_obj);
+            events.push(&entry);
         }
-        js_sys::Reflect::set(&obj, &"messages".into(), &messages_arr.into())
-            .map_err(|_| JsError::new("Failed to set messages"))?;
+        js_sys::Reflect::set(&obj, &"events".into(), &events.into())
+            .map_err(|_| internal_error("Failed to set events"))?;
 
         // Convert conversation keys
         let conv_keys_obj = js_sys::Object::new();
@@ -435,10 +526,10 @@ impl Chat {
         for (version, key) in &result.conversation_keys.keys {
             let arr = js_sys::Uint8Array::from(key.encoded());
             js_sys::Reflect::set(&keys_obj, &JsValue::from_str(version), &arr.into())
-                .map_err(|_| JsError::new("Failed to build conversation key map"))?;
+                .map_err(|_| internal_error("Failed to build conversation key map"))?;
         }
         js_sys::Reflect::set(&conv_keys_obj, &"keys".into(), &keys_obj.into())
-            .map_err(|_| JsError::new("Failed to set keys"))?;
+            .map_err(|_| internal_error("Failed to set keys"))?;
         js_sys::Reflect::set(
             &conv_keys_obj,
             &"latestVersion".into(),
@@ -448,9 +539,9 @@ impl Chat {
                 .map(|v| JsValue::from_str(&v))
                 .unwrap_or(JsValue::NULL),
         )
-        .map_err(|_| JsError::new("Failed to set latestVersion"))?;
+        .map_err(|_| internal_error("Failed to set latestVersion"))?;
         js_sys::Reflect::set(&obj, &"conversationKeys".into(), &conv_keys_obj.into())
-            .map_err(|_| JsError::new("Failed to set conversationKeys"))?;
+            .map_err(|_| internal_error("Failed to set conversationKeys"))?;
 
         // Convert errors
         let errors_obj = js_sys::Object::new();
@@ -460,10 +551,10 @@ impl Chat {
                 &JsValue::from_f64(idx as f64),
                 &JsValue::from_str(&err),
             )
-            .map_err(|_| JsError::new("Failed to set error"))?;
+            .map_err(|_| internal_error("Failed to set error"))?;
         }
         js_sys::Reflect::set(&obj, &"errors".into(), &errors_obj.into())
-            .map_err(|_| JsError::new("Failed to set errors"))?;
+            .map_err(|_| internal_error("Failed to set errors"))?;
 
         Ok(obj.into())
     }
@@ -484,7 +575,7 @@ impl Chat {
     /// throw; only after `setRejectUnverified(false)` are such events
     /// returned with `verified: false`.
     #[wasm_bindgen(js_name = decryptEvent)]
-    pub fn decrypt_event(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn decrypt_event(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventParams = from_js_params("decryptEvent", params)?;
         let conversation_keys =
             if p.conversation_keys.is_undefined() || p.conversation_keys.is_null() {
@@ -498,10 +589,7 @@ impl Chat {
             .signing_keys
             .map(|keys| keys.into_iter().map(Into::into).collect());
 
-        let event = self
-            .inner
-            .decrypt_event(core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let event = self.inner.decrypt_event(&core_params).map_err(sdk_error)?;
 
         // Convert to camelCase JS type
         let js_event: JsEvent = event.into();
@@ -509,10 +597,8 @@ impl Chat {
     }
 
     /// Sign data. Returns raw signature bytes (`Uint8Array`).
-    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .sign(data)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, JsValue> {
+        self.inner.sign(data).map_err(sdk_error)
     }
 
     // API Message Encryption
@@ -534,7 +620,7 @@ impl Chat {
     /// afterwards with `encryptFile` or `fileEncryptor` and the result's
     /// `eventB64`.
     #[wasm_bindgen(js_name = encryptMessage)]
-    pub fn encrypt_message(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn encrypt_message(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptMessageParams = from_js_params("encryptMessage", params)?;
         let mut core_params = chat_xdk_core::EncryptMessageParams::new(p.conversation_id, p.text);
         core_params.sender_id = p.sender_id;
@@ -545,11 +631,11 @@ impl Chat {
         core_params.attachments = p.attachments;
         core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
-        core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
+        core_params.ttl_msec = p.ttl_msec;
         let payload = self
             .inner
             .encrypt_message(&core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
     }
@@ -566,7 +652,7 @@ impl Chat {
     /// callers that no longer hold the raw event. The reply's id and files
     /// work as in `encryptMessage`.
     #[wasm_bindgen(js_name = encryptReply)]
-    pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptReplyParams = from_js_params("encryptReply", params)?;
         let mut core_params = chat_xdk_core::EncryptReplyParams::new(
             p.conversation_id,
@@ -588,11 +674,8 @@ impl Chat {
         core_params.reply_to_attachments = p.reply_to_attachments;
         core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
-        core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
-        let payload = self
-            .inner
-            .encrypt_reply(&core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        core_params.ttl_msec = p.ttl_msec;
+        let payload = self.inner.encrypt_reply(&core_params).map_err(sdk_error)?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
     }
@@ -609,12 +692,12 @@ impl Chat {
     /// The SDK generates the message id and returns it as `messageId` on the
     /// result.
     #[wasm_bindgen(js_name = encryptAddReaction)]
-    pub fn encrypt_add_reaction(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn encrypt_add_reaction(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptReactionParams = from_js_params("encryptAddReaction", params)?;
         let payload = self
             .inner
             .encrypt_add_reaction(&p.into_core())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
     }
@@ -623,12 +706,12 @@ impl Chat {
     ///
     /// Takes the same params object shape as `encryptAddReaction`.
     #[wasm_bindgen(js_name = encryptRemoveReaction)]
-    pub fn encrypt_remove_reaction(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn encrypt_remove_reaction(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptReactionParams = from_js_params("encryptRemoveReaction", params)?;
         let payload = self
             .inner
             .encrypt_remove_reaction(&p.into_core())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
     }
@@ -645,12 +728,9 @@ impl Chat {
     /// cache when omitted. The SDK generates the message id and returns it as
     /// `messageId` on the result.
     #[wasm_bindgen(js_name = encryptEdit)]
-    pub fn encrypt_edit(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn encrypt_edit(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptEditParams = from_js_params("encryptEdit", params)?;
-        let payload = self
-            .inner
-            .encrypt_edit(&p.into_core())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let payload = self.inner.encrypt_edit(&p.into_core()).map_err(sdk_error)?;
         let js_payload: JsSendPayload = payload.into();
         to_js_value(&js_payload)
     }
@@ -665,12 +745,12 @@ impl Chat {
     /// with its signature nested under `messageEventSignature`; the SDK
     /// generates the action's message id (`messageId` on the entry).
     #[wasm_bindgen(js_name = prepareMessageDelete)]
-    pub fn prepare_message_delete(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_message_delete(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsMessageDeleteParams = from_js_params("prepareMessageDelete", params)?;
         let prepared = self
             .inner
             .prepare_message_delete(&p.into_core())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         let js_prepared: JsPreparedAction = prepared.into();
         to_js_value(&js_prepared)
     }
@@ -686,33 +766,32 @@ impl Chat {
     /// `prepareMessageDelete` returns them. The SDK generates the action's
     /// message id (`messageId` on the entry).
     #[wasm_bindgen(js_name = prepareMarkConversationRead)]
-    pub fn prepare_mark_conversation_read(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_mark_conversation_read(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsMarkConversationReadParams =
             from_js_params("prepareMarkConversationRead", params)?;
         let prepared = self
             .inner
             .prepare_mark_conversation_read(&p.into_core())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         let js_prepared: JsPreparedAction = prepared.into();
         to_js_value(&js_prepared)
     }
 
-    /// Sign a group member removal.
+    /// Sign a group member removal and rotate the conversation key for the
+    /// members who stay.
     ///
-    /// `publicKeys` are the identity keys of the members who stay. When set,
-    /// the call rotates the conversation key for them and returns it with
-    /// two action signatures: the removal, bound to the new key version, and
-    /// the key change. Without them the same result has no new key and only
-    /// the removal signature. `conversationKeyVersion` on the params is the
-    /// version bound into a removal that does not rotate; omit it to sign
-    /// `null`.
+    /// `publicKeys` are the identity keys of the members who stay. The
+    /// result carries the new key and the action signatures: the removal,
+    /// bound to the new key version, a title and a description change for
+    /// each one the params set, re-encrypted under the new key, and the key
+    /// change.
     #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
-    pub fn prepare_group_members_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_members_remove(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupMembersRemoveParams = from_js_params("prepareGroupMembersRemove", params)?;
         let prepared = self
             .inner
             .prepare_group_members_remove_with_version(&p.into_core(), &now_millis())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
         prepared_change_to_js(prepared)
     }
 
@@ -720,86 +799,91 @@ impl Chat {
     /// `promoteAdminId` is set, and a conversation delete. Does not rotate
     /// the key.
     #[wasm_bindgen(js_name = prepareGroupLeave)]
-    pub fn prepare_group_leave(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_leave(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupLeaveParams = from_js_params("prepareGroupLeave", params)?;
         self.prepare_action(self.inner.prepare_group_leave(&p.into_core()))
     }
 
-    /// Sign a group title change. `customTitle` is the ciphertext to send.
+    /// Encrypt a new group title under the conversation key and sign the
+    /// change. `newTitle` is plaintext; `conversationKey` /
+    /// `conversationKeyVersion` resolve from the key cache when omitted.
+    /// Returns `{ encryptedValue, conversationKeyVersion, actionSignatures }`.
     #[wasm_bindgen(js_name = prepareGroupTitleChange)]
-    pub fn prepare_group_title_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_title_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupTitleChangeParams = from_js_params("prepareGroupTitleChange", params)?;
-        self.prepare_action(self.inner.prepare_group_title_change(&p.into_core()))
+        self.prepare_metadata_change(self.inner.prepare_group_title_change(&p.into_core()))
     }
 
-    /// Sign a group avatar change. `customAvatarUrl` is the value to send.
+    /// Sign a group avatar change: `newAvatarUrl`, the avatar image's media
+    /// URL, as is, and `conversationKeyVersion`, the version of the key the
+    /// image is encrypted under. Returns `{ actionSignatures }`.
     #[wasm_bindgen(js_name = prepareGroupAvatarChange)]
-    pub fn prepare_group_avatar_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_avatar_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupAvatarChangeParams = from_js_params("prepareGroupAvatarChange", params)?;
         self.prepare_action(self.inner.prepare_group_avatar_change(&p.into_core()))
     }
 
-    /// Sign a group description change. `customDescription` is the ciphertext
-    /// to send.
+    /// Encrypt a new group description under the conversation key and sign
+    /// the change; shaped as `prepareGroupTitleChange`.
     #[wasm_bindgen(js_name = prepareGroupDescriptionChange)]
-    pub fn prepare_group_description_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_description_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupDescriptionChangeParams =
             from_js_params("prepareGroupDescriptionChange", params)?;
-        self.prepare_action(self.inner.prepare_group_description_change(&p.into_core()))
+        self.prepare_metadata_change(self.inner.prepare_group_description_change(&p.into_core()))
     }
 
     /// Sign adding group admins.
     #[wasm_bindgen(js_name = prepareGroupAdminsAdd)]
-    pub fn prepare_group_admins_add(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_admins_add(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupAdminsAddParams = from_js_params("prepareGroupAdminsAdd", params)?;
         self.prepare_action(self.inner.prepare_group_admins_add(&p.into_core()))
     }
 
     /// Sign removing group admins.
     #[wasm_bindgen(js_name = prepareGroupAdminsRemove)]
-    pub fn prepare_group_admins_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_admins_remove(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupAdminsRemoveParams = from_js_params("prepareGroupAdminsRemove", params)?;
         self.prepare_action(self.inner.prepare_group_admins_remove(&p.into_core()))
     }
 
     /// Sign enabling a group invite. An omitted expiry or affiliate signs `null`.
     #[wasm_bindgen(js_name = prepareGroupInviteEnable)]
-    pub fn prepare_group_invite_enable(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_invite_enable(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupInviteEnableParams = from_js_params("prepareGroupInviteEnable", params)?;
         self.prepare_action(self.inner.prepare_group_invite_enable(&p.into_core()))
     }
 
     /// Sign disabling a group invite. `disabledBy` defaults to the sender.
     #[wasm_bindgen(js_name = prepareGroupInviteDisable)]
-    pub fn prepare_group_invite_disable(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_invite_disable(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupInviteDisableParams = from_js_params("prepareGroupInviteDisable", params)?;
         self.prepare_action(self.inner.prepare_group_invite_disable(&p.into_core()))
     }
 
     /// Sign a request to join a group. `requestingUserId` defaults to the sender.
     #[wasm_bindgen(js_name = prepareGroupJoinRequest)]
-    pub fn prepare_group_join_request(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_join_request(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupJoinRequestParams = from_js_params("prepareGroupJoinRequest", params)?;
         self.prepare_action(self.inner.prepare_group_join_request(&p.into_core()))
     }
 
     /// Sign rejecting group join requests.
     #[wasm_bindgen(js_name = prepareGroupJoinReject)]
-    pub fn prepare_group_join_reject(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_join_reject(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupJoinRejectParams = from_js_params("prepareGroupJoinReject", params)?;
         self.prepare_action(self.inner.prepare_group_join_reject(&p.into_core()))
     }
 
     /// Sign a message-TTL change. The signature covers `ttlMsec` only.
     #[wasm_bindgen(js_name = prepareMessageTtlChange)]
-    pub fn prepare_message_ttl_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_message_ttl_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsMessageTtlChangeParams = from_js_params("prepareMessageTtlChange", params)?;
         self.prepare_action(self.inner.prepare_message_ttl_change(&p.into_core()))
     }
 
     /// Sign clearing a conversation's message TTL.
     #[wasm_bindgen(js_name = prepareMessageTtlRemove)]
-    pub fn prepare_message_ttl_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_message_ttl_remove(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsMessageTtlRemoveParams = from_js_params("prepareMessageTtlRemove", params)?;
         self.prepare_action(self.inner.prepare_message_ttl_remove(&p.into_core()))
     }
@@ -807,18 +891,30 @@ impl Chat {
     /// Sign one screen-capture setting. `change` is `blockingEnabled`,
     /// `blockingDisabled`, `detectionEnabled`, or `detectionDisabled`.
     #[wasm_bindgen(js_name = prepareScreenCapture)]
-    pub fn prepare_screen_capture(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_screen_capture(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsScreenCaptureParams = from_js_params("prepareScreenCapture", params)?;
-        let core = p.into_core().map_err(|e| JsError::new(&format!("{}", e)))?;
+        let core = p.into_core().map_err(sdk_error)?;
         self.prepare_action(self.inner.prepare_screen_capture(&core))
     }
 
     fn prepare_action(
         &self,
         prepared: Result<chat_xdk_core::PreparedAction, chat_xdk_core::error::SdkError>,
-    ) -> Result<JsValue, JsError> {
-        let prepared = prepared.map_err(|e| JsError::new(&format!("{}", e)))?;
+    ) -> Result<JsValue, JsValue> {
+        let prepared = prepared.map_err(sdk_error)?;
         let js_prepared: JsPreparedAction = prepared.into();
+        to_js_value(&js_prepared)
+    }
+
+    fn prepare_metadata_change(
+        &self,
+        prepared: Result<
+            chat_xdk_core::PreparedGroupMetadataChange,
+            chat_xdk_core::error::SdkError,
+        >,
+    ) -> Result<JsValue, JsValue> {
+        let prepared = prepared.map_err(sdk_error)?;
+        let js_prepared: JsPreparedGroupMetadataChange = prepared.into();
         to_js_value(&js_prepared)
     }
 
@@ -835,7 +931,7 @@ impl Chat {
     /// under the same media hash key; its size is
     /// `encryptedFileSize(file.length)`. Errors say what to pass instead.
     #[wasm_bindgen(js_name = encryptFile)]
-    pub fn encrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsError> {
+    pub fn encrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsValue> {
         let p: JsEncryptFileParams = from_js_params("encryptFile", params)?;
         let mut core_params = chat_xdk_core::EncryptFileParams::new(
             js_to_bytes("encryptFile", "file", &p.file)?,
@@ -844,25 +940,20 @@ impl Chat {
         );
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
-        self.inner
-            .encrypt_file(&core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+        self.inner.encrypt_file(&core_params).map_err(sdk_error)
     }
 
     /// Create an incremental encryptor for a file too large to hold in
     /// memory. Takes the params of `encryptFile` apart from `file`, which is
     /// fed to the encryptor.
     #[wasm_bindgen(js_name = fileEncryptor)]
-    pub fn file_encryptor(&self, params: JsValue) -> Result<FileEncryptor, JsError> {
+    pub fn file_encryptor(&self, params: JsValue) -> Result<FileEncryptor, JsValue> {
         let p: JsFileEncryptorParams = from_js_params("fileEncryptor", params)?;
         let mut core_params =
             chat_xdk_core::FileEncryptorParams::new(p.event_b64, p.media_hash_key);
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
-        let inner = self
-            .inner
-            .file_encryptor(&core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let inner = self.inner.file_encryptor(&core_params).map_err(sdk_error)?;
         Ok(FileEncryptor { inner })
     }
 
@@ -876,7 +967,7 @@ impl Chat {
     /// message: a media attachment, a link card's banner or favicon, or media
     /// quoted in its reply preview. Errors say what to pass instead.
     #[wasm_bindgen(js_name = decryptFile)]
-    pub fn decrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsError> {
+    pub fn decrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsValue> {
         let p: JsDecryptFileParams = from_js_params("decryptFile", params)?;
         let core_params = chat_xdk_core::DecryptFileParams::new(
             js_to_bytes("decryptFile", "encrypted", &p.encrypted)?,
@@ -884,55 +975,35 @@ impl Chat {
             js_to_conv_keys("decryptFile", p.conversation_keys)?,
             p.media_hash_key,
         );
-        self.inner
-            .decrypt_file(core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+        self.inner.decrypt_file(&core_params).map_err(sdk_error)
     }
 
     /// Create an incremental decryptor for an encrypted file too large to
     /// hold in memory. Takes the params of `decryptFile` apart from
     /// `encrypted`, which is fed to the decryptor.
     #[wasm_bindgen(js_name = fileDecryptor)]
-    pub fn file_decryptor(&self, params: JsValue) -> Result<FileDecryptor, JsError> {
-        let p: JsFileParams = from_js_params("fileDecryptor", params)?;
+    pub fn file_decryptor(&self, params: JsValue) -> Result<FileDecryptor, JsValue> {
+        let p: JsFileDecryptorParams = from_js_params("fileDecryptor", params)?;
         let core_params = chat_xdk_core::FileDecryptorParams::new(
             p.event_b64,
             js_to_conv_keys("fileDecryptor", p.conversation_keys)?,
             p.media_hash_key,
         );
-        let inner = self
-            .inner
-            .file_decryptor(core_params)
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+        let inner = self.inner.file_decryptor(&core_params).map_err(sdk_error)?;
         Ok(FileDecryptor { inner })
     }
 
-    /// Encrypt a UTF-8 string and return base64 ciphertext.
-    ///
-    /// Use for metadata fields like group names before sending to the API.
-    #[wasm_bindgen(js_name = encrypt)]
-    pub fn encrypt(&self, plaintext: &str, conversation_key: Vec<u8>) -> Result<String, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
-        self.inner
-            .encrypt(plaintext, &ckey)
-            .map_err(|e| JsError::new(&format!("{}", e)))
-    }
-
-    /// Decrypt a base64-encoded ciphertext and return the UTF-8 plaintext.
-    ///
-    /// Use for metadata fields like group names returned by the API.
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation. Group changes in events need no call of their own:
+    /// `decryptEvent` returns them decrypted.
     #[wasm_bindgen(js_name = decrypt)]
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,
         conversation_key: Vec<u8>,
-    ) -> Result<String, JsError> {
-        let ckey = XChatConversationKey::from_bytes(conversation_key)
-            .ok_or_else(|| JsError::new("Invalid conversation key (expected 32 bytes)"))?;
-        self.inner
-            .decrypt(ciphertext_b64, &ckey)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    ) -> Result<String, JsValue> {
+        let ckey = bindings::conversation_key(&conversation_key).map_err(sdk_error)?;
+        self.inner.decrypt(ciphertext_b64, &ckey).map_err(sdk_error)
     }
 
     /// Prepare a signed conversation-key change, ready to send to the X API.
@@ -947,7 +1018,7 @@ impl Chat {
     /// Returns `{ conversationId, conversationKey, conversationKeyVersion,
     /// conversationParticipantKeys, actionSignatures }`.
     #[wasm_bindgen(js_name = prepareConversationKeyChange)]
-    pub fn prepare_conversation_key_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_conversation_key_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsConversationKeyChangeParams =
             from_js_params("prepareConversationKeyChange", params)?;
         let mut core_params = chat_xdk_core::ConversationKeyChangeParams::new(
@@ -960,7 +1031,7 @@ impl Chat {
         let result = self
             .inner
             .prepare_conversation_key_change_with_version(&core_params, &now_millis())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
 
         prepared_change_to_js(result)
     }
@@ -971,11 +1042,15 @@ impl Chat {
     /// the updated roster), `conversationId`, `newMemberIds`,
     /// `currentMemberIds`, `currentAdminIds`, `currentPendingMemberIds`,
     /// plus optional `senderId` / `signingKeyVersion` (resolved from the
-    /// session identity when omitted), `currentTitle`, `currentAvatarUrl`,
+    /// session identity when omitted), `currentTitle` and
+    /// `currentDescription` (plaintext, encrypted under the new conversation
+    /// key), `currentAvatarUrl` (the avatar's media URL, signed as is),
     /// `currentTtlMsec`, and `currentScreenCaptureBlockingEnabled`. Returns
-    /// the same shape as [`Chat::prepare_conversation_key_change`].
+    /// the same shape as [`Chat::prepare_conversation_key_change`], plus
+    /// `encryptedTitle` and `encryptedDescription` for a title and
+    /// description the params set.
     #[wasm_bindgen(js_name = prepareGroupMembersChange)]
-    pub fn prepare_group_members_change(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_members_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupMembersChangeParams = from_js_params("prepareGroupMembersChange", params)?;
         let mut core_params = chat_xdk_core::GroupMembersChangeParams::new(
             p.public_keys.into_iter().map(Into::into).collect(),
@@ -989,14 +1064,15 @@ impl Chat {
         core_params.signing_key_version = p.signing_key_version;
         core_params.current_title = p.current_title;
         core_params.current_avatar_url = p.current_avatar_url;
-        core_params.current_ttl_msec = p.current_ttl_msec.map(|t| t as i64);
+        core_params.current_description = p.current_description;
+        core_params.current_ttl_msec = p.current_ttl_msec;
         core_params.current_screen_capture_blocking_enabled =
             p.current_screen_capture_blocking_enabled;
 
         let result = self
             .inner
             .prepare_group_members_change_with_version(&core_params, &now_millis())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
 
         prepared_change_to_js(result)
     }
@@ -1006,12 +1082,14 @@ impl Chat {
     /// Takes a single params object with camelCase keys: `publicKeys` (for
     /// the new roster), `conversationId`, `memberIds`, `adminIds`, plus
     /// optional `senderId` / `signingKeyVersion` (resolved from the session
-    /// identity when omitted), `title`, `avatarUrl`, and `ttlMsec`. Emits
-    /// two action signatures (a conversation-key change and the group
-    /// create). Returns the same shape as
-    /// [`Chat::prepare_conversation_key_change`].
+    /// identity when omitted), `title` (plaintext, encrypted under the new
+    /// conversation key), and `ttlMsec`. Emits two action signatures (a
+    /// conversation-key change and the group create). Returns the same
+    /// shape as [`Chat::prepare_conversation_key_change`], plus
+    /// `encryptedTitle` for a title the params set. A create sets no avatar;
+    /// set it afterwards with `prepareGroupAvatarChange`.
     #[wasm_bindgen(js_name = prepareGroupCreate)]
-    pub fn prepare_group_create(&self, params: JsValue) -> Result<JsValue, JsError> {
+    pub fn prepare_group_create(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupCreateParams = from_js_params("prepareGroupCreate", params)?;
         let mut core_params = chat_xdk_core::GroupCreateParams::new(
             p.public_keys.into_iter().map(Into::into).collect(),
@@ -1022,13 +1100,12 @@ impl Chat {
         core_params.sender_id = p.sender_id;
         core_params.signing_key_version = p.signing_key_version;
         core_params.title = p.title;
-        core_params.avatar_url = p.avatar_url;
-        core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
+        core_params.ttl_msec = p.ttl_msec;
 
         let result = self
             .inner
             .prepare_group_create_with_version(&core_params, &now_millis())
-            .map_err(|e| JsError::new(&format!("{}", e)))?;
+            .map_err(sdk_error)?;
 
         prepared_change_to_js(result)
     }
@@ -1041,10 +1118,10 @@ impl Chat {
         public_key_b64: &str,
         signature: &[u8],
         data: &[u8],
-    ) -> Result<bool, JsError> {
+    ) -> Result<bool, JsValue> {
         self.inner
             .verify(public_key_b64, signature, data)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+            .map_err(sdk_error)
     }
 
     /// Verify that a signing key is authentically bound to an identity key.
@@ -1057,14 +1134,14 @@ impl Chat {
         identity_public_key_b64: &str,
         signing_public_key_b64: &str,
         identity_public_key_signature_b64: &str,
-    ) -> Result<bool, JsError> {
+    ) -> Result<bool, JsValue> {
         self.inner
             .verify_key_binding(
                 identity_public_key_b64,
                 signing_public_key_b64,
                 identity_public_key_signature_b64,
             )
-            .map_err(|e| JsError::new(&format!("{}", e)))
+            .map_err(sdk_error)
     }
 
     /// Report whether the loaded identity public key is the key in
@@ -1075,10 +1152,10 @@ impl Chat {
     /// encoding, so use it to check whether the keys on this device belong
     /// to a key registered to the account.
     #[wasm_bindgen(js_name = matchesRegisteredKey)]
-    pub fn matches_registered_key(&self, public_key_b64: &str) -> Result<bool, JsError> {
+    pub fn matches_registered_key(&self, public_key_b64: &str) -> Result<bool, JsValue> {
         self.inner
             .matches_registered_key(public_key_b64)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+            .map_err(sdk_error)
     }
 }
 
@@ -1086,7 +1163,7 @@ impl Chat {
 /// `conversationKey` as a `Uint8Array` and the rest as camelCase fields.
 fn prepared_change_to_js(
     result: chat_xdk_core::PreparedConversationChange,
-) -> Result<JsValue, JsError> {
+) -> Result<JsValue, JsValue> {
     use serde::Serialize;
 
     let obj = js_sys::Object::new();
@@ -1094,39 +1171,48 @@ fn prepared_change_to_js(
     if let Some(ckey) = &result.conversation_key {
         let arr = js_sys::Uint8Array::from(ckey.encoded());
         js_sys::Reflect::set(&obj, &"conversationKey".into(), &arr.into())
-            .map_err(|_| JsError::new("Failed to set conversationKey"))?;
+            .map_err(|_| internal_error("Failed to set conversationKey"))?;
     }
     js_sys::Reflect::set(
         &obj,
         &"conversationId".into(),
         &JsValue::from_str(&result.conversation_id),
     )
-    .map_err(|_| JsError::new("Failed to set conversationId"))?;
+    .map_err(|_| internal_error("Failed to set conversationId"))?;
     js_sys::Reflect::set(
         &obj,
         &"conversationKeyVersion".into(),
         &JsValue::from_str(&result.conversation_key_version),
     )
-    .map_err(|_| JsError::new("Failed to set conversationKeyVersion"))?;
+    .map_err(|_| internal_error("Failed to set conversationKeyVersion"))?;
+    for (name, value) in [
+        ("encryptedTitle", &result.encrypted_title),
+        ("encryptedDescription", &result.encrypted_description),
+    ] {
+        if let Some(value) = value {
+            js_sys::Reflect::set(&obj, &name.into(), &JsValue::from_str(value))
+                .map_err(|_| internal_error(format!("Failed to set {name}")))?;
+        }
+    }
 
     let js_prepared: JsPreparedConversationChange = result.into();
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     let participant_keys_val = js_prepared
         .conversation_participant_keys
         .serialize(&serializer)
-        .map_err(|e| JsError::new(&format!("Serialization failed: {:?}", e)))?;
+        .map_err(|e| internal_error(format!("Serialization failed: {:?}", e)))?;
     js_sys::Reflect::set(
         &obj,
         &"conversationParticipantKeys".into(),
         &participant_keys_val,
     )
-    .map_err(|_| JsError::new("Failed to set conversationParticipantKeys"))?;
+    .map_err(|_| internal_error("Failed to set conversationParticipantKeys"))?;
     let action_signatures_val = js_prepared
         .action_signatures
         .serialize(&serializer)
-        .map_err(|e| JsError::new(&format!("Serialization failed: {:?}", e)))?;
+        .map_err(|e| internal_error(format!("Serialization failed: {:?}", e)))?;
     js_sys::Reflect::set(&obj, &"actionSignatures".into(), &action_signatures_val)
-        .map_err(|_| JsError::new("Failed to set actionSignatures"))?;
+        .map_err(|_| internal_error("Failed to set actionSignatures"))?;
 
     Ok(obj.into())
 }
@@ -1144,18 +1230,14 @@ impl FileEncryptor {
     /// Encrypt a chunk of the file, returning the encrypted bytes available
     /// so far.
     #[wasm_bindgen]
-    pub fn push(&mut self, plaintext: Vec<u8>) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .push(&plaintext)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn push(&mut self, plaintext: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        self.inner.push(&plaintext).map_err(sdk_error)
     }
 
     /// Emit the final frame and consume the encryptor.
     #[wasm_bindgen]
-    pub fn finish(self) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .finish()
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn finish(self) -> Result<Vec<u8>, JsValue> {
+        self.inner.finish().map_err(sdk_error)
     }
 }
 
@@ -1174,18 +1256,14 @@ impl FileDecryptor {
     /// Decrypt a chunk of the encrypted file, returning the bytes available
     /// so far.
     #[wasm_bindgen]
-    pub fn push(&mut self, ciphertext: Vec<u8>) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .push(&ciphertext)
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn push(&mut self, ciphertext: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        self.inner.push(&ciphertext).map_err(sdk_error)
     }
 
     /// Decrypt the final frame and consume the decryptor.
     #[wasm_bindgen]
-    pub fn finish(self) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .finish()
-            .map_err(|e| JsError::new(&format!("{}", e)))
+    pub fn finish(self) -> Result<Vec<u8>, JsValue> {
+        self.inner.finish().map_err(sdk_error)
     }
 }
 
@@ -1205,41 +1283,34 @@ fn now_millis() -> String {
 fn js_to_conv_keys(
     method: &str,
     js: JsValue,
-) -> Result<HashMap<String, XChatConversationKey>, JsError> {
+) -> Result<HashMap<String, XChatConversationKey>, JsValue> {
     if !js.is_object() || js_sys::Array::is_array(&js) {
-        return Err(JsError::new(&format!(
+        return Err(invalid_input(format!(
             "Invalid {method} params: conversationKeys must be an object mapping key version to \
              key bytes (the `keys` map of decryptEvents or extractConversationKeys)"
         )));
     }
-    let mut result = HashMap::new();
-    let entries = js_sys::Object::entries(&js_sys::Object::from(js));
-    for i in 0..entries.length() {
-        let pair = js_sys::Array::from(&entries.get(i));
+    let mut entries = HashMap::new();
+    let pairs = js_sys::Object::entries(&js_sys::Object::from(js));
+    for i in 0..pairs.length() {
+        let pair = js_sys::Array::from(&pairs.get(i));
         let version = pair.get(0).as_string().unwrap_or_default();
-        let value = pair.get(1);
-        let key = value
+        let bytes = pair
+            .get(1)
             .dyn_ref::<js_sys::Uint8Array>()
-            .and_then(|bytes| XChatConversationKey::from_bytes(bytes.to_vec()))
-            .ok_or_else(|| {
-                JsError::new(&format!(
-                    "the key for version '{}' in the conversation key map is not 32 bytes: pass \
-                     the raw 32-byte conversation keys (the `keys` map of decryptEvents or \
-                     extractConversationKeys)",
-                    version
-                ))
-            })?;
-        result.insert(version, key);
+            .map(js_sys::Uint8Array::to_vec)
+            .unwrap_or_default();
+        entries.insert(version, bytes);
     }
-    Ok(result)
+    bindings::conversation_keys(entries).map_err(sdk_error)
 }
 
 /// Copy a params object's `Uint8Array` field in one step.
-fn js_to_bytes(method: &str, field: &str, js: &JsValue) -> Result<Vec<u8>, JsError> {
+fn js_to_bytes(method: &str, field: &str, js: &JsValue) -> Result<Vec<u8>, JsValue> {
     js.dyn_ref::<js_sys::Uint8Array>()
         .map(js_sys::Uint8Array::to_vec)
         .ok_or_else(|| {
-            JsError::new(&format!(
+            invalid_input(format!(
                 "Invalid {method} params: {field} must be a Uint8Array"
             ))
         })
@@ -1249,12 +1320,12 @@ fn js_to_bytes(method: &str, field: &str, js: &JsValue) -> Result<Vec<u8>, JsErr
 /// empty list (the core falls back to the `setSigningKeys` store); a
 /// malformed array is a caller error and is surfaced rather than silently
 /// ignored.
-fn js_to_signing_keys(js: JsValue) -> Result<Vec<chat_xdk_core::SigningKeyEntry>, JsError> {
+fn js_to_signing_keys(js: JsValue) -> Result<Vec<chat_xdk_core::SigningKeyEntry>, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(Vec::new());
     }
     let entries: Vec<JsSigningKeyEntry> = serde_wasm_bindgen::from_value(js)
-        .map_err(|e| JsError::new(&format!("Invalid signingKeys: {}", e)))?;
+        .map_err(|e| invalid_input(format!("Invalid signingKeys: {}", e)))?;
     Ok(entries.into_iter().map(Into::into).collect())
 }
 
@@ -1265,9 +1336,9 @@ fn js_to_signing_keys(js: JsValue) -> Result<Vec<chat_xdk_core::SigningKeyEntry>
 fn from_js_params<T: serde::de::DeserializeOwned>(
     method: &str,
     value: JsValue,
-) -> Result<T, JsError> {
+) -> Result<T, JsValue> {
     serde_wasm_bindgen::from_value(value)
-        .map_err(|e| JsError::new(&format!("Invalid {} params: {}", method, e)))
+        .map_err(|e| invalid_input(format!("Invalid {} params: {}", method, e)))
 }
 
 /// `replyToSenderId`: a user id, as a digits-only string. A number is
@@ -1290,17 +1361,46 @@ fn reply_to_sender_id_string<'de, D: serde::Deserializer<'de>>(
     }
 }
 
+/// `Number.MAX_SAFE_INTEGER`: the largest integer a JS number holds exactly.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// A millisecond count from JS: a finite number no larger in magnitude than
+/// `Number.MAX_SAFE_INTEGER`, truncated toward zero. NaN, an infinity or a
+/// number past that range names no instant or duration, so it is rejected
+/// rather than signed as some other value.
+fn checked_msec<E: serde::de::Error>(value: f64) -> Result<i64, E> {
+    if value.is_finite() && value.abs() <= MAX_SAFE_INTEGER {
+        return Ok(value as i64);
+    }
+    let shown = match value {
+        f64::INFINITY => "Infinity".to_string(),
+        f64::NEG_INFINITY => "-Infinity".to_string(),
+        _ => value.to_string(),
+    };
+    Err(E::custom(format!(
+        "a millisecond value must be a finite number within the safe integer range, got {shown}"
+    )))
+}
+
+fn msec<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    checked_msec(<f64 as serde::Deserialize>::deserialize(deserializer)?)
+}
+
+fn optional_msec<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error> {
+    <Option<f64> as serde::Deserialize>::deserialize(deserializer)?
+        .map(checked_msec)
+        .transpose()
+}
+
 /// Convert entity tuples `[start, end, "type"]` into core descriptors.
 fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<chat_xdk_core::EntityDescriptor> {
     tuples
         .into_iter()
-        .map(
-            |(start, end, entity_type)| chat_xdk_core::EntityDescriptor {
-                start,
-                end,
-                entity_type,
-            },
-        )
+        .map(|(start, end, entity_type)| {
+            chat_xdk_core::EntityDescriptor::new(start, end, entity_type)
+        })
         .collect()
 }
 
@@ -1335,7 +1435,8 @@ struct JsEncryptMessageParams {
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
-    ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1360,7 +1461,8 @@ struct JsEncryptReplyParams {
     reply_to_attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
-    ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1451,7 +1553,8 @@ impl JsMessageDeleteParams {
 struct JsMarkConversationReadParams {
     conversation_id: String,
     seen_until_sequence_id: String,
-    seen_at_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    seen_at_msec: Option<i64>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1464,7 +1567,10 @@ impl JsMarkConversationReadParams {
             self.conversation_id,
             self.seen_until_sequence_id,
         );
-        params.seen_at_msec = Some(self.seen_at_msec.unwrap_or_else(js_sys::Date::now) as i64);
+        params.seen_at_msec = Some(
+            self.seen_at_msec
+                .unwrap_or_else(|| js_sys::Date::now() as i64),
+        );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
@@ -1474,22 +1580,24 @@ impl JsMarkConversationReadParams {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsGroupMembersRemoveParams {
+    public_keys: Vec<JsPublicKeyInput>,
     conversation_id: String,
     user_ids: Vec<String>,
-    public_keys: Option<Vec<JsPublicKeyInput>>,
-    conversation_key_version: Option<String>,
+    title: Option<String>,
+    description: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
 
 impl JsGroupMembersRemoveParams {
     fn into_core(self) -> chat_xdk_core::GroupMembersRemoveParams {
-        let mut params =
-            chat_xdk_core::GroupMembersRemoveParams::new(self.conversation_id, self.user_ids);
-        params.public_keys = self
-            .public_keys
-            .map(|keys| keys.into_iter().map(Into::into).collect());
-        params.conversation_key_version = self.conversation_key_version;
+        let mut params = chat_xdk_core::GroupMembersRemoveParams::new(
+            self.public_keys.into_iter().map(Into::into).collect(),
+            self.conversation_id,
+            self.user_ids,
+        );
+        params.title = self.title;
+        params.description = self.description;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
@@ -1521,21 +1629,21 @@ impl JsGroupLeaveParams {
 #[serde(rename_all = "camelCase")]
 struct JsGroupTitleChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_title: String,
+    new_title: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 impl JsGroupTitleChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupTitleChangeParams {
-        let mut params = chat_xdk_core::GroupTitleChangeParams::new(
-            self.conversation_id,
-            self.conversation_key_version,
-            self.custom_title,
-        );
+        let mut params =
+            chat_xdk_core::GroupTitleChangeParams::new(self.conversation_id, self.new_title);
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
+        params.conversation_key = self.conversation_key;
+        params.conversation_key_version = self.conversation_key_version;
         params
     }
 }
@@ -1544,8 +1652,8 @@ impl JsGroupTitleChangeParams {
 #[serde(rename_all = "camelCase")]
 struct JsGroupAvatarChangeParams {
     conversation_id: String,
+    new_avatar_url: String,
     conversation_key_version: String,
-    custom_avatar_url: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1554,8 +1662,8 @@ impl JsGroupAvatarChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupAvatarChangeParams {
         let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
             self.conversation_id,
+            self.new_avatar_url,
             self.conversation_key_version,
-            self.custom_avatar_url,
         );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
@@ -1567,21 +1675,23 @@ impl JsGroupAvatarChangeParams {
 #[serde(rename_all = "camelCase")]
 struct JsGroupDescriptionChangeParams {
     conversation_id: String,
-    conversation_key_version: String,
-    custom_description: String,
+    new_description: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
 }
 
 impl JsGroupDescriptionChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupDescriptionChangeParams {
         let mut params = chat_xdk_core::GroupDescriptionChangeParams::new(
             self.conversation_id,
-            self.conversation_key_version,
-            self.custom_description,
+            self.new_description,
         );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
+        params.conversation_key = self.conversation_key;
+        params.conversation_key_version = self.conversation_key_version;
         params
     }
 }
@@ -1629,7 +1739,8 @@ impl JsGroupAdminsRemoveParams {
 struct JsGroupInviteEnableParams {
     conversation_id: String,
     invite_url: String,
-    expires_at_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    expires_at_msec: Option<i64>,
     affiliate_id: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
@@ -1639,7 +1750,7 @@ impl JsGroupInviteEnableParams {
     fn into_core(self) -> chat_xdk_core::GroupInviteEnableParams {
         let mut params =
             chat_xdk_core::GroupInviteEnableParams::new(self.conversation_id, self.invite_url);
-        params.expires_at_msec = self.expires_at_msec.map(|msec| msec as i64);
+        params.expires_at_msec = self.expires_at_msec;
         params.affiliate_id = self.affiliate_id;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
@@ -1708,7 +1819,8 @@ impl JsGroupJoinRejectParams {
 #[serde(rename_all = "camelCase")]
 struct JsMessageTtlChangeParams {
     conversation_id: String,
-    ttl_msec: f64,
+    #[serde(deserialize_with = "msec")]
+    ttl_msec: i64,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
@@ -1716,7 +1828,7 @@ struct JsMessageTtlChangeParams {
 impl JsMessageTtlChangeParams {
     fn into_core(self) -> chat_xdk_core::MessageTtlChangeParams {
         let mut params =
-            chat_xdk_core::MessageTtlChangeParams::new(self.conversation_id, self.ttl_msec as i64);
+            chat_xdk_core::MessageTtlChangeParams::new(self.conversation_id, self.ttl_msec);
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params
@@ -1785,7 +1897,9 @@ struct JsGroupMembersChangeParams {
     signing_key_version: Option<String>,
     current_title: Option<String>,
     current_avatar_url: Option<String>,
-    current_ttl_msec: Option<f64>,
+    current_description: Option<String>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    current_ttl_msec: Option<i64>,
     current_screen_capture_blocking_enabled: Option<bool>,
 }
 
@@ -1799,8 +1913,8 @@ struct JsGroupCreateParams {
     sender_id: Option<String>,
     signing_key_version: Option<String>,
     title: Option<String>,
-    avatar_url: Option<String>,
-    ttl_msec: Option<f64>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1856,18 +1970,18 @@ struct JsDecryptFileParams {
 /// The params of `fileDecryptor`.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JsFileParams {
+struct JsFileDecryptorParams {
     event_b64: String,
     #[serde(with = "serde_wasm_bindgen::preserve")]
     conversation_keys: JsValue,
     media_hash_key: String,
 }
 
-fn to_js_value<T: serde::Serialize>(value: &T) -> Result<JsValue, JsError> {
+fn to_js_value<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::json_compatible();
     value
         .serialize(&serializer)
-        .map_err(|e| JsError::new(&format!("Serialization failed: {:?}", e)))
+        .map_err(|e| internal_error(format!("Serialization failed: {:?}", e)))
 }
 
 // This crate has no Rust-side test module: `#[wasm_bindgen_test]` tests never

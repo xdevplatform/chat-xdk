@@ -73,7 +73,7 @@ jobs:
         with:
           tool: wasm-pack
       - name: Build wasm pkg
-        run: cd crates/wasm && wasm-pack build --target web --release
+        run: make wasm
 
       - name: Build Python extension into the in-repo package
         env:
@@ -84,8 +84,8 @@ jobs:
           EXT_SUFFIX="$(python -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')"
           cp -f target/debug/libchat_xdk.so "crates/pyo3/python/chat_xdk/_native${EXT_SUFFIX}"
 
-      - name: Build chat_xdk_dotnet native lib (for .NET + JVM)
-        run: cargo build -p chat-xdk-dotnet --release
+      - name: Build chat_xdk_ffi native lib (for .NET + JVM)
+        run: cargo build -p chat-xdk-ffi --release
 
       # --- Run each example's offline test -------------------------------------
       - name: Rust example
@@ -109,5 +109,5 @@ jobs:
         run: |
           cd examples/dotnet
           dotnet build ChatBot.Tests/ChatBot.Tests.csproj
-          cp ../../target/release/libchat_xdk_dotnet.so ChatBot.Tests/bin/Debug/net8.0/
+          cp ../../target/release/libchat_xdk_ffi.so ChatBot.Tests/bin/Debug/net8.0/
           dotnet test ChatBot.Tests/ChatBot.Tests.csproj --no-build

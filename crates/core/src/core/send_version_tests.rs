@@ -464,3 +464,93 @@ fn only_a_v1_edit_names_the_message_it_edits() {
         Some(original.message_id.as_str())
     );
 }
+
+#[test]
+fn a_decrypted_v1_edit_names_the_message_it_edits() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let target = frame(&delivered(&original, "100"));
+    let decrypted_edit = |party: &Party| {
+        let params = EncryptEditParams::new(target.clone(), "edited")
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        let edit = party.core.encrypt_edit(&params).unwrap();
+        let message = decrypt_message(
+            &ChatCore::new(),
+            &delivered(&edit, "200"),
+            &keys(KEY_VERSION, &ckey),
+            std::slice::from_ref(&party.entry),
+        )
+        .unwrap();
+        assert!(message.verified);
+        match message.content {
+            MessageContent::Edit {
+                target_message_sequence_id,
+                target_message_id,
+                updated_text,
+                ..
+            } => (target_message_sequence_id, target_message_id, updated_text),
+            other => panic!("expected an edit, got {:?}", other),
+        }
+    };
+
+    assert_eq!(
+        decrypted_edit(&party),
+        ("100".to_string(), None, "edited".to_string())
+    );
+    enable_v1_send(&party.core);
+    assert_eq!(
+        decrypted_edit(&party),
+        (
+            "100".to_string(),
+            Some(original.message_id.clone()),
+            "edited".to_string()
+        )
+    );
+}
+
+#[test]
+fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
+    let ckey = key(1);
+    let send = |party: &Party| {
+        party
+            .core
+            .encrypt_message(&message_params("hi", &ckey))
+            .unwrap()
+            .signature_info
+            .signature_version
+    };
+
+    let party = author();
+    assert_eq!(send(&party), "7", "no answer: v0");
+    party
+        .core
+        .set_feature_switches(200, br#"{"features":{"v1_send":true}}"#);
+    assert_eq!(send(&party), "10");
+    party
+        .core
+        .set_feature_switches(200, br#"{"features":{"v1_send":false}}"#);
+    assert_eq!(send(&party), "10", "a chat takes one answer");
+    assert_eq!(
+        party.core.start_features(),
+        None,
+        "nor reads the switches again"
+    );
+
+    let on = br#"{"features":{"v1_send":true}}"#;
+    let mut oversized = on.to_vec();
+    oversized.resize(crate::FEATURES_MAX_BODY + 1, b' ');
+    for (status, body) in [
+        (404, on.as_slice()),
+        (200, b"not json".as_slice()),
+        (200, br#"{"features":{"v1_send":"true"}}"#.as_slice()),
+        (200, oversized.as_slice()),
+    ] {
+        let party = author();
+        party.core.set_feature_switches(status, body);
+        assert_eq!(send(&party), "7", "{status} {}", body.len());
+    }
+}

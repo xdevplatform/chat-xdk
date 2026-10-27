@@ -28,9 +28,11 @@ signature version 10, so it rejects every v1 send as a signature
 verification failure. 0.6.0 therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
-chat that can't read the switch keeps sending v0. No public API turns v1
-on, and the Rust crate and the C ABI make no requests, so they always send
-v0. Upgrade the apps that read your conversations first:
+chat that can't read the switch keeps sending v0. The Rust crate and the C
+ABI make no requests: a Rust app, or code that calls the C ABI directly,
+makes the one request itself and hands the chat its answer, under the same
+rules the bindings follow, so it sends v1 when the switch says so too.
+Upgrade the apps that read your conversations first:
 [Rust](rust.md#upgrade-readers-before-v1-sends-start),
 [Python](python.md#upgrade-readers-before-v1-sends-start),
 [JavaScript](javascript.md#upgrade-readers-before-v1-sends-start),
@@ -46,14 +48,24 @@ The bindings read the switches with one anonymous request,
 credentials and no query parameters. Each chat reads the switches once, when
 it is created, and keeps the answer for its lifetime, so a change to a switch
 reaches the chats created after it; chats created while a request is in
-flight share it. The request never delays or fails a call, and any failure
+flight share it. Every switch is off until the answer arrives, so a chat
+whose `v1_send` switch is on sends v0 first and v1 from then on. Files
+encrypted from a v0 build of a message don't open with a v1 build of it, so
+encrypt each file from the payload you send. The request never delays or
+fails a call, and any failure
 leaves every switch off for the chat's lifetime, so its sends stay in v0, the
-format every reader opens:
+format every reader opens. The SDK decides what an answer means in one
+place, its Rust core: a binding only performs the request, and a body is
+read only up to its size limit, never whole first. A Rust app, or code
+that calls the C ABI directly, hands the core the answer to a request it
+made, and the core applies the same rules to it:
+[Rust](rust.md#the-feature-switch-request),
 [Python](python.md#the-feature-switch-request),
 [JavaScript](javascript.md#the-feature-switch-request),
 [Go](go.md#the-feature-switch-request),
 [JVM](jvm.md#the-feature-switch-request),
-[.NET](dotnet.md#the-feature-switch-request).
+[.NET](dotnet.md#the-feature-switch-request),
+[C ABI](c-abi.md#the-feature-switch-request).
 
 ## User ids and key versions take one form
 
@@ -99,10 +111,13 @@ order: start the upload, whose `media_hash_key` names the file in the
 message and whose size `encrypted_file_size` gives before encryption, build
 the message, then encrypt and upload the file. A v1 message with files takes
 an id derived from them, so building the same message again gives the same
-id and keeps its encrypted files valid. `decrypt_file` takes the event of the
-message that carries the file, which gives the key for the message's format
-and version and covers media quoted in a reply preview. v0 files use the
-conversation key, and the same calls handle both formats:
+id and keeps its encrypted files valid. A file with an empty filename or a
+size of 0 or less fails before anything is encrypted, since receiving
+clients discard it, and so does one with a negative width or height.
+`decrypt_file` takes the event of the message that carries the file, which
+gives the key for the message's format and version and covers media quoted
+in a reply preview. v0 files use the conversation key, and the same calls
+handle both formats:
 [Rust](rust.md#encrypt-a-file-from-its-message),
 [Python](python.md#encrypt-a-file-from-its-message),
 [JavaScript](javascript.md#encrypt-a-file-from-its-message),
@@ -118,8 +133,10 @@ name and fields in every binding (`SetIdentityParams`,
 `DecryptEventsParams`, `EncryptFileParams` and so on), so the bindings stay
 symmetric, and optional inputs are named fields that fall back to the chat's
 state (identity, key cache, signing keys) when unset. Rust takes every
-params value by reference, and Python takes a params class for every encrypt
-and prepare method:
+params value by reference and builds it with `new`, which takes the required
+fields, and `with_*` methods for the optional ones, so a field can be added
+without breaking callers. Python takes a params class for every encrypt and
+prepare method:
 [Rust](rust.md#set_identity-takes-setidentityparams),
 [Python](python.md#set_identity-takes-setidentityparams),
 [JavaScript](javascript.md#setidentity-takes-a-params-object),
@@ -127,6 +144,52 @@ and prepare method:
 [JVM](jvm.md#setidentity-takes-setidentityparams),
 [.NET](dotnet.md#setidentity-takes-setidentityparams),
 [C ABI](c-abi.md#set-the-identity-with-a-params-document).
+
+## A key change sets the version to encrypt with only once it verifies
+
+`decrypt_events` returns, with the keys it decrypts, the version to encrypt
+new messages with. A key change carries the key it introduces whether or not
+its signature verifies, and a reader that can't verify one (no signing key
+for its sender yet, or a forged change) still needs its key to read
+messages sent under it. Only a verified key change can set the version to
+encrypt with, and that version never moves back for the chat's lifetime: a
+key change from someone who can't sign for the conversation can't steer a
+chat's sends to a key they chose, and a replayed older change can't roll the
+version back. Every binding's `decrypt_events` result works this way:
+[Rust](rust.md#decrypt_events-takes-decrypteventsparams),
+[Python](python.md#decrypt_events-takes-decrypteventsparams),
+[JavaScript](javascript.md#decryptevents-takes-a-params-object),
+[Go](go.md#decryptevents-takes-decrypteventsparams),
+[JVM](jvm.md#decryptevents-takes-decrypteventsparams),
+[.NET](dotnet.md#decryptevents-takes-decrypteventsparams),
+[C ABI](c-abi.md#decrypt-with-params-documents).
+
+## Keys stored in Juicebox take their config when the chat is created
+
+The bindings took the Juicebox config in different places: some at creation,
+some on each setup and unlock call, and JS through its own options. Every
+binding now takes it when the chat is created, or with `update_config` on
+first boot, before the account has one, so setup and unlock take only the
+PIN. Until a chat has a config, the SDK core fails its Juicebox calls before
+any request, with one `invalid_state` error worded the same in every
+binding. An empty or blank config string counts as none, so creating a chat
+with one, or passing one to `update_config`, fails with that error at once,
+in every binding, rather than at the chat's first Juicebox call. PINs are
+bytes in every binding whose language can hold them that way, so an app can
+zero its copy once a call returns, and the bindings whose apps run event
+loops or UI threads add async forms of the Juicebox calls, which wait on
+network round trips. The JS binding runs the Juicebox client itself, but the
+SDK core still decides what a config means, which PINs a new registration
+accepts, how many guesses a registration allows (the config's
+`max_guess_count`), and how a failure reads, so every binding behaves the
+same. JS also loads keys with `importKeys` and saves them with `exportKeys`,
+as every binding does, without Juicebox:
+[Python](python.md#keys-stored-in-juicebox),
+[JavaScript](javascript.md#keys-stored-in-juicebox),
+[Go](go.md#keys-stored-in-juicebox),
+[JVM](jvm.md#keys-stored-in-juicebox),
+[.NET](dotnet.md#keys-stored-in-juicebox),
+[C ABI](c-abi.md#keys-stored-in-juicebox).
 
 ## Action signatures come nested
 
@@ -136,7 +199,8 @@ the signature nested under `message_event_signature`, next to the signer's
 `signing_public_key`. The prepare methods return that shape, so apps send
 the entries as returned; deletes and read receipts return a
 `PreparedAction`, one entry in the same shape. Only the JSON shape is
-nested; what is signed is the same:
+nested; what is signed is the same, and the signed payload itself stays
+inside the SDK, so a request never carries it:
 [Rust](rust.md#action-signatures-come-nested),
 [Python](python.md#action-signatures-come-nested),
 [JavaScript](javascript.md#action-signatures-come-nested),
@@ -189,31 +253,59 @@ Received keys:
 [.NET](dotnet.md#received-participant-keys-take-the-same-names),
 [C ABI](c-abi.md#received-participant-keys-take-the-same-names).
 
-## Decrypted events name the conversation key version as the X API does
+## Public key inputs name the identity key and its version
 
-Decrypted messages and key changes carry their conversation key version as
+The public keys a key change or group change encrypts a new conversation
+key to name their fields `identity_public_key` and `public_key_version`, as
+the signing key entries the decrypt calls take do, so one name holds one
+value in every key list an app builds: the key a user's `public_key` is,
+their identity key, and the version the X API gives it:
+[Rust](rust.md#public-key-inputs-name-the-identity-key-and-its-version),
+[Python](python.md#public-key-inputs-name-the-identity-key-and-its-version),
+[JavaScript](javascript.md#public-key-inputs-name-the-identity-key-and-its-version),
+[Go](go.md#public-key-inputs-name-the-identity-key-and-its-version),
+[JVM](jvm.md#public-key-inputs-name-the-identity-key-and-its-version),
+[.NET](dotnet.md#public-key-inputs-name-the-identity-key-and-its-version),
+[C ABI](c-abi.md#public-key-inputs-name-the-identity-key-and-its-version).
+
+## Decrypted events use the names the calls take
+
+A decrypted event names each value as the calls that send it do, so one name
+follows a value from the events an app reads to the calls it makes.
+Messages and key changes carry their conversation key version as
 `conversation_key_version`: the name the X API's events and the Thrift
-events give it, and the name the encrypt calls take. One name follows a key
-version from the events an app reads to the calls it makes:
-[Rust](rust.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[Python](python.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[JavaScript](javascript.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[Go](go.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[JVM](jvm.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[.NET](dotnet.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does),
-[C ABI](c-abi.md#decrypted-events-name-the-conversation-key-version-as-the-x-api-does).
+events give it, and the name the encrypt calls take. Fields that hold
+sequence ids say so, because apps deduplicate and anchor on a message's
+signed `message_id`, and a field named for a message id must hold one: a
+reaction or an edit names its target as `target_message_sequence_id`, a
+deletion its messages as `sequence_ids`, and a read receipt or unread
+marker its position as `seen_until_sequence_id`, the names the reaction,
+edit, delete and read-receipt params take. An edit's text is
+`updated_text`, as the edit params name it, and a v1 edit, which signs the
+`message_id` of the message it edits, carries that id as
+`target_message_id`:
+[Rust](rust.md#decrypted-events-use-the-names-the-calls-take),
+[Python](python.md#decrypted-events-use-the-names-the-calls-take),
+[JavaScript](javascript.md#decrypted-events-use-the-names-the-calls-take),
+[Go](go.md#decrypted-events-use-the-names-the-calls-take),
+[JVM](jvm.md#decrypted-events-use-the-names-the-calls-take),
+[.NET](dotnet.md#decrypted-events-use-the-names-the-calls-take),
+[C ABI](c-abi.md#decrypted-events-use-the-names-the-calls-take).
 
 ## Signatures verify at versions 8 through 11
 
 Each signature carries its version, and each version signs its own payload
-layout: version 8 signs key versions as integers, 9 appends the signature
-version, 10 covers `contents_encryption_version`, and 11 adds the key
-version to group member removals. 0.6.0 rebuilds each payload in the layout
-of the version its signature carries, so events signed at 8 through 11
-verify, including the v1 sends it signs at 10. Versions above 11 are
-rejected, since their layout is unknown
+layout: version 8 signs key versions as integers and adds a group's
+description to member adds, 9 appends the signature version, 10 covers
+`contents_encryption_version`, and 11 adds the key version to group member
+removals. 0.6.0 rebuilds each payload in the layout of the version its
+signature carries, so events signed at 8 through 11 verify, including the v1
+sends it signs at 10 and the member adds with a description it signs at 8.
+Versions above 11 are rejected, since their layout is unknown
 ([CRYPTO.md](../CRYPTO.md#verifying-newer-versions)). There's no code to
-change.
+change to read them. 0.5.x readers rebuild the layouts up to 7 only, so they
+can't verify v1 sends, member removals, or member adds with a description:
+each guide says to upgrade readers first.
 
 ## Read receipts should be signed
 
@@ -233,37 +325,80 @@ returns the receipt as a verified `ReadReceipt`:
 ## Group actions should be signed
 
 Apps should sign a group update with the signatures of the actions it
-performs. Removing members also rotates the conversation key for the
-members who stay:
-`prepare_group_members_remove` takes their public keys and returns a
-`PreparedConversationChange`, and
+performs. Removing members rotates the conversation key, so the members
+removed don't receive the key the group encrypts under next:
+`prepare_group_members_remove` takes the public keys of the members who stay
+and returns a `PreparedConversationChange` with the new key, and
 `POST /2/chat/conversations/{id}/members/remove` sends
-`group_key_rotation_data` with both signatures. Leaving signs the sender's
+`group_key_rotation_data` with its signatures. Leaving signs the sender's
 removal, then an admin add when `promote_admin_id` is set, then a
-conversation delete, and does not rotate the key. Title, avatar,
-description, admin, invite, and join changes, message-TTL changes, and
-screen-capture changes each return a `PreparedAction`:
+conversation delete, and does not rotate the key. Admin, invite, and join
+changes, message-TTL changes, and screen-capture changes each return a
+`PreparedAction`.
+
+A group's title and description are encrypted under the conversation key,
+and the SDK encrypts them: a group create, a member add, the title and
+description changes, and a removal take the plaintext and return the
+encrypted values with their signatures, so an app never encrypts a title
+itself and no plaintext title reaches the X API. A create encrypts its title
+under the key it creates and returns it for its request's `group_name`. The
+changes resolve the key as `encrypt_message` does. A member add and a
+removal rotate the key, so each re-encrypts the title and description the
+app passes under the new key. An add signs both in the member add, so the
+new members can read them, and returns the title for its request. A removal
+signs each between the removal and the key change, marked as a key-rotation
+re-encryption so X clients don't show it as a change; it leaves the avatar
+alone.
+
+An avatar is an image, and X clients encrypt the image, not its URL: the app
+encrypts the image under the conversation key and uploads it to the group's
+media, and the X API checks the URL against that media. So the avatar change
+signs the media URL as is, with the version of the key the image is
+encrypted under, and the decrypt calls return both for a received avatar
+change. A create sets no avatar, as X clients' creates normally don't; the
+app sets one with an avatar change.
+
+`decrypt_event` and `decrypt_events` decrypt a received create's title and a
+received title or description change into a `GroupText`. A value they can't
+decrypt, because its key is missing or it doesn't decrypt under it, comes
+back unavailable with the value as carried instead of failing the event, so
+the rest of the event, such as a create's members and admins, still reads.
+0.5.x apps signed titles as plaintext while naming a key version, so an app
+shows the raw value when a title isn't decryptable. Each guide shows the
+calls and how to read a `GroupText`:
 [Rust](rust.md#group-actions-should-be-signed),
 [Python](python.md#group-actions-should-be-signed),
 [JavaScript](javascript.md#group-actions-should-be-signed),
 [Go](go.md#group-actions-should-be-signed),
 [JVM](jvm.md#group-actions-should-be-signed),
-[.NET](dotnet.md#group-actions-should-be-signed),
-[C ABI](c-abi.md#group-actions-should-be-signed).
+[.NET](dotnet.md#group-actions-should-be-signed), [C
+ABI](c-abi.md#group-actions-should-be-signed).
 
-## Invalid input has its own error
+## Errors carry their kind
 
-A missing or invalid parameter fails with an error that names the value
-(`SdkError::InvalidInput` in Rust), without the `Invalid state:` prefix,
-which is left for state the chat lacks, such as a missing identity or an
-empty key cache. Callers can tell a bad argument from missing setup:
-[Rust](rust.md#invalid-input-errors),
-[Python](python.md#invalid-input-errors),
-[JavaScript](javascript.md#invalid-input-errors),
-[Go](go.md#invalid-input-errors),
-[JVM](jvm.md#invalid-input-errors),
-[.NET](dotnet.md#invalid-input-errors),
-[C ABI](c-abi.md#invalid-input-errors).
+Apps react differently to a bad argument, missing setup, a forged event and
+a wrong PIN, and reading that from a message's text breaks when the text
+changes. Every error has a kind, which the SDK core assigns once and every
+binding reports the same way: an exception class in Python, a kind on the
+error in the other bindings, and a `kind` in the C ABI's error document. A
+wrong PIN carries the attempts Juicebox reports left as a number, not text
+to parse. A missing or invalid parameter fails with an error that names the
+value (`SdkError::InvalidInput` in Rust), without the `Invalid state:`
+prefix, which is left for state the chat lacks, such as a missing identity
+or an empty key cache. An entity of a type the protocol doesn't have fails
+the same way: dropping it, as 0.5.x did, sent a message that differed from
+the one the app built, without saying so. So do entity offsets outside the
+text, counted in bytes of its UTF-8 encoding, a URL card without a url and a
+post attachment without an id or a URL, which receivers can't place or open.
+Calls that answered with a bare result, such as `verify` and `export_keys`,
+report the core's error too, rather than a generic failure or no value:
+[Rust](rust.md#errors-carry-their-kind),
+[Python](python.md#errors-carry-their-kind),
+[JavaScript](javascript.md#errors-carry-their-kind),
+[Go](go.md#errors-carry-their-kind),
+[JVM](jvm.md#errors-carry-their-kind),
+[.NET](dotnet.md#errors-carry-their-kind),
+[C ABI](c-abi.md#errors-carry-their-kind).
 
 ## Smaller changes
 
@@ -272,12 +407,26 @@ empty key cache. Callers can tell a bad argument from missing setup:
   ([JavaScript](javascript.md#typescript-import-the-types-the-package-exports)).
 - The JVM file methods throw the unchecked `ChatXdkException` and declare no
   checked exceptions ([JVM](jvm.md#exceptions)).
-- C ABI entry points whose arguments differ from 0.5.x take new names, so a
-  stale header or library fails to link instead of misreading its arguments
-  ([C ABI](c-abi.md)).
-- Rust's `SendPayload` is `#[non_exhaustive]`, so a field can be added to it
-  without breaking code that reads it
-  ([Rust](rust.md#sendpayload-fields-take-the-send-requests-names)).
+- One crate, `chat-xdk-ffi`, builds the C ABI library of every binding over
+  it, so Go, .NET and the JVM call the same functions with the same
+  behavior. The ABI has a version, which the library reports, every call
+  returns its result and error the same way, and the header declares the
+  Juicebox calls only for a library built with them
+  ([C ABI](c-abi.md#check-the-abi-version)).
+- Python types the dicts its calls take and return with exported
+  `TypedDict`s, so a type checker reads them
+  ([Python](python.md#key-entries-and-results-have-named-types)).
+- .NET params documents omit a field left `null`, so a missing value fails
+  with an error that names it, and .NET and JVM descriptors and the JVM's
+  key entries take their required values in their constructors, so leaving
+  one out doesn't compile: no stand-in `""` or `0` reaches the core
+  ([JVM](jvm.md#descriptors-and-key-entries-take-their-values-in-constructors),
+  [.NET](dotnet.md#entities-and-preview-images-take-their-values-in-the-constructor)).
+- Rust's public enums, params structs and result structs, `SendPayload`
+  among them, are `#[non_exhaustive]`, so a variant or field can be added
+  without breaking code that builds params with `new` and `with_*`, reads
+  results, and matches enums with a wildcard arm
+  ([Rust](rust.md#types-are-non_exhaustive)).
 - The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
   so apps there need no copy of their own; a library built for 0.5.x doesn't
   export the entry points 0.6.0 calls

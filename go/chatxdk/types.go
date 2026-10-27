@@ -6,7 +6,6 @@ import "encoding/json"
 type PublicKeys struct {
 	Identity string `json:"identity"`
 	Signing  string `json:"signing"`
-	Version  string `json:"version,omitempty"`
 }
 
 // PublicKeyRegistration contains the fields expected by the X API
@@ -87,46 +86,63 @@ type SigningKeyEntry struct {
 	IdentityPublicKeySignature string `json:"identity_public_key_signature"`
 }
 
-// PublicKeyInput is one row from GET /2/dm/encryption/public_keys, passed to the prepare methods.
+// PublicKeyInput is one row from GET /2/users/{id}/public_keys, passed to the prepare methods.
 type PublicKeyInput struct {
-	UserID     string `json:"user_id"`
-	PublicKey  string `json:"public_key"`
-	KeyVersion string `json:"key_version"`
+	UserID string `json:"user_id"`
+	// IdentityPublicKey is the base64 identity public key (SEC1 or SPKI):
+	// the X API's public_key.
+	IdentityPublicKey string `json:"identity_public_key"`
+	// PublicKeyVersion is the key's version, as the X API returns it.
+	PublicKeyVersion string `json:"public_key_version"`
 }
 
 // ConversationKeyBundle holds decrypted conversation key material keyed by version.
-// Keys maps version string -> raw 32-byte conversation key.
+// Keys maps version string -> raw 32-byte conversation key. LatestVersion is
+// the version to encrypt with: from DecryptEvents, the newest version whose
+// key change verified (nil until one verifies); from ExtractConversationKeys,
+// the batch's highest version.
 type ConversationKeyBundle struct {
 	Keys          map[string][]byte `json:"keys"`
 	LatestVersion *string           `json:"latest_version"`
 }
 
-// DecryptedEventMessage is one element of DecryptEventsResult.Messages.
+// DecryptedEvent is one event DecryptEvents decrypted, of any event type.
 // Event decodes to the same typed Event that DecryptEvent returns; use
 // Event.Raw() for the underlying JSON.
-type DecryptedEventMessage struct {
+type DecryptedEvent struct {
 	Event       Event  `json:"event"`
 	OriginalB64 string `json:"original_b64,omitempty"`
 }
 
 // DecryptEventsResult is the batch decrypt API.
 type DecryptEventsResult struct {
-	Messages         []DecryptedEventMessage `json:"messages"`
-	ConversationKeys ConversationKeyBundle   `json:"conversation_keys"`
-	Errors           map[string]string       `json:"errors"`
+	Events           []DecryptedEvent      `json:"events"`
+	ConversationKeys ConversationKeyBundle `json:"conversation_keys"`
+	Errors           map[string]string     `json:"errors"`
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,
-// PrepareGroupCreate, and PrepareGroupMembersChange. It carries everything
-// needed to POST the change.
+// PrepareGroupCreate, PrepareGroupMembersChange, and PrepareGroupMembersRemove.
+// It carries everything needed to POST the change.
 type PreparedConversationChange struct {
 	ConversationID string `json:"conversation_id"`
 	// ConversationKey is the raw 32-byte conversation key that was generated.
 	// Unlike a string, the byte slice can be zeroed once no longer needed.
-	ConversationKey             []byte                       `json:"conversation_key"`
+	// It is secret, so it never appears in the JSON of this struct.
+	ConversationKey             []byte                       `json:"-"`
 	ConversationKeyVersion      string                       `json:"conversation_key_version"`
 	ConversationParticipantKeys []ConversationParticipantKey `json:"conversation_participant_keys"`
 	ActionSignatures            []ActionSignature            `json:"action_signatures"`
+	// EncryptedTitle is set by PrepareGroupCreate and
+	// PrepareGroupMembersChange when the params carry a title: the title
+	// encrypted under the new conversation key, base64, the group_name a
+	// create request sends and the encrypted_title an add-members request
+	// sends.
+	EncryptedTitle *string `json:"encrypted_title,omitempty"`
+	// EncryptedDescription is set by PrepareGroupMembersChange when the
+	// params carry a description: the description encrypted under the new
+	// conversation key, base64, as the signed member add carries it.
+	EncryptedDescription *string `json:"encrypted_description,omitempty"`
 }
 
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.
@@ -141,7 +157,10 @@ type ConversationKeyChangeParams struct {
 
 // GroupMembersChangeParams are the parameters for PrepareGroupMembersChange.
 // SenderID and SigningKeyVersion are optional overrides: empty resolves from
-// the session identity set via SetIdentity.
+// the session identity set via SetIdentity. CurrentTitle and
+// CurrentDescription are plaintext: the call encrypts each under the new
+// conversation key it generates. CurrentAvatarURL is the avatar's media URL,
+// signed as is.
 type GroupMembersChangeParams struct {
 	SenderID                            string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion                   string           `json:"signing_key_version,omitempty"` // empty = session identity
@@ -151,15 +170,18 @@ type GroupMembersChangeParams struct {
 	CurrentMemberIDs                    []string         `json:"current_member_ids"`
 	CurrentAdminIDs                     []string         `json:"current_admin_ids"`
 	CurrentPendingMemberIDs             []string         `json:"current_pending_member_ids"`
-	CurrentTitle                        string           `json:"current_title,omitempty"`      // empty = unset
-	CurrentAvatarURL                    string           `json:"current_avatar_url,omitempty"` // empty = unset
+	CurrentTitle                        string           `json:"current_title,omitempty"`       // empty = unset
+	CurrentAvatarURL                    string           `json:"current_avatar_url,omitempty"`  // empty = unset
+	CurrentDescription                  string           `json:"current_description,omitempty"` // empty = unset
 	CurrentTTLMsec                      *int64           `json:"current_ttl_msec,omitempty"`
 	CurrentScreenCaptureBlockingEnabled *bool            `json:"current_screen_capture_blocking_enabled,omitempty"`
 }
 
 // GroupCreateParams are the parameters for PrepareGroupCreate.
 // SenderID and SigningKeyVersion are optional overrides: empty resolves from
-// the session identity set via SetIdentity.
+// the session identity set via SetIdentity. Title is plaintext: the create
+// encrypts it under the new conversation key. A create sets no avatar; set it
+// afterwards with PrepareGroupAvatarChange.
 type GroupCreateParams struct {
 	SenderID          string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion string           `json:"signing_key_version,omitempty"` // empty = session identity
@@ -167,8 +189,7 @@ type GroupCreateParams struct {
 	ConversationID    string           `json:"conversation_id"`
 	MemberIDs         []string         `json:"member_ids"`
 	AdminIDs          []string         `json:"admin_ids"`
-	Title             string           `json:"title,omitempty"`      // empty = unset
-	AvatarURL         string           `json:"avatar_url,omitempty"` // empty = unset
+	Title             string           `json:"title,omitempty"` // empty = unset
 	TTLMsec           *int64           `json:"ttl_msec,omitempty"`
 }
 
@@ -217,10 +238,16 @@ type EncryptMessageParams struct {
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }
 
-// EntityTuple represents a text entity: [start, end, type].
+// EntityTuple represents a text entity: [start, end, type]. start and end
+// are byte offsets into the text, as Go string indices are, start inclusive
+// and end exclusive, so 0 <= start <= end <= len(text); other offsets fail
+// the call with an error of kind ErrorKindInvalidInput naming them.
 type EntityTuple [3]interface{}
 
-// NewEntity creates an EntityTuple.
+// NewEntity creates an EntityTuple. entityType is one of "url", "mention",
+// "hashtag", "cashtag", "email", "address" or "phone_number"; any other
+// value, an empty one included, fails the call with an error of kind
+// ErrorKindInvalidInput naming it.
 func NewEntity(start, end int, entityType string) EntityTuple {
 	return EntityTuple{start, end, entityType}
 }
@@ -229,8 +256,14 @@ func NewEntity(start, end int, entityType string) EntityTuple {
 type AttachmentDescriptor struct {
 	AttachmentType string `json:"attachment_type"` // "media", "url", or "post"
 	// The media fields are always marshaled (no omitempty): core requires
-	// them on "media" attachments and a zero value (e.g. width 0) is valid,
-	// so omitting zeros would be rejected. Other variants ignore them.
+	// them on "media" attachments and a zero width or height is valid, so
+	// omitting zeros would be rejected. FilesizeBytes is the encrypted
+	// file's size, EncryptedFileSize of its size; an empty Filename, a
+	// FilesizeBytes of 0 or less, or a negative Width or Height fails the
+	// send with an error of kind ErrorKindInvalidInput, as does a "url"
+	// attachment with an empty URL (sent even when empty, so the error names
+	// it) or a "post" one with neither RestID nor PostURL. Other variants
+	// ignore the media fields.
 	MediaHashKey   string  `json:"media_hash_key"`
 	Width          int64   `json:"width"`
 	Height         int64   `json:"height"`
@@ -238,7 +271,7 @@ type AttachmentDescriptor struct {
 	Filename       string  `json:"filename"`
 	MediaType      *int32  `json:"media_type,omitempty"`
 	DurationMillis *int64  `json:"duration_millis,omitempty"`
-	URL            string  `json:"url,omitempty"`
+	URL            string  `json:"url"`
 	DisplayTitle   *string `json:"display_title,omitempty"`
 	// Optional encrypted preview images for "url" attachments. Supplying a
 	// display title plus a banner image makes receiving clients render a
@@ -257,8 +290,10 @@ type AttachmentDescriptor struct {
 //
 // FilesizeBytes and Filename are required alongside MediaHashKey: receiving
 // clients' shared ingest silently discards the whole preview image when
-// either is missing on the wire. FilesizeBytes is the encrypted image's size,
-// EncryptedFileSize of the image's size.
+// either is missing on the wire, so an empty Filename or a FilesizeBytes of
+// 0 or less fails the send with an error of kind ErrorKindInvalidInput, as
+// does a negative Width or Height. FilesizeBytes is the encrypted image's
+// size, EncryptedFileSize of the image's size.
 type URLAttachmentImageDescriptor struct {
 	MediaHashKey  string `json:"media_hash_key"`
 	FilesizeBytes int64  `json:"filesize_bytes"`
@@ -406,20 +441,20 @@ const (
 
 // GroupMembersRemoveParams are the parameters for PrepareGroupMembersRemove.
 //
-// PublicKeys are the identity keys of the members who stay. When set, the
-// call rotates the conversation key for them. An empty slice does not rotate.
-// ConversationKeyVersion is bound into a removal that does not rotate; empty
-// signs the literal null.
+// PublicKeys are the identity keys of the members who stay: the call rotates
+// the conversation key for them. Title and Description are the group's
+// plaintext metadata; each one set is encrypted under the new key and signed
+// with the removal as a key-rotation re-encryption.
 type GroupMembersRemoveParams struct {
-	ConversationID string `json:"conversation_id"`
+	// PublicKeys are the identity keys of the members who stay.
+	PublicKeys     []PublicKeyInput `json:"public_keys"`
+	ConversationID string           `json:"conversation_id"`
 	// UserIDs are the user ids being removed.
-	UserIDs []string `json:"user_ids"`
-	// PublicKeys are the identity keys of the members who remain.
-	PublicKeys []PublicKeyInput `json:"public_keys,omitempty"`
-	// ConversationKeyVersion is bound into a removal that does not rotate.
-	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	UserIDs           []string `json:"user_ids"`
+	Title             string   `json:"title,omitempty"`       // empty = unset
+	Description       string   `json:"description,omitempty"` // empty = unset
+	SenderID          string   `json:"sender_id,omitempty"`
+	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
 }
 
 // GroupLeaveParams are the parameters for PrepareGroupLeave.
@@ -437,32 +472,43 @@ type GroupLeaveParams struct {
 }
 
 // GroupTitleChangeParams are the parameters for PrepareGroupTitleChange.
-// CustomTitle is the ciphertext the request sends.
+//
+// NewTitle is plaintext: the call encrypts it under the conversation key, the
+// ConversationKey / ConversationKeyVersion pair or, both empty, the key cache.
 type GroupTitleChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	CustomTitle            string `json:"custom_title"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	NewTitle               string `json:"new_title"`
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // GroupAvatarChangeParams are the parameters for PrepareGroupAvatarChange.
+//
+// A group's avatar URL is not encrypted. NewAvatarURL is the media URL of the
+// avatar image, which the app encrypts under the conversation key and uploads
+// first; ConversationKeyVersion is the version of the key the image is
+// encrypted under.
 type GroupAvatarChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
+	NewAvatarURL           string `json:"new_avatar_url"`
 	ConversationKeyVersion string `json:"conversation_key_version"`
-	CustomAvatarURL        string `json:"custom_avatar_url"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	SenderID               string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
 // GroupDescriptionChangeParams are the parameters for PrepareGroupDescriptionChange.
-// CustomDescription is the ciphertext the request sends.
+//
+// NewDescription is plaintext: the call encrypts it under the conversation key, the
+// ConversationKey / ConversationKeyVersion pair or, both empty, the key cache.
 type GroupDescriptionChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	CustomDescription      string `json:"custom_description"`
-	SenderID               string `json:"sender_id,omitempty"`
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"`
+	NewDescription         string `json:"new_description"`
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = key cache
 }
 
 // GroupAdminsAddParams are the parameters for PrepareGroupAdminsAdd.
@@ -658,10 +704,6 @@ type ActionSignature struct {
 	MessageID                 string                `json:"message_id"`
 	EncodedMessageEventDetail string                `json:"encoded_message_event_detail"`
 	MessageEventSignature     MessageEventSignature `json:"message_event_signature"`
-	// SignaturePayload is the comma-separated payload that was signed;
-	// empty for conversation-key changes, whose payload embeds the
-	// plaintext conversation key.
-	SignaturePayload string `json:"signature_payload,omitempty"`
 }
 
 // MessageEventSignature is the signature of an ActionSignature.
@@ -674,10 +716,25 @@ type MessageEventSignature struct {
 	SigningPublicKey string `json:"signing_public_key"`
 }
 
-// PreparedAction is a signed message delete or read receipt: the
-// action_signatures a request carries for it, one entry.
+// PreparedAction holds the signed actions for a request that does not rotate a
+// conversation key: the action_signatures it carries. Returned by
+// PrepareMessageDelete, PrepareMarkConversationRead, and the group-action
+// prepares other than PrepareGroupMembersRemove; PrepareGroupLeave returns one
+// entry per signed event.
 type PreparedAction struct {
 	ActionSignatures []ActionSignature `json:"action_signatures"`
+}
+
+// PreparedGroupMetadataChange is a signed group title or description change,
+// returned by PrepareGroupTitleChange and PrepareGroupDescriptionChange.
+type PreparedGroupMetadataChange struct {
+	// EncryptedValue is the value encrypted under the conversation key,
+	// base64: the title or description the request sends.
+	EncryptedValue string `json:"encrypted_value"`
+	// ConversationKeyVersion is the version of the key the value is
+	// encrypted under.
+	ConversationKeyVersion string            `json:"conversation_key_version"`
+	ActionSignatures       []ActionSignature `json:"action_signatures"`
 }
 
 // orEmpty returns a non-nil slice so JSON marshals it as [] rather than null.
@@ -857,8 +914,9 @@ type TextContent struct {
 
 // ReactionContent contains the fields for a reaction message.
 type ReactionContent struct {
-	Emoji           string `json:"emoji"`
-	TargetMessageID string `json:"target_message_id"`
+	Emoji string `json:"emoji"`
+	// TargetMessageSequenceID is the sequence_id of the message reacted to.
+	TargetMessageSequenceID string `json:"target_message_sequence_id"`
 }
 
 // MediaHashReference is a reference to a media hash key found in attachments.
@@ -892,6 +950,19 @@ type GroupChangeEvent struct {
 	Verified bool            `json:"verified"`
 }
 
+// GroupText is a group title or description as a received event carries it:
+// the title of a Created group change, the new_title of a TitleChanged one and
+// the new_description of a DescriptionChanged one. Kind "Text" carries Text:
+// the value decrypted, or the plaintext an event that names no key version
+// carries. Kind "Unavailable" carries Raw: a value the SDK could not decrypt,
+// as the event carries it. 0.5.x apps sent titles as plaintext while naming a
+// key version, so show Raw when a title isn't decryptable.
+type GroupText struct {
+	Kind string `json:"kind"`
+	Text string `json:"text,omitempty"`
+	Raw  string `json:"raw,omitempty"`
+}
+
 // TypingEvent indicates someone is typing.
 type TypingEvent struct {
 	EventMeta
@@ -900,7 +971,8 @@ type TypingEvent struct {
 // ReadReceiptEvent indicates a conversation was marked as read.
 type ReadReceiptEvent struct {
 	EventMeta
-	SeenUntilID *string `json:"seen_until_id,omitempty"`
-	SeenAtMsec  *int64  `json:"seen_at_msec,omitempty"`
-	Verified    bool    `json:"verified"`
+	// SeenUntilSequenceID is the sequence_id of the newest event read.
+	SeenUntilSequenceID *string `json:"seen_until_sequence_id,omitempty"`
+	SeenAtMsec          *int64  `json:"seen_at_msec,omitempty"`
+	Verified            bool    `json:"verified"`
 }

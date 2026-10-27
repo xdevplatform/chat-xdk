@@ -104,7 +104,7 @@ public static class Register
                 },
             };
             bodyToPost = body;
-            var exported = chat.ExportKeys() ?? throw new InvalidOperationException("export_keys returned nothing — no identity to save");
+            var exported = chat.ExportKeys();
             SaveBlob(Convert.ToBase64String(exported));
             WriteMarker(new Dictionary<string, object?>
             {
@@ -173,7 +173,8 @@ public static class Register
             try
             {
                 var (configJson, _) = await api.GetJuiceboxConfigAsync(userId);
-                chat.Setup(pin, configJson);
+                chat.UpdateConfig(configJson);
+                await chat.SetupAsync(System.Text.Encoding.UTF8.GetBytes(pin));
                 Console.WriteLine("Stored the keys in Juicebox under the PIN.");
             }
             catch (Exception err)

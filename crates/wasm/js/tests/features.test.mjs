@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 
 import init, { Chat, __featureSetDefaultEndpoint } from "../pkg/chat_xdk_wasm.js";
 import * as pkg from "../index.js";
-import { featureServer, keepOffline, sleep, waitFor } from "./feature_server.mjs";
+import { REDIRECT_TARGET, featureServer, keepOffline, sleep, waitFor } from "./feature_server.mjs";
 
 const { ChatWithJuicebox, createChat } = pkg;
 
@@ -220,6 +220,117 @@ async function aReadInFlightNeverKeepsNodeRunning(server) {
   assert.ok(elapsed < limitMs, `the process exited after ${elapsed} ms`);
 }
 
+/**
+ * Where fetch() performs the read, the body is capped while it streams, and
+ * a body the runtime cannot stream is never read whole: either way the read
+ * fails and sends stay v0.
+ */
+async function theFetchReadCapsTheBodyWhileItStreams(v) {
+  const getBuiltinModule = process.getBuiltinModule;
+  const realFetch = globalThis.fetch;
+  process.getBuiltinModule = undefined;
+  const enabled = '{"features":{"v1_send":true}}';
+  let pulled = 0;
+  let readWhole = 0;
+  const streamed = (chunks) => ({
+    status: 200,
+    body: new ReadableStream({
+      pull(controller) {
+        pulled += 1;
+        const chunk = chunks.shift();
+        if (chunk === undefined) controller.close();
+        else controller.enqueue(new TextEncoder().encode(chunk));
+      },
+    }),
+    arrayBuffer: async () => {
+      readWhole += 1;
+      return new ArrayBuffer(0);
+    },
+  });
+  const unstreamable = {
+    status: 200,
+    body: undefined,
+    arrayBuffer: async () => {
+      readWhole += 1;
+      return new TextEncoder().encode(enabled).buffer;
+    },
+  };
+  try {
+    const cases = [
+      ["a body that fits", () => streamed([enabled]), "10"],
+      ["an oversized body", () => streamed([enabled, ...Array(200).fill(" ".repeat(1024))]), "7"],
+      ["a body that cannot stream", () => unstreamable, "7"],
+    ];
+    for (const [label, response, expected] of cases) {
+      globalThis.fetch = async () => response();
+      const chat = newChat(v, "http://127.0.0.1:9/features", { timeoutMs: 1000 });
+      await sleep(300);
+      assert.equal(send(chat, v), expected, label);
+      chat.free();
+    }
+    assert.ok(pulled < 100, `the oversized body was read to its end (${pulled} reads)`);
+    assert.equal(readWhole, 0, "a body was read whole");
+  } finally {
+    process.getBuiltinModule = getBuiltinModule;
+    globalThis.fetch = realFetch;
+  }
+}
+
+/**
+ * Run `body` with each way the wrapper performs the GET in Node: its http
+ * module, and fetch() as where that module is out of reach.
+ */
+async function withEachGetPath(body) {
+  await body("node:http");
+  const getBuiltinModule = process.getBuiltinModule;
+  process.getBuiltinModule = undefined;
+  try {
+    assert.equal(process.getBuiltinModule, undefined, "the read goes through fetch()");
+    await body("fetch");
+  } finally {
+    process.getBuiltinModule = getBuiltinModule;
+  }
+}
+
+async function theReadSendsNoCookiesOrCredentials(v) {
+  await withEachGetPath(async (path) => {
+    const server = await featureServer();
+    server.setCookie = "session=from-the-first-answer; Path=/";
+    try {
+      const first = newChat(v, server.endpoint);
+      await waitFor(`the first answer (${path})`, () => send(first, v) === "10");
+      first.free();
+      const second = newChat(v, server.endpoint);
+      await waitFor(`the second request (${path})`, () => server.queries.length === 2);
+      await waitFor(`the second answer (${path})`, () => send(second, v) === "10");
+      second.free();
+      for (const headers of server.headers) {
+        assert.equal(headers.cookie, undefined, `the read sends no cookie (${path})`);
+        assert.equal(headers.authorization, undefined, `the read sends no credentials (${path})`);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+}
+
+async function aRedirectIsNotFollowed(v) {
+  await withEachGetPath(async (path) => {
+    const server = await featureServer();
+    Object.assign(server, { status: 302, location: server.origin + REDIRECT_TARGET });
+    try {
+      const chat = newChat(v, server.endpoint, { timeoutMs: 500 });
+      await waitFor(`the request (${path})`, () => server.queries.length === 1);
+      await sleep(700);
+      assert.equal(send(chat, v), "7", `a redirect is a failed read (${path})`);
+      assert.equal(server.followed, 0, `the redirect is not followed (${path})`);
+      chat.free();
+    } finally {
+      await server.close();
+    }
+  });
+}
+
 async function main() {
   const wasmUrl = new URL("../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
   await init({ module_or_path: await fs.readFile(wasmUrl) });
@@ -234,10 +345,13 @@ async function main() {
     (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
     (server) => theAnswerHoldsForTheChatsLifetime(v, server),
     () => anyFailureLeavesSendsOnV0(v),
+    () => theFetchReadCapsTheBodyWhileItStreams(v),
     (server) => anUnreachableEndpointLeavesSendsOnV0(v, server),
     (server) => aRequestStillOpenAtItsTimeoutFails(v, server),
     (server) => aRequestEndsSafelyForAFreedChat(v, server),
     (server) => aReadInFlightNeverKeepsNodeRunning(server),
+    () => theReadSendsNoCookiesOrCredentials(v),
+    () => aRedirectIsNotFollowed(v),
   ];
   for (const test of tests) {
     const server = await featureServer();

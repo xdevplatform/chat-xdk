@@ -19,7 +19,7 @@ registered on first run); conversation state is in memory.
 ## Prerequisites
 
 - Go 1.21+ with cgo enabled (a C toolchain)
-- The binding ships prebuilt static libraries (`libchat_xdk_go.a`) for common
+- The binding ships prebuilt static libraries (`libchat_xdk_ffi.a`) for common
   platforms, so no Rust build is required to use it.
 
 ## Run it

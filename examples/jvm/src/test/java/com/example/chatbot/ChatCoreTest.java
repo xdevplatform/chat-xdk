@@ -8,6 +8,7 @@ import com.x.chatxdk.ChatXdkUtilities;
 import com.x.chatxdk.Types.AttachmentDescriptor;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.PreparedConversationChange;
+import com.x.chatxdk.Types.PreparedGroupMetadataChange;
 import com.x.chatxdk.Types.PublicKeyInput;
 import com.x.chatxdk.Types.PublicKeys;
 import org.junit.jupiter.api.Test;
@@ -74,14 +75,16 @@ class ChatCoreTest {
     }
 
     @Test
-    void genericEncryptDecryptRoundtrip() throws Exception {
+    void groupTitleChangeEncryptsTheTitleItSigns() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("12345");
             byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
-            String plaintext = "hello from the jvm example";
-            String ciphertext = core.encrypt(plaintext, key);
-            assertNotEquals(plaintext, ciphertext);
-            assertEquals(plaintext, core.decrypt(ciphertext, key));
+            String title = "hello from the jvm example";
+            PreparedGroupMetadataChange prepared = core.prepareGroupTitleChange("g123", title, key, "1");
+            assertNotEquals(title, prepared.encryptedValue);
+            assertEquals("1", prepared.conversationKeyVersion);
+            assertEquals(title, core.decrypt(prepared.encryptedValue, key));
         }
     }
 
@@ -90,10 +93,7 @@ class ChatCoreTest {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
             core.setIdentity("910002");
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = v.get("identity_public_b64").asText();
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", v.get("identity_public_b64").asText(), "1");
             PreparedConversationChange prepared =
                     core.prepareConversationKeyChange(List.of(input), "conv-1");
             assertEquals(1, prepared.conversationParticipantKeys.size());
@@ -121,7 +121,7 @@ class ChatCoreTest {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
             var result = core.decryptBatch(List.of(), List.of());
-            assertTrue(result.messages.isEmpty());
+            assertTrue(result.events.isEmpty());
         }
     }
 
@@ -135,10 +135,7 @@ class ChatCoreTest {
     }
 
     private static List<PublicKeyInput> fixtureKeys(JsonNode v) {
-        PublicKeyInput input = new PublicKeyInput();
-        input.userId = "1000";
-        input.publicKey = v.get("identity_public_b64").asText();
-        input.keyVersion = "1";
+        PublicKeyInput input = new PublicKeyInput("1000", v.get("identity_public_b64").asText(), "1");
         return List.of(input);
     }
 
@@ -171,8 +168,6 @@ class ChatCoreTest {
             assertEquals(signingPub, inner.path("signing_public_key").asText());
             assertFalse(inner.path("signature").asText().isEmpty());
             assertFalse(inner.path("public_key_version").asText().isEmpty());
-            // CKCE signature payloads are withheld (they embed the plaintext key).
-            assertFalse(sig.has("signature_payload"));
         }
     }
 
@@ -207,11 +202,15 @@ class ChatCoreTest {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
             core.setIdentity("1000");
+            String title = "hello from the jvm example";
             PreparedConversationChange prep = core.prepareGroupCreate(
-                    fixtureKeys(v), "g123", List.of("1000"), List.of("1000"));
+                    fixtureKeys(v), "g123", List.of("1000"), List.of("1000"), title);
             assertEquals(2, prep.actionSignatures.size());
             assertNotNull(prep.conversationKey);
             assertEquals(32, prep.conversationKey.length);
+            // The title goes out encrypted under the new key: the group_name the
+            // create request sends.
+            assertEquals(title, core.decrypt(prep.encryptedTitle, prep.conversationKey));
         }
     }
 
@@ -242,10 +241,7 @@ class ChatCoreTest {
         try (ChatCore core = loadedCore(v)) {
             core.setIdentity("1000");
             byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
-            EntityDescriptor mention = new EntityDescriptor();
-            mention.start = 0;
-            mention.end = 5;
-            mention.entityType = "mention";
+            EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
             // Reply by raw event: the preview is derived from the fixture event,
             // which was encrypted under the same fixture key + version.
             ChatCore.SendBody body = core.encryptReply(
@@ -284,7 +280,8 @@ class ChatCoreTest {
                     "1",
                     null,
                     null,
-                    List.of(AttachmentDescriptor.media("photo", 4, 3, plaintext.length, "photo.bin", 5, null)),
+                    List.of(AttachmentDescriptor.media(
+                            "photo", 4, 3, ChatXdkUtilities.encryptedFileSize(plaintext.length), "photo.bin", 5, null)),
                     null,
                     null);
             assertFalse(body.eventB64().isEmpty());

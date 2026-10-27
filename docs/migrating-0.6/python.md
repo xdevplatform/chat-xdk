@@ -14,22 +14,26 @@ change.
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `set_identity`](#set_identity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `import_keys`](#import_keys-takes-importkeysparams)
+- [ ] [Expect `export_keys` to raise without keys, and use the `_async` Juicebox calls in `asyncio` code](#keys-stored-in-juicebox)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `decrypt_events`](#decrypt_events-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `decrypt_events` and read its `events`](#decrypt_events-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass a params class to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-classes)
+- [ ] [Annotate key lists and results with the types the package exports](#key-entries-and-results-have-named-types)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a public key input's fields `identity_public_key` and `public_key_version`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Catch errors by class, and read a wrong PIN's attempts from `guesses_remaining`](#errors-carry-their-kind)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -38,14 +42,17 @@ Each snippet shows the lines that change, first as 0.5.x code writes them
 and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
 loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
-`decrypt_events` returns, `payload` for a `SendPayload`, `prepared` for
-the dict a prepare method returns, and `key_change` and `message` for a
-decrypted key change and message. `api.post(path, body)` stands for your
-HTTP client: it POSTs `body` as JSON to `https://api.x.com` + `path` with
-your user access token and returns the parsed JSON response.
+`decrypt_events` returns, `payload` for a `SendPayload`, `prepared` for the
+dict a prepare method returns, and `key_change`, `message`, `deleted`,
+`receipt` and `group_change` for a decrypted key change, message, deletion,
+read receipt and group change. `api.post(path, body)` stands for your HTTP
+client: it POSTs `body` as JSON to `https://api.x.com` + `path` with your
+user access token and returns the parsed JSON response.
 `photo_attachment(media_hash_key)` stands for your code that builds a
-photo's attachment descriptor. Every class and function the snippets use
-imports from `chat_xdk`.
+photo's attachment descriptor, and `show_edit`, `show_title`,
+`show_description` and `show_avatar` for your code that displays an edit, or
+a group's title, description or avatar. Every class and function the
+snippets use imports from `chat_xdk`.
 
 ## Upgrade readers before v1 sends start
 
@@ -92,8 +99,8 @@ the snippet), and send it as the only field of the
 `POST /2/users/{id}/public_keys` body. 0.6.0 doesn't pick a signing-key
 version for new keys: call `set_identity` with the `public_key_version` the
 request returns (see the next section). A signed call made without a version
-raises `ValueError: Invalid state: signing_key_version is not set: pass it
-explicitly or call set_identity() first`.
+raises `InvalidStateError: Invalid state: signing_key_version is not set:
+pass it explicitly or call set_identity() first`.
 
 ```python
 # 0.5.x
@@ -111,10 +118,14 @@ response = api.post(f"/2/users/{user_id}/public_keys", {"public_key": public_key
 chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_version"]))
 ```
 
+`PublicKeys`, which `get_public_keys()` and `setup()` return, holds the two
+public keys, `identity` and `signing`, and no `version`: their version is
+the `public_key_version` the registration request returns.
+
 ## `set_identity` takes `SetIdentityParams`
 
 Pass the user id and the signing-key version in a `SetIdentityParams`. It
-raises `ValueError` when either value is invalid (see
+raises `InvalidInputError` when either value is invalid (see
 [user ids](#user-ids-are-strings-of-digits) and
 [key versions](#key-versions-are-integers-written-as-strings)).
 
@@ -129,17 +140,59 @@ chat.set_identity(SetIdentityParams(user_id, signing_key_version))
 ## `import_keys` takes `ImportKeysParams`
 
 Pass the saved key bytes, and optionally the signing-key version they were
-registered under as the keyword argument `signing_key_version`. Without a
-version, call `set_identity` before the first signed call.
+registered under as the keyword argument `signing_key_version` (the
+`version` keyword of 0.5.x's `import_keys`). Without a version, call
+`set_identity` before the first signed call.
 
 ```python
 # 0.5.x
 chat.import_keys(private_keys)
-chat.import_keys(private_keys, signing_key_version)
+chat.import_keys(private_keys, version=signing_key_version)
 
 # 0.6.0
 chat.import_keys(ImportKeysParams(private_keys))
 chat.import_keys(ImportKeysParams(private_keys, signing_key_version=signing_key_version))
+```
+
+## Keys stored in Juicebox
+
+`Chat(config_json)` keeps your keys in Juicebox under the Juicebox config
+the X API returns, as in 0.5.x, and `Chat()` manages them with
+`import_keys` and `export_keys` alone, or takes the config later from
+`update_config`, on first boot. `setup`, `unlock`, `change_pin` and
+`delete` block on their Juicebox round trips; `setup_async`,
+`unlock_async`, `change_pin_async` and `delete_async` run the same calls on
+a worker thread, for an `asyncio` event loop. Until a chat has a config,
+they raise `InvalidStateError`, `Invalid state: no Juicebox config: pass
+the juicebox_config the X API returns when you create the chat, or call
+update_config() first`, the error every binding gives, and `Chat` and
+`update_config` raise it for an empty or blank config string. A wrong PIN raises
+`InvalidPinError`, whose `guesses_remaining` holds the attempts Juicebox
+reports left, `0` once the stored keys are locked and `None` when Juicebox
+reports no count:
+
+```python
+# 0.5.x
+try:
+    chat.unlock(pin)
+except ValueError as err:
+    guesses_left = guesses_remaining(err)
+
+# 0.6.0
+try:
+    chat.unlock(pin)
+except InvalidPinError as err:
+    guesses_left = err.guesses_remaining
+```
+
+`export_keys` raises `InvalidStateError` when no identity key is loaded:
+
+```python
+# 0.5.x
+private_keys = chat.export_keys()
+
+# 0.6.0
+private_keys = chat.export_keys() if chat.has_identity_key() else None
 ```
 
 ## User ids are strings of digits
@@ -148,7 +201,7 @@ Every user id is a `str` of digits: the `SetIdentityParams` user id,
 `sender_id`, `reply_to_sender_id`, the `user_id` of each public key and
 signing key, and group member, admin and pending-member ids. Each must be a
 positive integer written without a sign or leading zeros; anything else
-raises `ValueError` naming the field, such as
+raises `InvalidInputError` naming the field, such as
 `Invalid sender_id 'user-1': pass a numeric user id (digits only)`.
 `reply_to_sender_id` takes a `str`:
 
@@ -169,8 +222,8 @@ reply = chat.encrypt_reply(EncryptReplyParams(
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `signing_key_version` and each public key's
-`key_version`) and `conversation_key_version`. Anything else raises
-`ValueError` naming the field, such as `Invalid signing_key_version 'v1':
+`public_key_version`) and `conversation_key_version`. Anything else raises
+`InvalidInputError` naming the field, such as `Invalid signing_key_version 'v1':
 pass the key version as the X API returns it, an integer in digits`. There's
 no code to change if you pass the versions the X API returns.
 
@@ -178,16 +231,28 @@ no code to change if you pass the versions the X API returns.
 
 Pass the events in a `DecryptEventsParams`. `signing_keys` is optional and
 keyword-only; without it, the keys `set_signing_keys` stored verify the
-events. The result is the same dict, and the call still never raises: errors
-are collected per event.
+events. An event that fails is collected in the result's `errors` rather
+than raised; the call raises only for invalid params, such as a signing key
+entry without `public_key_version` (`InvalidInputError`) or `events` that
+is not a list (`TypeError`). The result holds the decrypted events, of every
+event type, under `events`:
 
 ```python
 # 0.5.x
 result = chat.decrypt_events(events, signing_keys)
+decrypted = result["messages"]
 
 # 0.6.0
 result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
+decrypted = result["events"]
 ```
+
+`result["conversation_keys"]["latest_version"]`, the version to encrypt
+with, is the newest version whose key change verified, and it never moves
+back for the chat's lifetime. It's `None` until a key change verifies: a key
+change the SDK can't verify still adds its key to
+`result["conversation_keys"]["keys"]`, for decrypting, but never becomes the
+version you encrypt with.
 
 ## `decrypt_event` takes `DecryptEventParams`
 
@@ -207,8 +272,10 @@ event = chat.decrypt_event(DecryptEventParams(event_b64, keys, signing_keys=sign
 ## Encrypt and prepare methods take params classes
 
 Each encrypt and prepare method takes one params object. Each class takes
-the arguments its method took, with the same names, order and defaults, and
-exposes every field as a read/write attribute:
+the arguments its method took, with the same names, order and defaults,
+except where [Group actions should be
+signed](#group-actions-should-be-signed) says otherwise, and exposes every
+field as a read/write attribute:
 
 | Method | Params class |
 |---|---|
@@ -233,6 +300,30 @@ payload = chat.encrypt_message(EncryptMessageParams(conversation_id, "hello", tt
 reaction = chat.encrypt_add_reaction(EncryptReactionParams(event_b64, "👍"))
 edit = chat.encrypt_edit(EncryptEditParams(event_b64, "fixed text"))
 prepared = chat.prepare_conversation_key_change(
+    ConversationKeyChangeParams(public_keys, conversation_id=conversation_id)
+)
+```
+
+## Key entries and results have named types
+
+The package exports a `TypedDict` for each dict the calls take or return, so
+a type checker reads them: `SigningKeyEntry` for each signing key that
+`set_signing_keys` and the decrypt params take, `PublicKeyInput` for each
+public key the prepare params take, and `ConversationKeyResult`,
+`DecryptEventsResult` and `DecryptedEvent`, `PreparedAction`,
+`PreparedGroupMetadataChange` and `PreparedConversationChange`, with
+`ActionSignature`, `MessageEventSignature` and `ConversationParticipantKey`,
+for the results. They're plain dicts at runtime, so there's no code to
+change; annotate with them where you held `dict`:
+
+```python
+# 0.5.x
+result: dict = chat.decrypt_events(events, signing_keys)
+prepared: dict = chat.prepare_conversation_key_change(public_keys, conversation_id=conversation_id)
+
+# 0.6.0
+result: DecryptEventsResult = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
+prepared: PreparedConversationChange = chat.prepare_conversation_key_change(
     ConversationKeyChangeParams(public_keys, conversation_id=conversation_id)
 )
 ```
@@ -325,10 +416,13 @@ and the key version from `event_b64`.
 Upload each file for one message only. In v1 the id of a message with files
 is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
-the same message again gives the same id, so files you already encrypted
-for it stay valid, and a second message that reuses the first one's uploads
-gets the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected.
+the same message again gives the same id, so files you already encrypted for
+it stay valid, and a second message that reuses the first one's uploads gets
+the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected, and so is a
+file whose `filename` is empty or whose `filesize_bytes` is 0 or less, which
+receiving clients would discard, or whose `width` or `height` is negative: give
+each file its name and the encrypted size `encrypted_file_size` gives.
 
 ## Decrypt a file with its message's event
 
@@ -353,18 +447,24 @@ plaintext = chat.decrypt_file(DecryptFileParams(downloaded, file_event_b64, keys
 `file_encryptor` and `file_decryptor` take the same values as
 `encrypt_file` and `decrypt_file`, without the file bytes, and return a
 `FileEncryptor` or a `FileDecryptor`; `push` and `finish` are unchanged.
+The classes are named `FileEncryptor` and `FileDecryptor` in imports and
+type hints too, where 0.5.x had `StreamEncryptor` and `StreamDecryptor`.
 Size an upload with `encrypted_file_size`.
 
 ```python
 # 0.5.x
+from chat_xdk import StreamDecryptor, StreamEncryptor
+
 size = encrypted_stream_size(len(photo))
-encryptor = chat.stream_encryptor(conversation_key)
-decryptor = chat.stream_decryptor(keys[conversation_key_version])
+encryptor: StreamEncryptor = chat.stream_encryptor(conversation_key)
+decryptor: StreamDecryptor = chat.stream_decryptor(keys[conversation_key_version])
 
 # 0.6.0
+from chat_xdk import FileDecryptor, FileEncryptor
+
 size = encrypted_file_size(len(photo))
-encryptor = chat.file_encryptor(FileEncryptorParams(payload.event_b64, media_hash_key))
-decryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_hash_key))
+encryptor: FileEncryptor = chat.file_encryptor(FileEncryptorParams(payload.event_b64, media_hash_key))
+decryptor: FileDecryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_hash_key))
 ```
 
 ## Action signatures come nested
@@ -372,9 +472,8 @@ decryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_h
 The prepare methods return each signed action in the shape a request's
 `action_signatures` takes: `message_id`, `encoded_message_event_detail`, the
 signature nested under `message_event_signature` (with `signing_public_key`,
-your signing public key as `get_public_keys` returns it) and, except for
-conversation-key changes, `signature_payload`. Pass them through as
-returned:
+your signing public key as `get_public_keys` returns it), and nothing else:
+the signed payload stays inside the SDK. Pass them through as returned:
 
 ```python
 # 0.5.x
@@ -394,6 +493,23 @@ action_signatures = [
 
 # 0.6.0
 action_signatures = prepared["action_signatures"]
+```
+
+## Public key inputs name the identity key and its version
+
+Each public key the prepare params take, one participant a conversation key
+is encrypted to, names its key `identity_public_key` and the key's version
+`public_key_version`, as a signing key entry does: the `public_key` the X
+API returns for a user is their identity key:
+
+```python
+# 0.5.x
+public_keys = [{"user_id": user_id, "public_key": identity_public_key, "key_version": public_key_version}]
+
+# 0.6.0
+public_keys: list[PublicKeyInput] = [
+    {"user_id": user_id, "identity_public_key": identity_public_key, "public_key_version": public_key_version}
+]
 ```
 
 ## Participant keys take the key requests' names
@@ -438,7 +554,7 @@ encrypted = key_change["participant_keys"][0]["encrypted_key"]
 encrypted = key_change["conversation_participant_keys"][0]["encrypted_conversation_key"]
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 Decrypted messages and key changes carry their conversation key version as
 `conversation_key_version`, the name the X API's events and the Thrift
@@ -454,10 +570,37 @@ message_version = message["conversation_key_version"]
 key_change_version = key_change["conversation_key_version"]
 ```
 
+Keys that hold sequence ids take the names of the params that send them. A
+`Reaction`, `ReactionRemoved` or `Edit` content names its target
+`target_message_sequence_id`, as `EncryptReactionParams` and
+`EncryptEditParams` do. A `MessageDeleted` event names its messages
+`sequence_ids`, as `MessageDeleteParams` does, and a `ReadReceipt` or
+`MarkedUnread` event names its position `seen_until_sequence_id`, as
+`MarkConversationReadParams` does. An edit's text is `updated_text`, as
+`EncryptEditParams` names it, and a v1 edit carries the signed `message_id`
+of the message it edits as `target_message_id`, absent for a v0 edit:
+
+```python
+# 0.5.x
+content = message["content"]
+if content["content_type"] == "Edit":
+    show_edit(content["target_message_id"], content["new_text"])
+deleted_sequence_ids = deleted["message_ids"]
+seen_until = receipt["seen_until_id"]
+
+# 0.6.0
+content = message["content"]
+if content["content_type"] == "Edit":
+    show_edit(content["target_message_sequence_id"], content["updated_text"])
+deleted_sequence_ids = deleted["sequence_ids"]
+seen_until = receipt["seen_until_sequence_id"]
+```
+
 ## Deletes return a `PreparedAction`
 
-`prepare_message_delete` returns a dict with `action_signatures` holding
-one entry, shaped as the previous section shows. Read the action's
+`prepare_message_delete` returns a dict with `action_signatures` holding one
+entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's
 `message_id` from that entry, and send `action_signatures` as returned:
 
 ```python
@@ -470,14 +613,49 @@ deletion = chat.prepare_message_delete(MessageDeleteParams(conversation_id, sequ
 message_id = deletion["action_signatures"][0]["message_id"]
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid argument raises `ValueError` with a message that names
-the value, such as `Invalid sender_id 'user-1': pass a numeric user id
+Every SDK failure raises a `ChatXdkError`, a `ValueError`, of the subclass
+that names its kind the same way in every binding: `InvalidInputError`,
+`InvalidStateError`, `ParseError`, `DecryptionError`, `VerificationError`,
+`InvalidPinError` or `JuiceboxError`, and `ChatXdkError` itself for a
+failure inside the SDK. Each carries the kind as `kind`
+(`"invalid_input"`, `"invalid_state"`, ...) and `guesses_remaining`, set
+on an `InvalidPinError` (see [Keys stored in Juicebox](#keys-stored-in-juicebox)).
+
+A missing or invalid argument raises `InvalidInputError` with a message that
+names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
 (digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+`Invalid state:` prefix. That covers a key or signature that `verify`,
+`verify_key_binding` or `matches_registered_key` can't decode. An entity of
+a type the SDK doesn't know, an empty one included, fails the same way, with
+`Invalid entity_type 'user_mention': pass url, mention, hashtag, cashtag,
+email, address or phone_number`, where 0.5.x sent the message without that
+entity. Entity offsets count bytes of the text's UTF-8 encoding, the start
+inclusive and the end exclusive, and an entity whose offsets are negative,
+end before they start or run past the end of the text fails the same way,
+such as `Invalid entity offsets 3..8: end is past the end of the text, which
+is 7 bytes of UTF-8`, where 0.5.x sent it. So do a URL card with an empty
+`url` and a post attachment with neither `rest_id` nor `post_url`. A call
+missing a required argument, or given one of the wrong type, still raises
+`TypeError`. Errors about state the chat lacks, such as a missing session
+identity or an empty key cache, raise `InvalidStateError` and keep their
+prefix. Catch the class rather than reading the message:
+
+```python
+# 0.5.x
+try:
+    chat.set_identity(user_id, signing_key_version)
+except ValueError as err:
+    if str(err).startswith("Invalid state:"):
+        raise
+
+# 0.6.0
+try:
+    chat.set_identity(SetIdentityParams(user_id, signing_key_version))
+except InvalidInputError:
+    pass
+```
 
 ## Group actions should be signed
 
@@ -486,23 +664,133 @@ Apps should sign each group update below. The sender comes from
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
 
+### Creating a group
+
+`prepare_group_create` encrypts the group's title under the conversation key
+it creates, so pass it as plaintext. The result dict also carries it
+encrypted, as `encrypted_title` (absent when unset): send that as the create
+request's `group_name`, next to its participant keys and signatures. The
+create signs the encrypted value, which is base64, so a title may contain a
+comma; a value signed as is, such as an avatar URL, can't. A create sets no
+avatar: set one afterwards with an [avatar change](#changing-the-avatar),
+with the image encrypted under the key the create returns.
+
+```python
+# 0.5.x
+prepared = chat.prepare_group_create(
+    public_keys, conversation_id, member_ids, admin_ids, title=title, avatar_url=avatar_url
+)
+body = {"group_name": title, "group_avatar_url": avatar_url}
+
+# 0.6.0
+prepared = chat.prepare_group_create(
+    GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids, title=title)
+)
+body = {"group_name": prepared["encrypted_title"]}
+```
+
+`decrypt_event` returns a received group create with its title decrypted
+with the key for the version the create names, from the call's key map or
+the key cache: a `Created` change's `title` is a `GroupText` dict (the
+`TypedDict` `chat_xdk` exports). `"kind": "Text"` holds the title in `text`.
+`"kind": "Unavailable"` holds, in `raw`, the value as the create carries it,
+when that key isn't there or the value doesn't decrypt under it, and the
+rest of the create still decrypts. 0.5.x signed a create's title as the app
+passed it, so a 0.5.x app's create with a plaintext title arrives as
+`Unavailable` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `Text`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`decrypt`.
+
+```python
+# 0.5.x
+change = group_change["change"]
+if change["change_type"] == "Created" and change["title"]:
+    show_title(chat.decrypt(change["title"], keys[conversation_key_version]))
+
+# 0.6.0
+change = group_change["change"]
+if change["change_type"] == "Created" and change["title"]:
+    title = change["title"]
+    show_title(title["text"] if title["kind"] == "Text" else title["raw"])
+```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`prepare_group_members_change` rotates the conversation key, so it
+re-encrypts the group's title and description under the key it generates:
+pass them as plaintext, as `current_title` and `current_description`, not as
+values your code encrypted. The result dict carries them encrypted, as
+`encrypted_title` and `encrypted_description` (absent when unset). Send
+`encrypted_title` as the add-members request's `encrypted_title`; the
+description travels in the signed member add.
+
+```python
+# 0.5.x
+prepared = chat.prepare_group_members_change(
+    public_keys, conversation_id, new_member_ids, member_ids, admin_ids, [], current_title=title
+)
+
+# 0.6.0
+prepared = chat.prepare_group_members_change(
+    GroupMembersChangeParams(
+        public_keys, conversation_id, new_member_ids, member_ids, admin_ids, [],
+        current_title=title, current_description=description,
+    )
+)
+body = {"encrypted_title": prepared["encrypted_title"]}
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `current_avatar_url` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
+
 ### Removing members
 
 `prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange` dict: the new
-conversation key, `conversation_participant_keys` for those members, and
-`action_signatures` in this order — the removal, then the conversation-key
-change.
+conversation key, so the members removed don't receive the key the group
+encrypts under next. `GroupMembersRemoveParams` takes the identity keys of
+the members who stay, the conversation id and the members to remove; a key
+for a member being removed raises `InvalidInputError`. The group's title and
+description are encrypted under the conversation key: pass the ones the
+group has, as plaintext, as `title` and `description`, and the call encrypts
+each under the new key and signs it as a key-rotation re-encryption, which X
+clients don't show as a change. A rotation leaves the avatar alone: its
+image stays encrypted under the key it was uploaded with, which the members
+who stay hold.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange` dict: the new conversation key,
+`conversation_participant_keys` for the members who stay, and
+`action_signatures` in request order — the removal, a title change and a
+description change for the ones passed, then the conversation-key change.
+Store the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```python
 # 0.6.0
 prepared = chat.prepare_group_members_remove(
-    GroupMembersRemoveParams(conversation_id, user_ids, public_keys=remaining_public_keys)
+    GroupMembersRemoveParams(remaining_public_keys, conversation_id, user_ids, title=title)
 )
 api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
     "user_ids": user_ids,
@@ -531,34 +819,104 @@ left = chat.prepare_group_leave(
 
 ### Changing the title
 
-`custom_title` is the ciphertext the request sends. The result is a
-`PreparedAction` dict; send its `action_signatures` on the request.
+`prepare_group_title_change` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version as the
+`conversation_key` and `conversation_key_version` keywords, or resolves
+both from the key cache without them. The result is a
+`PreparedGroupMetadataChange` dict: the `encrypted_value` the request sends
+as the title, the `conversation_key_version` it's encrypted under, and the
+`action_signatures` to send with it.
 
 ```python
+# 0.5.x
+encrypted_title = chat.encrypt(title, keys[conversation_key_version])
+
 # 0.6.0
-title = chat.prepare_group_title_change(
-    GroupTitleChangeParams(conversation_id, conversation_key_version, custom_title)
-)
+prepared = chat.prepare_group_title_change(GroupTitleChangeParams(conversation_id, title))
+encrypted_title = prepared["encrypted_value"]
+```
+
+`decrypt_event` returns a received title change decrypted: the `new_title`
+of a `TitleChanged` change is a `GroupText` dict, as a create's `title` is.
+It decrypts with the key for the version the change names, from the call's
+key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `Unavailable` with the value as carried, and the event still
+decrypts.
+
+```python
+# 0.5.x
+change = group_change["change"]
+if change["change_type"] == "TitleChanged":
+    show_title(chat.decrypt(change["new_title"], keys[conversation_key_version]))
+
+# 0.6.0
+change = group_change["change"]
+if change["change_type"] == "TitleChanged":
+    new_title = change["new_title"]
+    show_title(new_title["text"] if new_title["kind"] == "Text" else new_title["raw"])
 ```
 
 ### Changing the avatar
 
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `prepare_group_avatar_change`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction` dict; send its `action_signatures` with the URL. A URL
+containing a comma is rejected, since signatures join their fields with
+commas.
+
+```python
+# 0.5.x
+encrypted_avatar_url = chat.encrypt(avatar_url, keys[conversation_key_version])
+
+# 0.6.0
+prepared = chat.prepare_group_avatar_change(
+    GroupAvatarChangeParams(conversation_id, avatar_url, conversation_key_version)
+)
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
 ```python
 # 0.6.0
-avatar = chat.prepare_group_avatar_change(
-    GroupAvatarChangeParams(conversation_id, conversation_key_version, custom_avatar_url)
-)
+change = group_change["change"]
+if change["change_type"] == "AvatarChanged":
+    show_avatar(change["new_avatar_url"], change["conversation_key_version"])
 ```
 
 ### Changing the description
 
-`custom_description` is the ciphertext the request sends.
+`prepare_group_description_change` takes the new description as plaintext
+and returns a `PreparedGroupMetadataChange` dict, as the title change does.
+
+```python
+# 0.5.x
+encrypted_description = chat.encrypt(description, keys[conversation_key_version])
+
+# 0.6.0
+prepared = chat.prepare_group_description_change(
+    GroupDescriptionChangeParams(conversation_id, description)
+)
+encrypted_description = prepared["encrypted_value"]
+```
+
+A received description change is a `DescriptionChanged` change holding
+`new_description` as a `GroupText` dict; read it as a title change's
+`new_title`:
 
 ```python
 # 0.6.0
-description = chat.prepare_group_description_change(
-    GroupDescriptionChangeParams(conversation_id, conversation_key_version, custom_description)
-)
+change = group_change["change"]
+if change["change_type"] == "DescriptionChanged":
+    new_description = change["new_description"]
+    show_description(
+        new_description["text"] if new_description["kind"] == "Text" else new_description["raw"]
+    )
 ```
 
 ### Adding admins

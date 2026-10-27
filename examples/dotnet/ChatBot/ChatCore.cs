@@ -22,6 +22,16 @@ public sealed class ChatCore : IDisposable
     private readonly Chat _chat = new();
     public string SigningKeyVersion { get; private set; } = "";
 
+    /// <summary>
+    /// A chat whose conversation-key cache is on: <see cref="DecryptBatch"/>
+    /// fills it from verified key changes, and the encrypt calls take the
+    /// newest key from it.
+    /// </summary>
+    public ChatCore()
+    {
+        _chat.SetCacheKeys(true);
+    }
+
     // -- Key management -----------------------------------------------------
 
     /// <summary>Import an existing base64 private-key blob (identity[+signing])
@@ -51,7 +61,7 @@ public sealed class ChatCore : IDisposable
     public (PublicKeyRegistrationPayload Registration, string PrivateKeysB64) GenerateAndRegister()
     {
         var payload = _chat.GenerateKeypairs();
-        var exported = _chat.ExportKeys() ?? Array.Empty<byte>();
+        var exported = _chat.ExportKeys();
         return (payload, Convert.ToBase64String(exported));
     }
 
@@ -100,13 +110,15 @@ public sealed class ChatCore : IDisposable
     /// afterwards with <see cref="EncryptMedia"/> and the returned body's
     /// <c>EventB64</c>); <paramref name="quickReply"/> offers selectable
     /// options or answers them; <paramref name="ttlMsec"/> makes the message
-    /// disappear after the given lifetime.
+    /// disappear after the given lifetime. The conversation key comes from
+    /// the SDK's cache unless <paramref name="conversationKey"/> and
+    /// <paramref name="conversationKeyVersion"/> are passed.
     /// </summary>
     public SendBody EncryptReply(
         string conversationId,
         string text,
-        byte[] conversationKey,
-        string conversationKeyVersion,
+        byte[]? conversationKey = null,
+        string? conversationKeyVersion = null,
         string? replyToEvent = null,
         IReadOnlyList<EntityDescriptor>? entities = null,
         IReadOnlyList<AttachmentDescriptor>? attachments = null,
@@ -171,13 +183,21 @@ public sealed class ChatCore : IDisposable
 
     // -- Group management -----------------------------------------------------
 
-    /// <summary>Prepare a group creation: fresh key + the two required signatures.</summary>
+    /// <summary>
+    /// Prepare a group creation: fresh key + the two required signatures. A plaintext
+    /// <paramref name="title"/> is encrypted under the new key; send the result's
+    /// <c>EncryptedTitle</c> as the request's <c>group_name</c>.
+    /// </summary>
     public PreparedConversationChange PrepareGroupCreate(
         IReadOnlyList<PublicKeyInput> publicKeys,
         string conversationId,
         IReadOnlyList<string> memberIds,
-        IReadOnlyList<string> adminIds)
-        => _chat.PrepareGroupCreate(new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds));
+        IReadOnlyList<string> adminIds,
+        string? title = null)
+        => _chat.PrepareGroupCreate(new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds)
+        {
+            Title = title,
+        });
 
     /// <summary>Prepare a member add: rotated key + the two required signatures.</summary>
     public PreparedConversationChange PrepareGroupMembersChange(
@@ -202,10 +222,7 @@ public sealed class ChatCore : IDisposable
         IReadOnlyList<PublicKeyInput> publicKeys,
         string conversationId,
         IReadOnlyList<string> userIds)
-        => _chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(conversationId, userIds)
-        {
-            PublicKeys = publicKeys,
-        });
+        => _chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(publicKeys, conversationId, userIds));
 
     // -- Media files ----------------------------------------------------------
 
@@ -266,10 +283,22 @@ public sealed class ChatCore : IDisposable
         return output.ToArray();
     }
 
-    // -- Generic helpers (handy for metadata + tests) -----------------------
+    // -- Group metadata -------------------------------------------------------
 
-    public string Encrypt(string plaintext, byte[] conversationKey) => _chat.Encrypt(plaintext, conversationKey);
+    /// <summary>
+    /// Prepare a group title change: the SDK encrypts the plaintext title under the
+    /// conversation key and signs it. Send <c>EncryptedValue</c> as the group's name and
+    /// <c>ActionSignatures</c> on the request.
+    /// </summary>
+    public PreparedGroupMetadataChange PrepareGroupTitleChange(
+        string conversationId, string title, byte[] conversationKey, string conversationKeyVersion)
+        => _chat.PrepareGroupTitleChange(new GroupTitleChangeParams(conversationId, title)
+        {
+            ConversationKey = conversationKey,
+            ConversationKeyVersion = conversationKeyVersion,
+        });
 
+    /// <summary>Decrypt a group title or description the X API returns.</summary>
     public string Decrypt(string ciphertextB64, byte[] conversationKey) => _chat.Decrypt(ciphertextB64, conversationKey);
 
     public void Dispose() => _chat.Dispose();

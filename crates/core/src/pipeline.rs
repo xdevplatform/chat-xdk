@@ -268,7 +268,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     };
     let payload =
         crate::core::build_event_signature_payload(&outgoing, &detail, None).ok_or_else(|| {
-            SdkError::Parse("Signature payload contains comma-separated component".into())
+            SdkError::InvalidInput("Signature payload contains comma-separated component".into())
         })?;
 
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
@@ -439,12 +439,10 @@ pub fn build_message_edit_content(
     target_message_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     // MessageEdit carries entities unboxed, unlike MessageContents.
-    let entities = entities.map(|descs| {
-        build_thrift_entities(descs)
-            .into_iter()
-            .map(|e| *e)
-            .collect::<Vec<_>>()
-    });
+    let entities = entities
+        .map(|entities| build_thrift_entities(entities, Some(updated_text)))
+        .transpose()?
+        .map(|entities| entities.into_iter().map(|e| *e).collect::<Vec<_>>());
     let content = MessageEdit::new(
         Some(target_message_sequence_id.to_string()),
         Some(updated_text.to_string()),
@@ -475,12 +473,20 @@ pub fn build_reaction_remove_content(
 
 // Entity / Attachment descriptor → Thrift converters
 
-/// Convert [`EntityDescriptor`]s into Thrift `RichTextEntity` objects.
+/// Convert [`EntityDescriptor`]s into Thrift `RichTextEntity` objects. An
+/// entity type the protocol doesn't have, an empty one included, fails with
+/// an error naming it, and so do offsets that aren't a range of the text:
+/// `start` and `end` count bytes of the text's UTF-8 encoding, `start`
+/// inclusive and `end` exclusive, so `0 <= start <= end`, and `end` is at
+/// most the length of `text`, the text the entities index, when given.
 #[allow(clippy::vec_box)]
-pub fn build_thrift_entities(descs: &[EntityDescriptor]) -> Vec<Box<ThriftRichTextEntity>> {
+pub fn build_thrift_entities(
+    descs: &[EntityDescriptor],
+    text: Option<&str>,
+) -> Result<Vec<Box<ThriftRichTextEntity>>, SdkError> {
     descs
         .iter()
-        .filter_map(|d| {
+        .map(|d| {
             let content = match d.entity_type.as_str() {
                 "url" => ThriftRichTextContent::Url(Box::new(UrlRichTextContent::new())),
                 "mention" => {
@@ -499,15 +505,46 @@ pub fn build_thrift_entities(descs: &[EntityDescriptor]) -> Vec<Box<ThriftRichTe
                 "phone_number" | "phoneNumber" => {
                     ThriftRichTextContent::PhoneNumber(Box::new(PhoneNumberRichTextContent::new()))
                 }
-                _ => return None,
+                other => {
+                    return Err(SdkError::InvalidInput(format!(
+                        "Invalid entity_type '{other}': pass url, mention, hashtag, cashtag, \
+                         email, address or phone_number"
+                    )))
+                }
             };
-            Some(Box::new(ThriftRichTextEntity::new(
+            validate_entity_offsets(d, text)?;
+            Ok(Box::new(ThriftRichTextEntity::new(
                 Some(d.start),
                 Some(d.end),
                 Some(Box::new(content)),
             )))
         })
         .collect()
+}
+
+/// Check that an entity's offsets are a range of `text`, in bytes of its
+/// UTF-8 encoding: `0 <= start <= end <= text.len()`, the last bound only
+/// when the text is given.
+fn validate_entity_offsets(entity: &EntityDescriptor, text: Option<&str>) -> Result<(), SdkError> {
+    let (start, end) = (entity.start, entity.end);
+    let invalid = |problem: String| {
+        SdkError::InvalidInput(format!("Invalid entity offsets {start}..{end}: {problem}"))
+    };
+    if start < 0 || end < 0 {
+        return Err(invalid(
+            "offsets count bytes of the UTF-8 text, from 0".into(),
+        ));
+    }
+    if end < start {
+        return Err(invalid("end is before start".into()));
+    }
+    match text {
+        Some(text) if end as usize > text.len() => Err(invalid(format!(
+            "end is past the end of the text, which is {} bytes of UTF-8",
+            text.len()
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Most attachments a single message may carry.
@@ -646,13 +683,36 @@ pub fn build_message_attachments(
     attachments
 }
 
-/// The media hash keys of the files the descriptors reference, in order: a
-/// media attachment's, and a URL card's banner then favicon.
-pub(crate) fn file_media_hash_keys(descs: &[AttachmentDescriptor]) -> Vec<&str> {
+/// A file an attachment references: a media attachment's, or a URL card's
+/// banner or favicon.
+struct FileRef<'a> {
+    media_hash_key: &'a str,
+    filesize_bytes: i64,
+    filename: &'a str,
+    width: Option<i64>,
+    height: Option<i64>,
+}
+
+/// The files the descriptors reference, in order: a media attachment's, and
+/// a URL card's banner then favicon.
+fn files(descs: &[AttachmentDescriptor]) -> Vec<FileRef<'_>> {
     descs
         .iter()
         .flat_map(|desc| match desc {
-            AttachmentDescriptor::Media { media_hash_key, .. } => vec![media_hash_key.as_str()],
+            AttachmentDescriptor::Media {
+                media_hash_key,
+                filesize_bytes,
+                filename,
+                width,
+                height,
+                ..
+            } => vec![FileRef {
+                media_hash_key,
+                filesize_bytes: *filesize_bytes,
+                filename,
+                width: Some(*width),
+                height: Some(*height),
+            }],
             AttachmentDescriptor::Url {
                 banner_image,
                 favicon_image,
@@ -660,27 +720,59 @@ pub(crate) fn file_media_hash_keys(descs: &[AttachmentDescriptor]) -> Vec<&str> 
             } => [banner_image, favicon_image]
                 .into_iter()
                 .flatten()
-                .map(|image| image.media_hash_key.as_str())
+                .map(|image| FileRef {
+                    media_hash_key: &image.media_hash_key,
+                    filesize_bytes: image.filesize_bytes,
+                    filename: &image.filename,
+                    width: image.width,
+                    height: image.height,
+                })
                 .collect(),
             AttachmentDescriptor::Post { .. } => Vec::new(),
         })
         .collect()
 }
 
-/// Check that every file the descriptors reference has a media hash key and
-/// that no two attachments reference the same one. A file is uploaded once,
-/// under its media hash key, encrypted under the key of the one attachment
-/// that references it.
-pub(crate) fn validate_file_media_hash_keys(
-    descs: &[AttachmentDescriptor],
-) -> Result<(), SdkError> {
+/// The media hash keys of the files the descriptors reference, in order: a
+/// media attachment's, and a URL card's banner then favicon.
+pub(crate) fn file_media_hash_keys(descs: &[AttachmentDescriptor]) -> Vec<&str> {
+    files(descs)
+        .into_iter()
+        .map(|file| file.media_hash_key)
+        .collect()
+}
+
+/// Check the fields of the attachments a message sends: a URL card has a
+/// url, a post a `rest_id` or a `post_url`, and every file one references
+/// has a media hash key, a filename, a size above 0 and no negative width or
+/// height, with no two attachments referencing the same media hash key. A
+/// file is uploaded once, under its media hash key, encrypted under the key
+/// of the one attachment that references it, and receivers discard a file
+/// sent without its name or size.
+pub(crate) fn validate_attachment_fields(descs: &[AttachmentDescriptor]) -> Result<(), SdkError> {
     let mut seen = std::collections::HashSet::new();
     for desc in descs {
-        let mut own = file_media_hash_keys(std::slice::from_ref(desc));
-        // A card's banner and favicon share the card's key, so they may
-        // share one upload.
-        own.dedup();
-        for media_hash_key in own {
+        match desc {
+            AttachmentDescriptor::Url { url, .. } if url.is_empty() => {
+                return Err(SdkError::InvalidInput(
+                    "a URL card's url is empty: pass the link the card shows".into(),
+                ));
+            }
+            AttachmentDescriptor::Post { rest_id, post_url }
+                if rest_id.as_deref().unwrap_or("").is_empty()
+                    && post_url.as_deref().unwrap_or("").is_empty() =>
+            {
+                return Err(SdkError::InvalidInput(
+                    "a post attachment has neither rest_id nor post_url: pass the post's id or \
+                     its URL"
+                        .into(),
+                ));
+            }
+            _ => {}
+        }
+        let own = files(std::slice::from_ref(desc));
+        for file in &own {
+            let media_hash_key = file.media_hash_key;
             if media_hash_key.is_empty() {
                 return Err(SdkError::InvalidInput(
                     "an attachment's media_hash_key is empty: pass the media hash key the \
@@ -688,6 +780,33 @@ pub(crate) fn validate_file_media_hash_keys(
                         .into(),
                 ));
             }
+            if file.filename.is_empty() {
+                return Err(SdkError::InvalidInput(format!(
+                    "media_hash_key '{media_hash_key}' has an empty filename: pass the file's \
+                     original name"
+                )));
+            }
+            if file.filesize_bytes <= 0 {
+                return Err(SdkError::InvalidInput(format!(
+                    "media_hash_key '{media_hash_key}' has filesize_bytes {}: pass the \
+                     encrypted file's size, which encrypted_file_size gives",
+                    file.filesize_bytes
+                )));
+            }
+            for (side, value) in [("width", file.width), ("height", file.height)] {
+                if let Some(value) = value.filter(|value| *value < 0) {
+                    return Err(SdkError::InvalidInput(format!(
+                        "media_hash_key '{media_hash_key}' has {side} {value}: pass the {side} in \
+                         pixels, 0 or more"
+                    )));
+                }
+            }
+        }
+        let mut keys: Vec<&str> = own.iter().map(|file| file.media_hash_key).collect();
+        // A card's banner and favicon share the card's key, so they may
+        // share one upload.
+        keys.dedup();
+        for media_hash_key in keys {
             if !seen.insert(media_hash_key) {
                 return Err(SdkError::InvalidInput(format!(
                     "media_hash_key '{media_hash_key}' is in more than one attachment: upload \
@@ -843,23 +962,15 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_entities() {
-        let entities = build_thrift_entities(&[
-            EntityDescriptor {
-                start: 0,
-                end: 23,
-                entity_type: "url".to_string(),
-            },
-            EntityDescriptor {
-                start: 25,
-                end: 30,
-                entity_type: "mention".to_string(),
-            },
-            EntityDescriptor {
-                start: 32,
-                end: 40,
-                entity_type: "hashtag".to_string(),
-            },
-        ]);
+        let entities = build_thrift_entities(
+            &[
+                EntityDescriptor::new(0, 23, "url"),
+                EntityDescriptor::new(25, 30, "mention"),
+                EntityDescriptor::new(32, 40, "hashtag"),
+            ],
+            None,
+        )
+        .unwrap();
         let content = build_message_content(
             "https://example.com @user #topic",
             Some(entities),
@@ -872,43 +983,19 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_all_entity_types() {
-        let entities = build_thrift_entities(&[
-            EntityDescriptor {
-                start: 0,
-                end: 5,
-                entity_type: "url".to_string(),
-            },
-            EntityDescriptor {
-                start: 6,
-                end: 11,
-                entity_type: "mention".to_string(),
-            },
-            EntityDescriptor {
-                start: 12,
-                end: 17,
-                entity_type: "hashtag".to_string(),
-            },
-            EntityDescriptor {
-                start: 18,
-                end: 23,
-                entity_type: "cashtag".to_string(),
-            },
-            EntityDescriptor {
-                start: 24,
-                end: 40,
-                entity_type: "email".to_string(),
-            },
-            EntityDescriptor {
-                start: 41,
-                end: 55,
-                entity_type: "address".to_string(),
-            },
-            EntityDescriptor {
-                start: 56,
-                end: 66,
-                entity_type: "phone_number".to_string(),
-            },
-        ]);
+        let entities = build_thrift_entities(
+            &[
+                EntityDescriptor::new(0, 5, "url"),
+                EntityDescriptor::new(6, 11, "mention"),
+                EntityDescriptor::new(12, 17, "hashtag"),
+                EntityDescriptor::new(18, 23, "cashtag"),
+                EntityDescriptor::new(24, 40, "email"),
+                EntityDescriptor::new(41, 55, "address"),
+                EntityDescriptor::new(56, 66, "phone_number"),
+            ],
+            None,
+        )
+        .unwrap();
         assert_eq!(entities.len(), 7);
     }
 
@@ -1306,25 +1393,25 @@ mod tests {
     // build_thrift_entities — edge cases
 
     #[test]
-    fn test_build_entities_unknown_type_filtered() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 5,
-            entity_type: "unknown_type".to_string(),
-        }]);
-        assert!(
-            entities.is_empty(),
-            "Unknown entity types should be filtered out"
-        );
+    fn an_unknown_or_empty_entity_type_fails_naming_it() {
+        for etype in ["unknown_type", "", "URL", "phone number"] {
+            let err =
+                build_thrift_entities(&[EntityDescriptor::new(0, 5, etype)], None).unwrap_err();
+            assert!(matches!(err, SdkError::InvalidInput(_)), "{etype:?}: {err}");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid entity_type '{etype}': pass url, mention, hashtag, cashtag, email, \
+                     address or phone_number"
+                )
+            );
+        }
     }
 
     #[test]
     fn test_build_entities_phone_number_camel_case() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 14,
-            entity_type: "phoneNumber".to_string(),
-        }]);
+        let entities =
+            build_thrift_entities(&[EntityDescriptor::new(0, 14, "phoneNumber")], None).unwrap();
         assert_eq!(
             entities.len(),
             1,
@@ -1333,59 +1420,41 @@ mod tests {
     }
 
     #[test]
-    fn test_build_entities_mixed_with_unknown_filtered() {
-        let entities = build_thrift_entities(&[
-            EntityDescriptor {
-                start: 0,
-                end: 5,
-                entity_type: "url".to_string(),
-            },
-            EntityDescriptor {
-                start: 6,
-                end: 11,
-                entity_type: "bogus".to_string(),
-            },
-            EntityDescriptor {
-                start: 12,
-                end: 17,
-                entity_type: "mention".to_string(),
-            },
-        ]);
-        assert_eq!(entities.len(), 2, "Only valid types should survive");
+    fn one_unknown_entity_type_fails_the_whole_list() {
+        let err = build_thrift_entities(
+            &[
+                EntityDescriptor::new(0, 5, "url"),
+                EntityDescriptor::new(6, 11, "bogus"),
+                EntityDescriptor::new(12, 17, "mention"),
+            ],
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("'bogus'"), "{err}");
     }
 
     #[test]
     fn test_build_entities_empty_input() {
-        let entities = build_thrift_entities(&[]);
+        let entities = build_thrift_entities(&[], None).unwrap();
         assert!(entities.is_empty());
     }
 
     #[test]
     fn test_build_entities_all_types_individually() {
         // Tests each branch individually to ensure all type strings resolve
-        for (etype, expected_count) in [
-            ("url", 1),
-            ("mention", 1),
-            ("hashtag", 1),
-            ("cashtag", 1),
-            ("email", 1),
-            ("address", 1),
-            ("phone_number", 1),
-            ("phoneNumber", 1),
-            ("invalid", 0),
+        for etype in [
+            "url",
+            "mention",
+            "hashtag",
+            "cashtag",
+            "email",
+            "address",
+            "phone_number",
+            "phoneNumber",
         ] {
-            let entities = build_thrift_entities(&[EntityDescriptor {
-                start: 0,
-                end: 10,
-                entity_type: etype.to_string(),
-            }]);
-            assert_eq!(
-                entities.len(),
-                expected_count,
-                "Entity type '{}' should produce {} entity(ies)",
-                etype,
-                expected_count
-            );
+            let entities =
+                build_thrift_entities(&[EntityDescriptor::new(0, 10, etype)], None).unwrap();
+            assert_eq!(entities.len(), 1, "Entity type '{etype}'");
         }
     }
 
@@ -1421,11 +1490,7 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_entities_and_attachments() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 23,
-            entity_type: "url".to_string(),
-        }]);
+        let entities = build_thrift_entities(&[EntityDescriptor::new(0, 23, "url")], None).unwrap();
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Url {
             url: "https://example.com".to_string(),
             display_title: Some("Example".to_string()),
@@ -1462,11 +1527,8 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_preview_and_entities() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 5,
-            entity_type: "mention".to_string(),
-        }]);
+        let entities =
+            build_thrift_entities(&[EntityDescriptor::new(0, 5, "mention")], None).unwrap();
         let content = build_message_content_with_preview(
             "@user yes!",
             test_preview(
@@ -1508,11 +1570,8 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_preview_entities() {
-        let reply_entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 6,
-            entity_type: "hashtag".to_string(),
-        }]);
+        let reply_entities =
+            build_thrift_entities(&[EntityDescriptor::new(0, 6, "hashtag")], None).unwrap();
         let content = build_message_content_with_preview(
             "Replying to tagged msg",
             test_preview(
@@ -1568,22 +1627,16 @@ mod tests {
 
     #[test]
     fn test_build_message_content_with_preview_all_fields() {
-        let entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 5,
-            entity_type: "mention".to_string(),
-        }]);
+        let entities =
+            build_thrift_entities(&[EntityDescriptor::new(0, 5, "mention")], None).unwrap();
         let attachments = build_thrift_attachments(&[AttachmentDescriptor::Url {
             url: "https://reply-link.com".to_string(),
             display_title: None,
             banner_image: None,
             favicon_image: None,
         }]);
-        let reply_entities = build_thrift_entities(&[EntityDescriptor {
-            start: 0,
-            end: 20,
-            entity_type: "url".to_string(),
-        }]);
+        let reply_entities =
+            build_thrift_entities(&[EntityDescriptor::new(0, 20, "url")], None).unwrap();
         let reply_attachments = build_thrift_attachments(&[AttachmentDescriptor::Media {
             media_hash_key: "orig_media".to_string(),
             width: 400,

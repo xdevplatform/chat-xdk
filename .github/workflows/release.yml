@@ -119,13 +119,13 @@ jobs:
           set -euo pipefail
           rustup target add x86_64-unknown-linux-gnu x86_64-unknown-linux-musl
           sudo apt-get update && sudo apt-get install -y build-essential musl-tools
-          cargo build -p chat-xdk-go --release --target x86_64-unknown-linux-gnu
-          cargo build -p chat-xdk-go --release --target x86_64-unknown-linux-musl
-          strip -D --strip-debug target/x86_64-unknown-linux-gnu/release/libchat_xdk_go.a
-          strip -D --strip-debug target/x86_64-unknown-linux-musl/release/libchat_xdk_go.a
+          cargo build -p chat-xdk-ffi --release --target x86_64-unknown-linux-gnu
+          cargo build -p chat-xdk-ffi --release --target x86_64-unknown-linux-musl
+          strip -D --strip-debug target/x86_64-unknown-linux-gnu/release/libchat_xdk_ffi.a
+          strip -D --strip-debug target/x86_64-unknown-linux-musl/release/libchat_xdk_ffi.a
           mkdir -p go/chatxdk/libs/linux_amd64 go/chatxdk/libs/linux_amd64_musl
-          cp target/x86_64-unknown-linux-gnu/release/libchat_xdk_go.a go/chatxdk/libs/linux_amd64/
-          cp target/x86_64-unknown-linux-musl/release/libchat_xdk_go.a go/chatxdk/libs/linux_amd64_musl/
+          cp target/x86_64-unknown-linux-gnu/release/libchat_xdk_ffi.a go/chatxdk/libs/linux_amd64/
+          cp target/x86_64-unknown-linux-musl/release/libchat_xdk_ffi.a go/chatxdk/libs/linux_amd64_musl/
       - name: Build (darwin arm64 + amd64)
         if: matrix.os == 'darwin'
         # Darwin-only reproducibility flags, matching go-prebuilt-darwin.yml;
@@ -139,16 +139,16 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          cargo build -p chat-xdk-go --release --target aarch64-apple-darwin
-          cargo build -p chat-xdk-go --release --target x86_64-apple-darwin
-          strip -S target/aarch64-apple-darwin/release/libchat_xdk_go.a
-          strip -S target/x86_64-apple-darwin/release/libchat_xdk_go.a
+          cargo build -p chat-xdk-ffi --release --target aarch64-apple-darwin
+          cargo build -p chat-xdk-ffi --release --target x86_64-apple-darwin
+          strip -S target/aarch64-apple-darwin/release/libchat_xdk_ffi.a
+          strip -S target/x86_64-apple-darwin/release/libchat_xdk_ffi.a
           python3 scripts/normalize_ar_dates.py \
-            target/aarch64-apple-darwin/release/libchat_xdk_go.a \
-            target/x86_64-apple-darwin/release/libchat_xdk_go.a
+            target/aarch64-apple-darwin/release/libchat_xdk_ffi.a \
+            target/x86_64-apple-darwin/release/libchat_xdk_ffi.a
           mkdir -p go/chatxdk/libs/darwin_arm64 go/chatxdk/libs/darwin_amd64
-          cp target/aarch64-apple-darwin/release/libchat_xdk_go.a go/chatxdk/libs/darwin_arm64/
-          cp target/x86_64-apple-darwin/release/libchat_xdk_go.a go/chatxdk/libs/darwin_amd64/
+          cp target/aarch64-apple-darwin/release/libchat_xdk_ffi.a go/chatxdk/libs/darwin_arm64/
+          cp target/x86_64-apple-darwin/release/libchat_xdk_ffi.a go/chatxdk/libs/darwin_amd64/
       # Upload only this platform's freshly built archives: the checkout also
       # contains the other platform's committed (stale) copies, and overlapping
       # artifact contents race when the tag job merge-downloads both.
@@ -398,15 +398,15 @@ jobs:
         run: |
           set -euo pipefail
           for lib in linux_amd64 linux_amd64_musl darwin_arm64 darwin_amd64; do
-            cmp "go/chatxdk/libs/$lib/libchat_xdk_go.a" "fresh-libs/$lib/libchat_xdk_go.a"
+            cmp "go/chatxdk/libs/$lib/libchat_xdk_ffi.a" "fresh-libs/$lib/libchat_xdk_ffi.a"
             echo "OK: $lib byte-matches at the tag"
           done
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
-        run: ls -la fresh-libs/*/libchat_xdk_go.a
+        run: ls -la fresh-libs/*/libchat_xdk_ffi.a
 
   # ---------------------------------------------------------------------------
-  # Also runs for `java`: the JVM binding loads the same chat_xdk_dotnet cdylib
+  # Also runs for `java`: the JVM binding loads the same chat_xdk_ffi cdylib
   # (via JNA), so the java job reuses these per-platform artifacts.
   dotnet-build:
     name: Build .NET native (${{ matrix.rid }})
@@ -420,23 +420,23 @@ jobs:
           - runs_on: macos-latest
             rust_target: aarch64-apple-darwin
             rid: osx-arm64
-            lib: libchat_xdk_dotnet.dylib
+            lib: libchat_xdk_ffi.dylib
           - runs_on: macos-15-intel
             rust_target: x86_64-apple-darwin
             rid: osx-x64
-            lib: libchat_xdk_dotnet.dylib
+            lib: libchat_xdk_ffi.dylib
           - runs_on: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
             rid: linux-x64
-            lib: libchat_xdk_dotnet.so
+            lib: libchat_xdk_ffi.so
           - runs_on: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             rid: linux-arm64
-            lib: libchat_xdk_dotnet.so
+            lib: libchat_xdk_ffi.so
           - runs_on: windows-latest
             rust_target: x86_64-pc-windows-msvc
             rid: win-x64
-            lib: chat_xdk_dotnet.dll
+            lib: chat_xdk_ffi.dll
     defaults:
       run:
         working-directory: chat-xdk
@@ -458,8 +458,8 @@ jobs:
       - name: Install Linux build tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential
-      - name: Build cdylib (chat-xdk-dotnet)
-        run: cargo build -p chat-xdk-dotnet --release --target ${{ matrix.rust_target }}
+      - name: Build cdylib (chat-xdk-ffi)
+        run: cargo build -p chat-xdk-ffi --release --target ${{ matrix.rust_target }}
       - name: Upload native library
         uses: actions/upload-artifact@v4
         with:
@@ -576,11 +576,11 @@ jobs:
           jar="crates/jvm/java/chatxdk/target/chatxdk-${{ needs.prepare.outputs.version }}.jar"
           contents="$(jar tf "$jar")"
           for entry in \
-            native/osx-arm64/libchat_xdk_dotnet.dylib \
-            native/osx-x64/libchat_xdk_dotnet.dylib \
-            native/linux-x64/libchat_xdk_dotnet.so \
-            native/linux-arm64/libchat_xdk_dotnet.so \
-            native/win-x64/chat_xdk_dotnet.dll \
+            native/osx-arm64/libchat_xdk_ffi.dylib \
+            native/osx-x64/libchat_xdk_ffi.dylib \
+            native/linux-x64/libchat_xdk_ffi.so \
+            native/linux-arm64/libchat_xdk_ffi.so \
+            native/win-x64/chat_xdk_ffi.dll \
             META-INF/LICENSE \
             META-INF/THIRD_PARTY_NOTICES.md; do
             if ! grep -qx "$entry" <<<"$contents"; then

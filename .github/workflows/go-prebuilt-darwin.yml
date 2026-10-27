@@ -1,6 +1,6 @@
 # Committed prebuilts (reproducible: codegen-units=1 + ZERO_AR_DATE + zeroed ar member dates):
-#   go/chatxdk/libs/darwin_arm64/libchat_xdk_go.a
-#   go/chatxdk/libs/darwin_amd64/libchat_xdk_go.a
+#   go/chatxdk/libs/darwin_arm64/libchat_xdk_ffi.a
+#   go/chatxdk/libs/darwin_amd64/libchat_xdk_ffi.a
 #
 # Same pattern as go-prebuilt-linux.yml: verify on pull_request, sync on push /
 # workflow_dispatch. Builds both Apple targets on one macOS runner (matches local
@@ -19,7 +19,7 @@ on:
     branches: ["**"]
     paths:
       - "crates/core/**"
-      - "crates/go/**"
+      - "crates/ffi/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "go/chatxdk/libs/**"
@@ -28,7 +28,7 @@ on:
     branches: ["**"]
     paths:
       - "crates/core/**"
-      - "crates/go/**"
+      - "crates/ffi/**"
       - "go/chatxdk/libs/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -57,8 +57,8 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "11.0"
   RUST_TARGET_ARM64: aarch64-apple-darwin
   RUST_TARGET_AMD64: x86_64-apple-darwin
-  COMMITTED_ARM64: go/chatxdk/libs/darwin_arm64/libchat_xdk_go.a
-  COMMITTED_AMD64: go/chatxdk/libs/darwin_amd64/libchat_xdk_go.a
+  COMMITTED_ARM64: go/chatxdk/libs/darwin_arm64/libchat_xdk_ffi.a
+  COMMITTED_AMD64: go/chatxdk/libs/darwin_amd64/libchat_xdk_ffi.a
 
 jobs:
   verify:
@@ -86,16 +86,16 @@ jobs:
         uses: dtolnay/rust-toolchain@1.91.1
       - name: Rust targets (darwin)
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - name: Build static libraries (chat-xdk-go)
+      - name: Build static libraries (chat-xdk-ffi)
         run: |
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_ARM64"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_AMD64"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_ARM64"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_AMD64"
       - name: Strip (macOS)
         run: |
-          strip -S "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a"
-          strip -S "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+          strip -S "target/$RUST_TARGET_ARM64/release/libchat_xdk_ffi.a"
+          strip -S "target/$RUST_TARGET_AMD64/release/libchat_xdk_ffi.a"
       - name: Normalize archives (zero every ar member date)
         run: |
           # ZERO_AR_DATE covers the cctools passes; this zeroes the date field
@@ -103,14 +103,14 @@ jobs:
           # byte-identical no matter which tool wrote a header. Must stay
           # identical to the Makefile `prebuilt` recipe.
           python3 scripts/normalize_ar_dates.py \
-            "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a" \
-            "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+            "target/$RUST_TARGET_ARM64/release/libchat_xdk_ffi.a" \
+            "target/$RUST_TARGET_AMD64/release/libchat_xdk_ffi.a"
       - name: Must match committed archives
         shell: bash
         run: |
           set -euo pipefail
-          BUILT_ARM="target/${RUST_TARGET_ARM64}/release/libchat_xdk_go.a"
-          BUILT_AMD="target/${RUST_TARGET_AMD64}/release/libchat_xdk_go.a"
+          BUILT_ARM="target/${RUST_TARGET_ARM64}/release/libchat_xdk_ffi.a"
+          BUILT_AMD="target/${RUST_TARGET_AMD64}/release/libchat_xdk_ffi.a"
           COMMITTED_ARM="${COMMITTED_ARM64}"
           COMMITTED_AMD="${COMMITTED_AMD64}"
           for pair in "$BUILT_ARM:$COMMITTED_ARM" "$BUILT_AMD:$COMMITTED_AMD"; do
@@ -170,16 +170,16 @@ jobs:
         uses: dtolnay/rust-toolchain@1.91.1
       - name: Rust targets (darwin)
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - name: Build static libraries (chat-xdk-go)
+      - name: Build static libraries (chat-xdk-ffi)
         run: |
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_ARM64"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_AMD64"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_ARM64"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_AMD64"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_ARM64"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_AMD64"
       - name: Strip (macOS)
         run: |
-          strip -S "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a"
-          strip -S "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+          strip -S "target/$RUST_TARGET_ARM64/release/libchat_xdk_ffi.a"
+          strip -S "target/$RUST_TARGET_AMD64/release/libchat_xdk_ffi.a"
       - name: Normalize archives (zero every ar member date)
         run: |
           # ZERO_AR_DATE covers the cctools passes; this zeroes the date field
@@ -187,15 +187,15 @@ jobs:
           # byte-identical no matter which tool wrote a header. Must stay
           # identical to the Makefile `prebuilt` recipe.
           python3 scripts/normalize_ar_dates.py \
-            "target/$RUST_TARGET_ARM64/release/libchat_xdk_go.a" \
-            "target/$RUST_TARGET_AMD64/release/libchat_xdk_go.a"
+            "target/$RUST_TARGET_ARM64/release/libchat_xdk_ffi.a" \
+            "target/$RUST_TARGET_AMD64/release/libchat_xdk_ffi.a"
       - name: Commit prebuilts if changed
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "$COMMITTED_ARM64")" "$(dirname "$COMMITTED_AMD64")"
-          cp -f "target/${RUST_TARGET_ARM64}/release/libchat_xdk_go.a" "$COMMITTED_ARM64"
-          cp -f "target/${RUST_TARGET_AMD64}/release/libchat_xdk_go.a" "$COMMITTED_AMD64"
+          cp -f "target/${RUST_TARGET_ARM64}/release/libchat_xdk_ffi.a" "$COMMITTED_ARM64"
+          cp -f "target/${RUST_TARGET_AMD64}/release/libchat_xdk_ffi.a" "$COMMITTED_AMD64"
           if git diff --quiet -- "$COMMITTED_ARM64" "$COMMITTED_AMD64"; then
             echo "No change to darwin prebuilts; nothing to commit."
             exit 0
@@ -203,7 +203,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$COMMITTED_ARM64" "$COMMITTED_AMD64"
-          git commit -m "chore(go): sync libchat_xdk_go.a (darwin arm64 + amd64)"
+          git commit -m "chore(go): sync libchat_xdk_ffi.a (darwin arm64 + amd64)"
           if ! git push origin "HEAD:refs/heads/$(git rev-parse --abbrev-ref HEAD)"; then
             echo "::warning::git push failed. Use PREBUILT_SYNC_PAT or relax branch protection."
             exit 1

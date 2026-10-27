@@ -23,7 +23,7 @@
 
   <!--
     Native libraries ship under runtimes/<rid>/native/ and are resolved by the
-    .NET runtime at load time from the P/Invoke name "chat_xdk_dotnet". CI
+    .NET runtime at load time from the P/Invoke name "chat_xdk_ffi". CI
     builds one cdylib per RID (osx-arm64, osx-x64, linux-x64, linux-arm64,
     win-x64) and stages it there before packing. For a local package, build
     the cdylib in the release profile and copy it into the matching runtimes

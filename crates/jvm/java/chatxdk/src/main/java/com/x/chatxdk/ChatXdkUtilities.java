@@ -27,7 +27,7 @@ public final class ChatXdkUtilities {
         try {
             return Long.parseLong(value);
         } catch (NumberFormatException e) {
-            throw new ArithmeticException("Encrypted stream size exceeds Long.MAX_VALUE");
+            throw new ArithmeticException("Encrypted file size exceeds Long.MAX_VALUE");
         }
     }
 

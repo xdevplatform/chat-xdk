@@ -1,13 +1,16 @@
 [package]
-name = "chat-xdk-go"
+name = "chat-xdk-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Go bindings for chat-xdk encryption SDK (C FFI layer)"
+description = "C ABI of the chat-xdk encryption SDK, shared by the Go, .NET and JVM bindings"
 
 [lib]
-crate-type = ["staticlib"]
+name = "chat_xdk_ffi"
+# staticlib → the archive the Go package links (go/chatxdk/libs/)
+# cdylib    → the shared library .NET (P/Invoke) and the JVM (JNA) load
+crate-type = ["staticlib", "cdylib"]
 
 [features]
 default = ["juicebox"]
@@ -20,7 +23,10 @@ serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 zeroize.workspace = true
-libc = "0.2"
 
 [build-dependencies]
+# The C header (go/chatxdk/include/chat_xdk.h) and the C# P/Invoke layer
+# (crates/dotnet/dotnet/ChatXdk/NativeMethods.g.cs) are generated from this
+# crate's source on every build.
 cbindgen = "0.27"
+csbindgen = "1"

@@ -14,8 +14,10 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -61,12 +63,12 @@ class ChatTest {
     private static List<SigningKeyEntry> signingKeysFor(JsonNode v, String... userIds) {
         List<SigningKeyEntry> entries = new ArrayList<>();
         for (String userId : userIds) {
-            SigningKeyEntry entry = new SigningKeyEntry();
-            entry.userId = userId;
-            entry.publicKeyVersion = v.get("event_signing_key_version").asText();
-            entry.publicKey = v.get("signing_public_b64").asText();
-            entry.identityPublicKey = v.get("identity_public_b64").asText();
-            entry.identityPublicKeySignature = v.get("identity_public_key_signature_b64").asText();
+            SigningKeyEntry entry = new SigningKeyEntry(
+                    userId,
+                    v.get("event_signing_key_version").asText(),
+                    v.get("signing_public_b64").asText(),
+                    v.get("identity_public_b64").asText(),
+                    v.get("identity_public_key_signature_b64").asText());
             entries.add(entry);
         }
         return entries;
@@ -81,6 +83,17 @@ class ChatTest {
     private static ActionSignature onlyAction(PreparedAction prepared) {
         assertEquals(1, prepared.actionSignatures.size());
         return prepared.actionSignatures.get(0);
+    }
+
+    /**
+     * Whether {@code sig}'s signature verifies, under the signer's own signing key, over
+     * {@code payload}: the comma-joined fields its event signs.
+     */
+    private static boolean signs(Chat chat, ActionSignature sig, String payload) {
+        return chat.verify(
+                sig.messageEventSignature.signingPublicKey,
+                Base64.getDecoder().decode(sig.messageEventSignature.signature),
+                payload.getBytes(StandardCharsets.UTF_8));
     }
 
     /** File-encryption params under the fixture conversation key. */
@@ -139,10 +152,7 @@ class ChatTest {
 
     /** Produce a fresh conversation key via a prepared key change (for crypto tests). */
     private static byte[] newConvKey(Chat chat) throws Exception {
-        PublicKeyInput input = new PublicKeyInput();
-        input.userId = "910002";
-        input.publicKey = chat.getPublicKeys().identity;
-        input.keyVersion = "1";
+        PublicKeyInput input = new PublicKeyInput("910002", chat.getPublicKeys().identity, "1");
         ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
         params.senderId = "910002";
         params.signingKeyVersion = "1";
@@ -206,33 +216,57 @@ class ChatTest {
     }
 
     @Test
-    void guessesRemainingParsedFromInvalidPinMessage() {
-        // The core's invalid-PIN unlock error carries the stable
-        // "guesses_remaining=N" token in the message; 0 means exhausted.
-        assertEquals(
-                3,
-                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=3")
-                        .getGuessesRemaining());
-        assertEquals(
-                0,
-                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=0")
-                        .getGuessesRemaining());
-        assertNull(
-                new ChatXdkException("Juicebox error: Invalid PIN").getGuessesRemaining());
-        // The count is read only from the invalid-PIN form, not from
-        // unrelated messages that happen to contain the token.
-        assertNull(
-                new ChatXdkException("Delete failed: guesses_remaining=7")
-                        .getGuessesRemaining());
+    void errorsCarryTheirKind() {
+        try (Chat chat = new Chat()) {
+            ChatXdkException config =
+                    assertThrows(ChatXdkException.class, () -> chat.updateConfig("not json"));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, config.getKind());
+            assertNull(config.getGuessesRemaining());
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, assertThrows(ChatXdkException.class,
+                    () -> chat.setup("123".getBytes(StandardCharsets.UTF_8))).getKind());
+            assertEquals(ChatXdkException.Kind.PARSE, assertThrows(ChatXdkException.class,
+                    () -> chat.decryptEvent(new DecryptEventParams("not base64!"))).getKind());
+            assertEquals(ChatXdkException.Kind.INVALID_STATE, assertThrows(ChatXdkException.class,
+                    () -> chat.sign(new byte[] {1})).getKind());
+        }
+        assertThrows(NullPointerException.class, () -> new Chat((String) null));
     }
 
     @Test
-    void guessesRemainingNullOnNonPinErrors() {
+    void juiceboxCallsWithoutAConfigFailWithTheCoresInvalidStateError() throws Exception {
         try (Chat chat = new Chat()) {
-            ChatXdkException ex =
-                    assertThrows(ChatXdkException.class, () -> chat.updateConfig("not json"));
-            assertNull(ex.getGuessesRemaining());
+            chat.generateKeypairs();
+            String want = "Invalid state: no Juicebox config: pass the juicebox_config the X API "
+                    + "returns when you create the chat, or call update_config() first";
+            byte[] pin = "2580".getBytes(StandardCharsets.UTF_8);
+            byte[] newPin = "1359".getBytes(StandardCharsets.UTF_8);
+            Throwable async = assertThrows(java.util.concurrent.CompletionException.class,
+                    () -> chat.unlockAsync(pin).join()).getCause();
+            for (Throwable e : new Throwable[] {
+                assertThrows(ChatXdkException.class, () -> chat.setup(pin)),
+                assertThrows(ChatXdkException.class, () -> chat.unlock(pin)),
+                assertThrows(ChatXdkException.class, () -> chat.changePin(pin, newPin)),
+                assertThrows(ChatXdkException.class, chat::delete),
+                async,
+            }) {
+                ChatXdkException error = assertInstanceOf(ChatXdkException.class, e);
+                assertEquals(ChatXdkException.Kind.INVALID_STATE, error.getKind());
+                assertEquals(want, error.getMessage());
+            }
+            assertTrue(chat.isUnlocked());
         }
+    }
+
+    @Test
+    void errorsReadTheInvalidPinCount() {
+        ChatXdkException wrongPin = ChatXdkException.fromDocument(
+                "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN: guesses_remaining=3\","
+                        + "\"guesses_remaining\":3}");
+        assertEquals(ChatXdkException.Kind.INVALID_PIN, wrongPin.getKind());
+        assertEquals(3, wrongPin.getGuessesRemaining());
+        assertEquals("Juicebox error: Invalid PIN: guesses_remaining=3", wrongPin.getMessage());
+        assertNull(ChatXdkException.fromDocument(
+                "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN\"}").getGuessesRemaining());
     }
 
     @Test
@@ -282,12 +316,21 @@ class ChatTest {
     }
 
     @Test
-    void encryptDecryptRoundTrip() throws Exception {
+    void decryptReadsTheTitleATitleChangeSends() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] key = newConvKey(chat);
-            String ct = chat.encrypt("hello jvm", key);
-            assertEquals("hello jvm", chat.decrypt(ct, key));
+            assertEquals("hello jvm", chat.decrypt(encryptedTitle(chat, "hello jvm", key), key));
         }
+    }
+
+    /** The encrypted title a title change under {@code key} sends. */
+    private static String encryptedTitle(Chat chat, String title, byte[] key) throws Exception {
+        GroupTitleChangeParams params = new GroupTitleChangeParams("g100", title);
+        params.senderId = "910002";
+        params.signingKeyVersion = "1";
+        params.conversationKey = key;
+        params.conversationKeyVersion = "4";
+        return chat.prepareGroupTitleChange(params).encryptedValue;
     }
 
     @Test
@@ -348,21 +391,136 @@ class ChatTest {
     }
 
     @Test
-    void encryptMessageMediaAttachmentMissingRequiredFieldThrows() throws Exception {
+    void descriptorsAndKeyEntriesTakeTheirRequiredValuesInConstructors() throws Exception {
+        assertEquals(0, Types.AttachmentDescriptor.class.getConstructors().length);
+        for (java.lang.reflect.Field field : Types.AttachmentDescriptor.class.getFields()) {
+            assertTrue(java.lang.reflect.Modifier.isFinal(field.getModifiers()), field.getName());
+        }
+        Map<Class<?>, List<String>> required = Map.of(
+                EntityDescriptor.class, List.of("start", "end", "entityType"),
+                Types.UrlAttachmentImageDescriptor.class, List.of("mediaHashKey", "filesizeBytes", "filename"),
+                SigningKeyEntry.class,
+                List.of("userId", "publicKeyVersion", "publicKey", "identityPublicKey", "identityPublicKeySignature"),
+                PublicKeyInput.class, List.of("userId", "identityPublicKey", "publicKeyVersion"));
+        for (Map.Entry<Class<?>, List<String>> type : required.entrySet()) {
+            String name = type.getKey().getSimpleName();
+            java.lang.reflect.Constructor<?>[] constructors = type.getKey().getConstructors();
+            assertEquals(1, constructors.length, name);
+            assertEquals(type.getValue().size(), constructors[0].getParameterCount(), name);
+            for (String field : type.getValue()) {
+                assertTrue(java.lang.reflect.Modifier.isFinal(type.getKey().getField(field).getModifiers()),
+                        name + "." + field);
+            }
+        }
+        assertThrows(NullPointerException.class, () -> new SigningKeyEntry(null, "1", "k", "i", "s"));
+        assertThrows(NullPointerException.class, () -> new PublicKeyInput("1", null, "1"));
+        assertThrows(NullPointerException.class, () -> new Types.UrlAttachmentImageDescriptor("b", 1, null));
+        assertThrows(NullPointerException.class, () -> new EntityDescriptor(0, 1, null));
+        assertThrows(NullPointerException.class, () -> Types.AttachmentDescriptor.urlCard(null, "Example"));
+    }
+
+    @Test
+    void aFileWithoutANameOrASizeFailsWithInvalidInput() throws Exception {
         try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
             byte[] ckey = newConvKey(chat);
-            EncryptMessageParams p = new EncryptMessageParams("conv-1", "bad attachment");
-            p.senderId = "1001";
-            p.signingKeyVersion = "66";
-            p.conversationKey = ckey;
-            p.conversationKeyVersion = "1";
-            // Core requires the media fields; an attachment missing one is
-            // rejected rather than silently defaulted.
-            Types.AttachmentDescriptor bad = new Types.AttachmentDescriptor();
-            bad.attachmentType = "media";
-            bad.mediaHashKey = "h";
-            p.attachments = java.util.List.of(bad);
-            assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+            String noName = "has an empty filename: pass the file's original name";
+            String noSize = "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives";
+            for (Map.Entry<Types.AttachmentDescriptor, String> c : List.of(
+                    Map.entry(Types.AttachmentDescriptor.media("photo", 100, 100, 1000, "", 1, null),
+                            "media_hash_key 'photo' " + noName),
+                    Map.entry(Types.AttachmentDescriptor.media("photo", 100, 100, 0, "photo.jpg", 1, null),
+                            "media_hash_key 'photo' " + noSize),
+                    Map.entry(Types.AttachmentDescriptor.urlCard("https://example.com", "Example",
+                                    new Types.UrlAttachmentImageDescriptor("banner", 1000, ""), null),
+                            "media_hash_key 'banner' " + noName),
+                    Map.entry(Types.AttachmentDescriptor.urlCard("https://example.com", "Example",
+                                    null, new Types.UrlAttachmentImageDescriptor("favicon", 0, "favicon.png")),
+                            "media_hash_key 'favicon' " + noSize))) {
+                EncryptMessageParams p = new EncryptMessageParams("conv-1", "a file");
+                p.conversationKey = ckey;
+                p.conversationKeyVersion = "1";
+                p.attachments = List.of(c.getKey());
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals(c.getValue(), e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void invalidOffsetsLinksPostsAndDimensionsFailWithInvalidInput() throws Exception {
+        record Case(List<EntityDescriptor> entities, List<Types.AttachmentDescriptor> attachments, String message) {}
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
+            byte[] ckey = newConvKey(chat);
+            Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor("banner", 1000, "b.png");
+            banner.height = -1L;
+            List<Case> cases = List.of(
+                    new Case(List.of(new EntityDescriptor(-1, 4, "mention")), null,
+                            "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0"),
+                    new Case(List.of(new EntityDescriptor(5, 3, "mention")), null,
+                            "Invalid entity offsets 5..3: end is before start"),
+                    new Case(List.of(new EntityDescriptor(3, 8, "mention")), null,
+                            "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.urlCard("", null)),
+                            "a URL card's url is empty: pass the link the card shows"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.post(null, null)),
+                            "a post attachment has neither rest_id nor post_url: pass the post's id or its URL"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.media("photo", -1, 100, 1000, "photo.jpg", 1, null)),
+                            "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more"),
+                    new Case(null, List.of(Types.AttachmentDescriptor.urlCard("https://example.com", null, banner, null)),
+                            "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more"));
+            for (Case c : cases) {
+                EncryptMessageParams p = new EncryptMessageParams("conv-1", "hi @bob");
+                p.conversationKey = ckey;
+                p.conversationKeyVersion = "1";
+                p.entities = c.entities();
+                p.attachments = c.attachments();
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals(c.message(), e.getMessage());
+            }
+            // Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+            EncryptMessageParams utf8 = new EncryptMessageParams("conv-1", "é @bob");
+            utf8.conversationKey = ckey;
+            utf8.conversationKeyVersion = "1";
+            utf8.entities = List.of(new EntityDescriptor(3, 7, "mention"));
+            chat.encryptMessage(utf8);
+        }
+    }
+
+    @Test
+    void anEmptyJuiceboxConfigFailsWithTheNoConfigError() throws Exception {
+        String want = "Invalid state: no Juicebox config: pass the juicebox_config the X API returns "
+                + "when you create the chat, or call update_config() first";
+        for (String empty : new String[] {"", "  "}) {
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> new Chat(empty));
+            assertEquals(ChatXdkException.Kind.INVALID_STATE, e.getKind());
+            assertEquals(want, e.getMessage());
+        }
+        try (Chat chat = new Chat()) {
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.updateConfig(""));
+            assertEquals(ChatXdkException.Kind.INVALID_STATE, e.getKind());
+            assertEquals(want, e.getMessage());
+        }
+    }
+
+    @Test
+    void anUnknownOrEmptyEntityTypeFailsWithInvalidInput() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
+            byte[] ckey = newConvKey(chat);
+            for (String entityType : new String[] {"bogus", ""}) {
+                EncryptMessageParams p = new EncryptMessageParams("conv-1", "hi @bob");
+                p.conversationKey = ckey;
+                p.conversationKeyVersion = "1";
+                p.entities = List.of(new EntityDescriptor(3, 7, entityType));
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals("Invalid entity_type '" + entityType + "': pass url, mention, hashtag, cashtag, "
+                        + "email, address or phone_number", e.getMessage());
+            }
         }
     }
 
@@ -394,17 +552,15 @@ class ChatTest {
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
-            Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor();
-            banner.mediaHashKey = "banner-hash";
-            banner.filesizeBytes = 24_000L;
-            banner.filename = "banner.jpg";
+            Types.UrlAttachmentImageDescriptor banner =
+                    new Types.UrlAttachmentImageDescriptor("banner-hash", 24_000, "banner.jpg");
             banner.width = 1200L;
             banner.height = 630L;
             Types.AttachmentDescriptor attachment = Types.AttachmentDescriptor.urlCard(
                     "https://example.com/product",
                     "Example Product",
                     banner,
-                    Types.UrlAttachmentImageDescriptor.of("favicon-hash", 1_200L, "favicon.ico"));
+                    new Types.UrlAttachmentImageDescriptor("favicon-hash", 1_200L, "favicon.ico"));
 
             // ChatJson.MAPPER is the serializer the FFI uses to build the
             // params JSON, so confirm the banner reaches core under the
@@ -518,10 +674,7 @@ class ChatTest {
             // Explicit-field form: conversation id + target sequence id instead
             // of the raw target event.
             EncryptEditParams p = new EncryptEditParams(null, "see https://example.com");
-            EntityDescriptor url = new EntityDescriptor();
-            url.start = 4;
-            url.end = 23;
-            url.entityType = "url";
+            EntityDescriptor url = new EntityDescriptor(4, 23, "url");
             p.entities = List.of(url);
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";
@@ -577,9 +730,7 @@ class ChatTest {
             assertFalse(entry.has("signature"), entry.toString());
             assertEquals(signed.signingPublicKey,
                     entry.get("message_event_signature").get("signing_public_key").asText());
-            assertEquals(
-                    "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11",
-                    sig.signaturePayload);
+            assertTrue(signs(chat, sig, "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11"));
         }
     }
 
@@ -592,36 +743,36 @@ class ChatTest {
             p.senderId = "111";
             p.signingKeyVersion = "1";
             ActionSignature sig = onlyAction(chat.prepareMessageDelete(p));
-            assertEquals(
-                    "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1",
-                    sig.signaturePayload);
+            assertTrue(signs(chat, sig, "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1"));
         }
     }
 
     @Test
     void groupActionsSignVerifierPayloads() throws Exception {
         try (Chat chat = createUnlocked()) {
-            GroupMembersRemoveParams plain = new GroupMembersRemoveParams("g100", List.of("910007"));
-            plain.senderId = "111";
-            plain.signingKeyVersion = "1";
-            PreparedConversationChange removed = chat.prepareGroupMembersRemove(plain);
-            assertNull(removed.conversationKey);
-            assertTrue(removed.conversationParticipantKeys.isEmpty());
-            assertTrue(removed.actionSignatures.get(0).signaturePayload.endsWith(",910007,null,signature_version=11"));
-
-            PublicKeyInput key = new PublicKeyInput();
-            key.userId = "111";
-            key.publicKey = chat.getPublicKeys().identity;
-            key.keyVersion = "1";
-            GroupMembersRemoveParams rotating = new GroupMembersRemoveParams("g100", List.of("910007"));
-            rotating.senderId = "111";
-            rotating.signingKeyVersion = "1";
-            rotating.publicKeys = List.of(key);
-            PreparedConversationChange rotated = chat.prepareGroupMembersRemove(rotating);
+            PublicKeyInput key = new PublicKeyInput("111", chat.getPublicKeys().identity, "1");
+            GroupMembersRemoveParams removal =
+                    new GroupMembersRemoveParams(List.of(key), "g100", List.of("910007"));
+            removal.senderId = "111";
+            removal.signingKeyVersion = "1";
+            PreparedConversationChange rotated = chat.prepareGroupMembersRemove(removal);
             assertEquals(32, rotated.conversationKey.length);
+            assertEquals(1, rotated.conversationParticipantKeys.size());
             assertEquals(2, rotated.actionSignatures.size());
-            assertTrue(rotated.actionSignatures.get(1).signaturePayload == null
-                    || rotated.actionSignatures.get(1).signaturePayload.isEmpty());
+            assertEquals("11", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
+            ActionSignature removed = rotated.actionSignatures.get(0);
+            assertTrue(signs(chat, removed, "GroupChangeEvent.GroupMemberRemoveChange," + removed.messageId
+                    + ",111,g100,910007," + rotated.conversationKeyVersion + ",signature_version=11"));
+
+            GroupMembersRemoveParams noKeys =
+                    new GroupMembersRemoveParams(List.of(), "g100", List.of("910007"));
+            noKeys.senderId = "111";
+            noKeys.signingKeyVersion = "1";
+            ChatXdkException noKeysError =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareGroupMembersRemove(noKeys));
+            assertEquals(
+                    "public_keys is empty: pass the public keys of the remaining members",
+                    noKeysError.getMessage());
 
             GroupLeaveParams leave = new GroupLeaveParams("g100");
             leave.senderId = "111";
@@ -630,19 +781,141 @@ class ChatTest {
             leave.conversationKeyVersion = "7";
             PreparedAction left = chat.prepareGroupLeave(leave);
             assertEquals(3, left.actionSignatures.size());
-            assertTrue(left.actionSignatures.get(1).signaturePayload.endsWith(",910008"));
-            assertTrue(left.actionSignatures.get(2).signaturePayload.startsWith("ConversationDeleteEvent,"));
+            ActionSignature leaving = left.actionSignatures.get(0);
+            ActionSignature promoting = left.actionSignatures.get(1);
+            ActionSignature deleting = left.actionSignatures.get(2);
+            assertTrue(signs(chat, leaving, "GroupChangeEvent.GroupMemberRemoveChange," + leaving.messageId
+                    + ",111,g100,111,7,signature_version=11"));
+            assertTrue(signs(chat, promoting,
+                    "GroupChangeEvent.GroupAdminAddChange," + promoting.messageId + ",111,g100,910008"));
+            assertTrue(signs(chat, deleting, "ConversationDeleteEvent," + deleting.messageId + ",111,g100"));
 
-            GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "4", "enc-title");
+            GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "Board: layoffs, Q3");
             titleParams.senderId = "111";
             titleParams.signingKeyVersion = "1";
-            assertTrue(onlyAction(chat.prepareGroupTitleChange(titleParams)).signaturePayload.endsWith(",4,enc-title"));
+            titleParams.conversationKey = rotated.conversationKey;
+            titleParams.conversationKeyVersion = rotated.conversationKeyVersion;
+            PreparedGroupMetadataChange title = chat.prepareGroupTitleChange(titleParams);
+            assertEquals(rotated.conversationKeyVersion, title.conversationKeyVersion);
+            assertEquals(1, title.actionSignatures.size());
+            ActionSignature titleSig = title.actionSignatures.get(0);
+            assertTrue(signs(chat, titleSig, "GroupChangeEvent.GroupTitleChange," + titleSig.messageId
+                    + ",111,g100," + title.conversationKeyVersion + "," + title.encryptedValue));
+            assertEquals("Board: layoffs, Q3", chat.decrypt(title.encryptedValue, rotated.conversationKey));
+
+            String avatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
+            GroupAvatarChangeParams avatarParams =
+                    new GroupAvatarChangeParams("g100", avatarUrl, rotated.conversationKeyVersion);
+            avatarParams.senderId = "111";
+            avatarParams.signingKeyVersion = "1";
+            PreparedAction avatar = chat.prepareGroupAvatarChange(avatarParams);
+            assertEquals(1, avatar.actionSignatures.size());
+            ActionSignature avatarSig = avatar.actionSignatures.get(0);
+            assertTrue(signs(chat, avatarSig, "GroupChangeEvent.GroupAvatarUrlChange," + avatarSig.messageId
+                    + ",111,g100," + rotated.conversationKeyVersion + "," + avatarUrl));
+
+            GroupDescriptionChangeParams descriptionParams =
+                    new GroupDescriptionChangeParams("g100", "Rules: be kind");
+            descriptionParams.senderId = "111";
+            descriptionParams.signingKeyVersion = "1";
+            descriptionParams.conversationKey = rotated.conversationKey;
+            descriptionParams.conversationKeyVersion = rotated.conversationKeyVersion;
+            PreparedGroupMetadataChange description = chat.prepareGroupDescriptionChange(descriptionParams);
+            ActionSignature descriptionSig = description.actionSignatures.get(0);
+            assertTrue(signs(chat, descriptionSig, "GroupChangeEvent.GroupDescriptionChange,"
+                    + descriptionSig.messageId + ",111,g100," + description.conversationKeyVersion + ","
+                    + description.encryptedValue));
+            assertEquals("Rules: be kind", chat.decrypt(description.encryptedValue, rotated.conversationKey));
+
+            GroupTitleChangeParams uncached = new GroupTitleChangeParams("g100", "Board");
+            uncached.senderId = "111";
+            uncached.signingKeyVersion = "1";
+            ChatXdkException uncachedError =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareGroupTitleChange(uncached));
+            assertTrue(uncachedError.getMessage().contains("no cached conversation key for 'g100'"),
+                    uncachedError.getMessage());
+
+            GroupMembersRemoveParams withTitle =
+                    new GroupMembersRemoveParams(List.of(key), "g100", List.of("910007"));
+            withTitle.senderId = "111";
+            withTitle.signingKeyVersion = "1";
+            withTitle.title = "Board";
+            PreparedConversationChange removedWithTitle = chat.prepareGroupMembersRemove(withTitle);
+            assertEquals(3, removedWithTitle.actionSignatures.size());
+            ActionSignature rotatedTitle = removedWithTitle.actionSignatures.get(1);
+            assertEquals("7", rotatedTitle.messageEventSignature.signatureVersion);
+            assertFalse(rotatedTitle.encodedMessageEventDetail.isEmpty());
 
             ScreenCaptureParams capture = new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled);
             capture.senderId = "111";
             capture.signingKeyVersion = "1";
-            assertTrue(onlyAction(chat.prepareScreenCapture(capture)).signaturePayload.startsWith(
-                    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"));
+            ActionSignature blocking = onlyAction(chat.prepareScreenCapture(capture));
+            assertTrue(signs(chat, blocking,
+                    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking," + blocking.messageId + ",111,g100"));
+        }
+    }
+
+    /** One signed action and the fields it signs after the sender. */
+    private record SignedAction(ActionSignature action, String fields) {}
+
+    /** One signed action: the event its payload names and the prepare call. */
+    private record GroupActionCase(String event, Callable<SignedAction> prepare) {}
+
+    // The group and conversation-metadata actions each sign one action at signature version 7 over
+    // the event name, the action's message id, the sender, the conversation and the signed fields,
+    // and the signature verifies with the signer's signing key.
+    @Test
+    void groupActionsSignEachAction() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("111", "1"));
+            String signingKey = chat.getPublicKeys().signing;
+            GroupDescriptionChangeParams description = new GroupDescriptionChangeParams("g100", "Ships the app");
+            description.conversationKey = new byte[32];
+            description.conversationKeyVersion = "4";
+            Map<String, GroupActionCase> cases = new LinkedHashMap<>();
+            cases.put("avatar", new GroupActionCase("GroupChangeEvent.GroupAvatarUrlChange",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupAvatarChange(
+                            new GroupAvatarChangeParams("g100", "https://img/a.png", "4"))), ",g100,4,https://img/a.png")));
+            cases.put("description", new GroupActionCase("GroupChangeEvent.GroupDescriptionChange", () -> {
+                PreparedGroupMetadataChange changed = chat.prepareGroupDescriptionChange(description);
+                assertEquals(1, changed.actionSignatures.size());
+                return new SignedAction(changed.actionSignatures.get(0), ",g100,4," + changed.encryptedValue);
+            }));
+            cases.put("admins add", new GroupActionCase("GroupChangeEvent.GroupAdminAddChange",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupAdminsAdd(
+                            new GroupAdminsAddParams("g100", List.of("910008", "910009")))), ",g100,910008,910009")));
+            cases.put("admins remove", new GroupActionCase("GroupChangeEvent.GroupAdminRemoveChange",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupAdminsRemove(
+                            new GroupAdminsRemoveParams("g100", List.of("910008")))), ",g100,910008")));
+            cases.put("invite enable", new GroupActionCase("GroupChangeEvent.GroupInviteEnable",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupInviteEnable(
+                            new GroupInviteEnableParams("g100", "https://x.com/i/invite/abc"))),
+                            ",g100,https://x.com/i/invite/abc,null,null")));
+            cases.put("invite disable", new GroupActionCase("GroupChangeEvent.GroupInviteDisable",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupInviteDisable(
+                            new GroupInviteDisableParams("g100"))), ",g100,111")));
+            cases.put("join request", new GroupActionCase("GroupChangeEvent.GroupJoinRequest",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupJoinRequest(
+                            new GroupJoinRequestParams("g100"))), ",g100,111")));
+            cases.put("join reject", new GroupActionCase("GroupChangeEvent.GroupJoinReject",
+                    () -> new SignedAction(onlyAction(chat.prepareGroupJoinReject(
+                            new GroupJoinRejectParams("g100", List.of("910010")))), ",g100,910010")));
+            cases.put("ttl change", new GroupActionCase("ConversationMetadataChangeEvent.MessageDurationChange",
+                    () -> new SignedAction(onlyAction(chat.prepareMessageTtlChange(
+                            new MessageTtlChangeParams("g100", 86400000L))), ",g100,86400000")));
+            cases.put("ttl remove", new GroupActionCase("ConversationMetadataChangeEvent.MessageDurationRemove",
+                    () -> new SignedAction(onlyAction(chat.prepareMessageTtlRemove(
+                            new MessageTtlRemoveParams("g100"))), ",g100")));
+            for (Map.Entry<String, GroupActionCase> entry : cases.entrySet()) {
+                String name = entry.getKey();
+                GroupActionCase c = entry.getValue();
+                SignedAction signed = c.prepare().call();
+                MessageEventSignature sig = signed.action().messageEventSignature;
+                assertEquals("7", sig.signatureVersion, name);
+                assertEquals(signingKey, sig.signingPublicKey, name);
+                String payload = c.event() + "," + signed.action().messageId + ",111" + signed.fields();
+                assertTrue(signs(chat, signed.action(), payload), name + ": " + payload);
+            }
         }
     }
 
@@ -660,14 +933,8 @@ class ChatTest {
             assertFalse(sig.encodedMessageEventDetail.isEmpty());
             assertEquals("1", sig.messageEventSignature.publicKeyVersion);
             assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
-            assertEquals(
-                    "MarkConversationReadEvent," + sig.messageId
-                            + ",111,111:222,2011626338877079553,1700000000123",
-                    sig.signaturePayload);
-            assertTrue(chat.verify(
-                    chat.getPublicKeys().signing,
-                    Base64.getDecoder().decode(sig.messageEventSignature.signature),
-                    sig.signaturePayload.getBytes(StandardCharsets.UTF_8)));
+            assertTrue(signs(chat, sig, "MarkConversationReadEvent," + sig.messageId
+                    + ",111,111:222,2011626338877079553,1700000000123"));
         }
     }
 
@@ -682,9 +949,11 @@ class ChatTest {
 
             assertEquals("7", sig.messageEventSignature.publicKeyVersion);
             String prefix = "MarkConversationReadEvent," + sig.messageId + ",111,g999,seq-1,";
-            assertTrue(sig.signaturePayload.startsWith(prefix), sig.signaturePayload);
-            long seenAt = Long.parseLong(sig.signaturePayload.substring(prefix.length()));
-            assertTrue(seenAt >= before && seenAt <= after, "seen_at " + seenAt);
+            boolean signedNow = false;
+            for (long seenAt = before; seenAt <= after && !signedNow; seenAt++) {
+                signedNow = signs(chat, sig, prefix + seenAt);
+            }
+            assertTrue(signedNow, "seen_at in [" + before + ", " + after + "]");
         }
     }
 
@@ -762,10 +1031,7 @@ class ChatTest {
     void prepareConversationKeyChangeReturnsExpectedShape() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
             params.senderId = "910002";
             params.signingKeyVersion = "1";
@@ -779,13 +1045,45 @@ class ChatTest {
             assertEquals(1, prepared.conversationParticipantKeys.size());
             assertFalse(prepared.conversationParticipantKeys.get(0).encryptedConversationKey.isEmpty());
             assertEquals(1, prepared.actionSignatures.size());
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             // The participant keys serialize under the request's field names.
             JsonNode entry = ChatJson.MAPPER.valueToTree(prepared).get("conversation_participant_keys").get(0);
             assertEquals(
                     prepared.conversationParticipantKeys.get(0).encryptedConversationKey,
                     entry.get("encrypted_conversation_key").asText());
+        }
+    }
+
+    // The conversation key is secret: a prepared change carries it, but its JSON,
+    // the shape a request body is built from, never does.
+    @Test
+    void preparedChangeJsonLeavesOutTheConversationKey() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("910002", "1"));
+            List<PublicKeyInput> publicKeys =
+                    List.of(new PublicKeyInput("910002", chat.getPublicKeys().identity, "1"));
+
+            ConversationKeyChangeParams keyChange = new ConversationKeyChangeParams(publicKeys);
+            keyChange.conversationId = "910002:910005";
+            GroupMembersRemoveParams removal = new GroupMembersRemoveParams(publicKeys, "g123", List.of("910005"));
+            List<PreparedConversationChange> prepared = List.of(
+                    chat.prepareConversationKeyChange(keyChange),
+                    chat.prepareGroupCreate(new GroupCreateParams(
+                            publicKeys, "g123", List.of("910002", "910005"), List.of("910002"))),
+                    chat.prepareGroupMembersRemove(removal));
+
+            for (PreparedConversationChange change : prepared) {
+                assertEquals(32, change.conversationKey.length);
+                for (ObjectMapper mapper : List.of(ChatJson.MAPPER, new ObjectMapper())) {
+                    JsonNode json = mapper.readTree(mapper.writeValueAsString(change));
+                    assertFalse(json.has("conversation_key"), "JSON carries the key: " + json);
+                    List<String> fields = new ArrayList<>();
+                    json.fieldNames().forEachRemaining(fields::add);
+                    assertEquals(
+                            List.of("conversation_id", "conversation_key_version",
+                                    "conversation_participant_keys", "action_signatures"),
+                            fields);
+                }
+            }
         }
     }
 
@@ -803,10 +1101,7 @@ class ChatTest {
     void prepareGroupMembersChangeReturnsSignedChange() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
             p.senderId = "910002";
@@ -816,14 +1111,43 @@ class ChatTest {
             assertEquals("g123", prepared.conversationId);
             // A member add emits two signed actions: the key change and the add.
             assertEquals(2, prepared.actionSignatures.size());
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupMemberAddChange,"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
-            // Unset screen-capture blocking signs as the trailing null sentinel.
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.endsWith(",null"));
+            // The title goes out encrypted under the new key, the value the request
+            // sends as encrypted_title; the signature covers the ciphertext. Unset
+            // screen-capture blocking signs as the trailing null sentinel.
+            ActionSignature add = prepared.actionSignatures.get(1);
+            assertTrue(signs(chat, add, "GroupChangeEvent.GroupMemberAddChange," + add.messageId
+                    + ",910002,g123,910006,910002,910002," + prepared.encryptedTitle + ",null,null,"
+                    + prepared.conversationKeyVersion + ",null"));
+            assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
+            assertNull(prepared.encryptedDescription);
+            assertEquals("7", prepared.actionSignatures.get(1).messageEventSignature.signatureVersion);
+        }
+    }
+
+    @Test
+    void prepareGroupMembersChangeEncryptsTheDescription() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            PublicKeys keys = chat.getPublicKeys();
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
+            String avatarUrl = "https://ton.x.com/xchat_media/g123/avatar";
+            GroupMembersChangeParams p = new GroupMembersChangeParams(
+                    List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
+            p.senderId = "910002";
+            p.signingKeyVersion = "1";
+            p.currentTitle = "Test Group";
+            p.currentDescription = "Ships the app";
+            p.currentAvatarUrl = avatarUrl;
+            PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
+            assertEquals("Ships the app", chat.decrypt(prepared.encryptedDescription, prepared.conversationKey));
+            // The description is signed at version 8, after the screen-capture slot;
+            // the avatar URL is signed as passed.
+            ActionSignature add = prepared.actionSignatures.get(1);
+            assertEquals("8", add.messageEventSignature.signatureVersion);
+            assertTrue(signs(chat, add, "GroupChangeEvent.GroupMemberAddChange," + add.messageId
+                    + ",910002,g123,910006,910002,910002," + prepared.encryptedTitle + "," + avatarUrl
+                    + ",null," + prepared.conversationKeyVersion + ",null," + prepared.encryptedDescription));
         }
     }
 
@@ -831,10 +1155,7 @@ class ChatTest {
     void prepareGroupMembersChangeSignsScreenCaptureBlocking() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
             p.senderId = "910002";
@@ -842,9 +1163,10 @@ class ChatTest {
             p.currentScreenCaptureBlockingEnabled = true;
             PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
             // The group's screen-capture-blocking state fills the trailing signed slot.
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupMemberAddChange,"));
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.endsWith(",true"));
+            ActionSignature add = prepared.actionSignatures.get(1);
+            assertTrue(signs(chat, add, "GroupChangeEvent.GroupMemberAddChange," + add.messageId
+                    + ",910002,g123,910006,910002,910002,null,null,null," + prepared.conversationKeyVersion
+                    + ",true"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
         }
     }
@@ -853,10 +1175,7 @@ class ChatTest {
     void prepareGroupCreateReturnsSignedChange() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupCreateParams p = new GroupCreateParams(
                     List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
             p.senderId = "910002";
@@ -866,12 +1185,15 @@ class ChatTest {
             assertEquals("g123", prepared.conversationId);
             // A group create emits two signed actions: the key change and the create.
             assertEquals(2, prepared.actionSignatures.size());
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupCreate,"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
+            // The title goes out encrypted under the new key, the value the request
+            // sends as group_name; the signature covers the ciphertext.
+            ActionSignature create = prepared.actionSignatures.get(1);
+            assertTrue(signs(chat, create, "GroupChangeEvent.GroupCreate," + create.messageId + ",910002,"
+                    + prepared.conversationKeyVersion + ",910002,910005,null," + prepared.encryptedTitle + ",null"));
+            assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
+            assertNull(prepared.encryptedDescription);
         }
     }
 
@@ -879,14 +1201,8 @@ class ChatTest {
     void prepareConversationKeyChangeDerivesOneToOneId() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput a = new PublicKeyInput();
-            a.userId = "1491585161162473473";
-            a.publicKey = keys.identity;
-            a.keyVersion = "1";
-            PublicKeyInput b = new PublicKeyInput();
-            b.userId = "17380288";
-            b.publicKey = keys.identity;
-            b.keyVersion = "1";
+            PublicKeyInput a = new PublicKeyInput("1491585161162473473", keys.identity, "1");
+            PublicKeyInput b = new PublicKeyInput("17380288", keys.identity, "1");
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(a, b));
             params.senderId = "1491585161162473473";
             params.signingKeyVersion = "1";
@@ -902,14 +1218,8 @@ class ChatTest {
             // No conversationId set: the canonical one-to-one id is derived from
             // the two participants. Both entries reuse our identity key so every
             // participant key decrypts locally.
-            PublicKeyInput a = new PublicKeyInput();
-            a.userId = "17380288";
-            a.publicKey = keys.identity;
-            a.keyVersion = "1";
-            PublicKeyInput b = new PublicKeyInput();
-            b.userId = "1491585161162473473";
-            b.publicKey = keys.identity;
-            b.keyVersion = "1";
+            PublicKeyInput a = new PublicKeyInput("17380288", keys.identity, "1");
+            PublicKeyInput b = new PublicKeyInput("1491585161162473473", keys.identity, "1");
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(a, b));
             params.senderId = "17380288";
             params.signingKeyVersion = "1";
@@ -925,13 +1235,14 @@ class ChatTest {
     }
 
     @Test
-    void encryptDecryptUnicodeRoundTrip() throws Exception {
+    void decryptReadsAUnicodeTitle() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] key = newConvKey(chat);
             String plaintext = "metadata payload 🌟 with unicode";
-            String ct = chat.encrypt(plaintext, key);
+            String ct = encryptedTitle(chat, plaintext, key);
             assertFalse(ct.isEmpty());
             assertNotEquals(plaintext, ct);
+            assertNotEquals(ct, encryptedTitle(chat, plaintext, key));
             assertEquals(plaintext, chat.decrypt(ct, key));
         }
     }
@@ -941,24 +1252,8 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             DecryptEventsResult result = chat.decryptEvents(new DecryptEventsParams(List.of()));
             assertNotNull(result);
-            assertTrue(result.messages.isEmpty());
+            assertTrue(result.events.isEmpty());
             assertTrue(result.errors.isEmpty());
-        }
-    }
-
-    @Test
-    void decryptEventsMalformedSigningKeyEntryThrows() throws Exception {
-        try (Chat chat = createUnlocked()) {
-            // Null fields are omitted from the serialized JSON, so this entry is
-            // missing required fields. That must be surfaced rather than silently
-            // dropped (which would weaken verification by skipping it).
-            SigningKeyEntry malformed = new SigningKeyEntry();
-            malformed.publicKeyVersion = "1";
-            malformed.publicKey = "AA==";
-            DecryptEventsParams params = new DecryptEventsParams(List.of());
-            params.signingKeys = List.of(malformed);
-            ChatXdkException ex = assertThrows(ChatXdkException.class, () -> chat.decryptEvents(params));
-            assertTrue(ex.getMessage().contains("Invalid params JSON: missing field `user_id`"), ex.getMessage());
         }
     }
 
@@ -985,6 +1280,22 @@ class ChatTest {
                     v.get("signing_public_b64").asText(),
                     signature,
                     (v.get("message_utf8").asText() + "!").getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    // sign refuses data only the SDK signs: an event signature payload and a public key.
+    // Data that only resembles a payload is application data.
+    @Test
+    void signRefusesDataOnlyTheSdkSigns() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            String keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+            for (byte[] data : List.of(keyChange.getBytes(StandardCharsets.UTF_8), b64(v, "identity_public_b64"))) {
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.sign(data));
+                assertTrue(e.getMessage().contains("only the SDK signs"), e.getMessage());
+            }
+            assertEquals(64, chat.sign((" " + keyChange).getBytes(StandardCharsets.UTF_8)).length);
         }
     }
 
@@ -1016,7 +1327,7 @@ class ChatTest {
 
             List<JsonNode> keyChanges = new ArrayList<>();
             List<JsonNode> messages = new ArrayList<>();
-            for (DecryptedMessage dm : result.messages) {
+            for (DecryptedEvent dm : result.events) {
                 if ("KeyChange".equals(dm.event.path("type").asText())) keyChanges.add(dm.event);
                 if ("Message".equals(dm.event.path("type").asText())) messages.add(dm.event);
             }
@@ -1058,6 +1369,146 @@ class ChatTest {
     // Failure events are unsigned by protocol: the fixture failure decodes
     // with no conversation or signing keys, and the JSON carries the
     // PascalCase discriminator values.
+    // Reactions and edits name their target by its sequence id; a v0 edit
+    // carries no target message id.
+    @Test
+    void vectorsReactionsAndEditsNameTheirTargetBySequenceId() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            chat.setIdentity(new SetIdentityParams(
+                    v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
+            byte[] key = b64(v, "conversation_key_b64");
+            String version = v.get("event_conversation_key_version").asText();
+            String target = v.get("event_message_b64").asText();
+
+            EncryptReactionParams reaction = new EncryptReactionParams(target, "👍");
+            reaction.conversationKey = key;
+            reaction.conversationKeyVersion = version;
+            JsonNode added = decryptedContent(chat, v, chat.encryptAddReaction(reaction).eventB64);
+            assertEquals("Reaction", added.path("content_type").asText());
+            assertEquals("1", added.path("target_message_sequence_id").asText());
+            JsonNode removed = decryptedContent(chat, v, chat.encryptRemoveReaction(reaction).eventB64);
+            assertEquals("ReactionRemoved", removed.path("content_type").asText());
+            assertEquals("1", removed.path("target_message_sequence_id").asText());
+
+            EncryptEditParams edit = new EncryptEditParams(target, "fixed");
+            edit.conversationKey = key;
+            edit.conversationKeyVersion = version;
+            JsonNode edited = decryptedContent(chat, v, chat.encryptEdit(edit).eventB64);
+            assertEquals("Edit", edited.path("content_type").asText());
+            assertEquals("1", edited.path("target_message_sequence_id").asText());
+            assertEquals("fixed", edited.path("updated_text").asText());
+            assertTrue(edited.path("target_message_id").isMissingNode());
+        }
+    }
+
+    /** The content of a message this chat sent, decrypted and verified. */
+    private static JsonNode decryptedContent(Chat chat, JsonNode v, String eventB64) throws Exception {
+        DecryptEventParams params = new DecryptEventParams(eventB64, conversationKeys(v));
+        params.signingKeys = eventSigningKeys(v);
+        JsonNode event = chat.decryptEvent(params);
+        assertTrue(event.path("verified").asBoolean());
+        return event.path("content");
+    }
+
+    @Test
+    void vectorsGroupDescriptionChangeDecryptsOnReceive() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_group_description_b64").asText(), conversationKeys(v));
+            params.signingKeys = eventSigningKeys(v);
+            JsonNode event = chat.decryptEvent(params);
+            assertEquals("GroupChange", event.path("type").asText());
+            assertTrue(event.path("verified").asBoolean());
+            assertEquals(v.get("event_group_id").asText(), event.path("conversation_id").asText());
+            assertEquals("DescriptionChanged", event.path("change").path("change_type").asText());
+            ObjectMapper mapper = new ObjectMapper();
+            GroupText description =
+                    mapper.treeToValue(event.path("change").path("new_description"), GroupText.class);
+            assertEquals("Text", description.kind);
+            assertEquals(v.get("event_group_description").asText(), description.text);
+
+            // Without the key the description was encrypted under, the change
+            // still decrypts, with the description unavailable.
+            DecryptEventParams keyless =
+                    new DecryptEventParams(v.get("event_group_description_b64").asText(), Map.of());
+            keyless.signingKeys = eventSigningKeys(v);
+            GroupText unavailable = mapper.treeToValue(
+                    chat.decryptEvent(keyless).path("change").path("new_description"), GroupText.class);
+            assertEquals("Unavailable", unavailable.kind);
+            assertFalse(unavailable.raw.isEmpty());
+            assertNotEquals(v.get("event_group_description").asText(), unavailable.raw);
+        }
+    }
+
+    @Test
+    void vectorsGroupAvatarChangeCarriesTheMediaUrl() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            // The avatar URL is not encrypted, so the change reads without any key.
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_group_avatar_change_b64").asText(), Map.of());
+            params.signingKeys = eventSigningKeys(v);
+            JsonNode event = chat.decryptEvent(params);
+            assertTrue(event.path("verified").asBoolean());
+            JsonNode change = event.path("change");
+            assertEquals("AvatarChanged", change.path("change_type").asText());
+            assertEquals(v.get("event_group_avatar_url").asText(), change.path("new_avatar_url").asText());
+            assertEquals(
+                    v.get("event_conversation_key_version").asText(),
+                    change.path("conversation_key_version").asText());
+        }
+    }
+
+    @Test
+    void vectorsGroupCreateDecryptsItsTitleOnReceive() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            Map<String, byte[]> createKeys = Map.of(
+                    v.get("event_group_create_conversation_key_version").asText(),
+                    Base64.getDecoder().decode(v.get("event_group_create_conversation_key_b64").asText()));
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_group_create_b64").asText(), createKeys);
+            params.signingKeys = eventSigningKeys(v);
+            JsonNode event = chat.decryptEvent(params);
+            assertEquals("GroupChange", event.path("type").asText());
+            assertTrue(event.path("verified").asBoolean());
+            JsonNode change = event.path("change");
+            assertEquals("Created", change.path("change_type").asText());
+            ObjectMapper mapper = new ObjectMapper();
+            GroupText title = mapper.treeToValue(change.path("title"), GroupText.class);
+            assertEquals("Text", title.kind);
+            assertEquals(v.get("event_group_title").asText(), title.text);
+            assertTrue(change.path("avatar_url").isNull());
+            assertEquals(
+                    v.get("event_group_create_conversation_key_version").asText(),
+                    change.path("conversation_key_version").asText());
+
+            // Without the key the create seeded, the create still decrypts, on both
+            // paths, with its title unavailable as the ciphertext it carries.
+            String ciphertext = v.get("event_group_create_encrypted_title").asText();
+            DecryptEventParams keyless =
+                    new DecryptEventParams(v.get("event_group_create_b64").asText(), Map.of());
+            keyless.signingKeys = eventSigningKeys(v);
+            JsonNode keylessChange = chat.decryptEvent(keyless).path("change");
+            assertEquals(v.get("event_sender_id").asText(), keylessChange.path("member_ids").path(0).asText());
+            GroupText unavailable = mapper.treeToValue(keylessChange.path("title"), GroupText.class);
+            assertEquals("Unavailable", unavailable.kind);
+            assertEquals(ciphertext, unavailable.raw);
+            DecryptEventsParams batch =
+                    new DecryptEventsParams(List.of(v.get("event_group_create_b64").asText()));
+            batch.signingKeys = eventSigningKeys(v);
+            DecryptEventsResult result = chat.decryptEvents(batch);
+            assertTrue(result.errors.isEmpty(), result.errors.toString());
+            GroupText batched = mapper.treeToValue(
+                    result.events.get(0).event.path("change").path("title"), GroupText.class);
+            assertEquals("Unavailable", batched.kind);
+            assertEquals(ciphertext, batched.raw);
+        }
+    }
+
     @Test
     void vectorsFailureEventDecodesTypeAndRateLimitTier() throws Exception {
         JsonNode v = loadVectors();
@@ -1182,7 +1633,7 @@ class ChatTest {
             assertTrue(result.errors.isEmpty(), "errors: " + result.errors);
 
             List<JsonNode> messages = new ArrayList<>();
-            for (DecryptedMessage dm : result.messages) {
+            for (DecryptedEvent dm : result.events) {
                 if ("Message".equals(dm.event.path("type").asText())) messages.add(dm.event);
             }
             assertEquals(2, messages.size());
@@ -1316,7 +1767,7 @@ class ChatTest {
             byte[] key = result.conversationKeys.keys.get(v.get("message_key_conversation_key_version").asText());
             assertArrayEquals(ChatXdkUtilities.hexToBytes(v.get("message_key_conversation_key_hex").asText()), key);
             List<String> texts = new ArrayList<>();
-            for (DecryptedMessage dm : result.messages) {
+            for (DecryptedEvent dm : result.events) {
                 if ("Message".equals(dm.event.path("type").asText())) {
                     texts.add(dm.event.path("content").path("text").asText());
                 }
@@ -1394,6 +1845,20 @@ class ChatTest {
             byte[] signature = chatA.sign(data);
             // chatB's key doesn't match chatA's signature → false (not throw).
             assertFalse(chatA.verify(chatB.getPublicKeys().signing, signature, data));
+        }
+    }
+
+    // Verifying needs no loaded keys, and its error names the input, not the lock state.
+    @Test
+    void verifyNeedsNoLoadedKeys() throws Exception {
+        try (Chat signer = createUnlocked(); Chat verifier = new Chat()) {
+            byte[] data = {(byte) 0xAA, (byte) 0xBB};
+            byte[] signature = signer.sign(data);
+            assertTrue(verifier.verify(signer.getPublicKeys().signing, signature, data));
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> verifier.verify("notAPublicKey", signature, data));
+            assertTrue(e.getMessage().contains("public key"), e.getMessage());
+            assertFalse(e.getMessage().contains("unlocked"), e.getMessage());
         }
     }
 
@@ -1535,8 +2000,8 @@ class ChatTest {
             SendPayload payload = sendFiles(chat, v, "a link", Types.AttachmentDescriptor.urlCard(
                     "https://example.com",
                     null,
-                    Types.UrlAttachmentImageDescriptor.of("banner", 12L, "banner.png"),
-                    Types.UrlAttachmentImageDescriptor.of("favicon", 13L, "favicon.png")));
+                    new Types.UrlAttachmentImageDescriptor("banner", 12L, "banner.png"),
+                    new Types.UrlAttachmentImageDescriptor("favicon", 13L, "favicon.png")));
             for (String name : new String[] {"banner", "favicon"}) {
                 byte[] encrypted = chat.encryptFile(encryptFileParams(
                         v, (name + " bytes").getBytes(StandardCharsets.UTF_8), payload.eventB64, name));
@@ -1689,8 +2154,8 @@ class ChatTest {
         try (Chat chat = new Chat()) {
             assertThrows(Exception.class, chat::getPublicKeys);
             assertThrows(ChatXdkException.class, () -> chat.sign(new byte[] {1, 2, 3}));
-            // exportKeys returns null (not throws) when locked.
-            assertNull(chat.exportKeys());
+            assertEquals(ChatXdkException.Kind.INVALID_STATE,
+                    assertThrows(ChatXdkException.class, chat::exportKeys).getKind());
         }
     }
 
@@ -1710,60 +2175,75 @@ class ChatTest {
         }
     }
 
-    // JNA plumbing smokes only: the values cross the boundary without a crash.
-    // The behaviors themselves are pinned by
-    // vectorsDecryptEventsBatchAndSingleEventContracts and the Rust core suite.
+    // The session identity signs a call that names no identity of its own, and
+    // setRejectUnverified decides whether a message from a sender whose signing
+    // key the chat lacks is rejected or returned unverified.
     @Test
-    void setIdentityAndSetRejectUnverifiedSmoke() throws Exception {
-        try (Chat chat = createUnlocked()) {
+    void setIdentityAndSetRejectUnverifiedTakeEffect() throws Exception {
+        try (Chat chat = createUnlocked(); Chat sender = createUnlocked()) {
             chat.setIdentity(new SetIdentityParams("910004", "12345"));
+            ActionSignature action = onlyAction(chat.prepareMessageTtlRemove(new MessageTtlRemoveParams("g100")));
+            assertTrue(signs(chat, action,
+                    "ConversationMetadataChangeEvent.MessageDurationRemove," + action.messageId + ",910004,g100"));
+            assertEquals("12345", action.messageEventSignature.publicKeyVersion);
+
+            byte[] conversationKey = new byte[32];
+            EncryptMessageParams send = new EncryptMessageParams("910004:910005", "hi");
+            send.senderId = "910005";
+            send.signingKeyVersion = "1";
+            send.conversationKey = conversationKey;
+            send.conversationKeyVersion = "1";
+            DecryptEventParams received =
+                    new DecryptEventParams(sender.encryptMessage(send).eventB64, Map.of("1", conversationKey));
+            assertThrows(ChatXdkException.class, () -> chat.decryptEvent(received));
             chat.setRejectUnverified(false);
+            JsonNode unverified = chat.decryptEvent(received);
+            assertEquals("hi", unverified.path("content").path("text").asText());
+            assertFalse(unverified.path("verified").asBoolean());
             chat.setRejectUnverified(true);
+            assertThrows(ChatXdkException.class, () -> chat.decryptEvent(received));
         }
     }
 
-    // Absent-value normalization: an empty title/avatar is "not set" and
-    // signs the null sentinel, exactly like leaving the field null.
+    // Absent-value normalization: an empty title is "not set" and signs the
+    // null sentinel, exactly like leaving the field null.
     @Test
     void prepareGroupCreateEmptyTitleSignsNullSentinel() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             for (String title : new String[] {"", null}) {
                 GroupCreateParams p = new GroupCreateParams(
                         List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
                 p.senderId = "910002";
                 p.signingKeyVersion = "1";
                 p.title = title;
-                p.avatarUrl = title;
                 PreparedConversationChange prepared = chat.prepareGroupCreate(p);
-                String payload = prepared.actionSignatures.get(1).signaturePayload;
-                // Trailing slots: title, avatar_url, ttl — all unset → null sentinels.
-                assertTrue(payload.endsWith(",null,null,null"),
-                        "title/avatar must sign as the null sentinel, got: " + payload);
+                // Trailing slots: legacy upgrade, title, avatar_url — all unset → null
+                // sentinels.
+                ActionSignature create = prepared.actionSignatures.get(1);
+                assertTrue(signs(chat, create, "GroupChangeEvent.GroupCreate," + create.messageId + ",910002,"
+                        + prepared.conversationKeyVersion + ",910002,910005,null,null,null"),
+                        "the title and avatar must sign as the null sentinel");
+                assertNull(prepared.encryptedTitle);
             }
         }
     }
 
-    // Comma-injection rejection: the signature payload is comma-joined with
-    // no escaping, so a comma-containing title must fail.
+    // The plaintext never enters the comma-joined signature payload, only its
+    // base64 ciphertext does, so a title with a comma encrypts.
     @Test
-    void prepareGroupCreateCommaTitleThrows() throws Exception {
+    void prepareGroupCreateEncryptsACommaTitle() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupCreateParams p = new GroupCreateParams(
                     List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
             p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Team, the sequel";
-            assertThrows(ChatXdkException.class, () -> chat.prepareGroupCreate(p));
+            PreparedConversationChange prepared = chat.prepareGroupCreate(p);
+            assertEquals("Team, the sequel", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
         }
     }
 

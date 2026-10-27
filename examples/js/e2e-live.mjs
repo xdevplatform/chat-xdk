@@ -54,8 +54,8 @@ function signingFrom(pk, userId) {
 function keyEntries(pks, userId) {
   return pks.map((pk) => ({
     userId,
-    publicKey: pk.publicKey ?? pk.public_key ?? "",
-    keyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
+    identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
+    publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
   }));
 }
 
@@ -150,7 +150,7 @@ const eventsB64 = [
   ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
 ];
 let batch = core.decryptBatch(eventsB64, signing);
-const decrypted = batch.messages.filter((m) => messageText(m.event)).length;
+const decrypted = batch.events.filter((m) => messageText(m.event)).length;
 let convKeys = { ...batch.conversationKeys.keys };
 console.log(
   `live inbound messages decrypted: ${decrypted}; conversation keys: ${Object.keys(convKeys).length}`,
@@ -161,7 +161,7 @@ assert(decrypted > 0, "expected to decrypt at least one live message");
 // b64, for the reply-by-event form below).
 let canonicalConv = conv;
 let lastInboundB64;
-for (const m of batch.messages) {
+for (const m of batch.events) {
   const ev = m.event ?? {};
   if (ev.conversationId) canonicalConv = ev.conversationId;
   if (ev.type === "message" && String(ev.senderId) !== myId && ev.sequenceId && m.originalB64) {
@@ -272,10 +272,8 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
   // A deterministic multi-chunk payload, so the incremental encryptor emits
   // several frames and any corruption is byte-attributable.
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
-  const upload = await api.startMediaUpload(
-    canonicalConv,
-    ChatCore.encryptedFileSize(plaintext.length),
-  );
+  const encryptedSize = ChatCore.encryptedFileSize(plaintext.length);
+  const upload = await api.startMediaUpload(canonicalConv, encryptedSize);
   const { mediaHashKey } = upload;
 
   const mediaMsg = core.encryptReply({
@@ -289,7 +287,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
         media_hash_key: mediaHashKey,
         width: 0,
         height: 0,
-        filesize_bytes: plaintext.length,
+        filesize_bytes: encryptedSize,
         filename: "e2e.bin",
         media_type: 5,
       },
@@ -335,6 +333,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
     conversationId: groupId,
     memberIds: [myId],
     adminIds: [myId],
+    title: "chat-xdk e2e",
   });
   let members = [myId];
   try {
@@ -342,7 +341,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       conversationId: groupId,
       groupMembers: members,
       groupAdmins: [myId],
-      groupName: "chat-xdk e2e",
+      groupName: gPrep.encryptedTitle,
       ...prepToRequest(gPrep),
     });
   } catch {
@@ -353,13 +352,14 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
       conversationId: groupId,
       memberIds: [myId, partnerId],
       adminIds: [myId],
+      title: "chat-xdk e2e",
     });
     members = [myId, partnerId];
     await api.createConversation({
       conversationId: groupId,
       groupMembers: members,
       groupAdmins: [myId],
-      groupName: "chat-xdk e2e",
+      groupName: gPrep.encryptedTitle,
       ...prepToRequest(gPrep),
     });
   }

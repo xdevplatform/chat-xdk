@@ -20,7 +20,6 @@ struct FfiResult chat_xdk_internal_feature_set_default_endpoint(const char *endp
 */
 import "C"
 import (
-	"errors"
 	"time"
 	"unsafe"
 )
@@ -29,12 +28,12 @@ import (
 
 func ffiResult(r C.struct_FfiResult) (string, error) {
 	if r.error != nil {
-		msg := C.GoString(r.error)
+		document := C.GoString(r.error)
 		C.chat_xdk_free_string(r.error)
 		if r.data != nil {
 			C.chat_xdk_free_string(r.data)
 		}
-		return "", errors.New(msg)
+		return "", errorFromDocument(document)
 	}
 	if r.data == nil {
 		return "", nil
@@ -42,6 +41,21 @@ func ffiResult(r C.struct_FfiResult) (string, error) {
 	s := C.GoString(r.data)
 	C.chat_xdk_free_string(r.data)
 	return s, nil
+}
+
+// ffiBool reads a result whose data is `true` or `false`.
+func ffiBool(r C.struct_FfiResult) (bool, error) {
+	data, err := ffiResult(r)
+	return data == "true", err
+}
+
+// bytesPtr points C at a slice's bytes (cgo pins them for the call), or is
+// NULL for an empty slice.
+func bytesPtr(b []byte) *C.uint8_t {
+	if len(b) == 0 {
+		return nil
+	}
+	return (*C.uint8_t)(unsafe.Pointer(&b[0]))
 }
 
 // handle wraps the opaque C pointer so chat.go never references C directly.
@@ -99,43 +113,54 @@ func ffiDetectImageDimensions(data []byte) (string, error) {
 
 // lifecycle / state
 
-func ffiNew() handle {
-	return C.chat_xdk_new()
+func ffiNew(juiceboxConfigJSON *string) (handle, error) {
+	var cfg *C.char
+	if juiceboxConfigJSON != nil {
+		cfg = C.CString(*juiceboxConfigJSON)
+		defer C.free(unsafe.Pointer(cfg))
+	}
+	var out handle
+	if _, err := ffiResult(C.chat_xdk_new(cfg, &out)); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func ffiFree(h handle) {
 	C.chat_xdk_free(h)
 }
 
-func ffiIsUnlocked(h handle) int {
-	return int(C.chat_xdk_is_unlocked(h))
+func ffiIsUnlocked(h handle) (bool, error) {
+	return ffiBool(C.chat_xdk_is_unlocked(h))
 }
 
-func ffiHasIdentityKey(h handle) int {
-	return int(C.chat_xdk_has_identity_key(h))
+func ffiHasIdentityKey(h handle) (bool, error) {
+	return ffiBool(C.chat_xdk_has_identity_key(h))
 }
 
-func ffiSetRejectUnverified(h handle, reject bool) {
-	v := C.int(0)
+func ffiSetRejectUnverified(h handle, reject bool) error {
+	v := C.int32_t(0)
 	if reject {
 		v = 1
 	}
-	C.chat_xdk_set_reject_unverified(h, v)
-}
-
-func ffiSetIdentityParams(h handle, paramsJSON string) error {
-	c := C.CString(paramsJSON)
-	defer C.free(unsafe.Pointer(c))
-	_, err := ffiResult(C.chat_xdk_set_identity_params(h, c))
+	_, err := ffiResult(C.chat_xdk_set_reject_unverified(h, v))
 	return err
 }
 
-func ffiSetCacheKeys(h handle, enabled bool) {
-	v := C.int(0)
+func ffiSetIdentity(h handle, paramsJSON string) error {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	_, err := ffiResult(C.chat_xdk_set_identity(h, c))
+	return err
+}
+
+func ffiSetCacheKeys(h handle, enabled bool) error {
+	v := C.int32_t(0)
 	if enabled {
 		v = 1
 	}
-	C.chat_xdk_set_cache_keys(h, v)
+	_, err := ffiResult(C.chat_xdk_set_cache_keys(h, v))
+	return err
 }
 
 // ffiFeatureStart starts the chat's one read of the feature switches and
@@ -179,8 +204,9 @@ func ffiSetSigningKeys(h handle, signingKeysJSON string) error {
 	return err
 }
 
-func ffiLock(h handle) {
-	C.chat_xdk_lock(h)
+func ffiLock(h handle) error {
+	_, err := ffiResult(C.chat_xdk_lock(h))
+	return err
 }
 
 // key management
@@ -201,20 +227,13 @@ func ffiExportKeys(h handle) (string, error) {
 	return ffiResult(C.chat_xdk_export_keys(h))
 }
 
-// ffiImportKeys takes the base64 key material as a NUL-terminated byte buffer
-// and passes its pointer straight to C (cgo pins it for the call), instead of
-// C.CString, so the caller can wipe the only transport copy of the secret.
-// ffiImportKeysParams passes the raw private key bytes straight to C (cgo
-// pins them for the call), so the caller's slice remains the only copy to
-// wipe; only the signing-key version travels as JSON.
-func ffiImportKeysParams(h handle, keys []byte, paramsJSON string) (string, error) {
-	var ptr *C.uint8_t
-	if len(keys) > 0 {
-		ptr = (*C.uint8_t)(unsafe.Pointer(&keys[0]))
-	}
+// ffiImportKeys passes the raw private key bytes straight to C (cgo pins
+// them for the call), so the caller's slice remains the only copy to wipe;
+// only the signing-key version travels as JSON.
+func ffiImportKeys(h handle, keys []byte, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_import_keys_params(h, ptr, C.uintptr_t(len(keys)), c))
+	return ffiResult(C.chat_xdk_import_keys(h, bytesPtr(keys), C.uintptr_t(len(keys)), c))
 }
 
 // conversation keys
@@ -234,7 +253,7 @@ func ffiExtractConversationKeys(h handle, eventsJSON string) (string, error) {
 func ffiDecryptEvents(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_decrypt_events_params(h, c))
+	return ffiResult(C.chat_xdk_decrypt_events(h, c))
 }
 
 func ffiPrepareConversationKeyChange(h handle, paramsJSON string) (string, error) {
@@ -356,7 +375,7 @@ func ffiPrepareMarkConversationRead(h handle, paramsJSON string) (string, error)
 func ffiDecryptEvent(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
-	return ffiResult(C.chat_xdk_decrypt_event_params(h, c))
+	return ffiResult(C.chat_xdk_decrypt_event(h, c))
 }
 
 // encrypt
@@ -456,14 +475,6 @@ func ffiFileDecryptorFree(h fileDecryptorHandle) {
 	C.chat_xdk_file_decryptor_free(h)
 }
 
-func ffiEncrypt(h handle, plaintext, ckeyB64 string) (string, error) {
-	cPlain := C.CString(plaintext)
-	defer C.free(unsafe.Pointer(cPlain))
-	cKey := C.CString(ckeyB64)
-	defer C.free(unsafe.Pointer(cKey))
-	return ffiResult(C.chat_xdk_encrypt(h, cPlain, cKey))
-}
-
 func ffiDecrypt(h handle, ciphertextB64, ckeyB64 string) (string, error) {
 	cCipher := C.CString(ciphertextB64)
 	defer C.free(unsafe.Pointer(cCipher))
@@ -482,31 +493,26 @@ func ffiSign(h handle, data []byte) (string, error) {
 	return ffiResult(C.chat_xdk_sign(h, ptr, C.uintptr_t(len(data))))
 }
 
-func ffiVerify(h handle, pkB64, sigB64 string, data []byte) (int, error) {
+func ffiVerify(h handle, pkB64, sigB64 string, data []byte) (bool, error) {
 	cPK := C.CString(pkB64)
 	defer C.free(unsafe.Pointer(cPK))
 	cSig := C.CString(sigB64)
 	defer C.free(unsafe.Pointer(cSig))
-	var ptr *C.uint8_t
-	if len(data) > 0 {
-		ptr = (*C.uint8_t)(unsafe.Pointer(&data[0]))
-	}
-	rc := int(C.chat_xdk_verify(h, cPK, cSig, ptr, C.uintptr_t(len(data))))
-	return rc, nil
+	return ffiBool(C.chat_xdk_verify(h, cPK, cSig, bytesPtr(data), C.uintptr_t(len(data))))
 }
 
-func ffiVerifyKeyBinding(h handle, identityB64, signingB64, signatureB64 string) int {
+func ffiVerifyKeyBinding(h handle, identityB64, signingB64, signatureB64 string) (bool, error) {
 	cIdentity := C.CString(identityB64)
 	defer C.free(unsafe.Pointer(cIdentity))
 	cSigning := C.CString(signingB64)
 	defer C.free(unsafe.Pointer(cSigning))
 	cSig := C.CString(signatureB64)
 	defer C.free(unsafe.Pointer(cSig))
-	return int(C.chat_xdk_verify_key_binding(h, cIdentity, cSigning, cSig))
+	return ffiBool(C.chat_xdk_verify_key_binding(h, cIdentity, cSigning, cSig))
 }
 
-func ffiMatchesRegisteredKey(h handle, publicKeyB64 string) int {
+func ffiMatchesRegisteredKey(h handle, publicKeyB64 string) (bool, error) {
 	cPK := C.CString(publicKeyB64)
 	defer C.free(unsafe.Pointer(cPK))
-	return int(C.chat_xdk_matches_registered_key(h, cPK))
+	return ffiBool(C.chat_xdk_matches_registered_key(h, cPK))
 }

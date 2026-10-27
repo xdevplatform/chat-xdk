@@ -8,7 +8,7 @@
   <artifactId>chatxdk</artifactId>
   <version>0.6.0</version>
   <name>chat-xdk JVM bindings</name>
-  <description>X Chat SDK - encryption for X Direct Messages (JVM bindings, JNA → chat_xdk_dotnet)</description>
+  <description>X Chat SDK - encryption for X Direct Messages (JVM bindings, JNA → chat_xdk_ffi)</description>
   <url>https://github.com/xdevplatform/chat-xdk</url>
 
   <licenses>
@@ -61,7 +61,7 @@
     <!-- An explicit <resources> block replaces Maven's default resource
          directory rather than extending it, so src/main/resources must be
          re-declared here: release builds stage the per-platform
-         chat_xdk_dotnet natives under src/main/resources/native/<rid>/, and
+         chat_xdk_ffi natives under src/main/resources/native/<rid>/, and
          NativeLoader loads them from the jar at that path. -->
     <resources>
       <resource>

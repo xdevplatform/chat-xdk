@@ -43,13 +43,13 @@ fn fixture() -> &'static Fixture {
         // Identity binding: the signing key signs the identity key's wire bytes.
         let identity_bytes = B64.decode(&pubkeys.identity).expect("identity b64");
         let binding = core.sign(&identity_bytes).expect("binding signature");
-        let signing_keys = vec![SigningKeyEntry {
-            user_id: "1111".to_string(),
-            public_key_version: "1".to_string(),
-            public_key: pubkeys.signing.clone(),
-            identity_public_key: pubkeys.identity.clone(),
-            identity_public_key_signature: B64.encode(binding),
-        }];
+        let signing_keys = vec![SigningKeyEntry::new(
+            "1111",
+            "1",
+            &pubkeys.signing,
+            &pubkeys.identity,
+            B64.encode(binding),
+        )];
 
         Fixture {
             core,
@@ -65,14 +65,14 @@ fuzz_target!(|data: &[u8]| {
     // Well-formed base64 over arbitrary bytes drives the parse + crypto path …
     let encoded = B64.encode(data);
     let _ = f.core.decrypt_event(
-        DecryptEventParams::new(encoded, f.conversation_keys.clone())
+        &DecryptEventParams::new(encoded, f.conversation_keys.clone())
             .with_signing_keys(f.signing_keys.clone()),
     );
 
     // … and the raw input, when it is a string, drives the base64 error path.
     if let Ok(s) = std::str::from_utf8(data) {
         let _ = f.core.decrypt_event(
-            DecryptEventParams::new(s, f.conversation_keys.clone())
+            &DecryptEventParams::new(s, f.conversation_keys.clone())
                 .with_signing_keys(f.signing_keys.clone()),
         );
     }

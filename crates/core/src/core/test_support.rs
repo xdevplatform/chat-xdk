@@ -41,13 +41,13 @@ impl Party {
     pub(super) fn new(user_id: &str) -> Self {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        let entry = SigningKeyEntry {
-            user_id: user_id.to_string(),
-            public_key_version: SIGNING_KEY_VERSION.to_string(),
-            public_key: reg.public_key.signing_public_key,
-            identity_public_key: reg.public_key.public_key,
-            identity_public_key_signature: reg.public_key.identity_public_key_signature,
-        };
+        let entry = SigningKeyEntry::new(
+            user_id,
+            SIGNING_KEY_VERSION,
+            reg.public_key.signing_public_key,
+            reg.public_key.public_key,
+            reg.public_key.identity_public_key_signature,
+        );
         Self {
             core,
             user_id: user_id.to_string(),
@@ -55,9 +55,11 @@ impl Party {
         }
     }
 
-    /// A signature over `payload`, labeled with signature version `version`.
+    /// A signature over `payload`, labeled with signature version `version`,
+    /// made on the SDK's own signing path.
     pub(super) fn sign(&self, payload: &str, version: i32) -> MessageEventSignature {
-        let signature = self.core.sign(payload.as_bytes()).unwrap();
+        let signing_key = self.core.get_signing_private_key().unwrap();
+        let signature = KeyFactory::sign(&signing_key, payload.as_bytes()).unwrap();
         MessageEventSignature {
             signature: Some(STANDARD_NO_PAD.encode(signature)),
             public_key_version: Some(SIGNING_KEY_VERSION.to_string()),

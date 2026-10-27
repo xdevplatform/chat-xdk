@@ -14,14 +14,11 @@ namespace ChatXdk
 
         [JsonPropertyName("signing")]
         public string Signing { get; init; } = "";
-
-        [JsonPropertyName("version")]
-        public string Version { get; init; } = "";
     }
 
     /// <summary>
     /// Registration fields expected by the X API
-    /// (<c>POST /2/chat/keys</c>).
+    /// (<c>POST /2/users/{id}/public_keys</c>).
     /// </summary>
     public sealed class PublicKeyRegistration
     {
@@ -145,15 +142,6 @@ namespace ChatXdk
         /// <summary>The signature over the action, with its versions and the signer's signing public key.</summary>
         [JsonPropertyName("message_event_signature")]
         public MessageEventSignature MessageEventSignature { get; init; } = new();
-
-        /// <summary>
-        /// The comma-separated payload string that was signed; <see langword="null"/> for
-        /// conversation-key changes, whose payload embeds the plaintext
-        /// conversation key and is withheld.
-        /// </summary>
-        [JsonPropertyName("signature_payload")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? SignaturePayload { get; init; }
     }
 
     /// <summary>The signature of an <see cref="ActionSignature"/>.</summary>
@@ -177,12 +165,36 @@ namespace ChatXdk
     }
 
     /// <summary>
-    /// A signed message delete or read receipt: the <c>action_signatures</c> a request
-    /// carries for it, one entry.
+    /// Signed actions for a request that does not rotate a conversation key: the
+    /// <c>action_signatures</c> it carries. Returned by <see cref="Chat.PrepareMessageDelete"/>,
+    /// <see cref="Chat.PrepareMarkConversationRead"/>, and the group-action prepares other than
+    /// <see cref="Chat.PrepareGroupMembersRemove"/>; <see cref="Chat.PrepareGroupLeave"/> returns
+    /// one entry per signed event.
     /// </summary>
     public sealed class PreparedAction
     {
         /// <summary>The signed action, as the request's <c>action_signatures</c> entries.</summary>
+        [JsonPropertyName("action_signatures")]
+        public List<ActionSignature> ActionSignatures { get; init; } = new();
+    }
+
+    /// <summary>
+    /// A signed group title or description change: the value encrypted under the
+    /// conversation key and the <c>action_signatures</c> a request carries. Returned by
+    /// <see cref="Chat.PrepareGroupTitleChange"/> and
+    /// <see cref="Chat.PrepareGroupDescriptionChange"/>.
+    /// </summary>
+    public sealed class PreparedGroupMetadataChange
+    {
+        /// <summary>The value encrypted under the conversation key, base64: what the request sends.</summary>
+        [JsonPropertyName("encrypted_value")]
+        public string EncryptedValue { get; init; } = "";
+
+        /// <summary>Version of the conversation key the value is encrypted under.</summary>
+        [JsonPropertyName("conversation_key_version")]
+        public string ConversationKeyVersion { get; init; } = "";
+
+        /// <summary>The signed change, as the request's <c>action_signatures</c> entries.</summary>
         [JsonPropertyName("action_signatures")]
         public List<ActionSignature> ActionSignatures { get; init; } = new();
     }
@@ -222,17 +234,19 @@ namespace ChatXdk
         [JsonPropertyName("user_id")]
         public required string UserId { get; init; }
 
-        [JsonPropertyName("public_key")]
-        public required string PublicKey { get; init; }
+        /// <summary>The base64 identity public key (SEC1 or SPKI): the X API's <c>public_key</c>.</summary>
+        [JsonPropertyName("identity_public_key")]
+        public required string IdentityPublicKey { get; init; }
 
-        [JsonPropertyName("key_version")]
-        public required string KeyVersion { get; init; }
+        /// <summary>The key's version, as the X API returns it.</summary>
+        [JsonPropertyName("public_key_version")]
+        public required string PublicKeyVersion { get; init; }
     }
 
     /// <summary>
     /// Returned by <see cref="Chat.PrepareConversationKeyChange"/>,
-    /// <see cref="Chat.PrepareGroupCreate"/>, and
-    /// <see cref="Chat.PrepareGroupMembersChange"/>. Carries everything needed to POST the change.
+    /// <see cref="Chat.PrepareGroupCreate"/>, <see cref="Chat.PrepareGroupMembersChange"/>, and
+    /// <see cref="Chat.PrepareGroupMembersRemove"/>. Carries everything needed to POST the change.
     /// </summary>
     public sealed class PreparedConversationChange
     {
@@ -241,11 +255,22 @@ namespace ChatXdk
         public string ConversationId { get; init; } = "";
 
         /// <summary>
-        /// Raw 32-byte conversation key when one was generated, otherwise <see langword="null"/>.
-        /// (JSON carries it base64-encoded; <see cref="byte"/> arrays map to that natively.)
+        /// Raw 32-byte conversation key the call generated. It is secret, so serializing this
+        /// object to JSON leaves it out.
         /// </summary>
+        [JsonIgnore]
+        public byte[] ConversationKey { get; init; } = Array.Empty<byte>();
+
+        // Reads the key from the native result; never written, so the key stays out of the
+        // JSON this object serializes to.
+        [JsonInclude]
         [JsonPropertyName("conversation_key")]
-        public byte[]? ConversationKey { get; init; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        private byte[]? NativeConversationKey
+        {
+            get => null;
+            init => ConversationKey = value ?? Array.Empty<byte>();
+        }
 
         /// <summary>Version assigned to the conversation key.</summary>
         [JsonPropertyName("conversation_key_version")]
@@ -258,6 +283,26 @@ namespace ChatXdk
         /// <summary>Action signatures authenticating the change, ready to POST.</summary>
         [JsonPropertyName("action_signatures")]
         public List<ActionSignature> ActionSignatures { get; init; } = new();
+
+        /// <summary>
+        /// Set by <see cref="Chat.PrepareGroupCreate"/> and
+        /// <see cref="Chat.PrepareGroupMembersChange"/> when the params carry a title: the
+        /// title encrypted under the new conversation key, base64, the <c>group_name</c> a
+        /// create request sends and the <c>encrypted_title</c> an add-members request sends;
+        /// otherwise null.
+        /// </summary>
+        [JsonPropertyName("encrypted_title")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? EncryptedTitle { get; init; }
+
+        /// <summary>
+        /// Set by <see cref="Chat.PrepareGroupMembersChange"/> when the params carry a
+        /// description: the description encrypted under the new conversation key, base64, as
+        /// the signed member add carries it; otherwise null.
+        /// </summary>
+        [JsonPropertyName("encrypted_description")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? EncryptedDescription { get; init; }
     }
 
     /// <summary>
@@ -269,7 +314,11 @@ namespace ChatXdk
         /// <summary>Version string → raw 32-byte conversation key.</summary>
         public Dictionary<string, byte[]> Keys { get; init; } = new();
 
-        /// <summary>Highest key version (for encrypting new messages), or <see langword="null"/>.</summary>
+        /// <summary>
+        /// The version to encrypt with: from <see cref="Chat.DecryptEvents"/>, the newest version
+        /// whose key change verified (<see langword="null"/> until one verifies); from
+        /// <see cref="Chat.ExtractConversationKeys"/>, the batch's highest version.
+        /// </summary>
         public string? LatestVersion { get; init; }
     }
 
@@ -283,8 +332,8 @@ namespace ChatXdk
         public uint Height { get; init; }
     }
 
-    /// <summary>One decrypted event from <see cref="Chat.DecryptEvents"/>.</summary>
-    public sealed class DecryptedMessage
+    /// <summary>One event <see cref="Chat.DecryptEvents"/> decrypted, of any event type.</summary>
+    public sealed class DecryptedEvent
     {
         /// <summary>The decrypted event JSON (<c>type</c>, …).</summary>
         public JsonElement Event { get; init; }
@@ -296,14 +345,42 @@ namespace ChatXdk
     /// <summary>Result of <see cref="Chat.DecryptEvents"/>.</summary>
     public sealed class DecryptEventsResult
     {
-        /// <summary>The successfully decrypted events, in input order.</summary>
-        public IReadOnlyList<DecryptedMessage> Messages { get; init; } = Array.Empty<DecryptedMessage>();
+        /// <summary>The events that decrypted, in batch order, of every event type.</summary>
+        public IReadOnlyList<DecryptedEvent> Events { get; init; } = Array.Empty<DecryptedEvent>();
 
         /// <summary>Extracted keys and <see cref="ConversationKeyBundle.LatestVersion"/>.</summary>
         public ConversationKeyBundle ConversationKeys { get; init; } = new();
 
         /// <summary>String indices into the input batch for events that failed to decrypt.</summary>
         public Dictionary<string, string> Errors { get; init; } = new();
+    }
+
+    /// <summary>
+    /// A group title or description as a received group change carries it: the <c>title</c>
+    /// of a <c>Created</c> change, the <c>new_title</c> of a <c>TitleChanged</c> one and the
+    /// <c>new_description</c> of a <c>DescriptionChanged</c> one. A value converts from the
+    /// decrypted event JSON with <c>element.Deserialize&lt;GroupText&gt;()</c>. <see cref="Kind"/>
+    /// <c>"Text"</c> carries <see cref="Text"/>: the value decrypted, or the plaintext an event
+    /// that names no key version carries. <see cref="Kind"/> <c>"Unavailable"</c> carries
+    /// <see cref="Raw"/>: a value the SDK could not decrypt, as the event carries it. 0.5.x
+    /// apps sent titles as plaintext while naming a key version, so show <see cref="Raw"/>
+    /// when a title isn't decryptable.
+    /// </summary>
+    public sealed class GroupText
+    {
+        /// <summary><c>"Text"</c> or <c>"Unavailable"</c>.</summary>
+        [JsonPropertyName("kind")]
+        public string Kind { get; init; } = "";
+
+        /// <summary>The decrypted or plaintext value, for <c>"Text"</c>.</summary>
+        [JsonPropertyName("text")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Text { get; init; }
+
+        /// <summary>The value as the event carries it, for <c>"Unavailable"</c>.</summary>
+        [JsonPropertyName("raw")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Raw { get; init; }
     }
 
     /// <summary>
@@ -327,100 +404,127 @@ namespace ChatXdk
 
     /// <summary>
     /// Rich-text entity (URL, mention, hashtag, etc.) descriptor.
-    /// <see cref="Start"/> and <see cref="End"/> are byte offsets into the message text.
+    /// <see cref="Start"/> and <see cref="End"/> count bytes of the text's UTF-8 encoding, not
+    /// <see cref="string"/> indices (<c>Encoding.UTF8.GetByteCount(text[..i])</c> converts index
+    /// <c>i</c>), so <c>0 &lt;= Start &lt;= End &lt;=</c> the text's UTF-8 length; other offsets fail
+    /// the call with a <see cref="ChatXdkException"/> of kind
+    /// <see cref="ChatXdkErrorKind.InvalidInput"/>.
     /// </summary>
     public sealed class EntityDescriptor
     {
-        /// <summary>Byte offset into the message text where the entity begins.</summary>
-        public int Start { get; init; }
-        /// <summary>Byte offset into the message text where the entity ends (exclusive).</summary>
-        public int End { get; init; }
-        /// <summary>One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".</summary>
-        public string EntityType { get; init; } = "";
+        /// <summary>
+        /// Describe an entity of <paramref name="entityType"/> spanning bytes
+        /// <paramref name="start"/> to <paramref name="end"/> of the message text.
+        /// </summary>
+        public EntityDescriptor(int start, int end, string entityType)
+        {
+            ArgumentNullException.ThrowIfNull(entityType);
+            Start = start;
+            End = end;
+            EntityType = entityType;
+        }
+
+        /// <summary>UTF-8 byte offset into the text where the entity begins.</summary>
+        public int Start { get; }
+        /// <summary>UTF-8 byte offset into the text where the entity ends (exclusive).</summary>
+        public int End { get; }
+        /// <summary>
+        /// One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".
+        /// Any other value, an empty one included, fails the call with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        public string EntityType { get; }
     }
 
     /// <summary>
-    /// Attachment descriptor. Use the factory methods to create well-formed instances.
+    /// Attachment descriptor, created by <see cref="Media"/>, <see cref="UrlCard"/> or
+    /// <see cref="Post"/>.
     /// </summary>
     public sealed class AttachmentDescriptor
     {
+        private AttachmentDescriptor(string attachmentType) => AttachmentType = attachmentType;
+
         /// <summary>Attachment kind: one of "media", "url", or "post".</summary>
         [JsonPropertyName("attachment_type")]
-        public string AttachmentType { get; init; } = "";
+        public string AttachmentType { get; }
 
-        // Media fields — always present for "media" attachments, null for other types.
-        // Do NOT use WhenWritingDefault on numeric fields: a value of 0 is valid and
-        // must be transmitted so the Rust side doesn't silently default-to-zero.
+        // Media fields: set on "media" attachments, null on the others. Nullable so that a
+        // media attachment's width, height and size are sent even when 0.
         /// <summary>Hash key identifying the uploaded media blob.</summary>
         [JsonPropertyName("media_hash_key")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? MediaHashKey { get; init; }
+        public string? MediaHashKey { get; private init; }
 
         /// <summary>Media width in pixels.</summary>
         [JsonPropertyName("width")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? Width { get; init; }
+        public long? Width { get; private init; }
 
         /// <summary>Media height in pixels.</summary>
         [JsonPropertyName("height")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? Height { get; init; }
+        public long? Height { get; private init; }
 
-        /// <summary>Size of the media file in bytes.</summary>
+        /// <summary>Size of the encrypted media file in bytes: <c>EncryptedFileSize</c> of its size.</summary>
         [JsonPropertyName("filesize_bytes")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? FilesizeBytes { get; init; }
+        public long? FilesizeBytes { get; private init; }
 
         /// <summary>Original filename of the media.</summary>
         [JsonPropertyName("filename")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Filename { get; init; }
+        public string? Filename { get; private init; }
 
         /// <summary>1=image, 2=gif, 3=video, 4=audio, 5=file, 6=svg.</summary>
         [JsonPropertyName("media_type")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public int? MediaType { get; init; }
+        public int? MediaType { get; private init; }
 
         /// <summary>Duration of audio/video media in milliseconds.</summary>
         [JsonPropertyName("duration_millis")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? DurationMillis { get; init; }
+        public long? DurationMillis { get; private init; }
 
         // URL fields
         /// <summary>Target URL for a "url" card attachment.</summary>
         [JsonPropertyName("url")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Url { get; init; }
+        public string? Url { get; private init; }
 
         /// <summary>Display title shown for the URL card.</summary>
         [JsonPropertyName("display_title")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? DisplayTitle { get; init; }
+        public string? DisplayTitle { get; private init; }
 
         /// <summary>Encrypted banner (preview) image for the URL card.</summary>
         [JsonPropertyName("banner_image")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public UrlAttachmentImageDescriptor? BannerImage { get; init; }
+        public UrlAttachmentImageDescriptor? BannerImage { get; private init; }
 
         /// <summary>Encrypted favicon image for the URL card.</summary>
         [JsonPropertyName("favicon_image")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public UrlAttachmentImageDescriptor? FaviconImage { get; init; }
+        public UrlAttachmentImageDescriptor? FaviconImage { get; private init; }
 
         // Post fields
         /// <summary>Numeric rest ID of the referenced post/tweet.</summary>
         [JsonPropertyName("rest_id")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? RestId { get; init; }
+        public string? RestId { get; private init; }
 
         /// <summary>Canonical URL of the referenced post/tweet.</summary>
         [JsonPropertyName("post_url")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? PostUrl { get; init; }
+        public string? PostUrl { get; private init; }
 
         // Factory methods
 
-        /// <summary>Create a media attachment.</summary>
+        /// <summary>
+        /// Create a media attachment. An empty <paramref name="filename"/>, a
+        /// <paramref name="filesizeBytes"/> of 0 or less, or a negative <paramref name="width"/>
+        /// or <paramref name="height"/> fails the send with a <see cref="ChatXdkException"/> of
+        /// kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
         public static AttachmentDescriptor Media(
             string mediaHashKey,
             long width,
@@ -428,19 +532,21 @@ namespace ChatXdk
             long filesizeBytes,
             string filename,
             int? mediaType = null,
-            long? durationMillis = null) => new()
+            long? durationMillis = null)
         {
-            AttachmentType = "media",
-            MediaHashKey = mediaHashKey,
-            // Store as nullable so the JSON serializer always emits the field
-            // (even when the value is 0) rather than omitting it.
-            Width = width,
-            Height = height,
-            FilesizeBytes = filesizeBytes,
-            Filename = filename,
-            MediaType = mediaType,
-            DurationMillis = durationMillis,
-        };
+            ArgumentNullException.ThrowIfNull(mediaHashKey);
+            ArgumentNullException.ThrowIfNull(filename);
+            return new("media")
+            {
+                MediaHashKey = mediaHashKey,
+                Width = width,
+                Height = height,
+                FilesizeBytes = filesizeBytes,
+                Filename = filename,
+                MediaType = mediaType,
+                DurationMillis = durationMillis,
+            };
+        }
 
         /// <summary>
         /// Create a URL card attachment. Supplying <paramref name="displayTitle"/> and
@@ -448,25 +554,32 @@ namespace ChatXdk
         /// preview card: start the image's upload to the conversation's media store,
         /// reference the media hash key it returns, then encrypt the image with
         /// <see cref="Chat.EncryptFile"/> and the message's <see cref="SendPayload.EventB64"/>
-        /// and finish the upload.
+        /// and finish the upload. An empty <paramref name="url"/> fails the send with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
         public static AttachmentDescriptor UrlCard(
             string url,
             string? displayTitle = null,
             UrlAttachmentImageDescriptor? bannerImage = null,
-            UrlAttachmentImageDescriptor? faviconImage = null) => new()
+            UrlAttachmentImageDescriptor? faviconImage = null)
         {
-            AttachmentType = "url",
-            Url = url,
-            DisplayTitle = displayTitle,
-            BannerImage = bannerImage,
-            FaviconImage = faviconImage,
-        };
+            ArgumentNullException.ThrowIfNull(url);
+            return new("url")
+            {
+                Url = url,
+                DisplayTitle = displayTitle,
+                BannerImage = bannerImage,
+                FaviconImage = faviconImage,
+            };
+        }
 
-        /// <summary>Create a post/tweet attachment.</summary>
-        public static AttachmentDescriptor Post(string? restId = null, string? postUrl = null) => new()
+        /// <summary>
+        /// Create a post/tweet attachment from its <paramref name="restId"/>, its
+        /// <paramref name="postUrl"/>, or both; one with neither fails the send with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        public static AttachmentDescriptor Post(string? restId = null, string? postUrl = null) => new("post")
         {
-            AttachmentType = "post",
             RestId = restId,
             PostUrl = postUrl,
         };
@@ -476,34 +589,47 @@ namespace ChatXdk
     /// An encrypted preview image (banner or favicon) referenced by a URL card
     /// attachment via its media hash key.
     /// <para>
-    /// <see cref="FilesizeBytes"/> and <see cref="Filename"/> are required
-    /// alongside <see cref="MediaHashKey"/>: receiving clients' shared ingest
-    /// silently discards the whole preview image when either is missing on
-    /// the wire.
+    /// Receiving clients' shared ingest discards the whole preview image when its
+    /// <see cref="FilesizeBytes"/> or <see cref="Filename"/> is missing on the wire, so a
+    /// send fails with a <see cref="ChatXdkException"/> of kind
+    /// <see cref="ChatXdkErrorKind.InvalidInput"/> when either is empty or not above 0.
     /// </para>
     /// </summary>
     public sealed class UrlAttachmentImageDescriptor
     {
+        /// <summary>
+        /// Describe the image whose upload started with <paramref name="mediaHashKey"/>:
+        /// <paramref name="filesizeBytes"/> is the encrypted image's size,
+        /// <c>EncryptedFileSize</c> of the image's size, and <paramref name="filename"/> its
+        /// original name.
+        /// </summary>
+        public UrlAttachmentImageDescriptor(string mediaHashKey, long filesizeBytes, string filename)
+        {
+            ArgumentNullException.ThrowIfNull(mediaHashKey);
+            ArgumentNullException.ThrowIfNull(filename);
+            MediaHashKey = mediaHashKey;
+            FilesizeBytes = filesizeBytes;
+            Filename = filename;
+        }
+
         /// <summary>Media hash key the image's upload started with.</summary>
         [JsonPropertyName("media_hash_key")]
-        public string MediaHashKey { get; init; } = "";
+        public string MediaHashKey { get; }
 
-        /// <summary>
-        /// Size of the encrypted image in bytes: <c>EncryptedFileSize</c> of the image's size. Required.
-        /// </summary>
+        /// <summary>Size of the encrypted image in bytes: <c>EncryptedFileSize</c> of the image's size.</summary>
         [JsonPropertyName("filesize_bytes")]
-        public long FilesizeBytes { get; init; }
+        public long FilesizeBytes { get; }
 
-        /// <summary>Original filename of the image. Required.</summary>
+        /// <summary>Original filename of the image.</summary>
         [JsonPropertyName("filename")]
-        public string Filename { get; init; } = "";
+        public string Filename { get; }
 
-        /// <summary>Image width in pixels.</summary>
+        /// <summary>Image width in pixels; a negative one fails the send.</summary>
         [JsonPropertyName("width")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public long? Width { get; init; }
 
-        /// <summary>Image height in pixels.</summary>
+        /// <summary>Image height in pixels; a negative one fails the send.</summary>
         [JsonPropertyName("height")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public long? Height { get; init; }
@@ -824,7 +950,12 @@ namespace ChatXdk
         public string? ConversationId { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupMembersChange"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupMembersChange"/>. <see cref="CurrentTitle"/>
+    /// and <see cref="CurrentDescription"/> are plaintext: the call encrypts each under the new
+    /// conversation key it generates. <see cref="CurrentAvatarUrl"/> is the avatar's media URL,
+    /// signed as is.
+    /// </summary>
     public sealed class GroupMembersChangeParams
     {
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
@@ -866,17 +997,22 @@ namespace ChatXdk
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
-        /// <summary>Current group title, if set.</summary>
+        /// <summary>Current group title, as plaintext, if set; the call encrypts it.</summary>
         public string? CurrentTitle { get; init; }
-        /// <summary>Current group avatar URL, if set.</summary>
+        /// <summary>Current group avatar media URL, if set.</summary>
         public string? CurrentAvatarUrl { get; init; }
+        /// <summary>Current group description, as plaintext, if set; the call encrypts it.</summary>
+        public string? CurrentDescription { get; init; }
         /// <summary>Current disappearing-message TTL in milliseconds, if set.</summary>
         public long? CurrentTtlMsec { get; init; }
         /// <summary>Current screen-capture-blocking state, if set.</summary>
         public bool? CurrentScreenCaptureBlockingEnabled { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupCreate"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupCreate"/>. A create sets no avatar; set it
+    /// afterwards with <see cref="Chat.PrepareGroupAvatarChange"/>.
+    /// </summary>
     public sealed class GroupCreateParams
     {
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
@@ -908,10 +1044,8 @@ namespace ChatXdk
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
-        /// <summary>Group title, if set.</summary>
+        /// <summary>Group title, as plaintext, if set; the create encrypts it.</summary>
         public string? Title { get; init; }
-        /// <summary>Group avatar URL, if set.</summary>
-        public string? AvatarUrl { get; init; }
         /// <summary>Disappearing-message TTL in milliseconds, if set.</summary>
         public long? TtlMsec { get; init; }
     }
@@ -1226,19 +1360,34 @@ namespace ChatXdk
         DetectionDisabled,
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupMembersRemove"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupMembersRemove"/>. The call rotates the
+    /// conversation key for the members who stay.
+    /// </summary>
     public sealed class GroupMembersRemoveParams
     {
-        public GroupMembersRemoveParams(string conversationId, IReadOnlyList<string> userIds)
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="publicKeys">Identity public keys of the members who stay.</param>
+        /// <param name="conversationId">ID of the group conversation.</param>
+        /// <param name="userIds">User IDs being removed.</param>
+        public GroupMembersRemoveParams(
+            IReadOnlyList<PublicKeyInput> publicKeys,
+            string conversationId,
+            IReadOnlyList<string> userIds)
         {
+            PublicKeys = publicKeys;
             ConversationId = conversationId;
             UserIds = userIds;
         }
 
+        /// <summary>Identity public keys of the members who stay; the new key is encrypted for them.</summary>
+        public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
         public string ConversationId { get; }
         public IReadOnlyList<string> UserIds { get; }
-        public IReadOnlyList<PublicKeyInput>? PublicKeys { get; init; }
-        public string? ConversationKeyVersion { get; init; }
+        /// <summary>The group's title, re-encrypted under the new conversation key; null leaves it out.</summary>
+        public string? Title { get; init; }
+        /// <summary>The group's description, re-encrypted under the new conversation key; null leaves it out.</summary>
+        public string? Description { get; init; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
     }
@@ -1254,55 +1403,75 @@ namespace ChatXdk
         public string? SigningKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupTitleChange"/>. CustomTitle is ciphertext.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupTitleChange"/>. <see cref="NewTitle"/> is plaintext: the
+    /// call encrypts it under the conversation key, <see cref="ConversationKey"/> /
+    /// <see cref="ConversationKeyVersion"/> or, both null, the key cache.
+    /// </summary>
     public sealed class GroupTitleChangeParams
     {
-        public GroupTitleChangeParams(string conversationId, string conversationKeyVersion, string customTitle)
+        public GroupTitleChangeParams(string conversationId, string newTitle)
         {
             ConversationId = conversationId;
-            ConversationKeyVersion = conversationKeyVersion;
-            CustomTitle = customTitle;
+            NewTitle = newTitle;
         }
 
         public string ConversationId { get; }
-        public string ConversationKeyVersion { get; }
-        public string CustomTitle { get; }
+        /// <summary>The group's new title, as plaintext.</summary>
+        public string NewTitle { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
+        /// <summary>Raw 32-byte conversation key; resolves from the key cache when null.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>. A group's avatar URL is not
+    /// encrypted: <see cref="NewAvatarUrl"/> is the media URL of the avatar image, which the app
+    /// encrypts under the conversation key and uploads first.
+    /// </summary>
     public sealed class GroupAvatarChangeParams
     {
-        public GroupAvatarChangeParams(string conversationId, string conversationKeyVersion, string customAvatarUrl)
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl, string conversationKeyVersion)
         {
             ConversationId = conversationId;
+            NewAvatarUrl = newAvatarUrl;
             ConversationKeyVersion = conversationKeyVersion;
-            CustomAvatarUrl = customAvatarUrl;
         }
 
         public string ConversationId { get; }
+        /// <summary>The media URL of the group's new avatar image, signed and sent as is.</summary>
+        public string NewAvatarUrl { get; }
+        /// <summary>Version of the conversation key the avatar image is encrypted under.</summary>
         public string ConversationKeyVersion { get; }
-        public string CustomAvatarUrl { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupDescriptionChange"/>. CustomDescription is ciphertext.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupDescriptionChange"/>. <see cref="NewDescription"/> is plaintext: the
+    /// call encrypts it under the conversation key, <see cref="ConversationKey"/> /
+    /// <see cref="ConversationKeyVersion"/> or, both null, the key cache.
+    /// </summary>
     public sealed class GroupDescriptionChangeParams
     {
-        public GroupDescriptionChangeParams(string conversationId, string conversationKeyVersion, string customDescription)
+        public GroupDescriptionChangeParams(string conversationId, string newDescription)
         {
             ConversationId = conversationId;
-            ConversationKeyVersion = conversationKeyVersion;
-            CustomDescription = customDescription;
+            NewDescription = newDescription;
         }
 
         public string ConversationId { get; }
-        public string ConversationKeyVersion { get; }
-        public string CustomDescription { get; }
+        /// <summary>The group's new description, as plaintext.</summary>
+        public string NewDescription { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
+        /// <summary>Raw 32-byte conversation key; resolves from the key cache when null.</summary>
+        public byte[]? ConversationKey { get; init; }
+        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
+        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>Parameters for <see cref="Chat.PrepareGroupAdminsAdd"/>.</summary>

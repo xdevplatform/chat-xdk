@@ -54,11 +54,7 @@ fn unix_secs() -> u64 {
 /// Signing entries -> the flat entries the prepare methods take.
 fn key_entries(pks: &[SigningKeyEntry]) -> Vec<PublicKeyInput> {
     pks.iter()
-        .map(|pk| PublicKeyInput {
-            user_id: pk.user_id.clone(),
-            public_key: pk.identity_public_key.clone(),
-            key_version: pk.public_key_version.clone(),
-        })
+        .map(|pk| PublicKeyInput::new(&pk.user_id, &pk.identity_public_key, &pk.public_key_version))
         .collect()
 }
 
@@ -176,7 +172,7 @@ fn e2e_live() {
         .collect();
     let batch = core.decrypt_batch(&refs, &signing);
     let decrypted = batch
-        .messages
+        .events
         .iter()
         .filter(|m| message_text(&m.event).is_some())
         .count();
@@ -194,7 +190,7 @@ fn e2e_live() {
     let mut canonical_conv = conv.clone();
     let mut last_inbound_event: Option<String> = None;
     let mut key_change_events: Vec<String> = Vec::new();
-    for m in &batch.messages {
+    for m in &batch.events {
         if let Event::KeyChange(_) = &m.event {
             if let Some(raw) = &m.original_b64 {
                 key_change_events.push(raw.clone());
@@ -284,23 +280,19 @@ fn e2e_live() {
         .encrypt_reply(
             &canonical_conv,
             &format!("@user {marker}"),
-            &key,
-            &kv,
             ReplyOptions {
                 // Threading by raw event: the SDK derives the preview from it
                 // and embeds it; the key changes cover an original encrypted
                 // under an older key version.
                 reply_to_event: last_inbound_event.clone(),
                 reply_to_ckces: (!key_change_events.is_empty()).then(|| key_change_events.clone()),
-                entities: Some(vec![EntityDescriptor {
-                    start: 0,
-                    end: 5,
-                    entity_type: "mention".to_string(),
-                }]),
+                entities: Some(vec![EntityDescriptor::new(0, 5, "mention")]),
                 attachments: None,
                 quick_reply: None,
                 ttl_msec: Some(24 * 60 * 60 * 1000),
-            },
+                ..Default::default()
+            }
+            .with_conversation_key(&key, &kv),
         )
         .expect("encrypt_reply");
     api.send_message(&canonical_conv, &body)
@@ -369,8 +361,6 @@ fn e2e_live() {
             .encrypt_reply(
                 &canonical_conv,
                 &format!("chat-xdk e2e media [rust] {}", unix_secs()),
-                &key,
-                &kv,
                 ReplyOptions {
                     reply_to_event: None,
                     reply_to_ckces: None,
@@ -379,14 +369,16 @@ fn e2e_live() {
                         media_hash_key: media_hash_key.clone(),
                         width: 0,
                         height: 0,
-                        filesize_bytes: plaintext.len() as i64,
+                        filesize_bytes: total_bytes as i64,
                         filename: "e2e.bin".to_string(),
                         media_type: Some(5),
                         duration_millis: None,
                     }]),
                     quick_reply: None,
                     ttl_msec: Some(24 * 60 * 60 * 1000),
-                },
+                    ..Default::default()
+                }
+                .with_conversation_key(&key, &kv),
             )
             .expect("encrypt media message");
         let ciphertext = core
@@ -477,6 +469,7 @@ fn groups_flow(
             &group_id,
             &[my_id.to_string()],
             &[my_id.to_string()],
+            Some("chat-xdk e2e"),
         )
         .expect("prepare_group_create");
     let mut members = vec![my_id.to_string()];
@@ -484,7 +477,7 @@ fn groups_flow(
     body["conversation_id"] = json!(group_id);
     body["group_members"] = json!(members);
     body["group_admins"] = json!([my_id]);
-    body["group_name"] = json!("chat-xdk e2e");
+    body["group_name"] = json!(prep.encrypted_title);
     if api.create_conversation(&body).is_err() {
         // Some deployments reject single-member groups; fall back to creating
         // with both participants (skipping the member-add below).
@@ -494,6 +487,7 @@ fn groups_flow(
                 &group_id,
                 &[my_id.to_string(), partner_id.to_string()],
                 &[my_id.to_string()],
+                Some("chat-xdk e2e"),
             )
             .expect("prepare_group_create fallback");
         members = vec![my_id.to_string(), partner_id.to_string()];
@@ -501,7 +495,7 @@ fn groups_flow(
         body["conversation_id"] = json!(group_id);
         body["group_members"] = json!(members);
         body["group_admins"] = json!([my_id]);
-        body["group_name"] = json!("chat-xdk e2e");
+        body["group_name"] = json!(prep.encrypted_title);
         api.create_conversation(&body).expect("create_conversation");
     }
     let kv = prep.conversation_key_version.clone();
@@ -513,7 +507,11 @@ fn groups_flow(
 
     let marker = format!("chat-xdk e2e group [rust] {}", unix_secs());
     let msg = core
-        .encrypt_reply(&group_id, &marker, &key, &kv, ReplyOptions::default())
+        .encrypt_reply(
+            &group_id,
+            &marker,
+            ReplyOptions::default().with_conversation_key(&key, &kv),
+        )
         .expect("encrypt group message");
     api.send_message(&group_id, &msg)
         .expect("send group message");

@@ -103,7 +103,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         keys = chat.get_public_keys()
         self.assertEqual(keys.identity, v["identity_public_b64"])
         self.assertEqual(keys.signing, v["signing_public_b64"])
-        self.assertIsInstance(keys.version, str)
+        self.assertFalse(hasattr(keys, "version"))
 
         sig_bytes = chat.sign(v["message_utf8"].encode("utf-8"))
         sig_b64 = base64.b64encode(sig_bytes).decode("ascii")
@@ -112,6 +112,20 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertTrue(chat.verify(v["signing_public_b64"], sig_bytes, v["message_utf8"].encode("utf-8")))
         self.assertFalse(chat.verify(v["signing_public_b64"], sig_bytes, (v["message_utf8"] + "!").encode("utf-8")))
 
+    def test_sign_refuses_data_only_the_sdk_signs(self):
+        from chat_xdk import Chat, ImportKeysParams
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
+
+        key_change = b"ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5"
+        for data in (key_change, base64.b64decode(v["identity_public_b64"])):
+            with self.assertRaisesRegex(ValueError, "only the SDK signs"):
+                chat.sign(data)
+        # Data that only resembles a payload is application data.
+        self.assertEqual(len(chat.sign(b" " + key_change)), 64)
+
     def test_ecies_conversation_key_roundtrip(self):
         from chat_xdk import Chat, ConversationKeyChangeParams, ImportKeysParams
 
@@ -119,7 +133,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat = Chat()
         chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
 
-        public_keys = [{"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}]
+        public_keys = [{"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
                 public_keys, conversation_id="conv-1", sender_id="910002", signing_key_version="1"
@@ -186,7 +200,7 @@ class TestPythonSdkVectors(unittest.TestCase):
             base64.b64decode(v["conversation_key_b64"]),
         )
 
-        key_changes = [m["event"] for m in result["messages"] if m["event"]["type"] == "KeyChange"]
+        key_changes = [m["event"] for m in result["events"] if m["event"]["type"] == "KeyChange"]
         self.assertEqual(len(key_changes), 1)
         self.assertTrue(key_changes[0]["verified"])
         self.assertEqual(key_changes[0]["conversation_key_version"], ck_version)
@@ -195,7 +209,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         for key in participant_keys:
             self.assertEqual(set(key), {"user_id", "encrypted_conversation_key", "public_key_version"})
 
-        messages = [m["event"] for m in result["messages"] if m["event"]["type"] == "Message"]
+        messages = [m["event"] for m in result["events"] if m["event"]["type"] == "Message"]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["content"]["text"], v["event_message_text"])
         self.assertTrue(messages[0]["verified"])
@@ -314,13 +328,157 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
         self.assertEqual(result["errors"], {})
 
-        messages = [m["event"] for m in result["messages"] if m["event"]["type"] == "Message"]
+        messages = [m["event"] for m in result["events"] if m["event"]["type"] == "Message"]
         self.assertEqual(len(messages), 2)
         # Both replies decrypt; the derived preview validates against the
         # embedded raw original, the forged preview text is flagged.
         self.assertEqual(messages[0]["content"]["text"], v["event_reply_text"])
         self.assertEqual(messages[0]["reply_preview_validation"], "Valid")
         self.assertEqual(messages[1]["reply_preview_validation"], "Invalid")
+
+    def test_group_description_change_decrypts_on_receive(self):
+        from chat_xdk import Chat, DecryptEventParams
+
+        v = _load_vectors()
+        chat = Chat()
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_description_b64"],
+                keys,
+                signing_keys=_fixture_signing_keys(v),
+            )
+        )
+        self.assertEqual(event["type"], "GroupChange")
+        self.assertTrue(event["verified"])
+        self.assertEqual(event["conversation_id"], v["event_group_id"])
+        self.assertEqual(
+            event["change"],
+            {
+                "change_type": "DescriptionChanged",
+                "new_description": {"kind": "Text", "text": v["event_group_description"]},
+            },
+        )
+        # Without the key the description was encrypted under, the change
+        # still decrypts, with the description unavailable.
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_description_b64"], {}, signing_keys=_fixture_signing_keys(v)
+            )
+        )
+        description = event["change"]["new_description"]
+        self.assertEqual(description["kind"], "Unavailable")
+        self.assertTrue(description["raw"])
+        self.assertNotEqual(description["raw"], v["event_group_description"])
+
+    def test_group_avatar_change_carries_the_media_url(self):
+        from chat_xdk import Chat, DecryptEventParams
+
+        v = _load_vectors()
+        chat = Chat()
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_avatar_change_b64"], {}, signing_keys=_fixture_signing_keys(v)
+            )
+        )
+        self.assertEqual(event["type"], "GroupChange")
+        self.assertTrue(event["verified"])
+        self.assertEqual(
+            event["change"],
+            {
+                "change_type": "AvatarChanged",
+                "new_avatar_url": v["event_group_avatar_url"],
+                "conversation_key_version": v["event_conversation_key_version"],
+            },
+        )
+
+    def test_group_create_decrypts_its_title_on_receive(self):
+        from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams
+
+        v = _load_vectors()
+        chat = Chat()
+        keys = {
+            v["event_group_create_conversation_key_version"]: base64.b64decode(
+                v["event_group_create_conversation_key_b64"]
+            )
+        }
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_create_b64"], keys, signing_keys=_fixture_signing_keys(v)
+            )
+        )
+        self.assertEqual(event["type"], "GroupChange")
+        self.assertTrue(event["verified"])
+        self.assertEqual(
+            event["change"],
+            {
+                "change_type": "Created",
+                "member_ids": [v["event_sender_id"]],
+                "admin_ids": [v["event_sender_id"]],
+                "title": {"kind": "Text", "text": v["event_group_title"]},
+                "avatar_url": None,
+                "conversation_key_version": v["event_group_create_conversation_key_version"],
+            },
+        )
+        # Without the key the create seeded, the create still decrypts, on
+        # both paths, with its title unavailable as the ciphertext it carries.
+        unavailable = {"kind": "Unavailable", "raw": v["event_group_create_encrypted_title"]}
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_group_create_b64"], {}, signing_keys=_fixture_signing_keys(v)
+            )
+        )
+        self.assertEqual(event["change"]["member_ids"], [v["event_sender_id"]])
+        self.assertEqual(event["change"]["title"], unavailable)
+        result = chat.decrypt_events(
+            DecryptEventsParams(
+                [v["event_group_create_b64"]], signing_keys=_fixture_signing_keys(v)
+            )
+        )
+        self.assertEqual(result["errors"], {})
+        self.assertEqual(result["events"][0]["event"]["change"]["title"], unavailable)
+
+    def test_reactions_and_edits_name_their_target_by_sequence_id(self):
+        from chat_xdk import (
+            Chat,
+            DecryptEventParams,
+            EncryptEditParams,
+            EncryptReactionParams,
+            ImportKeysParams,
+            SetIdentityParams,
+        )
+
+        v = _load_vectors()
+        chat = Chat()
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
+        chat.set_identity(SetIdentityParams(v["event_sender_id"], v["event_signing_key_version"]))
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        version = v["event_conversation_key_version"]
+        key = dict(conversation_key=conv_key, conversation_key_version=version)
+
+        def content(payload):
+            event = chat.decrypt_event(
+                DecryptEventParams(
+                    payload.event_b64, {version: conv_key}, signing_keys=_fixture_signing_keys(v)
+                )
+            )
+            self.assertTrue(event["verified"])
+            return event["content"]
+
+        target = v["event_message_b64"]
+        self.assertEqual(
+            content(chat.encrypt_add_reaction(EncryptReactionParams(target, "👍", **key))),
+            {"content_type": "Reaction", "emoji": "👍", "target_message_sequence_id": "1"},
+        )
+        self.assertEqual(
+            content(chat.encrypt_remove_reaction(EncryptReactionParams(target, "👍", **key))),
+            {"content_type": "ReactionRemoved", "emoji": "👍", "target_message_sequence_id": "1"},
+        )
+        # A v0 edit names its target by sequence id only.
+        self.assertEqual(
+            content(chat.encrypt_edit(EncryptEditParams(target, "fixed", **key))),
+            {"content_type": "Edit", "target_message_sequence_id": "1", "updated_text": "fixed"},
+        )
 
     def test_failure_event_decodes_type_and_rate_limit_tier(self):
         from chat_xdk import Chat, DecryptEventParams
@@ -648,7 +806,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(ckey, hex_to_bytes(v["message_key_conversation_key_hex"]))
         texts = [
             m["event"]["content"]["text"]
-            for m in result["messages"]
+            for m in result["events"]
             if m["event"]["type"] == "Message"
         ]
         self.assertEqual(texts, [v["event_message_key_text"]])

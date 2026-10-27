@@ -78,11 +78,19 @@ async function main() {
   assert.equal(chat.verify(v.signing_public_b64, sigBytes, msgBytes), true);
   assert.equal(chat.verify(v.signing_public_b64, sigBytes, new TextEncoder().encode(v.message_utf8 + "!")), false);
 
+  // sign refuses data only the SDK signs: an event signature payload and a
+  // public key. Data that only resembles a payload is application data.
+  const keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+  for (const data of [new TextEncoder().encode(keyChange), b64ToBytes(v.identity_public_b64)]) {
+    assert.throws(() => chat.sign(data), /only the SDK signs/);
+  }
+  assert.equal(chat.sign(new TextEncoder().encode(` ${keyChange}`)).length, 64);
+
   // conversation-key change ECIES roundtrip (ciphertext randomized, key retained locally)
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   const decryptedKey = chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey);
@@ -267,7 +275,7 @@ async function main() {
     batch.conversationKeys.keys[v.event_conversation_key_version],
     b64ToBytes(v.conversation_key_b64),
   );
-  const keyChanges = batch.messages.filter((m) => m.event.type === "keyChange");
+  const keyChanges = batch.events.filter((m) => m.event.type === "keyChange");
   assert.equal(keyChanges.length, 1);
   assert.equal(keyChanges[0].event.verified, true);
   assert.equal(keyChanges[0].event.conversationKeyVersion, v.event_conversation_key_version);
@@ -275,7 +283,7 @@ async function main() {
   for (const key of keyChanges[0].event.conversationParticipantKeys) {
     assert.deepEqual(Object.keys(key).sort(), ["encryptedConversationKey", "publicKeyVersion", "userId"]);
   }
-  const messages = batch.messages.filter((m) => m.event.type === "message");
+  const messages = batch.events.filter((m) => m.event.type === "message");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].event.content.text, v.event_message_text);
   assert.equal(messages[0].event.verified, true);
@@ -308,13 +316,84 @@ async function main() {
     signingKeys,
   });
   assert.deepEqual(Object.keys(replyBatch.errors), []);
-  const replies = replyBatch.messages.filter((m) => m.event.type === "message");
+  const replies = replyBatch.events.filter((m) => m.event.type === "message");
   assert.equal(replies.length, 2);
   const [validReply, forgedReply] = replies;
   assert.equal(validReply.event.content.text, v.event_reply_text);
   assert.equal(validReply.event.replyPreviewValidation, "valid");
   assert.equal(forgedReply.event.content.text, v.event_reply_text);
   assert.equal(forgedReply.event.replyPreviewValidation, "invalid");
+
+  // A signed group description change: decryptEvent returns the description
+  // decrypted under the fixture conversation key, and without that key the
+  // change still decrypts, with the description unavailable.
+  const description = chat.decryptEvent({
+    eventB64: v.event_group_description_b64,
+    conversationKeys: fixtureKeys,
+    signingKeys,
+  });
+  assert.equal(description.type, "groupChange");
+  assert.equal(description.verified, true);
+  assert.equal(description.conversationId, v.event_group_id);
+  assert.deepEqual(description.change, {
+    changeType: "descriptionChanged",
+    newDescription: { kind: "text", text: v.event_group_description },
+  });
+  const keyless = chat.decryptEvent({
+    eventB64: v.event_group_description_b64,
+    conversationKeys: {},
+    signingKeys,
+  });
+  assert.equal(keyless.change.newDescription.kind, "unavailable");
+  assert.ok(keyless.change.newDescription.raw);
+  assert.notEqual(keyless.change.newDescription.raw, v.event_group_description);
+
+  // A signed group avatar change carries the media URL as is, with the
+  // version of the key its image is encrypted under: no key needed.
+  const avatar = chat.decryptEvent({
+    eventB64: v.event_group_avatar_change_b64,
+    conversationKeys: {},
+    signingKeys,
+  });
+  assert.equal(avatar.verified, true);
+  assert.deepEqual(avatar.change, {
+    changeType: "avatarChanged",
+    newAvatarUrl: v.event_group_avatar_url,
+    conversationKeyVersion: v.event_conversation_key_version,
+  });
+
+  // A signed group create: decryptEvent returns its title decrypted under
+  // the key the create seeded. Without that key the create still decrypts,
+  // on both paths, with its title unavailable as the ciphertext it carries.
+  const createKeys = {
+    [v.event_group_create_conversation_key_version]: b64ToBytes(v.event_group_create_conversation_key_b64),
+  };
+  const created = chat.decryptEvent({
+    eventB64: v.event_group_create_b64,
+    conversationKeys: createKeys,
+    signingKeys,
+  });
+  assert.equal(created.type, "groupChange");
+  assert.equal(created.verified, true);
+  assert.deepEqual(created.change, {
+    changeType: "created",
+    memberIds: [v.event_sender_id],
+    adminIds: [v.event_sender_id],
+    title: { kind: "text", text: v.event_group_title },
+    avatarUrl: null,
+    conversationKeyVersion: v.event_group_create_conversation_key_version,
+  });
+  const unavailableTitle = { kind: "unavailable", raw: v.event_group_create_encrypted_title };
+  const keylessCreate = chat.decryptEvent({
+    eventB64: v.event_group_create_b64,
+    conversationKeys: {},
+    signingKeys,
+  });
+  assert.deepEqual(keylessCreate.change.memberIds, [v.event_sender_id]);
+  assert.deepEqual(keylessCreate.change.title, unavailableTitle);
+  const createBatch = chat.decryptEvents({ events: [v.event_group_create_b64], signingKeys });
+  assert.deepEqual(createBatch.errors, {});
+  assert.deepEqual(createBatch.events[0].event.change.title, unavailableTitle);
 
   // Failure events are unsigned by protocol: the fixture failure decodes with
   // no keys, and JS camelCases the discriminator values and the tier field.
@@ -548,7 +627,7 @@ async function main() {
     assert.deepEqual(Object.keys(mkBatch.errors), []);
     assert.deepEqual(mkBatch.conversationKeys.keys[mkVersion], mkKey);
     assert.deepEqual(
-      mkBatch.messages.filter((m) => m.event.type === "message").map((m) => m.event.content.text),
+      mkBatch.events.filter((m) => m.event.type === "message").map((m) => m.event.content.text),
       [v.event_message_key_text],
     );
     assert.deepEqual(

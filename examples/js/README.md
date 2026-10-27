@@ -37,12 +37,11 @@ the browser, or in Node for the bot); REST calls go through the **XDK**
 
 ## Message format
 
-The bot and the browser app import a raw private-key blob, which the
-package's `createChat` (keys kept in Juicebox) doesn't take, so they drive the
-lower-level WASM `Chat` from `crates/wasm/pkg/`. That `Chat` doesn't read the
-X API's feature switches, so their messages go out in the v0 format. A chat
-from `createChat`, as in [`src/register.mjs`](src/register.mjs), reads the
-switches once, when it is created, and sends v1 if `v1_send` was on then.
+The bot imports its raw private-key blob into a chat from `createChat()`,
+which reads the X API's feature switches once, when it is created, and sends
+v1 if `v1_send` was on then. The browser app drives the lower-level WASM
+`Chat` from `crates/wasm/pkg/`, which doesn't read the switches, so its
+messages go out in the v0 format.
 
 ## Test it (offline, no credentials)
 
@@ -89,9 +88,9 @@ npm run build:wasm                                    # once per Rust change
 X_ACCESS_TOKEN=... CHAT_PIN=... npm run register -- --confirm
 ```
 
-The browser-safe WASM binding has no key export, so — unlike the other
-language examples — this persists the identity in **Juicebox** under `CHAT_PIN`
-(required) instead of a local blob; the bot then recovers it with `unlock(pin)`.
+Unlike the other language examples, this script shows the Juicebox flow: it
+persists the identity in **Juicebox** under `CHAT_PIN` (required) instead of a
+local blob, and recovers it with `unlock(pin)`.
 It needs the optional `juicebox-sdk` peer dependency installed. A brand-new
 account works too: the account's `juicebox_config` is created by the
 public-key POST itself, so the script creates the chat with no config,

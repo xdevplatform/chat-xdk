@@ -10,11 +10,6 @@ export interface PublicKeys {
   identity: string;
   /** Base64-encoded signing public key */
   signing: string;
-  /**
-   * Always the empty string; reserved. The registered key version is
-   * tracked internally and not surfaced here.
-   */
-  version: string;
 }
 
 /**
@@ -37,8 +32,8 @@ export interface PublicKeyRegistrationPayload {
 }
 
 /**
- * Result from encryptMessage, encryptReply, encryptAddReaction, and
- * encryptRemoveReaction.
+ * Result from encryptMessage, encryptReply, encryptAddReaction,
+ * encryptRemoveReaction, and encryptEdit.
  */
 export interface SendPayload {
   /**
@@ -81,12 +76,6 @@ export interface ActionSignature {
   encodedMessageEventDetail: string;
   /** The signature over the action, with its versions and the signer's signing public key. */
   messageEventSignature: MessageEventSignature;
-  /**
-   * The comma-separated payload string that was signed; populated for group
-   * changes, message deletes and read receipts. Omitted for conversation-key
-   * changes, whose payload embeds the plaintext conversation key.
-   */
-  signaturePayload?: string;
 }
 
 /** The signature of an ActionSignature. */
@@ -102,10 +91,26 @@ export interface MessageEventSignature {
 }
 
 /**
- * A signed message delete or read receipt: the `actionSignatures` a request
- * carries for it, one entry.
+ * Signed actions for a request that carries no new conversation key and no
+ * encrypted group text: the `actionSignatures` it carries. Returned by
+ * prepareMessageDelete, prepareMarkConversationRead, prepareGroupLeave (one
+ * entry per signed event), prepareGroupAvatarChange, and the admin, invite,
+ * join-request, message-TTL and screen-capture prepares.
  */
 export interface PreparedAction {
+  actionSignatures: ActionSignature[];
+}
+
+/**
+ * A signed group title or description change: the value encrypted under the
+ * conversation key and the `actionSignatures` a request carries.
+ */
+export interface PreparedGroupMetadataChange {
+  /** The value encrypted under the conversation key, base64: what the request sends. */
+  encryptedValue: string;
+  /** Version of the conversation key the value is encrypted under. */
+  conversationKeyVersion: string;
+  /** The signed change, one entry. */
   actionSignatures: ActionSignature[];
 }
 
@@ -136,14 +141,18 @@ export type ConversationKeyMap = { [version: string]: Uint8Array };
 export interface ConversationKeyResult {
   /** Map of key version → raw conversation key bytes. */
   keys: ConversationKeyMap;
-  /** The latest (highest) key version, for encrypting new messages. */
+  /**
+   * The version to encrypt with: from decryptEvents, the newest version whose
+   * key change verified (null until one verifies); from
+   * extractConversationKeys, the batch's highest version.
+   */
   latestVersion: string | null;
 }
 
 /**
- * A single decrypted message from decryptEvents.
+ * One event decryptEvents decrypted, of any event type.
  */
-export interface DecryptedMessage {
+export interface DecryptedEvent {
   /** The decrypted event. */
   event: Event;
   /** Original base64 event string (for reference). */
@@ -154,8 +163,8 @@ export interface DecryptedMessage {
  * Result from decryptEvents batch API.
  */
 export interface DecryptEventsResult {
-  /** Successfully decrypted messages. */
-  messages: DecryptedMessage[];
+  /** The events that decrypted, in batch order, of every event type. */
+  events: DecryptedEvent[];
   /** Extracted conversation keys (for caching). */
   conversationKeys: ConversationKeyResult;
   /** Errors encountered during decryption (event index, as a string key → error message). */
@@ -183,10 +192,11 @@ export interface ConversationParticipantKey {
 }
 
 /**
- * A public key input for prepareConversationKeyChange / prepareGroupMembersChange.
+ * A public key input for prepareConversationKeyChange, prepareGroupCreate,
+ * prepareGroupMembersChange and prepareGroupMembersRemove.
  *
  * Represents a single public key version for a user, as returned by the
- * X API `GET /2/dm/encryption/public_keys` endpoint.
+ * X API `GET /2/users/{id}/public_keys` endpoint.
  *
  * Pass the full array — the SDK groups by userId and picks the latest
  * version per user automatically.
@@ -194,14 +204,15 @@ export interface ConversationParticipantKey {
 export interface PublicKeyInput {
   /** The user's user ID (snowflake string). */
   userId: string;
-  /** Base64-encoded identity public key (SEC1 or SPKI). */
-  publicKey: string;
-  /** Key version string from the X API. */
-  keyVersion: string;
+  /** Base64-encoded identity public key (SEC1 or SPKI): the X API's `public_key`. */
+  identityPublicKey: string;
+  /** The key's version, as the X API returns it. */
+  publicKeyVersion: string;
 }
 
 /**
- * Result from prepareConversationKeyChange / prepareGroupMembersChange.
+ * Result from prepareConversationKeyChange, prepareGroupCreate,
+ * prepareGroupMembersChange and prepareGroupMembersRemove.
  *
  * Contains everything needed to POST the change to the X API: the new key
  * (to keep locally), the per-participant encrypted copies, and the action
@@ -210,7 +221,10 @@ export interface PublicKeyInput {
 export interface PreparedConversationChange {
   /** Conversation id the change applies to (derived for a one-to-one, or the id you passed). */
   conversationId: string;
-  /** Raw conversation key bytes (32 bytes). Store locally for encrypting messages. */
+  /**
+   * Raw conversation key bytes (32 bytes). Store locally for encrypting
+   * messages. It is secret, so JSON.stringify leaves it out of this object.
+   */
   conversationKey: Uint8Array;
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;
@@ -218,14 +232,31 @@ export interface PreparedConversationChange {
   conversationParticipantKeys: ConversationParticipantKey[];
   /** Action signatures authenticating the change, ready to POST to the API. */
   actionSignatures: ActionSignature[];
+  /**
+   * prepareGroupCreate and prepareGroupMembersChange, when the params set a
+   * title: the title encrypted under the new conversation key, base64 — the
+   * `group_name` a create request sends, and the `encrypted_title` an
+   * add-members request sends.
+   */
+  encryptedTitle?: string;
+  /**
+   * prepareGroupMembersChange only, when the params set a description: the
+   * description encrypted under the new conversation key, base64, as the
+   * signed member add carries it.
+   */
+  encryptedDescription?: string;
 }
 
 /**
  * Entity descriptor tuple: [startByteOffset, endByteOffset, entityType].
+ * The offsets count bytes of the text's UTF-8 encoding, not string indices
+ * (`new TextEncoder().encode(text.slice(0, i)).length` converts index `i`),
+ * so `0 <= start <= end <=` the text's UTF-8 length; other offsets fail the
+ * call with a `ChatXdkError` of kind `invalidInput` naming them.
  * entityType is one of: "url", "mention", "hashtag", "cashtag", "email",
  * "address", "phoneNumber" (the snake_case spelling "phone_number" is
- * accepted too). Unrecognized entity types are silently dropped — the
- * message encrypts without that entity and no error is raised.
+ * accepted too). Any other entity type, an empty one included, fails the
+ * call with a `ChatXdkError` of kind `invalidInput` naming it.
  */
 export type EntityTuple = [number, number, string];
 
@@ -276,6 +307,45 @@ export interface SetIdentityParams {
   userId: string;
   /** The `public_key_version` the X API returned when your keys were registered. */
   signingKeyVersion: string;
+}
+
+/** Params for `importKeys`. */
+export interface ImportKeysParams {
+  /** The private keys, as `exportKeys` returns them. */
+  keys: Uint8Array;
+  /**
+   * The `public_key_version` the X API returned when the keys were
+   * registered; key-change entries for other versions of your keys are
+   * skipped.
+   */
+  signingKeyVersion?: string | null;
+}
+
+/**
+ * What kind of failure a `ChatXdkError` is; every binding names the same
+ * failure the same way.
+ */
+export type ChatXdkErrorKind =
+  | 'invalidInput'
+  | 'invalidState'
+  | 'parse'
+  | 'decryption'
+  | 'verification'
+  | 'invalidPin'
+  | 'juicebox'
+  | 'internal';
+
+/** The error every SDK call throws. */
+export declare class ChatXdkError extends Error {
+  constructor(kind: ChatXdkErrorKind, message: string, guessesRemaining?: number | null);
+  /** What kind of failure this is. */
+  readonly kind: ChatXdkErrorKind;
+  /**
+   * The PIN attempts left after an `invalidPin` failure, when Juicebox
+   * reports them: 0 means the guess budget is exhausted and the stored keys
+   * are locked. Null for every other failure.
+   */
+  readonly guessesRemaining: number | null;
 }
 
 /**
@@ -494,22 +564,21 @@ export type ScreenCaptureChange =
   | "detectionEnabled"
   | "detectionDisabled";
 
-/** Parameters for prepareGroupMembersRemove. */
+/**
+ * Parameters for prepareGroupMembersRemove. The call rotates the
+ * conversation key for the members who stay.
+ */
 export interface GroupMembersRemoveParams {
+  /** Identity public keys of the members who stay; the new key is encrypted for them. */
+  publicKeys: PublicKeyInput[];
   /** ID of the group conversation. */
   conversationId: string;
   /** User IDs being removed. */
   userIds: string[];
-  /**
-   * Identity public keys of the members who remain. Set to rotate the
-   * conversation key in this same call.
-   */
-  publicKeys?: PublicKeyInput[] | null;
-  /**
-   * Conversation-key version bound into a removal that does not rotate.
-   * Omit it to sign the literal `null`. Ignored when `publicKeys` is set.
-   */
-  conversationKeyVersion?: string | null;
+  /** The group's title, re-encrypted under the new conversation key and signed with the removal. */
+  title?: string | null;
+  /** The group's description, re-encrypted under the new conversation key and signed with the removal. */
+  description?: string | null;
   /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
   /** Version of the signing key; resolves from the session identity when omitted. */
@@ -530,35 +599,62 @@ export interface GroupLeaveParams {
   signingKeyVersion?: string | null;
 }
 
-/** Parameters for prepareGroupTitleChange. `customTitle` is ciphertext. */
+/**
+ * Parameters for prepareGroupTitleChange. `newTitle` is plaintext: the SDK encrypts it under
+ * the conversation key — `conversationKey` / `conversationKeyVersion`, or
+ * the key cache when both are omitted.
+ */
 export interface GroupTitleChangeParams {
+  /** ID of the group conversation. */
   conversationId: string;
-  /** Conversation-key version the title is encrypted under. */
-  conversationKeyVersion: string;
-  /** Encrypted title, the value the request sends as the group name. */
-  customTitle: string;
+  /** The group's new title, as plaintext. */
+  newTitle: string;
+  /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
 }
 
-/** Parameters for prepareGroupAvatarChange. */
+/**
+ * Parameters for prepareGroupAvatarChange. A group's avatar URL is not
+ * encrypted: `newAvatarUrl` is the media URL of the avatar image, which the
+ * app encrypts under the conversation key and uploads first.
+ */
 export interface GroupAvatarChangeParams {
+  /** ID of the group conversation. */
   conversationId: string;
+  /** The media URL of the group's new avatar image, signed and sent as is. */
+  newAvatarUrl: string;
+  /** Version of the conversation key the avatar image is encrypted under. */
   conversationKeyVersion: string;
-  /** Avatar URL the request sends. */
-  customAvatarUrl: string;
+  /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
 }
 
-/** Parameters for prepareGroupDescriptionChange. `customDescription` is ciphertext. */
+/**
+ * Parameters for prepareGroupDescriptionChange. `newDescription` is plaintext: the SDK encrypts it under
+ * the conversation key — `conversationKey` / `conversationKeyVersion`, or
+ * the key cache when both are omitted.
+ */
 export interface GroupDescriptionChangeParams {
+  /** ID of the group conversation. */
   conversationId: string;
-  conversationKeyVersion: string;
-  /** Encrypted description the request sends. */
-  customDescription: string;
+  /** The group's new description, as plaintext. */
+  newDescription: string;
+  /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
+  /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
 }
 
 /** Parameters for prepareGroupAdminsAdd. */
@@ -662,8 +758,10 @@ export interface ConversationKeyChangeParams {
  * Parameters for prepareGroupMembersChange.
  *
  * The current* fields snapshot the group state the change is made against.
- * An unset optional signs the null sentinel, so every binding produces
- * identical signed bytes.
+ * `currentTitle` and `currentDescription` are plaintext: the call encrypts
+ * each under the new conversation key it generates and signs the
+ * ciphertext. An unset optional signs the null sentinel, so every binding
+ * produces identical signed bytes.
  */
 export interface GroupMembersChangeParams {
   /** Identity public keys for every participant of the updated roster. */
@@ -682,10 +780,12 @@ export interface GroupMembersChangeParams {
   senderId?: string | null;
   /** Version of the signing key used to sign the change; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
-  /** The group's current title, if set. */
+  /** The group's current title, as plaintext, if set. */
   currentTitle?: string | null;
-  /** The group's current avatar URL, if set. */
+  /** The group's current avatar media URL, if set; signed as is. */
   currentAvatarUrl?: string | null;
+  /** The group's current description, as plaintext, if set. */
+  currentDescription?: string | null;
   /** The group's current message TTL in milliseconds, if set. */
   currentTtlMsec?: number | null;
   /** The group's current screen-capture-blocking state; omit when unset. */
@@ -695,8 +795,10 @@ export interface GroupMembersChangeParams {
 /**
  * Parameters for prepareGroupCreate.
  *
- * An unset optional signs the null sentinel, so every binding produces
- * identical signed bytes.
+ * `title` is plaintext: the create encrypts it under the new conversation
+ * key and signs the ciphertext. A create sets no avatar; set it afterwards
+ * with prepareGroupAvatarChange. An unset optional signs the null sentinel,
+ * so every binding produces identical signed bytes.
  */
 export interface GroupCreateParams {
   /** Identity public keys for every participant of the new group. */
@@ -711,10 +813,8 @@ export interface GroupCreateParams {
   senderId?: string | null;
   /** Version of the signing key used to sign the create; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
-  /** The group's title, if set. */
+  /** The group's title, as plaintext, if set. */
   title?: string | null;
-  /** The group's avatar URL, if set. */
-  avatarUrl?: string | null;
   /** The group's message TTL in milliseconds, if set. */
   ttlMsec?: number | null;
 }
@@ -826,7 +926,12 @@ export interface FileDecryptorParams {
 // NOTE: AttachmentDescriptor uses snake_case as it's part of the Thrift protocol
 // and matches the wire format used by the X API
 /**
- * Attachment descriptor object.
+ * Attachment descriptor object. A media attachment's `filesize_bytes` is the
+ * encrypted file's size, `encryptedFileSize` of its size; an empty
+ * `filename`, a `filesize_bytes` of 0 or less, or a negative `width` or
+ * `height` fails the send with a `ChatXdkError` of kind `invalidInput`, as
+ * do a `url` attachment with an empty `url` and a `post` attachment with
+ * neither `rest_id` nor `post_url`.
  */
 export type AttachmentDescriptor =
   | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number }
@@ -847,16 +952,20 @@ export interface UrlAttachmentImageDescriptor {
   /**
    * Size of the encrypted image in bytes: `encryptedFileSize` of the image's
    * size. Required: receiving clients silently discard the preview image
-   * when this is missing on the wire.
+   * when this is missing on the wire, so 0 or less fails the send with a
+   * `ChatXdkError` of kind `invalidInput`.
    */
   filesize_bytes: number;
   /**
    * Original filename of the image (receivers key their decrypted-file
    * cache on it). Required: receiving clients silently discard the preview
-   * image when this is missing on the wire.
+   * image when this is missing on the wire, so an empty one fails the send
+   * with a `ChatXdkError` of kind `invalidInput`.
    */
   filename: string;
+  /** Width in pixels, when known; a negative one fails the send. */
   width?: number;
+  /** Height in pixels, when known; a negative one fails the send. */
   height?: number;
 }
 
@@ -940,14 +1049,29 @@ export interface Event {
   failure?: FailureType;
   /** For rate-limit upsell failures: the account tier whose limit was reached. */
   rateLimitTier?: RateLimitTier;
+  /** For messageDeleted events: the `sequenceId`s of the deleted messages. */
+  sequenceIds?: string[];
+  /** For readReceipt and markedUnread events: the `sequenceId` of the newest event read. */
+  seenUntilSequenceId?: string;
   /** Index signature for additional event-specific fields. */
   [key: string]: any;
 }
 
 /**
+ * A group title or description as a received groupChange event carries it:
+ * the `title` of a 'created' change, the `newTitle` of a 'titleChanged' one
+ * and the `newDescription` of a 'descriptionChanged' one. 'text' carries the
+ * value decrypted, or the plaintext an event that names no key version
+ * carries. 'unavailable' carries `raw`, a value the SDK could not decrypt, as
+ * the event carries it. 0.5.x apps sent titles as plaintext while naming a
+ * key version, so show `raw` when a title isn't decryptable.
+ */
+export type GroupText = { kind: 'text'; text: string } | { kind: 'unavailable'; raw: string };
+
+/**
  * Decrypted message content. Permissive convenience shape: `contentType`
  * discriminates which fields are present (e.g. `text` on 'text' content,
- * `emoji`/`targetMessageId` on reactions, `newText` on edits).
+ * `emoji`/`targetMessageSequenceId` on reactions, `updatedText` on edits).
  */
 export interface MessageContent {
   /**
@@ -957,11 +1081,16 @@ export interface MessageContent {
   contentType?: string;
   /** Present on 'text' content. */
   text?: string;
-  /** Present on 'edit' content. */
-  newText?: string;
+  /** Present on 'edit' content: the replacement text. */
+  updatedText?: string;
   /** Present on 'reaction' and 'reactionRemoved' content. */
   emoji?: string;
-  /** Present on 'reaction', 'reactionRemoved', and 'edit' content. */
+  /**
+   * Present on 'reaction', 'reactionRemoved', and 'edit' content: the
+   * `sequenceId` of the target message.
+   */
+  targetMessageSequenceId?: string;
+  /** Present on 'edit' content sent as v1: the target message's signed message id. */
   targetMessageId?: string;
   /** Present on 'text' and 'edit' content: rich-text entities. */
   entities?: unknown[];
@@ -1017,7 +1146,7 @@ export interface AttachmentInfo {
 }
 
 /**
- * Options for creating a Chat instance with Juicebox integration.
+ * Options for creating a Chat instance.
  */
 export interface CreateChatOptions {
   /** 
@@ -1040,16 +1169,20 @@ export interface CreateChatOptions {
    * (converted to a realms config with majority recover threshold — no
    * realm public keys, so only suitable for realms that don't require
    * them), or a raw realms config. Realm auth tokens always come from
-   * `getAuthToken`, not the config.
+   * `getAuthToken`, not the config. An empty or blank string throws the
+   * `ChatXdkError` of kind `invalidState` a chat without a config gives its
+   * Juicebox calls; omit the option instead on first boot.
    */
   juiceboxConfig?: string;
   
   /**
    * Async function to get a Juicebox auth token for a realm.
    *
-   * Required even when `juiceboxConfig` is omitted: the first Juicebox
-   * operation after `updateConfig()` (typically first-boot `setup`) needs it.
-   * 
+   * Required to use Juicebox (`updateConfig`, `setup`, `unlock`,
+   * `changePin`, `delete`), even when `juiceboxConfig` is omitted at first
+   * boot. A chat created without it loads no juicebox-sdk and keeps its keys
+   * with `importKeys` / `exportKeys`.
+   *
    * @param realmId - Hex-encoded realm ID
    * @returns Promise resolving to the auth token string
    * 
@@ -1061,17 +1194,7 @@ export interface CreateChatOptions {
    *   return response.text();
    * }
    */
-  getAuthToken: (realmId: string) => Promise<string>;
-
-  /**
-   * Optional override for the number of PIN guesses allowed before lockout.
-   * A non-negative integer wins over the config, including across later
-   * `updateConfig()` calls. When omitted, the config's `max_guess_count`
-   * applies when it is a non-negative integer (0 included), defaulting to
-   * 20 for the `sdk_config` and `key_store_token_map_json` shapes and 5
-   * otherwise.
-   */
-  maxGuessCount?: number;
+  getAuthToken?: (realmId: string) => Promise<string>;
 }
 
 /**
@@ -1156,6 +1279,19 @@ interface ChatCrypto {
    */
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
 
+  /**
+   * Load private keys, as `exportKeys` returns them. The SDK's copy of the
+   * bytes is zeroized after import; zero your own with `fill(0)`.
+   */
+  importKeys(params: ImportKeysParams): void;
+
+  /**
+   * The loaded private keys, unencrypted: store them only where private
+   * keys belong, and zero the bytes with `fill(0)` once done. Throws when
+   * no identity key is loaded.
+   */
+  exportKeys(): Uint8Array;
+
   /** Get current public keys. */
   getPublicKeys(): PublicKeys;
 
@@ -1202,7 +1338,10 @@ interface ChatCrypto {
    */
   decryptEvent(params: DecryptEventParams): Event;
 
-  /** Sign data. Returns raw signature bytes (64 bytes). */
+  /**
+   * Sign application data. Returns raw signature bytes (64 bytes). Throws for
+   * an event signature payload or a public key, which only the SDK signs.
+   */
   sign(data: Uint8Array): Uint8Array;
 
   /** Verify a signature. */
@@ -1281,10 +1420,11 @@ interface ChatCrypto {
    */
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
 
-  /** Encrypt a UTF-8 string and return base64 ciphertext. Use for metadata fields like group names. */
-  encrypt(plaintext: string, conversationKey: Uint8Array): string;
-
-  /** Decrypt a base64-encoded ciphertext and return the UTF-8 plaintext. Use for metadata fields like group names. */
+  /**
+   * Decrypt a group title or description the X API returns for a
+   * conversation. Group changes in events need no call of their own:
+   * decryptEvent returns them decrypted.
+   */
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
 
   /**
@@ -1311,8 +1451,12 @@ interface ChatCrypto {
    * prepareGroupCreate; a key rotation without a roster change is
    * prepareConversationKeyChange.
    *
-   * @returns PreparedConversationChange with two action signatures: the
-   * conversation-key change and the member add
+   * `currentTitle` and `currentDescription` are plaintext: the call encrypts
+   * each under the new conversation key and signs the ciphertext.
+   *
+   * @returns PreparedConversationChange with two action signatures (the
+   * conversation-key change and the member add), and `encryptedTitle` and
+   * `encryptedDescription` for a title and description the params set
    */
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
 
@@ -1324,29 +1468,41 @@ interface ChatCrypto {
    * prepareConversationKeyChange; roster additions use
    * prepareGroupMembersChange.
    *
-   * @returns PreparedConversationChange with two action signatures: the
-   * conversation-key change and the group create
+   * `title` is plaintext: the call encrypts it under the new conversation key
+   * and signs the ciphertext. A create sets no avatar; set it afterwards with
+   * prepareGroupAvatarChange.
+   *
+   * @returns PreparedConversationChange with two action signatures (the
+   * conversation-key change and the group create), and `encryptedTitle` for a
+   * title the params set: the `group_name` the create request sends
    */
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
 
   /**
-   * Sign a group member removal. When `publicKeys` names the members who
-   * stay, also rotates the conversation key and returns it. Otherwise the
-   * result has no new key and one removal signature.
+   * Sign a group member removal and rotate the conversation key for the
+   * members who stay (`publicKeys`).
+   *
+   * @returns PreparedConversationChange with the new key and the action
+   * signatures: the removal, a title and a description change for each one
+   * the params set, re-encrypted under the new key, and the conversation-key
+   * change
    */
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
 
   /** Sign leaving a group. Does not rotate the conversation key. */
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
 
-  /** Sign a group title change. */
-  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+  /** Encrypt a new group title under the conversation key and sign the change. */
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
 
-  /** Sign a group avatar change. */
+  /**
+   * Sign a group avatar change: the avatar image's media URL, as is, and the
+   * version of the key the image is encrypted under.
+   */
   prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
 
-  /** Sign a group description change. */
-  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  /** Encrypt a new group description under the conversation key and sign the change. */
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
 
   /** Sign adding group admins. */
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
@@ -1386,12 +1542,12 @@ declare class Chat implements ChatCrypto {
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   /**
-   * Import private keys from raw bytes. When `version` is given it also
-   * records the public key version the keys were registered under. The
-   * input bytes are zeroized after import.
+   * Import private keys from `keys` (32 or 64 bytes). When
+   * `signingKeyVersion` is given it also records the public key version the
+   * keys were registered under.
    */
-  importKeys(keys: Uint8Array, version?: string): void;
-  /** Export private keys as raw bytes. */
+  importKeys(params: ImportKeysParams): void;
+  /** Export private keys as raw bytes; throws when no identity key is loaded. */
   exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
@@ -1417,16 +1573,15 @@ declare class Chat implements ChatCrypto {
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
-  encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
-  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
   prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
-  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
   prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
   prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;
@@ -1449,8 +1604,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
    * (4+ characters, not a single repeated character or sequential digit
    * run). Pass a Uint8Array to be able to zero the buffer afterwards.
    *
-   * Requires a Juicebox config: throws if the instance was created without
-   * `juiceboxConfig` and `updateConfig()` has not been called yet.
+   * Requires a Juicebox config: throws a `ChatXdkError` of kind
+   * `invalidState` if the instance was created without `juiceboxConfig` and
+   * `updateConfig()` has not been called yet.
    */
   setup(pin: string | Uint8Array): Promise<PublicKeys>;
   /** Requires a Juicebox config, like setup(). */
@@ -1464,8 +1620,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   changePin(oldPin: string | Uint8Array, newPin: string | Uint8Array): Promise<void>;
   /**
    * (Re-)create the Juicebox client from a config (e.g. refreshed auth
-   * tokens) and re-resolve the PIN guess budget from it; an explicit
-   * createChat `maxGuessCount` override keeps winning. On an instance
+   * tokens), with the PIN guess budget the config sets. On an instance
    * created without `juiceboxConfig`, this is the first-boot step that
    * enables `setup`/`unlock`/`changePin`/`delete`.
    */
@@ -1476,6 +1631,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
+  importKeys(params: ImportKeysParams): void;
+  exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1500,16 +1657,15 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
-  encrypt(plaintext: string, conversationKey: Uint8Array): string;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
-  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedAction;
+  prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
   prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
-  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedAction;
+  prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
   prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
   prepareGroupInviteEnable(params: GroupInviteEnableParams): PreparedAction;
@@ -1530,11 +1686,14 @@ export declare class ChatWithJuicebox implements ChatCrypto {
 }
 
 /**
- * Create a Chat instance with integrated Juicebox key storage.
+ * Create a Chat instance, with Juicebox key storage when `getAuthToken` is
+ * given.
  *
  * `juiceboxConfig` is optional: on first boot (no `juicebox_config` on the
  * account yet) create with just `getAuthToken`, `generateKeypairs()`, POST
- * the payload, then `updateConfig()` + `setup(pin)`.
+ * the payload, then `updateConfig()` + `setup(pin)`. Without
+ * `getAuthToken`, the chat keeps its keys with `importKeys` / `exportKeys`
+ * and needs no juicebox-sdk.
  *
  * Each call creates an independent instance with its own Juicebox client.
  * The Juicebox auth-token callback is a process-wide global that each
@@ -1542,16 +1701,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
  * instances is fine but concurrent Juicebox operations across instances in
  * one process are not supported.
  */
-export declare function createChat(options: CreateChatOptions): Promise<ChatWithJuicebox>;
+export declare function createChat(options?: CreateChatOptions): Promise<ChatWithJuicebox>;
 
 // Utility Functions
-
-/**
- * Remaining PIN attempts from an invalid-PIN unlock()/changePin() failure,
- * or null when the error carries no count. 0 means the guess budget is
- * exhausted and the stored keys are locked.
- */
-export declare function guessesRemaining(err: unknown): number | null;
 
 /** Return the exact size of a file once encrypted: the size its upload declares before the file is encrypted. */
 export declare function encryptedFileSize(plaintextSize: number): number;

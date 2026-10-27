@@ -137,7 +137,7 @@ func TestE2ELive(t *testing.T) {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
 	decrypted := 0
-	for _, m := range batch.Messages {
+	for _, m := range batch.Events {
 		if MessageText(&m.Event) != "" {
 			decrypted++
 		}
@@ -153,7 +153,7 @@ func TestE2ELive(t *testing.T) {
 	canonicalConv := conv
 	lastInboundEvent := ""
 	var ckces []string
-	for _, m := range batch.Messages {
+	for _, m := range batch.Events {
 		var meta chatxdk.EventMeta
 		_ = json.Unmarshal(m.Event.Raw(), &meta)
 		if meta.ConversationID != nil && *meta.ConversationID != "" {
@@ -229,7 +229,7 @@ func TestE2ELive(t *testing.T) {
 	if !ok {
 		t.Fatalf("own rotated CKCE (version %s) did not decrypt+verify", kv)
 	}
-	for _, m := range batch.Messages {
+	for _, m := range batch.Events {
 		if m.Event.Type == "KeyChange" && m.OriginalB64 != "" {
 			ckces = append(ckces, m.OriginalB64)
 		}
@@ -323,7 +323,7 @@ func TestE2ELive(t *testing.T) {
 				MediaHashKey:   mediaHashKey,
 				Width:          0,
 				Height:         0,
-				FilesizeBytes:  int64(len(plaintext)),
+				FilesizeBytes:  int64(totalBytes),
 				Filename:       "e2e.bin",
 				MediaType:      &mediaType,
 			}},
@@ -393,7 +393,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 
 	// Create with the caller as sole member/admin so the member add below
 	// exercises PrepareGroupMembersChange with the partner.
-	prep, err := core.PrepareGroupCreate(myKeys, groupID, []string{myID}, []string{myID})
+	prep, err := core.PrepareGroupCreate(myKeys, groupID, []string{myID}, []string{myID}, "chat-xdk e2e")
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate: %v", err)
 	}
@@ -401,7 +401,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 	if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep)); err != nil {
 		// Some deployments reject single-member groups; fall back to creating
 		// with both participants (skipping the member-add below).
-		prep, err = core.PrepareGroupCreate(bothKeys, groupID, []string{myID, partnerID}, []string{myID})
+		prep, err = core.PrepareGroupCreate(bothKeys, groupID, []string{myID, partnerID}, []string{myID}, "chat-xdk e2e")
 		if err != nil {
 			t.Fatalf("PrepareGroupCreate (fallback): %v", err)
 		}
@@ -462,14 +462,15 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 	t.Logf("group member remove: %s removed (key rotated to %s)", partnerID, rPrep.ConversationKeyVersion)
 }
 
-// groupBody assembles the group-create request: roster fields plus the
-// two-signature key change from PrepareGroupCreate.
+// groupBody assembles the group-create request: roster fields, the
+// two-signature key change from PrepareGroupCreate, and the title it
+// encrypted.
 func groupBody(groupID string, members []string, adminID string, prep *chatxdk.PreparedConversationChange) map[string]any {
 	body := PrepToRequest(prep)
 	body["conversation_id"] = groupID
 	body["group_members"] = members
 	body["group_admins"] = []string{adminID}
-	body["group_name"] = "chat-xdk e2e"
+	body["group_name"] = prep.EncryptedTitle
 	return body
 }
 
@@ -480,9 +481,9 @@ func keyEntries(pks []map[string]any, userID string) []chatxdk.PublicKeyInput {
 	for _, pk := range pks {
 		version := str(pk["public_key_version"])
 		entries = append(entries, chatxdk.PublicKeyInput{
-			UserID:     userID,
-			PublicKey:  str(pk["public_key"]),
-			KeyVersion: version,
+			UserID:            userID,
+			IdentityPublicKey: str(pk["public_key"]),
+			PublicKeyVersion:  version,
 		})
 	}
 	return entries

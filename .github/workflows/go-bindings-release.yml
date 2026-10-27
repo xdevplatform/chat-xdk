@@ -1,4 +1,4 @@
-# Push a Go tag → build all libchat_xdk_go.a variants on GitHub runners → GitHub Release
+# Push a Go tag → build all libchat_xdk_ffi.a variants on GitHub runners → GitHub Release
 # with one tarball (libs/ tree) + .sha256.
 #
 # Triggers on the subdir-module tag pushed by release.yml (`go/chatxdk/vX.Y.Z`,
@@ -71,8 +71,8 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Clean chat-xdk-go release for target
-        run: cargo clean -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+      - name: Clean chat-xdk-ffi release for target
+        run: cargo clean -p chat-xdk-ffi --release --target "${{ matrix.rust_target }}"
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -80,23 +80,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ${{ matrix.extra_apt }}
 
-      - name: Build static library (chat-xdk-go)
+      - name: Build static library (chat-xdk-ffi)
         run: |
-          cargo build -p chat-xdk-go --release --target "${{ matrix.rust_target }}"
+          cargo build -p chat-xdk-ffi --release --target "${{ matrix.rust_target }}"
 
       - name: Strip debug symbols (Linux)
         if: runner.os == 'Linux'
-        run: strip --strip-debug "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+        run: strip --strip-debug "target/${{ matrix.rust_target }}/release/libchat_xdk_ffi.a"
 
       - name: Strip debug symbols (macOS)
         if: runner.os == 'macOS'
-        run: strip -S "target/${{ matrix.rust_target }}/release/libchat_xdk_go.a"
+        run: strip -S "target/${{ matrix.rust_target }}/release/libchat_xdk_ffi.a"
 
-      - name: Upload libchat_xdk_go.a
+      - name: Upload libchat_xdk_ffi.a
         uses: actions/upload-artifact@v4
         with:
-          name: libchat_xdk_go-${{ matrix.lib_subdir }}
-          path: chat-xdk/target/${{ matrix.rust_target }}/release/libchat_xdk_go.a
+          name: libchat_xdk_ffi-${{ matrix.lib_subdir }}
+          path: chat-xdk/target/${{ matrix.rust_target }}/release/libchat_xdk_ffi.a
           if-no-files-found: error
 
   package-and-release:
@@ -108,7 +108,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: libchat_xdk_go-*
+          pattern: libchat_xdk_ffi-*
 
       - name: Assemble libs/ tree and tarball
         id: pack
@@ -116,18 +116,18 @@ jobs:
           set -euo pipefail
           mkdir -p libs
           shopt -s nullglob
-          files=(artifacts/libchat_xdk_go-*/libchat_xdk_go.a)
+          files=(artifacts/libchat_xdk_ffi-*/libchat_xdk_ffi.a)
           if [ "${#files[@]}" -ne 4 ]; then
-            echo "Expected 4 libchat_xdk_go artifacts, got ${#files[@]}"
+            echo "Expected 4 libchat_xdk_ffi artifacts, got ${#files[@]}"
             find artifacts -type f -print || true
             exit 1
           fi
           for f in "${files[@]}"; do
             dir=$(dirname "$f")
             name=$(basename "$dir")
-            sub=${name#libchat_xdk_go-}
+            sub=${name#libchat_xdk_ffi-}
             mkdir -p "libs/${sub}"
-            cp -f "$f" "libs/${sub}/libchat_xdk_go.a"
+            cp -f "$f" "libs/${sub}/libchat_xdk_ffi.a"
           done
           TAG="${{ github.ref_name }}"
           SAFE=$(echo "$TAG" | sed 's|/|-|g')
@@ -142,9 +142,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           body: |
-            Prebuilt `libchat_xdk_go.a` for all supported platforms (built in GitHub Actions).
+            Prebuilt `libchat_xdk_ffi.a` for all supported platforms (built in GitHub Actions).
 
-            Download **`${{ steps.pack.outputs.archive }}`** and verify with **`${{ steps.pack.outputs.archive }}.sha256`**, then extract so paths are `libs/<os>_<arch>/libchat_xdk_go.a` (same layout as `go/chatxdk/libs/` in this repo).
+            Download **`${{ steps.pack.outputs.archive }}`** and verify with **`${{ steps.pack.outputs.archive }}.sha256`**, then extract so paths are `libs/<os>_<arch>/libchat_xdk_ffi.a` (same layout as `go/chatxdk/libs/` in this repo).
           files: |
             ${{ steps.pack.outputs.archive }}
             ${{ steps.pack.outputs.archive }}.sha256

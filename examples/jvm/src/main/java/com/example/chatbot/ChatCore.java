@@ -35,6 +35,15 @@ public final class ChatCore implements AutoCloseable {
     private final Chat chat = new Chat();
     private String signingKeyVersion;
 
+    /**
+     * A chat whose conversation-key cache is on: {@link #decryptBatch} fills it
+     * from verified key changes, and the encrypt calls take the newest key from
+     * it.
+     */
+    public ChatCore() {
+        chat.setCacheKeys(true);
+    }
+
     public String signingKeyVersion() {
         return signingKeyVersion;
     }
@@ -67,8 +76,7 @@ public final class ChatCore implements AutoCloseable {
     /** Generate a fresh identity to register with the X API. */
     public Generated generateAndRegister() throws Exception {
         PublicKeyRegistrationPayload payload = chat.generateKeypairs();
-        byte[] exported = chat.exportKeys();
-        String blob = exported == null ? "" : Base64.getEncoder().encodeToString(exported);
+        String blob = Base64.getEncoder().encodeToString(chat.exportKeys());
         return new Generated(payload, blob);
     }
 
@@ -141,6 +149,8 @@ public final class ChatCore implements AutoCloseable {
      * media hash key its upload started with (encrypt the files afterwards
      * with {@link #encryptMedia} and the returned body's {@code eventB64});
      * {@code ttlMsec} makes the message disappear after the given lifetime.
+     * With {@code conversationKey} and {@code conversationKeyVersion} null, the
+     * conversation key comes from the SDK's cache.
      */
     public SendBody encryptReply(
             String conversationId,
@@ -227,15 +237,21 @@ public final class ChatCore implements AutoCloseable {
 
     // -- Group management -----------------------------------------------------
 
-    /** Prepare a group creation: fresh key + the two required signatures. */
+    /**
+     * Prepare a group creation: fresh key + the two required signatures. A plaintext
+     * {@code title} (or {@code null}) is encrypted under the new key; send the
+     * result's {@code encryptedTitle} as the request's {@code group_name}.
+     */
     public PreparedConversationChange prepareGroupCreate(
             List<PublicKeyInput> publicKeys,
             String conversationId,
             List<String> memberIds,
-            List<String> adminIds)
+            List<String> adminIds,
+            String title)
             throws Exception {
-        return chat.prepareGroupCreate(
-                new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds));
+        GroupCreateParams params = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
+        params.title = title;
+        return chat.prepareGroupCreate(params);
     }
 
     /** Prepare a member add: rotated key + the two required signatures. */
@@ -258,9 +274,8 @@ public final class ChatCore implements AutoCloseable {
     public PreparedConversationChange prepareGroupMembersRemove(
             List<PublicKeyInput> publicKeys, String conversationId, List<String> userIds)
             throws Exception {
-        GroupMembersRemoveParams params = new GroupMembersRemoveParams(conversationId, userIds);
-        params.publicKeys = publicKeys;
-        return chat.prepareGroupMembersRemove(params);
+        return chat.prepareGroupMembersRemove(
+                new GroupMembersRemoveParams(publicKeys, conversationId, userIds));
     }
 
     // -- Media files ----------------------------------------------------------
@@ -326,12 +341,23 @@ public final class ChatCore implements AutoCloseable {
         }
     }
 
-    // -- Generic helpers (handy for metadata + tests) -----------------------
+    // -- Group metadata -------------------------------------------------------
 
-    public String encrypt(String plaintext, byte[] conversationKey) {
-        return chat.encrypt(plaintext, conversationKey);
+    /**
+     * Prepare a group title change: the SDK encrypts the plaintext title under the
+     * conversation key and signs it. Send {@code encryptedValue} as the group's name and
+     * {@code actionSignatures} on the request.
+     */
+    public PreparedGroupMetadataChange prepareGroupTitleChange(
+            String conversationId, String title, byte[] conversationKey, String conversationKeyVersion)
+            throws Exception {
+        GroupTitleChangeParams params = new GroupTitleChangeParams(conversationId, title);
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        return chat.prepareGroupTitleChange(params);
     }
 
+    /** Decrypt a group title or description the X API returns. */
     public String decrypt(String ciphertextB64, byte[] conversationKey) {
         return chat.decrypt(ciphertextB64, conversationKey);
     }

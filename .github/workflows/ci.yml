@@ -162,9 +162,9 @@ jobs:
       # go binding suite: the `go` job below. Prebuilt archive byte-verify:
       # .github/workflows/go-prebuilt-linux.yml (PR verify + push sync).
 
-      - name: Build chat_xdk_dotnet (JNA / JVM)
+      - name: Build chat_xdk_ffi (JNA / JVM)
         if: runner.os == 'Linux'
-        run: cargo build -p chat-xdk-dotnet --release
+        run: cargo build -p chat-xdk-ffi --release
 
       - name: Setup Java (JVM bindings)
         if: runner.os == 'Linux'

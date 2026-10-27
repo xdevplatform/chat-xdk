@@ -2,6 +2,7 @@ package com.x.chatxdk;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.sun.net.httpserver.Headers;
 import com.x.chatxdk.Types.*;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -10,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +29,7 @@ class FeatureSwitchTest {
 
     /** A keyed chat that reads its feature switches from {@code endpoint}. */
     private static Chat newChat(String endpoint, long timeoutMs) throws Exception {
-        Chat chat = new Chat(endpoint, Duration.ofMillis(timeoutMs));
+        Chat chat = new Chat(null, endpoint, Duration.ofMillis(timeoutMs));
         chat.generateKeypairs();
         chat.setIdentity(new SetIdentityParams("1001", "1"));
         return chat;
@@ -65,7 +67,15 @@ class FeatureSwitchTest {
         for (Method method : Chat.class.getMethods()) {
             assertFalse(method.getName().toLowerCase().contains("feature"), method.getName());
         }
-        assertEquals(1, Chat.class.getConstructors().length);
+        // The public constructors take no feature endpoint: Chat() and Chat(juiceboxConfigJson).
+        assertEquals(
+                List.of("", "String"),
+                Arrays.stream(Chat.class.getConstructors())
+                        .map(c -> Arrays.stream(c.getParameterTypes())
+                                .map(Class::getSimpleName)
+                                .collect(Collectors.joining(",")))
+                        .sorted()
+                        .collect(Collectors.toList()));
         for (Class<?> type : Types.class.getClasses()) {
             assertFalse(type.getSimpleName().contains("Feature"), type.getSimpleName());
         }
@@ -221,6 +231,37 @@ class FeatureSwitchTest {
             try (Chat kept = newChat(server.endpoint)) {
                 waitFor("v1", () -> sendVersion(kept).equals("10"));
                 assertEquals(1, server.queries().size());
+            }
+        }
+    }
+
+    @Test
+    void theReadSendsNoCookiesOrCredentials() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.setCookie("session=from-the-first-answer; Path=/");
+            try (Chat first = newChat(server.endpoint)) {
+                waitFor("the first answer", () -> sendVersion(first).equals("10"));
+            }
+            try (Chat second = newChat(server.endpoint)) {
+                waitFor("the second request", () -> server.queries().size() == 2);
+                waitFor("the second answer", () -> sendVersion(second).equals("10"));
+            }
+            for (Headers headers : server.headers()) {
+                assertNull(headers.getFirst("Cookie"), "the read sends no cookie");
+                assertNull(headers.getFirst("Authorization"), "the read sends no credentials");
+            }
+        }
+    }
+
+    @Test
+    void aRedirectIsNotFollowed() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.redirect();
+            try (Chat chat = newChat(server.endpoint, 500)) {
+                waitFor("the request", () -> server.queries().size() == 1);
+                Thread.sleep(700);
+                assertEquals("7", sendVersion(chat), "a redirect is a failed read");
+                assertEquals(0, server.followedRedirects(), "the redirect is not followed");
             }
         }
     }

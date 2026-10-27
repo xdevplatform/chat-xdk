@@ -16,7 +16,7 @@ namespace ChatXdk.Tests
         /// <summary>A keyed chat that reads its feature switches from <paramref name="endpoint"/>.</summary>
         private static Chat NewChat(string endpoint, int timeoutMs = 2000)
         {
-            var chat = new Chat(endpoint, TimeSpan.FromMilliseconds(timeoutMs));
+            var chat = new Chat(null, endpoint, TimeSpan.FromMilliseconds(timeoutMs));
             chat.GenerateKeypairs();
             chat.SetIdentity(new SetIdentityParams("1001", "1"));
             return chat;
@@ -51,7 +51,12 @@ namespace ChatXdk.Tests
                 var members = type.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
                 Assert.DoesNotContain(members, member => member.Name.Contains("Feature"));
             }
-            Assert.Single(typeof(Chat).GetConstructors());
+            // The public constructors take no feature endpoint: Chat() and Chat(juiceboxConfigJson).
+            Assert.Equal(
+                new[] { "", "String" },
+                typeof(Chat).GetConstructors()
+                    .Select(ctor => string.Join(",", ctor.GetParameters().Select(p => p.ParameterType.Name)))
+                    .OrderBy(signature => signature));
         }
 
         [Fact]
@@ -176,6 +181,37 @@ namespace ChatXdk.Tests
             using var kept = NewChat(server.Endpoint);
             await WaitFor("v1", () => SendVersion(kept) == "10");
             Assert.Single(server.Queries);
+        }
+
+        [Fact]
+        public async Task TheReadSendsNoCookiesOrCredentials()
+        {
+            using var server = new FeatureServer();
+            server.SetCookie("session=from-the-first-answer; Path=/");
+            using (var first = NewChat(server.Endpoint))
+            {
+                await WaitFor("the first answer", () => SendVersion(first) == "10");
+            }
+            using var second = NewChat(server.Endpoint);
+            await WaitFor("the second request", () => server.Queries.Count == 2);
+            await WaitFor("the second answer", () => SendVersion(second) == "10");
+            foreach (var head in server.RequestHeads)
+            {
+                Assert.DoesNotContain("\r\nCookie:", head, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("\r\nAuthorization:", head, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        [Fact]
+        public async Task ARedirectIsNotFollowed()
+        {
+            using var server = new FeatureServer();
+            server.Redirect();
+            using var chat = NewChat(server.Endpoint, timeoutMs: 500);
+            await WaitFor("the request", () => server.Queries.Count == 1);
+            await Task.Delay(700);
+            Assert.Equal("7", SendVersion(chat));
+            Assert.Equal(0, server.FollowedRedirects);
         }
     }
 }

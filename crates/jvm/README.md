@@ -5,22 +5,22 @@ JVM bindings for the X Chat SDK — encryption for X Direct Messages.
 ## Architecture
 
 ```
-JVM (com.x.chatxdk) → JNA → Rust cdylib (libchat_xdk_dotnet) → chat-xdk-core
+JVM (com.x.chatxdk) → JNA → Rust cdylib (libchat_xdk_ffi) → chat-xdk-core
 ```
 
-The native library is `libchat_xdk_dotnet`, the Rust cdylib built by `crates/dotnet` and loaded via JNA. Complex values cross the FFI boundary as JSON UTF-8 strings.
+The native library is `libchat_xdk_ffi`, the C ABI shared library built from `crates/ffi` and loaded via JNA. Complex values cross the FFI boundary as JSON UTF-8 strings.
 
 ## Prerequisites
 
 - **JDK 17+** and **Maven**
-- **Rust** (stable) to build the native `chat_xdk_dotnet` library
+- **Rust** (stable) to build the native `chat_xdk_ffi` library
 
 ## Setup
 
 From the repo root, build the native library:
 
 ```bash
-cargo build -p chat-xdk-dotnet --release
+cargo build -p chat-xdk-ffi --release
 ```
 
 Run the JVM tests (builds the cdylib, then `mvn test` with `jna.library.path` pointing at `target/release`):
@@ -29,7 +29,7 @@ Run the JVM tests (builds the cdylib, then `mvn test` with `jna.library.path` po
 make jvm-test
 ```
 
-For your app, depend on the `chatxdk` artifact (`mvn install` from `crates/jvm/java/chatxdk` or publish to your registry) and ensure JNA can load `chat_xdk_dotnet` (place the shared library next to the JVM or set `jna.library.path`).
+For your app, depend on the `com.x:chatxdk` artifact. The published jar bundles `chat_xdk_ffi` for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) and loads it from the jar. A jar you build with `mvn install` from `crates/jvm/java/chatxdk` bundles none, so JNA loads the library from `jna.library.path` (or the system library path).
 
 ## Quick Start
 

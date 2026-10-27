@@ -23,8 +23,11 @@ import java.util.concurrent.TimeUnit;
  * {@link HttpClient} and hands the status and body back. Nothing here is API.
  */
 final class FeatureFetch {
+    // The read is anonymous: the client has no cookie handler, so it stores and sends no cookies,
+    // and it follows no redirect, so a 3xx answer reaches the core as a failed read rather than as
+    // a request to another URL.
     private static final HttpClient HTTP =
-            HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+            HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
 
     private FeatureFetch() {}
 

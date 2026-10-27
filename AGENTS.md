@@ -49,9 +49,9 @@ When you add or change SDK behavior:
 
 1. Implement it once in `crates/core` (`ChatCore`, or `Chat` for Juicebox).
 2. Surface it in **every** binding with matching behavior and signatures:
-   Python `crates/pyo3`, JS/WASM `crates/wasm`, Go `crates/go` → `go/chatxdk`,
-   .NET + JVM (both over the `chat_xdk_dotnet` cdylib in `crates/dotnet`,
-   `crates/jvm`).
+   Python `crates/pyo3`, JS/WASM `crates/wasm`, and Go `go/chatxdk`, .NET
+   `crates/dotnet` and JVM `crates/jvm`, all three over the one C ABI in
+   `crates/ffi`.
 3. Use each language's idiom for naming only: `snake_case` (Rust/Python),
    `camelCase` (JS/Java), `PascalCase` methods (.NET/Go).
 4. Update the per-binding tables in [`docs/API.md`](docs/API.md) in lockstep.
@@ -67,8 +67,8 @@ the file calls (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor
 and two decrypt paths whose contracts are **identical across bindings**:
 
 - `decryptEvents({ events, signingKeys })` — batch (initial load / pagination).
-  Self-extracts conversation keys from `KeyChange` events, **never throws**
-  (per-event errors collected in the result).
+  Self-extracts conversation keys from `KeyChange` events; per-event errors
+  are collected in the result, and it **throws only for invalid params**.
 - `decryptEvent({ eventB64, conversationKeys, signingKeys })` — single event
   with pre-cached keys. **Throws** on failure.
 
@@ -119,10 +119,13 @@ a bug even when every binding "works".
   `QuickReply` are untagged with `deny_unknown_fields`, so a stray
   `"response": null` next to `"request"` is rejected.
 - **Errors follow one style per binding.** Invalid input fails in the core with
-  a message naming the value (`Invalid quick reply: …`), surfaced as the
-  binding's error type: Python `ValueError`, JS a thrown `Error`, Go a returned
-  `error`, .NET and JVM `ChatXdkException`. Never return a partial result or
-  silently drop the bad value.
+  a message naming the value (`Invalid quick reply: …`). The core gives every
+  error a kind (`SdkError::kind()`), which each binding surfaces as its error
+  type: Python the exception subclass of `ChatXdkError` (a `ValueError`), JS a
+  thrown `ChatXdkError` with `kind`, Go a returned `*chatxdk.Error` with
+  `Kind`, .NET and JVM `ChatXdkException` with its kind, and the C ABI an error
+  document with `kind`. Never return a partial result or silently drop the bad
+  value, and never read a kind or a count out of a message's text.
 
 **Known exceptions** (do not copy these patterns into new surface; fix them
 when touching the area): Go `TextContent` nested fields other than quick reply,
@@ -246,7 +249,7 @@ params as `Invalid encryptMessage params: …` instead of the core message.
 ```
 crates/core/     chat-xdk-core: engine, crypto/, keys/, thrift/ (generated)
 crates/pyo3/     Python        crates/wasm/   WASM (+ js/ wrapper)
-crates/go/       cdylib → go/chatxdk        crates/dotnet/ + crates/jvm/  (over chat_xdk_dotnet)
+crates/ffi/      C ABI (chat_xdk_ffi) under go/chatxdk, crates/dotnet/ and crates/jvm/
 docs/            API.md, ARCHITECTURE.md, CRYPTO.md
 examples/        clone-and-run demo bots (NOT shipped SDK code)
 tests/fixtures/  sdk_vectors.json — cross-binding vectors
