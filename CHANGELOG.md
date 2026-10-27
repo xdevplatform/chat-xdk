@@ -13,27 +13,31 @@ against it, and the Rust crate's examples build as doctests.
 
 ### Added
 
-Group and conversation-metadata actions should be signed before they are sent.
-Each call takes one params object and returns `action_signatures` for the
-request.
+Group and conversation-metadata actions are signed before they are sent:
+recipients on the default policy drop one that isn't. Each call takes one
+params object and returns `action_signatures` for the request.
 
 `prepare_group_members_remove` removes members and rotates the conversation
 key, so the members removed don't receive the key the group encrypts under
-next. `GroupMembersRemoveParams` takes the public keys of the members who
-stay, the conversation id and the members to remove, and the result is a
-`PreparedConversationChange`: the new key, the remaining members'
-participant keys, and the request's signatures — the removal, signed at
-signature version 11 and bound to the new key version, then the key change.
-The group's title and description are encrypted under the conversation key,
-so the removal takes the ones the group has as plaintext (`title`,
-`description`), encrypts each under the new key, and signs each change
-between the removal and the key change, marked as a key-rotation
-re-encryption (`for_key_rotation`) so X clients don't show it as a change.
-The result carries no ratchet tree and no rewrapped pin-key bundle.
+next. `GroupMembersRemoveParams` takes the public keys of every member who
+stays, the caller's included, the conversation id and the members to
+remove, and the result is a `PreparedConversationChange`: the new key, the
+remaining members' participant keys, and the request's signatures — the
+removal, signed at signature version 11 and bound to the new key version,
+then the key change. The group's title and description are encrypted under
+the conversation key, so the removal takes the ones the group has as
+plaintext (`title`, `description`), encrypts each under the new key, and
+signs each change between the removal and the key change, marked as a
+key-rotation re-encryption (`for_key_rotation`), which recipients' decrypt
+drops (see Other breaking changes). The key cache adopts the new key once
+`decrypt_events` verifies the removal's key change; until then the app
+passes the new key and version to the encrypt calls. The result carries no
+ratchet tree and no rewrapped pin-key bundle.
 
-`prepare_group_leave` signs leaving a group: a removal of the sender, an
-admin add when `promote_admin_id` names the member to promote, and a
-conversation delete. Leave does not rotate the conversation key.
+`prepare_group_leave` signs leaving a group: a removal of the sender, at
+signature version 11, an admin add when `promote_admin_id` names the member
+to promote, and a conversation delete. Leave does not rotate the
+conversation key.
 
 `prepare_group_title_change` and `prepare_group_description_change` take the
 new value as plaintext and encrypt it under the conversation key, which
@@ -95,14 +99,14 @@ as `target_message_id` (`targetMessageId` in JS), next to that message's
   message it edits.
 - Signatures verify at versions 8 through 11, in the payload layout of the
   version each carries. Versions above 11 are rejected.
-- Read receipts should be signed. `prepare_mark_conversation_read` takes
+- Read receipts are signed. `prepare_mark_conversation_read` takes
   `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
   (the sequence id of the newest event read) and a `seen_at_msec`, which
-  defaults to the current time. It returns a `PreparedAction`. Apps should
-  send its `action_signatures` on the mark-read request
-  (`POST /2/chat/conversations/{id}/read`) as they are, nested as the
+  defaults to the current time. It returns a `PreparedAction`, whose
+  `action_signatures` the mark-read request
+  (`POST /2/chat/conversations/{id}/read`) sends as they are, nested as the
   conversation-change requests nest theirs. Recipients on the default policy
-  reject an unsigned receipt; `decrypt_event` returns a signed receipt as a
+  drop an unsigned receipt; `decrypt_event` returns a signed receipt as a
   verified `ReadReceipt`. The C ABI adds
   `chat_xdk_prepare_mark_conversation_read`.
 - The JVM jar and the .NET package bundle the native library for 64-bit ARM
@@ -645,6 +649,17 @@ juicebox-sdk.
   its `conversation_key_version`. `decrypt` opens the encrypted
   `group_name` and `group_description` the X API returns with a
   conversation.
+- `decrypt_event` and `decrypt_events` drop a group change that re-encrypts
+  the group's title or description for a key rotation (`for_key_rotation`),
+  as a member removal sends one under the new key: it carries the same text
+  and isn't a change. They drop it under either reject-unverified setting,
+  after verifying it, as they drop an unverified event: `decrypt_events`
+  leaves it out of `events` and records it in `errors`, and `decrypt_event`
+  fails with an invalid-input error. The removal itself, its key change,
+  avatar changes and every title or description change without the mark
+  decrypt as before. The mark sits outside the signed payload, so a relay
+  that sets it on a title change can only hide that change, as it could by
+  withholding the event.
 - Rust: every method takes its params by reference, the decrypt and file
   calls included: `encrypt_message(&params)`, `decrypt_events(&params)`,
   `decrypt_file(&params)` and so on. `set_signing_keys` takes a slice.

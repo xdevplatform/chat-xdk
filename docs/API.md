@@ -1357,10 +1357,10 @@ everywhere.
 requires `conversation_id` and `seen_until_sequence_id` — the `sequence_id`
 of the newest event read. A `seen_at_msec` (milliseconds since the Unix
 epoch) records when it was read and defaults to the current time when unset;
-the JS binding reads the JavaScript clock. Apps should sign a receipt with
+the JS binding reads the JavaScript clock. Sign a receipt with
 `prepare_mark_conversation_read` and send the `PreparedAction`'s
 `action_signatures` on `POST /2/chat/conversations/{id}/read` as they are:
-recipients on the default policy reject an unsigned receipt. The call returns
+recipients on the default policy drop an unsigned receipt. The call returns
 a `PreparedAction` shaped as for deletes, whose entry's
 `encodedMessageEventDetail` carries the `MarkConversationReadEvent`. The
 signature covers the read point and its time, so a recipient's
