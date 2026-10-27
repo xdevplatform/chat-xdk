@@ -241,6 +241,10 @@ export interface PreparedConversationChange {
 
 /**
  * Entity descriptor tuple: [startByteOffset, endByteOffset, entityType].
+ * The offsets count bytes of the text's UTF-8 encoding, not string indices
+ * (`new TextEncoder().encode(text.slice(0, i)).length` converts index `i`),
+ * so `0 <= start <= end <=` the text's UTF-8 length; other offsets fail the
+ * call with a `ChatXdkError` of kind `invalidInput` naming them.
  * entityType is one of: "url", "mention", "hashtag", "cashtag", "email",
  * "address", "phoneNumber" (the snake_case spelling "phone_number" is
  * accepted too). Any other entity type, an empty one included, fails the
@@ -916,8 +920,10 @@ export interface FileDecryptorParams {
 /**
  * Attachment descriptor object. A media attachment's `filesize_bytes` is the
  * encrypted file's size, `encryptedFileSize` of its size; an empty
- * `filename` or a `filesize_bytes` of 0 or less fails the send with a
- * `ChatXdkError` of kind `invalidInput`.
+ * `filename`, a `filesize_bytes` of 0 or less, or a negative `width` or
+ * `height` fails the send with a `ChatXdkError` of kind `invalidInput`, as
+ * do a `url` attachment with an empty `url` and a `post` attachment with
+ * neither `rest_id` nor `post_url`.
  */
 export type AttachmentDescriptor =
   | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number }
@@ -949,7 +955,9 @@ export interface UrlAttachmentImageDescriptor {
    * with a `ChatXdkError` of kind `invalidInput`.
    */
   filename: string;
+  /** Width in pixels, when known; a negative one fails the send. */
   width?: number;
+  /** Height in pixels, when known; a negative one fails the send. */
   height?: number;
 }
 

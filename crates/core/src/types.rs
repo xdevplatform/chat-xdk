@@ -1303,13 +1303,18 @@ fn default_sig_version() -> String {
 }
 
 /// Describes a rich-text entity (URL, mention, hashtag, etc.) to embed in a
-/// message.  The `start` and `end` byte offsets refer to the message text.
+/// message. `start` and `end` count bytes of the UTF-8 text the entity is
+/// in, so `0 <= start <= end <= text.len()`; other offsets fail the call
+/// with an `InvalidInput` error naming them. A reply preview's entities
+/// index the quoted message's text, so their end isn't checked against the
+/// preview's.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct EntityDescriptor {
-    /// Start byte offset of the entity within the message text (inclusive).
+    /// Byte offset of the entity's first byte in the UTF-8 text (inclusive).
     pub start: i32,
-    /// End byte offset of the entity within the message text (exclusive).
+    /// Byte offset just past the entity's last byte in the UTF-8 text
+    /// (exclusive).
     pub end: i32,
     /// One of: `"url"`, `"mention"`, `"hashtag"`, `"cashtag"`, `"email"`,
     /// `"address"`, `"phone_number"`. Any other value, an empty one
@@ -1344,7 +1349,11 @@ pub enum AttachmentDescriptor {
     /// A media attachment (image, gif, video, etc.).
     Media {
         media_hash_key: String,
+        /// Width in pixels; a negative one fails the send with an
+        /// `InvalidInput` error.
         width: i64,
+        /// Height in pixels; a negative one fails the send with an
+        /// `InvalidInput` error.
         height: i64,
         /// Size of the encrypted file in bytes: `encrypted_file_size` of the
         /// file's size. A size of 0 or less fails the send with an
@@ -1371,6 +1380,8 @@ pub enum AttachmentDescriptor {
     /// with, then encrypt it with `encrypt_file` or `file_encryptor` and the
     /// message's `event_b64` and finish the upload.
     Url {
+        /// The link the card shows; an empty one fails the send with an
+        /// `InvalidInput` error.
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_title: Option<String>,
@@ -1381,7 +1392,8 @@ pub enum AttachmentDescriptor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         favicon_image: Option<UrlAttachmentImageDescriptor>,
     },
-    /// A post / tweet attachment.
+    /// A post / tweet attachment, named by its `rest_id`, its `post_url`, or
+    /// both; one with neither fails the send with an `InvalidInput` error.
     Post {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rest_id: Option<String>,
@@ -1415,8 +1427,12 @@ pub struct UrlAttachmentImageDescriptor {
     /// whole preview image when this field is missing on the wire, so an
     /// empty filename fails the send with an `InvalidInput` error.
     pub filename: String,
+    /// Width in pixels, when known; a negative one fails the send with an
+    /// `InvalidInput` error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
+    /// Height in pixels, when known; a negative one fails the send with an
+    /// `InvalidInput` error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
 }

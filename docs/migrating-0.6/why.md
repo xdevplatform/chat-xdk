@@ -109,10 +109,11 @@ the message, then encrypt and upload the file. A v1 message with files takes
 an id derived from them, so building the same message again gives the same
 id and keeps its encrypted files valid. A file with an empty filename or a
 size of 0 or less fails before anything is encrypted, since receiving
-clients discard it. `decrypt_file` takes the event of the message that
-carries the file, which gives the key for the message's format and version
-and covers media quoted in a reply preview. v0 files use the conversation
-key, and the same calls handle both formats:
+clients discard it, and so does one with a negative width or height.
+`decrypt_file` takes the event of the message that carries the file, which
+gives the key for the message's format and version and covers media quoted
+in a reply preview. v0 files use the conversation key, and the same calls
+handle both formats:
 [Rust](rust.md#encrypt-a-file-from-its-message),
 [Python](python.md#encrypt-a-file-from-its-message),
 [JavaScript](javascript.md#encrypt-a-file-from-its-message),
@@ -167,12 +168,15 @@ binding now takes it when the chat is created, or with `update_config` on
 first boot, before the account has one, so setup and unlock take only the
 PIN. Until a chat has a config, the SDK core fails its Juicebox calls before
 any request, with one `invalid_state` error worded the same in every
-binding. PINs are bytes in every binding whose language can hold them that
-way, so an app can zero its copy once a call returns, and the bindings whose
-apps run event loops or UI threads add async forms of the Juicebox calls,
-which wait on network round trips. The JS binding runs the Juicebox client
-itself, but the SDK core still decides what a config means, which PINs a new
-registration accepts, how many guesses a registration allows (the config's
+binding. An empty or blank config string counts as none, so creating a chat
+with one, or passing one to `update_config`, fails with that error at once,
+in every binding, rather than at the chat's first Juicebox call. PINs are
+bytes in every binding whose language can hold them that way, so an app can
+zero its copy once a call returns, and the bindings whose apps run event
+loops or UI threads add async forms of the Juicebox calls, which wait on
+network round trips. The JS binding runs the Juicebox client itself, but the
+SDK core still decides what a config means, which PINs a new registration
+accepts, how many guesses a registration allows (the config's
 `max_guess_count`), and how a failure reads, so every binding behaves the
 same. JS also loads keys with `importKeys` and saves them with `exportKeys`,
 as every binding does, without Juicebox:
@@ -379,9 +383,11 @@ value (`SdkError::InvalidInput` in Rust), without the `Invalid state:`
 prefix, which is left for state the chat lacks, such as a missing identity
 or an empty key cache. An entity of a type the protocol doesn't have fails
 the same way: dropping it, as 0.5.x did, sent a message that differed from
-the one the app built, without saying so. Calls that answered with a bare
-result, such as `verify` and `export_keys`, report the core's error too,
-rather than a generic failure or no value:
+the one the app built, without saying so. So do entity offsets outside the
+text, counted in bytes of its UTF-8 encoding, a URL card without a url and a
+post attachment without an id or a URL, which receivers can't place or open.
+Calls that answered with a bare result, such as `verify` and `export_keys`,
+report the core's error too, rather than a generic failure or no value:
 [Rust](rust.md#errors-carry-their-kind),
 [Python](python.md#errors-carry-their-kind),
 [JavaScript](javascript.md#errors-carry-their-kind),
@@ -406,12 +412,11 @@ rather than a generic failure or no value:
 - Python types the dicts its calls take and return with exported
   `TypedDict`s, so a type checker reads them
   ([Python](python.md#key-entries-and-results-have-named-types)).
-- .NET params documents omit a field left `null`, .NET descriptors take
-  their required values in their constructors, and JVM descriptors leave
-  required fields unset rather than filled with `""` or `0`, so a missing
-  value fails with an error that names it, or doesn't compile, instead of a
-  stand-in reaching the core
-  ([JVM](jvm.md#entities-take-their-values-in-the-constructor),
+- .NET params documents omit a field left `null`, so a missing value fails
+  with an error that names it, and .NET and JVM descriptors and the JVM's
+  key entries take their required values in their constructors, so leaving
+  one out doesn't compile: no stand-in `""` or `0` reaches the core
+  ([JVM](jvm.md#descriptors-and-key-entries-take-their-values-in-constructors),
   [.NET](dotnet.md#entities-and-preview-images-take-their-values-in-the-constructor)).
 - Rust's public enums, params structs and result structs, `SendPayload`
   among them, are `#[non_exhaustive]`, so a variant or field can be added

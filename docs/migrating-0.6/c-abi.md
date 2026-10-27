@@ -148,21 +148,22 @@ take(chat_xdk_set_cache_keys(chat, 1));
 ## Keys stored in Juicebox
 
 `chat_xdk_new` takes the Juicebox config the X API returns, or NULL for a
-chat that manages its keys with `chat_xdk_import_keys` alone, and writes
-the handle to its out-parameter. `chat_xdk_update_config` sets the config,
-on first boot, before the account has one, or replaces it to refresh it.
-Until a chat has one, `chat_xdk_setup`, `chat_xdk_unlock`,
-`chat_xdk_change_pin` and `chat_xdk_delete` fail with the `invalid_state`
-error every binding gives, `Invalid state: no Juicebox config: pass the
-juicebox_config the X API returns when you create the chat, or call
-update_config() first`. `chat_xdk_setup` and `chat_xdk_unlock` take only
-the PIN, and every PIN is bytes and a length, so you can zero yours once
-the call returns. The header
-declares the Juicebox functions (`chat_xdk_update_config`,
+chat that manages its keys with `chat_xdk_import_keys` alone, and writes the
+handle to its out-parameter; an empty or blank config fails with the
+`invalid_state` error below, as it does in `chat_xdk_update_config`.
+`chat_xdk_update_config` sets the config, on first boot, before the account
+has one, or replaces it to refresh it. Until a chat has one,
 `chat_xdk_setup`, `chat_xdk_unlock`, `chat_xdk_change_pin` and
-`chat_xdk_delete`) when `CHAT_XDK_JUICEBOX` is defined, so define it
-before you include `chat_xdk.h` (or pass `-DCHAT_XDK_JUICEBOX`) when you
-link a library built with Juicebox, as the bindings do:
+`chat_xdk_delete` fail with the `invalid_state` error every binding gives,
+`Invalid state: no Juicebox config: pass the juicebox_config the X API
+returns when you create the chat, or call update_config() first`.
+`chat_xdk_setup` and `chat_xdk_unlock` take only the PIN, and every PIN is
+bytes and a length, so you can zero yours once the call returns. The header
+declares the Juicebox functions (`chat_xdk_update_config`, `chat_xdk_setup`,
+`chat_xdk_unlock`, `chat_xdk_change_pin` and `chat_xdk_delete`) when
+`CHAT_XDK_JUICEBOX` is defined, so define it before you include `chat_xdk.h`
+(or pass `-DCHAT_XDK_JUICEBOX`) when you link a library built with Juicebox,
+as the bindings do:
 
 ```c
 // 0.5.x
@@ -312,8 +313,8 @@ it stay valid, and a second message that reuses the first one's uploads gets
 the same id, so recipients drop it as a repeat. A message that lists an
 empty media hash key, or one media hash key twice, is rejected, and so is a
 file whose `filename` is empty or whose `filesize_bytes` is 0 or less, which
-receiving clients would discard: give each file its name and the encrypted
-size `chat_xdk_encrypted_file_size` gives.
+receiving clients would discard, or whose `width` or `height` is negative: give
+each file its name and the encrypted size `chat_xdk_encrypted_file_size` gives.
 
 ## Decrypt a file with its message's event
 
@@ -512,6 +513,12 @@ message`, without an `Invalid state:` prefix. An entity of a type the SDK
 doesn't know, an empty one included, fails the same way, with `Invalid
 entity_type 'user_mention': pass url, mention, hashtag, cashtag, email,
 address or phone_number`, where 0.5.x sent the message without that entity.
+Entity offsets count bytes of the text's UTF-8 encoding, the start
+inclusive and the end exclusive, and an entity whose offsets are negative,
+end before they start or run past the end of the text fails the same way,
+such as `Invalid entity offsets 3..8: end is past the end of the text,
+which is 7 bytes of UTF-8`, where 0.5.x sent it. So do a URL card with an
+empty `url` and a post attachment with neither `rest_id` nor `post_url`.
 Errors about state the chat lacks, such as a missing session identity or an
 empty key cache, are of kind `invalid_state` and keep their prefix. Match
 the kind rather than the message.

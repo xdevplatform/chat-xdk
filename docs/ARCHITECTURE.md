@@ -504,7 +504,7 @@ input types callers fill in (`PublicKeyInput`, `SigningKeyEntry`,
 | `SendPayload` | Encrypted content + signature + metadata ready for the X API |
 | `PublicKeys` | Identity + signing public keys (base64) |
 | `PublicKeyRegistrationPayload` | Registration payload for the X API |
-| `EntityDescriptor` | Rich-text entity descriptor (URL, mention, hashtag) with byte offsets; used by `EncryptMessageParams` and `EncryptReplyParams` |
+| `EntityDescriptor` | Rich-text entity descriptor (URL, mention, hashtag) with UTF-8 byte offsets; used by `EncryptMessageParams` and `EncryptReplyParams` |
 
 #### `error.rs` — Error Hierarchy
 

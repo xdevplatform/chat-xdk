@@ -187,7 +187,9 @@ and `Delete` and their async forms throw a `ChatXdkException` of kind
 juicebox_config the X API returns when you create the chat, or call
 update_config() first`, the error every binding gives, and a wrong PIN
 throws one of kind `InvalidPin` (see
-[Errors carry their kind](#errors-carry-their-kind)).
+[Errors carry their kind](#errors-carry-their-kind)). `new Chat(config)` and
+`UpdateConfig` throw the same `InvalidState` exception for an empty or blank
+config; `new Chat()` creates a chat without one.
 
 ## User ids are strings of digits
 
@@ -385,8 +387,9 @@ it stay valid, and a second message that reuses the first one's uploads gets
 the same id, so recipients drop it as a repeat. A message that lists an
 empty media hash key, or one media hash key twice, is rejected, and so is a
 file whose `Filename` is empty or whose `FilesizeBytes` is 0 or less, which
-receiving clients would discard: give each file its name and the encrypted
-size `ChatXdkUtilities.EncryptedFileSize` gives.
+receiving clients would discard, or whose `Width` or `Height` is negative:
+give each file its name and the encrypted size
+`ChatXdkUtilities.EncryptedFileSize` gives.
 
 ## Decrypt a file with its message's event
 
@@ -594,9 +597,15 @@ that `Verify`, `VerifyKeyBinding` or `MatchesRegisteredKey` can't decode. An
 entity of a type the SDK doesn't know, an empty one included, fails the same
 way, with `Invalid entity_type 'user_mention': pass url, mention, hashtag,
 cashtag, email, address or phone_number`, where 0.5.x sent the message
-without that entity. Errors about state the chat lacks, such as a missing
-session identity or an empty key cache, are of kind `InvalidState` and keep
-their prefix. Tell them apart by kind rather than by message:
+without that entity. Entity offsets count bytes of the text's UTF-8
+encoding, the start inclusive and the end exclusive, and an entity whose
+offsets are negative, end before they start or run past the end of the text
+fails the same way, such as `Invalid entity offsets 3..8: end is past the
+end of the text, which is 7 bytes of UTF-8`, where 0.5.x sent it. So do a
+URL card with an empty `Url` and a post attachment with neither `RestId` nor
+`PostUrl`. Errors about state the chat lacks, such as a missing session
+identity or an empty key cache, are of kind `InvalidState` and keep their
+prefix. Tell them apart by kind rather than by message:
 
 ```csharp
 // 0.5.x

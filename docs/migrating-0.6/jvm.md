@@ -20,12 +20,12 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Pass a `DecryptEventsParams` to `decryptEvents` and read its `events`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
-- [ ] [Build an `EntityDescriptor` with its constructor](#entities-take-their-values-in-the-constructor)
+- [ ] [Build descriptors and key entries with their constructors](#descriptors-and-key-entries-take-their-values-in-constructors)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
-- [ ] [Name a `PublicKeyInput`'s fields `identityPublicKey` and `publicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
+- [ ] [Pass a `PublicKeyInput` the identity key and its version](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
@@ -189,7 +189,9 @@ and `delete` and their async forms throw a `ChatXdkException` of kind
 juicebox_config the X API returns when you create the chat, or call
 update_config() first`, the error every binding gives, and a wrong PIN
 throws one of kind `INVALID_PIN` (see
-[Errors carry their kind](#errors-carry-their-kind)).
+[Errors carry their kind](#errors-carry-their-kind)). `new Chat(config)` and
+`updateConfig` throw the same `INVALID_STATE` exception for an empty or blank
+config; `new Chat()` creates a chat without one.
 
 ## User ids are strings of digits
 
@@ -297,13 +299,14 @@ as recipients receive it. It isn't part of the send request: keep it to
 encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
-## Entities take their values in the constructor
+## Descriptors and key entries take their values in constructors
 
-An `EntityDescriptor` takes its start, end and type in its constructor, and
-its fields are final. The attachment descriptors and
-`UrlAttachmentImageDescriptor` start with their required fields unset rather
-than `""` or `0`, so a field you leave out fails the call with an error that
-names it:
+An `EntityDescriptor`, a `UrlAttachmentImageDescriptor`, a `SigningKeyEntry`
+and a `PublicKeyInput` take their required values in their constructor and
+keep them in final fields; a preview image's `width` and `height` stay
+settable. An `AttachmentDescriptor` comes from `media`, `urlCard` or `post`
+and has final fields. None can be built without its required values, and a
+`null` one throws `NullPointerException`:
 
 ```java
 // 0.5.x
@@ -311,9 +314,23 @@ EntityDescriptor mention = new EntityDescriptor();
 mention.start = 0;
 mention.end = 5;
 mention.entityType = "mention";
+UrlAttachmentImageDescriptor banner = UrlAttachmentImageDescriptor.of(
+        mediaHashKey, ChatXdkUtilities.encryptedStreamSize(photo.length), "banner.jpg");
+banner.width = 1200L;
+SigningKeyEntry signingKey = new SigningKeyEntry();
+signingKey.userId = userId;
+signingKey.publicKeyVersion = publicKeyVersion;
+signingKey.publicKey = signingPublicKey;
+signingKey.identityPublicKey = identityPublicKey;
+signingKey.identityPublicKeySignature = identityPublicKeySignature;
 
 // 0.6.0
 EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
+UrlAttachmentImageDescriptor banner = new UrlAttachmentImageDescriptor(
+        mediaHashKey, ChatXdkUtilities.encryptedFileSize(photo.length), "banner.jpg");
+banner.width = 1200L;
+SigningKeyEntry signingKey = new SigningKeyEntry(
+        userId, publicKeyVersion, signingPublicKey, identityPublicKey, identityPublicKeySignature);
 ```
 
 ## Encrypt a file from its message
@@ -379,8 +396,9 @@ it stay valid, and a second message that reuses the first one's uploads gets
 the same id, so recipients drop it as a repeat. A message that lists an
 empty media hash key, or one media hash key twice, is rejected, and so is a
 file whose `filename` is empty or whose `filesizeBytes` is 0 or less, which
-receiving clients would discard: give each file its name and the encrypted
-size `ChatXdkUtilities.encryptedFileSize` gives.
+receiving clients would discard, or whose `width` or `height` is negative:
+give each file its name and the encrypted size
+`ChatXdkUtilities.encryptedFileSize` gives.
 
 ## Decrypt a file with its message's event
 
@@ -451,7 +469,9 @@ List<ActionSignature> actionSignatures = prepared.actionSignatures;
 A `PublicKeyInput`, one participant a conversation key is encrypted to,
 names its key `identityPublicKey` and the key's version `publicKeyVersion`,
 as `SigningKeyEntry` does: the `public_key` the X API returns for a user is
-their identity key:
+their identity key. Its constructor takes the user id, the key and the
+version (see
+[Descriptors and key entries take their values in constructors](#descriptors-and-key-entries-take-their-values-in-constructors)):
 
 ```java
 // 0.5.x
@@ -461,10 +481,7 @@ input.publicKey = identityPublicKey;
 input.keyVersion = publicKeyVersion;
 
 // 0.6.0
-PublicKeyInput input = new PublicKeyInput();
-input.userId = userId;
-input.identityPublicKey = identityPublicKey;
-input.publicKeyVersion = publicKeyVersion;
+PublicKeyInput input = new PublicKeyInput(userId, identityPublicKey, publicKeyVersion);
 ```
 
 ## Participant keys take the key requests' names
@@ -590,6 +607,12 @@ message`, without an `Invalid state:` prefix. An entity of a type the SDK
 doesn't know, an empty one included, fails the same way, with `Invalid
 entity_type 'user_mention': pass url, mention, hashtag, cashtag, email,
 address or phone_number`, where 0.5.x sent the message without that entity.
+Entity offsets count bytes of the text's UTF-8 encoding, the start
+inclusive and the end exclusive, and an entity whose offsets are negative,
+end before they start or run past the end of the text fails the same way,
+such as `Invalid entity offsets 3..8: end is past the end of the text,
+which is 7 bytes of UTF-8`, where 0.5.x sent it. So do a URL card with an
+empty `url` and a post attachment with neither `restId` nor `postUrl`.
 Errors about state the chat lacks, such as a missing session identity or an
 empty key cache, are of kind `INVALID_STATE` and keep their prefix. Tell
 them apart by kind rather than by message:

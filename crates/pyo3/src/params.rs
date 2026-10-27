@@ -26,7 +26,11 @@ pub struct EncryptMessageParams {
     pub(crate) conversation_key: Option<Vec<u8>>,
     /// Version of the conversation key, as its key-change event carries it.
     pub(crate) conversation_key_version: Option<String>,
-    /// ``(start, end, entity_type)`` tuples for rich text.
+    /// ``(start, end, entity_type)`` tuples for rich text. ``start`` and
+    /// ``end`` count bytes of the text's UTF-8 encoding, not ``str`` indices
+    /// (``len(text[:i].encode())`` converts index ``i``), so
+    /// ``0 <= start <= end <=`` the text's UTF-8 length; other offsets raise
+    /// ``InvalidInputError``.
     pub(crate) entities: Option<Py<PyAny>>,
     /// Attachment dicts, each with an ``"attachment_type"`` key. Each file
     /// (a ``"media"`` attachment, or a ``"url"`` card's ``banner_image`` or
@@ -34,7 +38,10 @@ pub struct EncryptMessageParams {
     /// encrypt the files afterwards with ``Chat.encrypt_file`` or
     /// ``Chat.file_encryptor``. Upload each file for one message only:
     /// reusing another message's uploads can give this message that
-    /// message's id.
+    /// message's id. A file with an empty ``filename``, a ``filesize_bytes``
+    /// of 0 or less, or a negative ``width`` or ``height``, a ``"url"`` card
+    /// with an empty ``url``, and a ``"post"`` with neither ``rest_id`` nor
+    /// ``post_url`` raise ``InvalidInputError``.
     pub(crate) attachments: Option<Py<PyAny>>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.

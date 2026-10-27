@@ -516,7 +516,11 @@ in Go, `new Chat()` in .NET and the JVM, and `chat_xdk_new(NULL, &chat)` in
 the C ABI) runs every crypto call, and until it has one, setup, unlock,
 `change_pin` and `delete` fail with the same invalid-state error in every
 binding: `Invalid state: no Juicebox config: pass the juicebox_config the X
-API returns when you create the chat, or call update_config() first`. Go,
+API returns when you create the chat, or call update_config() first`. An
+empty or blank config string is no config: creating a chat with one, or
+passing one to `update_config`, fails with that error in every binding, and
+Rust's `JuiceboxConfig::from_x_api_json` returns it as an `SdkError`, as it
+returns an invalid-input one for a malformed config. Go,
 .NET, the JVM and the C ABI take PINs as bytes the caller can zero. Python
 (`setup_async`, `unlock_async`, `change_pin_async`, `delete_async`), .NET
 (`SetupAsync`, …) and the JVM (`setupAsync`, …) run the Juicebox calls off
@@ -635,9 +639,11 @@ juicebox-sdk.
   key, size and filename, in its constructor, read-only, and an
   `AttachmentDescriptor` comes only from `Media`, `UrlCard` or `Post`, so
   no descriptor defaults a required value to `""` or `0`. JVM:
-  `EntityDescriptor` takes its start, end and type in its constructor, and
-  the attachment and image descriptors leave their required fields unset
-  rather than `""` or `0`.
+  `EntityDescriptor`, `UrlAttachmentImageDescriptor`, `SigningKeyEntry` and
+  `PublicKeyInput` take their required values in their constructor and keep
+  them in final fields (an image's `width` and `height` stay settable), and
+  an `AttachmentDescriptor` comes only from `media`, `urlCard` or `post`,
+  with final fields; a `null` required value throws `NullPointerException`.
 - An entity of a type the SDK doesn't know, an empty one included, fails
   the call with an invalid-input error naming it (`Invalid entity_type
   'user_mention': pass url, mention, hashtag, cashtag, email, address or
@@ -646,7 +652,15 @@ juicebox-sdk.
   carries, a media attachment or a URL card's banner or favicon, with an
   empty `filename` or a `filesize_bytes` of 0 or less fails the send with an
   invalid-input error naming its media hash key, since receiving clients
-  discard such a file.
+  discard such a file, and so does one with a negative `width` or `height`.
+  Entity offsets count bytes of the text's UTF-8 encoding, `start` inclusive
+  and `end` exclusive: an entity whose offsets are negative, end before they
+  start or run past the end of its text fails with an invalid-input error
+  naming them (`Invalid entity offsets 3..8: end is past the end of the text,
+  which is 7 bytes of UTF-8`); a reply preview's entities, which index the
+  quoted message's text, are checked for all but the end. A URL card with an
+  empty `url` and a post attachment with neither `rest_id` nor `post_url`
+  fail the same way.
 - JS typings declare only what the module exports: `Chat` and `ChatCrypto`
   aren't importable, and `FileEncryptor` / `FileDecryptor`, which the module
   returns but doesn't export, are interfaces. `ChatXdkError`,

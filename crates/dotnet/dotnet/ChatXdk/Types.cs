@@ -390,7 +390,11 @@ namespace ChatXdk
 
     /// <summary>
     /// Rich-text entity (URL, mention, hashtag, etc.) descriptor.
-    /// <see cref="Start"/> and <see cref="End"/> are byte offsets into the message text.
+    /// <see cref="Start"/> and <see cref="End"/> count bytes of the text's UTF-8 encoding, not
+    /// <see cref="string"/> indices (<c>Encoding.UTF8.GetByteCount(text[..i])</c> converts index
+    /// <c>i</c>), so <c>0 &lt;= Start &lt;= End &lt;=</c> the text's UTF-8 length; other offsets fail
+    /// the call with a <see cref="ChatXdkException"/> of kind
+    /// <see cref="ChatXdkErrorKind.InvalidInput"/>.
     /// </summary>
     public sealed class EntityDescriptor
     {
@@ -406,9 +410,9 @@ namespace ChatXdk
             EntityType = entityType;
         }
 
-        /// <summary>Byte offset into the message text where the entity begins.</summary>
+        /// <summary>UTF-8 byte offset into the text where the entity begins.</summary>
         public int Start { get; }
-        /// <summary>Byte offset into the message text where the entity ends (exclusive).</summary>
+        /// <summary>UTF-8 byte offset into the text where the entity ends (exclusive).</summary>
         public int End { get; }
         /// <summary>
         /// One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".
@@ -502,9 +506,10 @@ namespace ChatXdk
         // Factory methods
 
         /// <summary>
-        /// Create a media attachment. An empty <paramref name="filename"/> or a
-        /// <paramref name="filesizeBytes"/> of 0 or less fails the send with a
-        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// Create a media attachment. An empty <paramref name="filename"/>, a
+        /// <paramref name="filesizeBytes"/> of 0 or less, or a negative <paramref name="width"/>
+        /// or <paramref name="height"/> fails the send with a <see cref="ChatXdkException"/> of
+        /// kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
         public static AttachmentDescriptor Media(
             string mediaHashKey,
@@ -535,7 +540,8 @@ namespace ChatXdk
         /// preview card: start the image's upload to the conversation's media store,
         /// reference the media hash key it returns, then encrypt the image with
         /// <see cref="Chat.EncryptFile"/> and the message's <see cref="SendPayload.EventB64"/>
-        /// and finish the upload.
+        /// and finish the upload. An empty <paramref name="url"/> fails the send with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
         public static AttachmentDescriptor UrlCard(
             string url,
@@ -553,7 +559,11 @@ namespace ChatXdk
             };
         }
 
-        /// <summary>Create a post/tweet attachment.</summary>
+        /// <summary>
+        /// Create a post/tweet attachment from its <paramref name="restId"/>, its
+        /// <paramref name="postUrl"/>, or both; one with neither fails the send with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
         public static AttachmentDescriptor Post(string? restId = null, string? postUrl = null) => new("post")
         {
             RestId = restId,
@@ -600,12 +610,12 @@ namespace ChatXdk
         [JsonPropertyName("filename")]
         public string Filename { get; }
 
-        /// <summary>Image width in pixels.</summary>
+        /// <summary>Image width in pixels; a negative one fails the send.</summary>
         [JsonPropertyName("width")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public long? Width { get; init; }
 
-        /// <summary>Image height in pixels.</summary>
+        /// <summary>Image height in pixels; a negative one fails the send.</summary>
         [JsonPropertyName("height")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public long? Height { get; init; }

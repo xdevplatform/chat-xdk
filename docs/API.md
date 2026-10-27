@@ -32,7 +32,11 @@ none. A chat created without one (`Chat::default()`,
 `setup`, `unlock`, `change_pin` and `delete` fail with an invalid-state
 error worded the same in every binding: `Invalid state: no Juicebox config:
 pass the juicebox_config the X API returns when you create the chat, or
-call update_config() first`.
+call update_config() first`. An empty or blank config string is no config:
+creating a chat with one, or passing one to `update_config`, fails with that
+error in every binding, and so does Rust's
+`JuiceboxConfig::from_x_api_json`, which reads the config the X API returns
+(a malformed config fails with an invalid-input error naming the problem).
 
 Rust's `set_feature_switches`, and the C ABI's
 `chat_xdk_set_feature_switches(chat, status, body, body_len)`, hand a chat
@@ -2027,7 +2031,7 @@ use chat_xdk_core::{
     EncryptFileParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, Event,
 };
 
-let config = JuiceboxConfig::from_json(config_json);
+let config = JuiceboxConfig::from_x_api_json(&config_json)?;
 let chat = Chat::new(config);
 chat.unlock(b"2580").await?;
 
@@ -2451,13 +2455,13 @@ pub struct SendPayload {
 
 ### EntityDescriptor (Rust, .NET, JVM) / EntityTuple (Go, JS) / tuple (Python)
 
-Describes a rich-text entity to embed in a message. The `start` and `end` byte offsets refer to positions within the message text. Rust, .NET, and JVM expose an `EntityDescriptor` struct/class, built from its start, end and type (`EntityDescriptor::new`, and the .NET and JVM constructors); Go and JS use an `EntityTuple` (`[start, end, type]`); Python takes plain `(start, end, entity_type)` tuples.
+Describes a rich-text entity to embed in a message. `start` and `end` are offsets into the text the entity is in (a message's `text`, or an edit's `updated_text`) counted in bytes of its UTF-8 encoding, `start` inclusive and `end` exclusive, so `0 <= start <= end <=` the text's length in UTF-8 bytes. Offsets outside that range fail the call with an invalid-input error naming them, in every binding: `Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8`. A reply preview's `reply_to_entities` index the quoted message's text, which the preview may carry only the start of, so only their start and order are checked. Rust and Go string indices are UTF-8 byte offsets already; from a string index `i`, Python takes `len(text[:i].encode())`, JS `new TextEncoder().encode(text.slice(0, i)).length`, .NET `Encoding.UTF8.GetByteCount(text[..i])` and the JVM `text.substring(0, i).getBytes(StandardCharsets.UTF_8).length`. Rust, .NET, and JVM expose an `EntityDescriptor` struct/class, built from its start, end and type (`EntityDescriptor::new`, and the .NET and JVM constructors); Go and JS use an `EntityTuple` (`[start, end, type]`); Python takes plain `(start, end, entity_type)` tuples.
 
 ```rust
 // Rust
 pub struct EntityDescriptor {
-    pub start: i32,          // Start byte offset in the message text
-    pub end: i32,            // End byte offset in the message text
+    pub start: i32,          // First byte of the entity in the UTF-8 text (inclusive)
+    pub end: i32,            // Byte after the entity's last one (exclusive)
     pub entity_type: String, // One of the types below, e.g. "url", "mention"
 }
 ```
@@ -2529,8 +2533,12 @@ field here would be an invisible no-banner failure for callers. For the same
 reason a send fails with an invalid-input error when a media attachment or a
 URL card image has an empty `media_hash_key` or `filename`, or a
 `filesize_bytes` of 0 or less, such as `media_hash_key 'banner' has an empty
-filename: pass the file's original name`. `width`/`height` are optional and
-currently ignored by receiving clients (emitted for wire fidelity).
+filename: pass the file's original name`. `width`/`height` are optional on
+an image and currently ignored by receiving clients (emitted for wire
+fidelity); a negative one, on an image or a media attachment, fails the same
+way. So do a `url` attachment with an empty `url` (`a URL card's url is
+empty: pass the link the card shows`) and a `post` attachment with neither
+`rest_id` nor `post_url`.
 
 **URL cards ("clickable images").** A `url` attachment with only a `url`
 renders as a bare link on some clients: clients only auto-fetch missing card
@@ -2565,9 +2573,10 @@ displayTitle, bannerImage, faviconImage)` with images built by `new
 UrlAttachmentImageDescriptor(mediaHashKey, filesizeBytes, filename)` and an
 optional `{ Width, Height }` initializer, `Types.AttachmentDescriptor
 .urlCard(url, displayTitle, bannerImage, faviconImage)` with images built by
-`UrlAttachmentImageDescriptor.of(mediaHashKey, filesizeBytes, filename)`).
-A .NET `AttachmentDescriptor` comes only from its `Media`, `UrlCard` and
-`Post` factories. Go uses the flat
+`new UrlAttachmentImageDescriptor(mediaHashKey, filesizeBytes, filename)`
+and settable `width` and `height`). A .NET or JVM `AttachmentDescriptor`
+comes only from its `Media`/`media`, `UrlCard`/`urlCard` and `Post`/`post`
+factories. Go uses the flat
 `AttachmentDescriptor` struct with `BannerImage`/`FaviconImage` pointer
 fields (`URLAttachmentImageDescriptor`); JS and Python pass the plain
 object/dict shape above.

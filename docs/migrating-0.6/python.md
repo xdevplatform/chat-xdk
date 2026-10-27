@@ -164,7 +164,8 @@ the X API returns, as in 0.5.x, and `Chat()` manages them with
 a worker thread, for an `asyncio` event loop. Until a chat has a config,
 they raise `InvalidStateError`, `Invalid state: no Juicebox config: pass
 the juicebox_config the X API returns when you create the chat, or call
-update_config() first`, the error every binding gives. A wrong PIN raises
+update_config() first`, the error every binding gives, and `Chat` and
+`update_config` raise it for an empty or blank config string. A wrong PIN raises
 `InvalidPinError`, whose `guesses_remaining` holds the attempts Juicebox
 reports left, `0` once the stored keys are locked and `None` when Juicebox
 reports no count:
@@ -419,8 +420,8 @@ it stay valid, and a second message that reuses the first one's uploads gets
 the same id, so recipients drop it as a repeat. A message that lists an
 empty media hash key, or one media hash key twice, is rejected, and so is a
 file whose `filename` is empty or whose `filesize_bytes` is 0 or less, which
-receiving clients would discard: give each file its name and the encrypted
-size `encrypted_file_size` gives.
+receiving clients would discard, or whose `width` or `height` is negative: give
+each file its name and the encrypted size `encrypted_file_size` gives.
 
 ## Decrypt a file with its message's event
 
@@ -623,10 +624,16 @@ names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
 a type the SDK doesn't know, an empty one included, fails the same way, with
 `Invalid entity_type 'user_mention': pass url, mention, hashtag, cashtag,
 email, address or phone_number`, where 0.5.x sent the message without that
-entity. A call missing a required argument, or given one of the wrong type,
-still raises `TypeError`. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, raise `InvalidStateError`
-and keep their prefix. Catch the class rather than reading the message:
+entity. Entity offsets count bytes of the text's UTF-8 encoding, the start
+inclusive and the end exclusive, and an entity whose offsets are negative,
+end before they start or run past the end of the text fails the same way,
+such as `Invalid entity offsets 3..8: end is past the end of the text, which
+is 7 bytes of UTF-8`, where 0.5.x sent it. So do a URL card with an empty
+`url` and a post attachment with neither `rest_id` nor `post_url`. A call
+missing a required argument, or given one of the wrong type, still raises
+`TypeError`. Errors about state the chat lacks, such as a missing session
+identity or an empty key cache, raise `InvalidStateError` and keep their
+prefix. Catch the class rather than reading the message:
 
 ```python
 # 0.5.x

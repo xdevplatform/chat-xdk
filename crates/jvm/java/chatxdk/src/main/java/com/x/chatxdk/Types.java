@@ -415,13 +415,16 @@ public final class Types {
 
     /**
      * Rich-text entity (URL, mention, hashtag, etc.) descriptor.
-     * {@link #start} and {@link #end} are byte offsets into the message text.
+     * {@link #start} and {@link #end} count bytes of the text's UTF-8 encoding, not {@code String}
+     * indices ({@code text.substring(0, i).getBytes(StandardCharsets.UTF_8).length} converts index
+     * {@code i}), so {@code 0 <= start <= end <=} the text's UTF-8 length; other offsets fail the
+     * call with a {@link ChatXdkException} of kind {@code INVALID_INPUT}.
      */
     public static final class EntityDescriptor {
-        /** Byte offset of the start of the entity in the message text. */
+        /** UTF-8 byte offset into the text where the entity begins. */
         public final int start;
 
-        /** Byte offset of the end of the entity in the message text. */
+        /** UTF-8 byte offset into the text where the entity ends (exclusive). */
         public final int end;
 
         /**
