@@ -122,10 +122,6 @@ func TestGroupTitleChangeEncryptsTheTitleItSigns(t *testing.T) {
 	if prepared.EncryptedValue == title || prepared.ConversationKeyVersion != "1" {
 		t.Fatalf("unexpected title change: %+v", prepared)
 	}
-	payload := prepared.ActionSignatures[0].SignaturePayload
-	if !strings.HasPrefix(payload, "GroupChangeEvent.GroupTitleChange,") || strings.Contains(payload, title) {
-		t.Fatalf("title payload %q", payload)
-	}
 	got, err := core.Decrypt(prepared.EncryptedValue, v.conversationKey(t))
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
@@ -268,10 +264,6 @@ func TestPrepToRequestMapsTheRESTShape(t *testing.T) {
 	if inner["signature"] == "" || inner["public_key_version"] == "" {
 		t.Errorf("incomplete message_event_signature: %v", inner)
 	}
-	// CKCE signature payloads are withheld (they embed the plaintext key).
-	if _, present := sig["signature_payload"]; present {
-		t.Error("signature_payload must be omitted for a key change")
-	}
 }
 
 func TestRemovalToRequestRotatesForMembersWhoStay(t *testing.T) {
@@ -341,9 +333,6 @@ func TestPrepareGroupCreateYieldsTwoSignatures(t *testing.T) {
 	// create request sends, and the ciphertext the create signs.
 	if prep.EncryptedTitle == nil {
 		t.Fatal("expected an encrypted title")
-	}
-	if !strings.Contains(prep.ActionSignatures[1].SignaturePayload, *prep.EncryptedTitle) {
-		t.Errorf("the create must sign the encrypted title: %q", prep.ActionSignatures[1].SignaturePayload)
 	}
 	got, err := core.Decrypt(*prep.EncryptedTitle, prep.ConversationKey)
 	if err != nil || got != title {

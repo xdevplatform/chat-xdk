@@ -345,9 +345,9 @@ FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(fileEventB6
 The prepare methods return each `ActionSignature` in the shape a request's
 `action_signatures` takes: `messageId`, `encodedMessageEventDetail`, the
 signature in `messageEventSignature` (a `MessageEventSignature` with
-`signingPublicKey`, your signing public key as `getPublicKeys` returns it)
-and, except for conversation-key changes, `signaturePayload`, which is
-`null` and left out of the JSON when absent. Serialize them as returned:
+`signingPublicKey`, your signing public key as `getPublicKeys` returns it),
+and nothing else: the signed payload stays inside the SDK. Serialize them as
+returned:
 
 ```java
 // 0.5.x

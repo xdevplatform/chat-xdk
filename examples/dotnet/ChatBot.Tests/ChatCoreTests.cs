@@ -103,9 +103,6 @@ public class ChatCoreTests
         var prepared = core.PrepareGroupTitleChange("g123", title, key, "1");
         Assert.NotEqual(title, prepared.EncryptedValue);
         Assert.Equal("1", prepared.ConversationKeyVersion);
-        var payload = prepared.ActionSignatures[0].SignaturePayload;
-        Assert.StartsWith("GroupChangeEvent.GroupTitleChange,", payload);
-        Assert.DoesNotContain(title, payload);
         Assert.Equal(title, core.Decrypt(prepared.EncryptedValue, key));
     }
 
@@ -187,8 +184,6 @@ public class ChatCoreTests
         Assert.Equal(signingPub, inner.GetProperty("signing_public_key").GetString());
         Assert.False(string.IsNullOrEmpty(inner.GetProperty("signature").GetString()));
         Assert.False(string.IsNullOrEmpty(inner.GetProperty("public_key_version").GetString()));
-        // CKCE signature payloads are withheld (they embed the plaintext key).
-        Assert.False(sig.TryGetProperty("signature_payload", out _));
     }
 
     [Fact]
@@ -234,8 +229,7 @@ public class ChatCoreTests
         Assert.NotNull(prep.ConversationKey);
         Assert.Equal(32, prep.ConversationKey.Length);
         // The title goes out encrypted under the new key: the group_name the
-        // create request sends, and the ciphertext the create signs.
-        Assert.Contains(prep.EncryptedTitle!, prep.ActionSignatures[1].SignaturePayload);
+        // create request sends.
         Assert.Equal(title, core.Decrypt(prep.EncryptedTitle!, prep.ConversationKey));
     }
 

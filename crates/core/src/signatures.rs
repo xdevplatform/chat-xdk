@@ -66,11 +66,13 @@ pub struct ActionSignature {
     /// signing public key.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub message_event_signature: MessageEventSignature,
-    /// The comma-separated payload string that was signed, kept as a
-    /// debugging aid. Empty for conversation-key changes, whose payload
-    /// embeds the plaintext conversation key and must not be exposed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub signature_payload: String,
+    /// The comma-separated payload that was signed, for this crate's tests:
+    /// never serialized, so it stays off the wire. Empty for
+    /// conversation-key changes, whose payload embeds the plaintext
+    /// conversation key.
+    #[serde(skip)]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) signature_payload: String,
 }
 
 /// The signature of an [`ActionSignature`].
@@ -303,9 +305,8 @@ fn nullable_bool(v: Option<bool>) -> String {
 /// Signs the plaintext conversation key bytes (base64 no-padding) rather
 /// than per-participant encrypted keys. Because the signed payload embeds
 /// the plaintext conversation key, it must never leave the SDK: the
-/// intermediate strings are zeroized and the returned
-/// `signature_payload` is left empty. Verifiers reconstruct the payload
-/// from the event and their decrypted copy of the key, so nothing is lost.
+/// intermediate strings are zeroized and not kept. Verifiers reconstruct
+/// the payload from the event and their decrypted copy of the key.
 pub fn build_ckey_change_signature(
     signing_key: &XChatPrivateKey,
     public_key_version: &str,
@@ -482,6 +483,9 @@ pub(crate) fn sign_action(
 }
 
 #[cfg(test)]
+mod round_trip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -519,10 +523,11 @@ mod tests {
                 assert!(json.get(flat).is_none(), "{flat} is nested, not flat");
             }
         }
-        let delete_json = serde_json::to_value(&delete).unwrap();
-        assert_eq!(delete_json["signature_payload"], delete.signature_payload);
-        let key_change_json = serde_json::to_value(&key_change).unwrap();
-        assert!(key_change_json.get("signature_payload").is_none());
+        assert!(!delete.signature_payload.is_empty());
+        for sig in [&delete, &key_change] {
+            let json = serde_json::to_value(sig).unwrap();
+            assert!(json.get("signature_payload").is_none());
+        }
     }
 
     #[test]

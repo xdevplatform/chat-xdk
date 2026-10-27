@@ -26,6 +26,17 @@ const onlyAction = (prepared) => {
   return prepared.actionSignatures[0];
 };
 
+/**
+ * Whether `sig`'s signature verifies, under the signer's own signing key,
+ * over `payload`: the comma-joined fields its event signs.
+ */
+const signs = (chat, sig, payload) =>
+  chat.verify(
+    sig.messageEventSignature.signingPublicKey,
+    b64ToBytes(sig.messageEventSignature.signature),
+    new TextEncoder().encode(payload),
+  );
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -229,8 +240,6 @@ async function main() {
     "userId",
   ]);
   assert.equal(prep.actionSignatures.length, 1);
-  // Omitted: the payload embeds the plaintext conversation key and is withheld.
-  assert.equal(prep.actionSignatures[0].signaturePayload, undefined);
   // Nested as the request's actionSignatures carry it.
   assert.equal(prep.actionSignatures[0].messageEventSignature.publicKeyVersion, "1");
   assert.equal(prep.actionSignatures[0].messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
@@ -258,16 +267,15 @@ async function main() {
   });
   assert.equal(groupPrep.conversationId, "g-1");
   assert.equal(groupPrep.actionSignatures.length, 2);
-  // Omitted: the payload embeds the plaintext conversation key and is withheld.
-  assert.equal(groupPrep.actionSignatures[0].signaturePayload, undefined);
   assert.ok(groupPrep.actionSignatures[0].encodedMessageEventDetail.length > 0);
-  assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
   assert.ok(groupPrep.actionSignatures[1].encodedMessageEventDetail.length > 0);
   // The title goes out encrypted under the new key, the value the request
   // sends as group_name; the signature covers the ciphertext.
   assert.equal(typeof groupPrep.encryptedTitle, "string");
-  assert.ok(groupPrep.actionSignatures[1].signaturePayload.includes(groupPrep.encryptedTitle));
-  assert.ok(!groupPrep.actionSignatures[1].signaturePayload.includes("My Group"));
+  const groupCreate = groupPrep.actionSignatures[1];
+  assert.ok(signs(chat, groupCreate,
+    `GroupChangeEvent.GroupCreate,${groupCreate.messageId},910002,${groupPrep.conversationKeyVersion},` +
+    `910002,910005,null,${groupPrep.encryptedTitle},null`));
   assert.equal(chat.decrypt(groupPrep.encryptedTitle, groupPrep.conversationKey), "My Group");
   assert.equal("encryptedDescription" in groupPrep, false);
   const commaPrep = chat.prepareGroupCreate({
@@ -293,9 +301,12 @@ async function main() {
       adminIds: ["910002"],
       title,
     });
+    const create = p.actionSignatures[1];
     assert.ok(
-      p.actionSignatures[1].signaturePayload.endsWith(",null,null,null"),
-      `the title and avatar must sign as the null sentinel, got: ${p.actionSignatures[1].signaturePayload}`,
+      signs(chat, create,
+        `GroupChangeEvent.GroupCreate,${create.messageId},910002,${p.conversationKeyVersion},` +
+        "910002,910005,null,null,null"),
+      "the title and avatar must sign as the null sentinel",
     );
     assert.equal("encryptedTitle" in p, false);
   }
@@ -632,10 +643,7 @@ async function main() {
   assert.equal(deleteSig.messageEventSignature.signatureVersion, "7");
   assert.equal(deleteSig.messageEventSignature.publicKeyVersion, "1");
   assert.equal(deleteSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
-  assert.equal(
-    deleteSig.signaturePayload,
-    `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`,
-  );
+  assert.ok(signs(chat, deleteSig, `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`));
   const deleteForSelfSig = onlyAction(chat.prepareMessageDelete({
     senderId: "111",
     signingKeyVersion: "1",
@@ -643,10 +651,7 @@ async function main() {
     sequenceIds: ["seq-1"],
     deleteForAll: false,
   }));
-  assert.equal(
-    deleteForSelfSig.signaturePayload,
-    `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
-  );
+  assert.ok(signs(chat, deleteForSelfSig, `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`));
 
   // 4c5. Group actions: a removal signs version 11 and rotates the key for
   // the members who stay, the title and description changes sign the value
@@ -666,12 +671,10 @@ async function main() {
   assert.equal(rotated.conversationParticipantKeys.length, 1);
   assert.equal(rotated.actionSignatures.length, 2);
   assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "11");
-  assert.ok(
-    rotated.actionSignatures[0].signaturePayload.endsWith(
-      `,910007,${rotated.conversationKeyVersion},signature_version=11`,
-    ),
-  );
-  assert.equal(rotated.actionSignatures[1].signaturePayload, undefined);
+  const removal = rotated.actionSignatures[0];
+  assert.ok(signs(chat, removal,
+    `GroupChangeEvent.GroupMemberRemoveChange,${removal.messageId},111,g100,910007,` +
+    `${rotated.conversationKeyVersion},signature_version=11`));
   assert.throws(
     () => chat.prepareGroupMembersRemove({
       senderId: "111",
@@ -691,8 +694,11 @@ async function main() {
     conversationKeyVersion: "7",
   });
   assert.equal(left.actionSignatures.length, 3);
-  assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
-  assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
+  const [leaving, promoting, deleting] = left.actionSignatures;
+  assert.ok(signs(chat, leaving,
+    `GroupChangeEvent.GroupMemberRemoveChange,${leaving.messageId},111,g100,111,7,signature_version=11`));
+  assert.ok(signs(chat, promoting, `GroupChangeEvent.GroupAdminAddChange,${promoting.messageId},111,g100,910008`));
+  assert.ok(signs(chat, deleting, `ConversationDeleteEvent,${deleting.messageId},111,g100`));
 
   const metadataKey = { conversationKey: rotated.conversationKey, conversationKeyVersion: rotated.conversationKeyVersion };
   const metadata = [
@@ -705,10 +711,9 @@ async function main() {
     assert.deepEqual(Object.keys(prepared).sort(), ["actionSignatures", "conversationKeyVersion", "encryptedValue"]);
     assert.equal(prepared.conversationKeyVersion, rotated.conversationKeyVersion);
     assert.equal(prepared.actionSignatures.length, 1);
-    const payload = prepared.actionSignatures[0].signaturePayload;
-    assert.ok(payload.startsWith(prefix), payload);
-    assert.ok(payload.endsWith(`,${prepared.conversationKeyVersion},${prepared.encryptedValue}`), payload);
-    assert.ok(!payload.includes(plaintext), payload);
+    const sig = prepared.actionSignatures[0];
+    assert.ok(signs(chat, sig,
+      `${prefix}${sig.messageId},111,g100,${prepared.conversationKeyVersion},${prepared.encryptedValue}`));
     assert.equal(chat.decrypt(prepared.encryptedValue, rotated.conversationKey), plaintext);
   }
   const groupAvatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
@@ -718,9 +723,10 @@ async function main() {
     newAvatarUrl: groupAvatarUrl,
     conversationKeyVersion: rotated.conversationKeyVersion,
   });
-  const avatarPayload = onlyAction(avatarPrep).signaturePayload;
-  assert.ok(avatarPayload.startsWith("GroupChangeEvent.GroupAvatarUrlChange,"), avatarPayload);
-  assert.ok(avatarPayload.endsWith(`,${rotated.conversationKeyVersion},${groupAvatarUrl}`), avatarPayload);
+  const avatarSig = onlyAction(avatarPrep);
+  assert.ok(signs(chat, avatarSig,
+    `GroupChangeEvent.GroupAvatarUrlChange,${avatarSig.messageId},111,g100,` +
+    `${rotated.conversationKeyVersion},${groupAvatarUrl}`));
   assert.throws(
     () => chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board" }),
     /no cached conversation key for 'g100'/,
@@ -732,29 +738,29 @@ async function main() {
     userIds: ["910007"],
     title: "Board",
   });
-  assert.deepEqual(
-    withTitle.actionSignatures.slice(0, 2).map((s) => s.signaturePayload.split(",")[0]),
-    ["GroupChangeEvent.GroupMemberRemoveChange", "GroupChangeEvent.GroupTitleChange"],
-  );
   assert.equal(withTitle.actionSignatures.length, 3);
+  const [titledRemoval, titleChange] = withTitle.actionSignatures;
+  assert.ok(signs(chat, titledRemoval,
+    `GroupChangeEvent.GroupMemberRemoveChange,${titledRemoval.messageId},111,g100,910007,` +
+    `${withTitle.conversationKeyVersion},signature_version=11`));
+  assert.equal(titleChange.messageEventSignature.signatureVersion, "7");
+  assert.ok(titleChange.encodedMessageEventDetail.length > 0);
   const blocking = onlyAction(chat.prepareScreenCapture({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g100",
     change: "blockingEnabled",
   }));
-  assert.ok(blocking.signaturePayload.startsWith(
-    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,",
-  ));
+  assert.ok(signs(chat, blocking,
+    `ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,${blocking.messageId},111,g100`));
   const detection = onlyAction(chat.prepareScreenCapture({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g100",
     change: "detectionDisabled",
   }));
-  assert.ok(detection.signaturePayload.startsWith(
-    "ConversationMetadataChangeEvent.DisableScreenCaptureDetection,",
-  ));
+  assert.ok(signs(chat, detection,
+    `ConversationMetadataChangeEvent.DisableScreenCaptureDetection,${detection.messageId},111,g100`));
   assert.throws(
     () => chat.prepareScreenCapture({
       senderId: "111",
@@ -778,18 +784,9 @@ async function main() {
   assert.ok(readSig.encodedMessageEventDetail.length > 0);
   assert.equal(readSig.messageEventSignature.publicKeyVersion, "1");
   assert.equal(readSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
-  assert.equal(
-    readSig.signaturePayload,
-    `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`,
-  );
-  assert.equal(
-    chat.verify(
-      v.signing_public_b64,
-      b64ToBytes(readSig.messageEventSignature.signature),
-      new TextEncoder().encode(readSig.signaturePayload),
-    ),
-    true,
-  );
+  assert.equal(readSig.messageEventSignature.signingPublicKey, v.signing_public_b64);
+  assert.ok(signs(chat, readSig,
+    `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`));
 
   // An omitted seenAtMsec signs the JavaScript clock's current time.
   const beforeRead = Date.now();
@@ -801,9 +798,11 @@ async function main() {
   }));
   const afterRead = Date.now();
   const readNowPrefix = `MarkConversationReadEvent,${readNowSig.messageId},111,g999,seq-1,`;
-  assert.ok(readNowSig.signaturePayload.startsWith(readNowPrefix));
-  const readNowAt = Number(readNowSig.signaturePayload.slice(readNowPrefix.length));
-  assert.ok(readNowAt >= beforeRead && readNowAt <= afterRead);
+  let readNowSigned = false;
+  for (let at = beforeRead; at <= afterRead && !readNowSigned; at++) {
+    readNowSigned = signs(chat, readNowSig, `${readNowPrefix}${at}`);
+  }
+  assert.ok(readNowSigned);
 
   assert.throws(
     () =>
@@ -843,13 +842,11 @@ async function main() {
   assert.equal(membersPrep.actionSignatures.length, 2);
   assert.ok(membersPrep.actionSignatures[0].encodedMessageEventDetail.length > 0);
   assert.ok(membersPrep.actionSignatures[1].encodedMessageEventDetail.length > 0);
-  assert.ok(
-    membersPrep.actionSignatures[1].signaturePayload.startsWith(
-      "GroupChangeEvent.GroupMemberAddChange,",
-    ),
-  );
   // Unset screen-capture blocking signs as the trailing null sentinel.
-  assert.ok(membersPrep.actionSignatures[1].signaturePayload.endsWith(",null"));
+  const membersAdd = membersPrep.actionSignatures[1];
+  assert.ok(signs(chat, membersAdd,
+    `GroupChangeEvent.GroupMemberAddChange,${membersAdd.messageId},910002,g-1,910005,910002,910002,` +
+    `null,null,null,${membersPrep.conversationKeyVersion},null`));
 
   // 4d1. The current title and description go out encrypted under the key
   // the add generates, as the result returns them; the description is
@@ -875,10 +872,11 @@ async function main() {
     chat.decrypt(describedPrep.encryptedDescription, describedPrep.conversationKey),
     "Ships the app",
   );
-  assert.ok(!describedAdd.signaturePayload.includes("Team"));
   assert.equal(describedAdd.messageEventSignature.signatureVersion, "8");
-  assert.ok(describedAdd.signaturePayload.endsWith(`,null,${describedPrep.encryptedDescription}`));
-  assert.ok(describedAdd.signaturePayload.includes(`,${avatarUrl},`));
+  assert.ok(signs(chat, describedAdd,
+    `GroupChangeEvent.GroupMemberAddChange,${describedAdd.messageId},910002,g-1,910005,910002,910002,` +
+    `${describedPrep.encryptedTitle},${avatarUrl},null,${describedPrep.conversationKeyVersion},null,` +
+    describedPrep.encryptedDescription));
   assert.equal("encryptedTitle" in membersPrep, false);
   assert.equal(membersPrep.actionSignatures[1].messageEventSignature.signatureVersion, "7");
 
@@ -894,7 +892,10 @@ async function main() {
     currentPendingMemberIds: [],
     currentScreenCaptureBlockingEnabled: true,
   });
-  assert.ok(membersPrepScb.actionSignatures[1].signaturePayload.endsWith(",true"));
+  const scbAdd = membersPrepScb.actionSignatures[1];
+  assert.ok(signs(chat, scbAdd,
+    `GroupChangeEvent.GroupMemberAddChange,${scbAdd.messageId},910002,g-1,910005,910002,910002,` +
+    `null,null,null,${membersPrepScb.conversationKeyVersion},true`));
 
   // 4d3. Omitting conversationId derives the canonical numeric-sorted
   // one-to-one id from the two participants.

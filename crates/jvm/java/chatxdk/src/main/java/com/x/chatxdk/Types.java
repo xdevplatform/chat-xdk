@@ -156,14 +156,6 @@ public final class Types {
         /** The signature over the action, with its versions and the signer's signing public key. */
         @JsonProperty("message_event_signature")
         public MessageEventSignature messageEventSignature = new MessageEventSignature();
-
-        /**
-         * The comma-separated payload string that was signed; {@code null} for
-         * conversation-key changes, whose payload embeds the plaintext
-         * conversation key and is withheld.
-         */
-        @JsonProperty("signature_payload")
-        public String signaturePayload;
     }
 
     /** The signature of an {@link ActionSignature}. */

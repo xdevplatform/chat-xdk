@@ -145,15 +145,6 @@ namespace ChatXdk
         /// <summary>The signature over the action, with its versions and the signer's signing public key.</summary>
         [JsonPropertyName("message_event_signature")]
         public MessageEventSignature MessageEventSignature { get; init; } = new();
-
-        /// <summary>
-        /// The comma-separated payload string that was signed; <see langword="null"/> for
-        /// conversation-key changes, whose payload embeds the plaintext
-        /// conversation key and is withheld.
-        /// </summary>
-        [JsonPropertyName("signature_payload")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? SignaturePayload { get; init; }
     }
 
     /// <summary>The signature of an <see cref="ActionSignature"/>.</summary>

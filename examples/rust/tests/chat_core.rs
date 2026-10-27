@@ -75,12 +75,6 @@ fn group_title_change_encrypts_the_title_it_signs() {
         .expect("prepare_group_title_change");
     assert_ne!(prepared.encrypted_value, title);
     assert_eq!(prepared.conversation_key_version, "1");
-    let payload = &prepared.action_signatures[0].signature_payload;
-    assert!(
-        payload.starts_with("GroupChangeEvent.GroupTitleChange,"),
-        "{payload}"
-    );
-    assert!(!payload.contains(title), "{payload}");
     assert_eq!(
         core.decrypt(&prepared.encrypted_value, &key)
             .expect("decrypt"),
@@ -213,8 +207,6 @@ fn prep_to_request_maps_the_rest_shape() {
     assert_eq!(inner["signing_public_key"].as_str().unwrap(), signing);
     assert!(!inner["signature"].as_str().unwrap().is_empty());
     assert!(!inner["public_key_version"].as_str().unwrap().is_empty());
-    // CKCE signature payloads are withheld (they embed the plaintext key).
-    assert!(sig.get("signature_payload").is_none());
 }
 
 #[test]
@@ -272,11 +264,8 @@ fn prepare_group_create_yields_two_signatures() {
     let key = prep.conversation_key.as_ref().unwrap();
     assert_eq!(key.encoded().len(), 32);
     // The title goes out encrypted under the new key: the group_name the
-    // create request sends, and the ciphertext the create signs.
+    // create request sends.
     let encrypted_title = prep.encrypted_title.as_deref().expect("encrypted title");
-    assert!(prep.action_signatures[1]
-        .signature_payload
-        .contains(encrypted_title));
     assert_eq!(core.decrypt(encrypted_title, key).expect("decrypt"), title);
 }
 

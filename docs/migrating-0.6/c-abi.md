@@ -255,13 +255,12 @@ char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 // 0.6.0
 // {"action_signatures":[{"message_id":"...","encoded_message_event_detail":"...",
 //   "message_event_signature":{"signature":"...","signature_version":"7",
-//   "public_key_version":"...","signing_public_key":"..."},"signature_payload":"..."}]}
+//   "public_key_version":"...","signing_public_key":"..."}}]}
 char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 ```
 
-Send those entries as the request's `action_signatures`; the
-`signature_payload` (the signed payload, a debugging aid) is left out for
-conversation-key changes.
+Send those entries as the request's `action_signatures`; the signed
+payload stays inside the SDK.
 
 ## Participant keys take the key requests' names
 

@@ -264,11 +264,6 @@ Two hygiene notes:
   can't receive the conversation key. For stronger assurance, each party can
   call `getPublicKeyFingerprint()` on their own device and compare the values
   out-of-band.
-- **Key-change signatures carry no `signaturePayload`.** The signed payload of
-  a conversation-key change embeds the plaintext conversation key, so the SDK
-  withholds it — the field is empty/omitted on that signature and must never be
-  reconstructed and sent. Group-action signatures keep their payload (it
-  contains only public fields).
 - **Optional group fields normalize in core.** An empty-string title,
   description or avatar URL and a negative `ttlMsec` are treated as "not
   set", so every binding signs the same `null` whether it can express an
@@ -535,9 +530,7 @@ GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_
 ```
 
 The key change is the same `ConversationKeyChangeEvent` payload
-`prepare_conversation_key_change` signs, at signature version 7. Its
-`signature_payload` is omitted because the payload contains the plaintext
-conversation key.
+`prepare_conversation_key_change` signs, at signature version 7.
 
 The result does not carry a ratchet tree (`base64_encoded_key_rotation`) or
 a rewrapped pin-key bundle (`rotated_pmk_bundle`).
@@ -1277,7 +1270,7 @@ only), `false` only from the caller's view. No conversation key is involved:
 `prepare_message_delete` returns a `PreparedAction`, the request's
 `action_signatures` with one entry. The entry is an `ActionSignature`, the
 same shape as the conversation-change `actionSignatures` entries (see
-**Action signatures** below), with its `signature_payload` populated; its
+**Action signatures** below); its
 `encodedMessageEventDetail` carries the `MessageDeleteEvent`. The optional
 `sender_id` / `signing_key_version` overrides resolve from the session
 identity, and a one-to-one id is signed in its canonical colon form, as
@@ -1313,8 +1306,7 @@ into the request body as they are (snake_case shown; JS returns camelCase):
         "signature_version": "7",
         "public_key_version": "<your signing key version>",
         "signing_public_key": "<your signing public key, as get_public_keys returns it>"
-      },
-      "signature_payload": "<the signed payload; omitted for conversation-key changes>"
+      }
     }
   ]
 }

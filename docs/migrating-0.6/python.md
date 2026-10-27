@@ -378,9 +378,8 @@ decryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_h
 The prepare methods return each signed action in the shape a request's
 `action_signatures` takes: `message_id`, `encoded_message_event_detail`, the
 signature nested under `message_event_signature` (with `signing_public_key`,
-your signing public key as `get_public_keys` returns it) and, except for
-conversation-key changes, `signature_payload`. Pass them through as
-returned:
+your signing public key as `get_public_keys` returns it), and nothing else:
+the signed payload stays inside the SDK. Pass them through as returned:
 
 ```python
 # 0.5.x

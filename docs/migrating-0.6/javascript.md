@@ -332,8 +332,8 @@ The prepare methods return each signed action in the shape a request's
 `action_signatures` takes, camelCased as everything the package returns is:
 `messageId`, `encodedMessageEventDetail`, the signature nested under
 `messageEventSignature` (with `signingPublicKey`, your signing public key as
-`getPublicKeys` returns it) and, except for conversation-key changes,
-`signaturePayload`. Use them as returned, and write their keys in snake_case
+`getPublicKeys` returns it), and nothing else: the signed payload stays
+inside the SDK. Use them as returned, and write their keys in snake_case
 when you build the request body, as you do for the other fields:
 
 ```js

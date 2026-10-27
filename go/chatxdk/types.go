@@ -687,10 +687,6 @@ type ActionSignature struct {
 	MessageID                 string                `json:"message_id"`
 	EncodedMessageEventDetail string                `json:"encoded_message_event_detail"`
 	MessageEventSignature     MessageEventSignature `json:"message_event_signature"`
-	// SignaturePayload is the comma-separated payload that was signed;
-	// empty for conversation-key changes, whose payload embeds the
-	// plaintext conversation key.
-	SignaturePayload string `json:"signature_payload,omitempty"`
 }
 
 // MessageEventSignature is the signature of an ActionSignature.

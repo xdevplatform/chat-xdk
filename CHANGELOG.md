@@ -659,16 +659,15 @@ prepared = chat.prepare_conversation_key_change(
   carries them: `message_id`, `encoded_message_event_detail`, the signature
   nested under `message_event_signature` (`signature`, `signature_version`,
   `public_key_version` and the new `signing_public_key`, your signing public
-  key as `get_public_keys` returns it), and `signature_payload` when it is
-  not withheld. They were flat, with no signing public key, and apps
-  re-nested them: pass `action_signatures` through as returned instead.
+  key as `get_public_keys` returns it), and nothing else: the signed payload
+  stays inside the SDK, so it never goes out with a request. They were flat,
+  with no signing public key, and apps re-nested them: pass
+  `action_signatures` through as returned instead.
   The new `MessageEventSignature` type holds the nested signature in every
   binding. `prepare_message_delete` and `prepare_mark_conversation_read`
   return the new `PreparedAction` (`action_signatures`, one entry) instead
   of a single `ActionSignature`; read the action's `message_id` from that
-  entry. Go, .NET and the JVM omit an absent `signature_payload` when
-  serializing (.NET `SignaturePayload` is `string?` and the JVM field is
-  `null` when absent).
+  entry.
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.

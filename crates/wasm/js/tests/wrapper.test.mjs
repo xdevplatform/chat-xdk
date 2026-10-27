@@ -263,7 +263,15 @@ async function delegationTests() {
     title: "Wrapper Group",
   });
   assert.equal(groupPrep.actionSignatures.length, 2);
-  assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
+  const create = groupPrep.actionSignatures[1];
+  assert.ok(chat.verify(
+    create.messageEventSignature.signingPublicKey,
+    b64ToBytes(create.messageEventSignature.signature),
+    new TextEncoder().encode(
+      `GroupChangeEvent.GroupCreate,${create.messageId},910002,${groupPrep.conversationKeyVersion},` +
+      `910002,910005,null,${groupPrep.encryptedTitle},null`,
+    ),
+  ));
 
   const membersPrep = chat.prepareGroupMembersChange({
     senderId: "910002",
@@ -276,11 +284,15 @@ async function delegationTests() {
     currentPendingMemberIds: [],
   });
   assert.equal(membersPrep.actionSignatures.length, 2);
-  assert.ok(
-    membersPrep.actionSignatures[1].signaturePayload.startsWith(
-      "GroupChangeEvent.GroupMemberAddChange,",
+  const add = membersPrep.actionSignatures[1];
+  assert.ok(chat.verify(
+    add.messageEventSignature.signingPublicKey,
+    b64ToBytes(add.messageEventSignature.signature),
+    new TextEncoder().encode(
+      `GroupChangeEvent.GroupMemberAddChange,${add.messageId},910002,g-1,910005,910002,910002,` +
+      `null,null,null,${membersPrep.conversationKeyVersion},null`,
     ),
-  );
+  ));
 
   // Message-encryption delegations (params objects flow through intact).
   const convKey = b64ToBytes(v.conversation_key_b64);

@@ -1444,6 +1444,21 @@ func onlyAction(t *testing.T, prepared *PreparedAction, err error) ActionSignatu
 	return prepared.ActionSignatures[0]
 }
 
+// signedOver reports whether sig's signature verifies, under the signer's
+// own signing key, over payload: the comma-joined fields its event signs.
+func signedOver(t *testing.T, chat *Chat, sig ActionSignature, payload string) bool {
+	t.Helper()
+	raw, err := base64.RawStdEncoding.DecodeString(sig.MessageEventSignature.Signature)
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	valid, err := chat.Verify(sig.MessageEventSignature.SigningPublicKey, raw, []byte(payload))
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	return valid
+}
+
 func TestPrepareMessageDelete(t *testing.T) {
 	v := loadVectors(t)
 
@@ -1495,8 +1510,8 @@ func TestPrepareMessageDelete(t *testing.T) {
 		t.Errorf("message_event_signature missing from %s", data)
 	}
 	want := fmt.Sprintf("MessageDeleteEvent,%s,111,111:222,2,seq-10,seq-11", sig.MessageID)
-	if sig.SignaturePayload != want {
-		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
+	if !signedOver(t, chat, sig, want) {
+		t.Errorf("expected the delete to sign %q", want)
 	}
 
 	// Group ids pass through unchanged; delete-for-self signs the wire
@@ -1510,8 +1525,8 @@ func TestPrepareMessageDelete(t *testing.T) {
 	})
 	selfSig := onlyAction(t, selfPrepared, err)
 	want = fmt.Sprintf("MessageDeleteEvent,%s,111,g999,1,seq-1", selfSig.MessageID)
-	if selfSig.SignaturePayload != want {
-		t.Errorf("expected signature_payload %q, got %q", want, selfSig.SignaturePayload)
+	if !signedOver(t, chat, selfSig, want) {
+		t.Errorf("expected the delete to sign %q", want)
 	}
 }
 
@@ -1545,11 +1560,9 @@ func TestGroupActionSignatures(t *testing.T) {
 	}
 	removal := rotated.ActionSignatures[0]
 	if removal.MessageEventSignature.SignatureVersion != "11" ||
-		!strings.HasSuffix(removal.SignaturePayload, ",910007,"+rotated.ConversationKeyVersion+",signature_version=11") {
-		t.Fatalf("removal payload: %+v", removal)
-	}
-	if rotated.ActionSignatures[1].SignaturePayload != "" {
-		t.Fatalf("key-change payload should be withheld")
+		!signedOver(t, chat, removal, "GroupChangeEvent.GroupMemberRemoveChange,"+removal.MessageID+
+			",111,g100,910007,"+rotated.ConversationKeyVersion+",signature_version=11") {
+		t.Fatalf("removal signature: %+v", removal)
 	}
 	_, err = chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
 		ConversationID:    "g100",
@@ -1572,8 +1585,12 @@ func TestGroupActionSignatures(t *testing.T) {
 		t.Fatalf("leave: %v", err)
 	}
 	if len(left.ActionSignatures) != 3 ||
-		!strings.HasSuffix(left.ActionSignatures[1].SignaturePayload, ",910008") ||
-		!strings.HasPrefix(left.ActionSignatures[2].SignaturePayload, "ConversationDeleteEvent,") {
+		!signedOver(t, chat, left.ActionSignatures[0], "GroupChangeEvent.GroupMemberRemoveChange,"+
+			left.ActionSignatures[0].MessageID+",111,g100,111,7,signature_version=11") ||
+		!signedOver(t, chat, left.ActionSignatures[1], "GroupChangeEvent.GroupAdminAddChange,"+
+			left.ActionSignatures[1].MessageID+",111,g100,910008") ||
+		!signedOver(t, chat, left.ActionSignatures[2], "ConversationDeleteEvent,"+
+			left.ActionSignatures[2].MessageID+",111,g100") {
 		t.Fatalf("leave signatures: %+v", left.ActionSignatures)
 	}
 
@@ -1604,11 +1621,9 @@ func TestGroupActionSignatures(t *testing.T) {
 		if prepared.ConversationKeyVersion != version || len(prepared.ActionSignatures) != 1 {
 			t.Fatalf("%s shape: %+v", m.prefix, prepared)
 		}
-		payload := prepared.ActionSignatures[0].SignaturePayload
-		if !strings.HasPrefix(payload, m.prefix) ||
-			!strings.HasSuffix(payload, ","+version+","+prepared.EncryptedValue) ||
-			strings.Contains(payload, m.plaintext) {
-			t.Fatalf("metadata payload %q", payload)
+		sig := prepared.ActionSignatures[0]
+		if !signedOver(t, chat, sig, m.prefix+sig.MessageID+",111,g100,"+version+","+prepared.EncryptedValue) {
+			t.Fatalf("%s signature: %+v", m.prefix, sig)
 		}
 		decrypted, err := chat.Decrypt(prepared.EncryptedValue, key)
 		if err != nil || decrypted != m.plaintext {
@@ -1621,9 +1636,9 @@ func TestGroupActionSignatures(t *testing.T) {
 		NewAvatarURL: avatarURL, ConversationKeyVersion: version,
 	})
 	avatarSig := onlyAction(t, avatar, err)
-	if !strings.HasPrefix(avatarSig.SignaturePayload, "GroupChangeEvent.GroupAvatarUrlChange,") ||
-		!strings.HasSuffix(avatarSig.SignaturePayload, ","+version+","+avatarURL) {
-		t.Fatalf("avatar payload %q", avatarSig.SignaturePayload)
+	if !signedOver(t, chat, avatarSig, "GroupChangeEvent.GroupAvatarUrlChange,"+avatarSig.MessageID+
+		",111,g100,"+version+","+avatarURL) {
+		t.Fatalf("avatar signature: %+v", avatarSig)
 	}
 	if _, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
 		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100", NewTitle: "Board",
@@ -1644,7 +1659,8 @@ func TestGroupActionSignatures(t *testing.T) {
 		t.Fatalf("remove with title: %v", err)
 	}
 	if len(withTitle.ActionSignatures) != 3 ||
-		!strings.HasPrefix(withTitle.ActionSignatures[1].SignaturePayload, "GroupChangeEvent.GroupTitleChange,") {
+		withTitle.ActionSignatures[1].MessageEventSignature.SignatureVersion != "7" ||
+		withTitle.ActionSignatures[1].EncodedMessageEventDetail == "" {
 		t.Fatalf("remove with title signatures: %+v", withTitle.ActionSignatures)
 	}
 	blockingPrepared, err := chat.PrepareScreenCapture(ScreenCaptureParams{
@@ -1652,8 +1668,9 @@ func TestGroupActionSignatures(t *testing.T) {
 		Change: BlockingEnabled,
 	})
 	blocking := onlyAction(t, blockingPrepared, err)
-	if !strings.HasPrefix(blocking.SignaturePayload, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,") {
-		t.Fatalf("screen capture payload %q", blocking.SignaturePayload)
+	if !signedOver(t, chat, blocking, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"+
+		blocking.MessageID+",111,g100") {
+		t.Fatalf("screen capture signature: %+v", blocking)
 	}
 }
 
@@ -1690,19 +1707,8 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 		"MarkConversationReadEvent,%s,111,111:222,2011626338877079553,1700000000123",
 		sig.MessageID,
 	)
-	if sig.SignaturePayload != want {
-		t.Errorf("expected signature_payload %q, got %q", want, sig.SignaturePayload)
-	}
-	rawSig, err := base64.RawStdEncoding.DecodeString(sig.MessageEventSignature.Signature)
-	if err != nil {
-		t.Fatalf("decode signature: %v", err)
-	}
-	valid, err := chat.Verify(v.SigningPublicB64, rawSig, []byte(sig.SignaturePayload))
-	if err != nil {
-		t.Fatalf("Verify failed: %v", err)
-	}
-	if !valid {
-		t.Error("expected the read receipt signature to verify")
+	if sig.MessageEventSignature.SigningPublicKey != v.SigningPublicB64 || !signedOver(t, chat, sig, want) {
+		t.Errorf("expected the read receipt to sign %q", want)
 	}
 
 	// With no identity in the params the session identity signs, and a nil
@@ -1721,15 +1727,12 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 		t.Errorf("expected public_key_version 7, got %q", nowSig.MessageEventSignature.PublicKeyVersion)
 	}
 	prefix := fmt.Sprintf("MarkConversationReadEvent,%s,111,g999,seq-1,", nowSig.MessageID)
-	if !strings.HasPrefix(nowSig.SignaturePayload, prefix) {
-		t.Fatalf("expected signature_payload to start with %q, got %q", prefix, nowSig.SignaturePayload)
+	signedNow := false
+	for readAt := before; readAt <= after && !signedNow; readAt++ {
+		signedNow = signedOver(t, chat, nowSig, prefix+strconv.FormatInt(readAt, 10))
 	}
-	readAt, err := strconv.ParseInt(strings.TrimPrefix(nowSig.SignaturePayload, prefix), 10, 64)
-	if err != nil {
-		t.Fatalf("parse seen_at from %q: %v", nowSig.SignaturePayload, err)
-	}
-	if readAt < before || readAt > after {
-		t.Errorf("expected seen_at in [%d, %d], got %d", before, after, readAt)
+	if !signedNow {
+		t.Errorf("expected the receipt to sign a seen_at in [%d, %d]", before, after)
 	}
 
 	_, err = chat.PrepareMarkConversationRead(MarkConversationReadParams{ConversationID: "g999"})
@@ -1833,10 +1836,6 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	}
 	if len(prepared.ActionSignatures) != 1 {
 		t.Fatalf("expected 1 action signature, got %d", len(prepared.ActionSignatures))
-	}
-	// Empty: the payload embeds the plaintext conversation key and is withheld.
-	if prepared.ActionSignatures[0].SignaturePayload != "" {
-		t.Errorf("unexpected signature payload: %q", prepared.ActionSignatures[0].SignaturePayload)
 	}
 
 	// The encrypted key should be decryptable back to the conversation key.
@@ -1961,15 +1960,8 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 	if len(prepared.ActionSignatures) != 2 {
 		t.Fatalf("expected 2 action signatures, got %d", len(prepared.ActionSignatures))
 	}
-	// Empty: the payload embeds the plaintext conversation key and is withheld.
-	if prepared.ActionSignatures[0].SignaturePayload != "" {
-		t.Errorf("unexpected CKCE signature payload: %q", prepared.ActionSignatures[0].SignaturePayload)
-	}
 	if prepared.ActionSignatures[0].EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty CKCE encoded event detail")
-	}
-	if !strings.HasPrefix(prepared.ActionSignatures[1].SignaturePayload, "GroupChangeEvent.GroupMemberAddChange,") {
-		t.Errorf("unexpected member-add signature payload: %q", prepared.ActionSignatures[1].SignaturePayload)
 	}
 	if prepared.ActionSignatures[1].EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty member-add encoded event detail")
@@ -1980,8 +1972,9 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 	if prepared.EncryptedTitle == nil || prepared.EncryptedDescription != nil {
 		t.Fatalf("expected only an encrypted title: %+v", prepared)
 	}
-	if !strings.Contains(add.SignaturePayload, *prepared.EncryptedTitle) || strings.Contains(add.SignaturePayload, "Team") {
-		t.Errorf("the add must sign the encrypted title, got: %q", add.SignaturePayload)
+	if !signedOver(t, chat, add, "GroupChangeEvent.GroupMemberAddChange,"+add.MessageID+
+		",910002,g123,910009,910002,910002,"+*prepared.EncryptedTitle+",null,null,"+prepared.ConversationKeyVersion+",null") {
+		t.Errorf("the add must sign the encrypted title: %+v", add)
 	}
 	title, err := chat.Decrypt(*prepared.EncryptedTitle, prepared.ConversationKey)
 	if err != nil || title != "Team" {
@@ -2017,11 +2010,11 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 		t.Errorf("encrypted description decrypts to %q, %v", description, err)
 	}
 	describedAdd := described.ActionSignatures[1]
-	if describedAdd.MessageEventSignature.SignatureVersion != "8" ||
-		!strings.HasSuffix(describedAdd.SignaturePayload, ",null,"+*described.EncryptedDescription) ||
-		!strings.Contains(describedAdd.SignaturePayload, ","+avatarURL+",") {
-		t.Errorf("unexpected described add: version %q, payload %q",
-			describedAdd.MessageEventSignature.SignatureVersion, describedAdd.SignaturePayload)
+	if described.EncryptedTitle == nil || describedAdd.MessageEventSignature.SignatureVersion != "8" ||
+		!signedOver(t, chat, describedAdd, "GroupChangeEvent.GroupMemberAddChange,"+describedAdd.MessageID+
+			",910002,g123,910009,910002,910002,"+*described.EncryptedTitle+","+avatarURL+",null,"+
+			described.ConversationKeyVersion+",null,"+*described.EncryptedDescription) {
+		t.Errorf("unexpected described add: %+v", describedAdd)
 	}
 }
 
@@ -2056,15 +2049,8 @@ func TestPrepareGroupCreate(t *testing.T) {
 	if len(prepared.ActionSignatures) != 2 {
 		t.Fatalf("expected 2 action signatures, got %d", len(prepared.ActionSignatures))
 	}
-	// Empty: the payload embeds the plaintext conversation key and is withheld.
-	if prepared.ActionSignatures[0].SignaturePayload != "" {
-		t.Errorf("unexpected CKCE signature payload: %q", prepared.ActionSignatures[0].SignaturePayload)
-	}
 	if prepared.ActionSignatures[0].EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty CKCE encoded event detail")
-	}
-	if !strings.HasPrefix(prepared.ActionSignatures[1].SignaturePayload, "GroupChangeEvent.GroupCreate,") {
-		t.Errorf("unexpected group-create signature payload: %q", prepared.ActionSignatures[1].SignaturePayload)
 	}
 	if prepared.ActionSignatures[1].EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty group-create encoded event detail")
@@ -2074,9 +2060,10 @@ func TestPrepareGroupCreate(t *testing.T) {
 	if prepared.EncryptedTitle == nil {
 		t.Fatal("expected an encrypted title")
 	}
-	payload := prepared.ActionSignatures[1].SignaturePayload
-	if !strings.Contains(payload, *prepared.EncryptedTitle) || strings.Contains(payload, "Team") {
-		t.Errorf("the create must sign the encrypted title, got: %q", payload)
+	create := prepared.ActionSignatures[1]
+	if !signedOver(t, chat, create, "GroupChangeEvent.GroupCreate,"+create.MessageID+",910002,"+
+		prepared.ConversationKeyVersion+",910002,910005,null,"+*prepared.EncryptedTitle+",null") {
+		t.Errorf("the create must sign the encrypted title: %+v", create)
 	}
 	title, err := chat.Decrypt(*prepared.EncryptedTitle, prepared.ConversationKey)
 	if err != nil || title != "Team" {
@@ -2111,11 +2098,12 @@ func TestPrepareGroupCreateEmptyTitleSignsNullSentinel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate failed: %v", err)
 	}
-	payload := prepared.ActionSignatures[1].SignaturePayload
 	// Trailing slots: legacy upgrade, title, avatar_url — all unset → null
 	// sentinels.
-	if !strings.HasSuffix(payload, ",null,null,null") {
-		t.Errorf("the title and avatar must sign as the null sentinel, got: %q", payload)
+	create := prepared.ActionSignatures[1]
+	if !signedOver(t, chat, create, "GroupChangeEvent.GroupCreate,"+create.MessageID+",910002,"+
+		prepared.ConversationKeyVersion+",910002,910005,null,null,null") {
+		t.Errorf("the title and avatar must sign as the null sentinel: %+v", create)
 	}
 	if prepared.EncryptedTitle != nil {
 		t.Errorf("an unset title must not be encrypted: %+v", prepared)
@@ -2867,19 +2855,18 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareGroupMembersChange (optional fields) failed: %v", err)
 	}
-	// Two signed actions: the key change and the member add. The encrypted
-	// title and the avatar URL live in the member-add payload (index 1).
-	if len(prepared.ActionSignatures) != 2 || prepared.ActionSignatures[1].MessageEventSignature.Signature == "" {
-		t.Fatalf("expected 2 action signatures with a non-empty member-add signature, got %d", len(prepared.ActionSignatures))
+	// Two signed actions: the key change and the member add. The add signs
+	// the encrypted title, the avatar URL and the ttl; pending members are
+	// not signed, and unset screen-capture blocking signs as the trailing
+	// null sentinel.
+	if len(prepared.ActionSignatures) != 2 || prepared.EncryptedTitle == nil {
+		t.Fatalf("expected 2 action signatures and an encrypted title, got %+v", prepared)
 	}
-	if prepared.EncryptedTitle == nil ||
-		!strings.Contains(prepared.ActionSignatures[1].SignaturePayload, *prepared.EncryptedTitle) ||
-		!strings.Contains(prepared.ActionSignatures[1].SignaturePayload, "https://example.com/avatar.png") {
-		t.Error("expected the encrypted title and the avatar URL in the member-add signature payload")
-	}
-	// Unset screen-capture blocking signs as the trailing null sentinel.
-	if !strings.HasSuffix(prepared.ActionSignatures[1].SignaturePayload, ",null") {
-		t.Errorf("expected a trailing null screen-capture slot, got %q", prepared.ActionSignatures[1].SignaturePayload)
+	add := prepared.ActionSignatures[1]
+	if !signedOver(t, chat, add, "GroupChangeEvent.GroupMemberAddChange,"+add.MessageID+
+		",910002,g123,910010,910002,910002,"+*prepared.EncryptedTitle+
+		",https://example.com/avatar.png,86400000,"+prepared.ConversationKeyVersion+",null") {
+		t.Errorf("unexpected member-add signature: %+v", add)
 	}
 }
 
@@ -2908,8 +2895,10 @@ func TestPrepareGroupMembersChangeScreenCaptureBlocking(t *testing.T) {
 		t.Fatalf("PrepareGroupMembersChange (screen capture) failed: %v", err)
 	}
 	// The group's screen-capture-blocking state fills the trailing signed slot.
-	if !strings.HasSuffix(prepared.ActionSignatures[1].SignaturePayload, ",true") {
-		t.Errorf("expected the signed payload to end with the screen-capture flag, got %q", prepared.ActionSignatures[1].SignaturePayload)
+	add := prepared.ActionSignatures[1]
+	if !signedOver(t, chat, add, "GroupChangeEvent.GroupMemberAddChange,"+add.MessageID+
+		",910002,g123,910010,910002,910002,null,null,null,"+prepared.ConversationKeyVersion+",true") {
+		t.Errorf("expected the add to sign the screen-capture flag: %+v", add)
 	}
 	if prepared.ActionSignatures[1].EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty member-add encoded event detail")

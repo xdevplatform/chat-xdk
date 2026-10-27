@@ -80,9 +80,6 @@ class TestChatCore(unittest.TestCase):
         prepared = core.prepare_group_title_change("g123", title, conv_key, "1")
         self.assertNotEqual(prepared["encrypted_value"], title)
         self.assertEqual(prepared["conversation_key_version"], "1")
-        payload = prepared["action_signatures"][0]["signature_payload"]
-        self.assertTrue(payload.startswith("GroupChangeEvent.GroupTitleChange,"), payload)
-        self.assertNotIn(title, payload)
         self.assertEqual(core.decrypt(prepared["encrypted_value"], conv_key), title)
 
     def test_conversation_key_prepare_and_decrypt_roundtrip(self):
@@ -200,8 +197,6 @@ class TestPreparedChanges(unittest.TestCase):
         inner = sig["message_event_signature"]
         self.assertEqual(inner["signing_public_key"], core.public_keys()["signing"])
         self.assertTrue(inner["signature"] and inner["public_key_version"])
-        # CKCE signature payloads are withheld (they embed the plaintext key).
-        self.assertNotIn("signature_payload", sig)
 
     def test_removal_to_request_rotates_for_members_who_stay(self):
         from chat_core import removal_to_request
@@ -235,9 +230,8 @@ class TestPreparedChanges(unittest.TestCase):
         self.assertEqual(len(prep["action_signatures"]), 2)
         self.assertTrue(prep["conversation_key"])
         # The title goes out encrypted under the new key: the group_name the
-        # create request sends, and the ciphertext the create signs.
+        # create request sends.
         encrypted_title = prep["encrypted_title"]
-        self.assertIn(encrypted_title, prep["action_signatures"][1]["signature_payload"])
         self.assertEqual(core.decrypt(encrypted_title, bytes(prep["conversation_key"])), title)
 
     def test_encrypt_reaction_produces_sendable_payload(self):

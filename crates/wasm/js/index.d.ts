@@ -81,12 +81,6 @@ export interface ActionSignature {
   encodedMessageEventDetail: string;
   /** The signature over the action, with its versions and the signer's signing public key. */
   messageEventSignature: MessageEventSignature;
-  /**
-   * The comma-separated payload string that was signed; populated for group
-   * changes, message deletes and read receipts. Omitted for conversation-key
-   * changes, whose payload embeds the plaintext conversation key.
-   */
-  signaturePayload?: string;
 }
 
 /** The signature of an ActionSignature. */

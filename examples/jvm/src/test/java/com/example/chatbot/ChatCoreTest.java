@@ -84,9 +84,6 @@ class ChatCoreTest {
             PreparedGroupMetadataChange prepared = core.prepareGroupTitleChange("g123", title, key, "1");
             assertNotEquals(title, prepared.encryptedValue);
             assertEquals("1", prepared.conversationKeyVersion);
-            String payload = prepared.actionSignatures.get(0).signaturePayload;
-            assertTrue(payload.startsWith("GroupChangeEvent.GroupTitleChange,"), payload);
-            assertFalse(payload.contains(title), payload);
             assertEquals(title, core.decrypt(prepared.encryptedValue, key));
         }
     }
@@ -177,8 +174,6 @@ class ChatCoreTest {
             assertEquals(signingPub, inner.path("signing_public_key").asText());
             assertFalse(inner.path("signature").asText().isEmpty());
             assertFalse(inner.path("public_key_version").asText().isEmpty());
-            // CKCE signature payloads are withheld (they embed the plaintext key).
-            assertFalse(sig.has("signature_payload"));
         }
     }
 
@@ -220,8 +215,7 @@ class ChatCoreTest {
             assertNotNull(prep.conversationKey);
             assertEquals(32, prep.conversationKey.length);
             // The title goes out encrypted under the new key: the group_name the
-            // create request sends, and the ciphertext the create signs.
-            assertTrue(prep.actionSignatures.get(1).signaturePayload.contains(prep.encryptedTitle));
+            // create request sends.
             assertEquals(title, core.decrypt(prep.encryptedTitle, prep.conversationKey));
         }
     }

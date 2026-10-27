@@ -155,6 +155,18 @@ namespace ChatXdk.Tests
         /// <summary>The one <c>action_signatures</c> entry of a prepared delete or read receipt.</summary>
         private static ActionSignature OnlyAction(PreparedAction prepared) => Assert.Single(prepared.ActionSignatures);
 
+        /// <summary>
+        /// Whether <paramref name="sig"/>'s signature verifies, under the signer's own signing key,
+        /// over <paramref name="payload"/>: the comma-joined fields its event signs.
+        /// </summary>
+        private static bool Signs(Chat chat, ActionSignature sig, string payload)
+        {
+            var signed = sig.MessageEventSignature.Signature;
+            var signature = Convert.FromBase64String(signed.PadRight(signed.Length + (4 - signed.Length % 4) % 4, '='));
+            return chat.Verify(
+                sig.MessageEventSignature.SigningPublicKey, signature, System.Text.Encoding.UTF8.GetBytes(payload));
+        }
+
         /// <summary>File-encryption params under the fixture conversation key.</summary>
         private static EncryptFileParams EncryptFileParamsFor(SdkVectors v, byte[] file, string eventB64, string mediaHashKey) =>
             new(file, eventB64, mediaHashKey)
@@ -764,9 +776,7 @@ namespace ChatXdk.Tests
             Assert.Equal(
                 sig.MessageEventSignature.SigningPublicKey,
                 entry.GetProperty("message_event_signature").GetProperty("signing_public_key").GetString());
-            Assert.Equal(
-                $"MessageDeleteEvent,{sig.MessageId},111,111:222,2,seq-10,seq-11",
-                sig.SignaturePayload);
+            Assert.True(Signs(chat, sig, $"MessageDeleteEvent,{sig.MessageId},111,111:222,2,seq-10,seq-11"));
         }
 
         [Fact]
@@ -787,10 +797,9 @@ namespace ChatXdk.Tests
             Assert.Single(rotated.ConversationParticipantKeys);
             Assert.Equal(2, rotated.ActionSignatures.Count);
             Assert.Equal("11", rotated.ActionSignatures[0].MessageEventSignature.SignatureVersion);
-            Assert.EndsWith(
-                $",910007,{rotated.ConversationKeyVersion},signature_version=11",
-                rotated.ActionSignatures[0].SignaturePayload);
-            Assert.True(string.IsNullOrEmpty(rotated.ActionSignatures[1].SignaturePayload));
+            var removal = rotated.ActionSignatures[0];
+            Assert.True(Signs(chat, removal, $"GroupChangeEvent.GroupMemberRemoveChange,{removal.MessageId},111,g100,910007," +
+                $"{rotated.ConversationKeyVersion},signature_version=11"));
             var noKeys = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupMembersRemove(
                 new GroupMembersRemoveParams(Array.Empty<PublicKeyInput>(), "g100", new[] { "910007" })
                 {
@@ -807,8 +816,11 @@ namespace ChatXdk.Tests
                 ConversationKeyVersion = "7",
             });
             Assert.Equal(3, left.ActionSignatures.Count);
-            Assert.EndsWith(",910008", left.ActionSignatures[1].SignaturePayload);
-            Assert.StartsWith("ConversationDeleteEvent,", left.ActionSignatures[2].SignaturePayload);
+            var (leaving, promoting, deleting) = (left.ActionSignatures[0], left.ActionSignatures[1], left.ActionSignatures[2]);
+            Assert.True(Signs(chat, leaving,
+                $"GroupChangeEvent.GroupMemberRemoveChange,{leaving.MessageId},111,g100,111,7,signature_version=11"));
+            Assert.True(Signs(chat, promoting, $"GroupChangeEvent.GroupAdminAddChange,{promoting.MessageId},111,g100,910008"));
+            Assert.True(Signs(chat, deleting, $"ConversationDeleteEvent,{deleting.MessageId},111,g100"));
 
             var metadata = new (PreparedGroupMetadataChange Prepared, string Prefix, string Plaintext)[]
             {
@@ -830,10 +842,9 @@ namespace ChatXdk.Tests
             foreach (var (prepared, prefix, plaintext) in metadata)
             {
                 Assert.Equal(rotated.ConversationKeyVersion, prepared.ConversationKeyVersion);
-                var payload = Assert.Single(prepared.ActionSignatures).SignaturePayload;
-                Assert.StartsWith(prefix, payload);
-                Assert.EndsWith($",{prepared.ConversationKeyVersion},{prepared.EncryptedValue}", payload);
-                Assert.DoesNotContain(plaintext, payload);
+                var sig = Assert.Single(prepared.ActionSignatures);
+                Assert.True(Signs(chat, sig,
+                    $"{prefix}{sig.MessageId},111,g100,{prepared.ConversationKeyVersion},{prepared.EncryptedValue}"));
                 Assert.Equal(plaintext, chat.Decrypt(prepared.EncryptedValue, rotated.ConversationKey));
             }
             const string avatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
@@ -843,8 +854,8 @@ namespace ChatXdk.Tests
                     SenderId = "111",
                     SigningKeyVersion = "1",
                 }));
-            Assert.StartsWith("GroupChangeEvent.GroupAvatarUrlChange,", avatar.SignaturePayload);
-            Assert.EndsWith($",{rotated.ConversationKeyVersion},{avatarUrl}", avatar.SignaturePayload);
+            Assert.True(Signs(chat, avatar,
+                $"GroupChangeEvent.GroupAvatarUrlChange,{avatar.MessageId},111,g100,{rotated.ConversationKeyVersion},{avatarUrl}"));
             var uncached = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupTitleChange(
                 new GroupTitleChangeParams("g100", "Board") { SenderId = "111", SigningKeyVersion = "1" }));
             Assert.Contains("no cached conversation key for 'g100'", uncached.Message);
@@ -856,14 +867,17 @@ namespace ChatXdk.Tests
                 Title = "Board",
             });
             Assert.Equal(3, withTitle.ActionSignatures.Count);
-            Assert.StartsWith("GroupChangeEvent.GroupTitleChange,", withTitle.ActionSignatures[1].SignaturePayload);
+            var rotatedTitle = withTitle.ActionSignatures[1];
+            Assert.Equal("7", rotatedTitle.MessageEventSignature.SignatureVersion);
+            Assert.NotEmpty(rotatedTitle.EncodedMessageEventDetail);
 
             var blocking = OnlyAction(chat.PrepareScreenCapture(new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled)
             {
                 SenderId = "111",
                 SigningKeyVersion = "1",
             }));
-            Assert.StartsWith("ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,", blocking.SignaturePayload);
+            Assert.True(Signs(chat, blocking,
+                $"ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{blocking.MessageId},111,g100"));
         }
 
         [Fact]
@@ -880,9 +894,7 @@ namespace ChatXdk.Tests
                 SigningKeyVersion = "1",
             }));
 
-            Assert.Equal(
-                $"MessageDeleteEvent,{sig.MessageId},111,g999,1,seq-1",
-                sig.SignaturePayload);
+            Assert.True(Signs(chat, sig, $"MessageDeleteEvent,{sig.MessageId},111,g999,1,seq-1"));
         }
 
         // PrepareMarkConversationRead
@@ -906,13 +918,8 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(sig.EncodedMessageEventDetail);
             Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
             Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
-            Assert.Equal(
-                $"MarkConversationReadEvent,{sig.MessageId},111,111:222,2011626338877079553,1700000000123",
-                sig.SignaturePayload);
-            var signed = sig.MessageEventSignature.Signature;
-            var signature = Convert.FromBase64String(signed.PadRight(signed.Length + (4 - signed.Length % 4) % 4, '='));
-            Assert.True(chat.Verify(
-                chat.GetPublicKeys().Signing, signature, System.Text.Encoding.UTF8.GetBytes(sig.SignaturePayload!)));
+            Assert.True(Signs(chat, sig,
+                $"MarkConversationReadEvent,{sig.MessageId},111,111:222,2011626338877079553,1700000000123"));
         }
 
         [Fact]
@@ -927,9 +934,10 @@ namespace ChatXdk.Tests
 
             Assert.Equal("7", sig.MessageEventSignature.PublicKeyVersion);
             var prefix = $"MarkConversationReadEvent,{sig.MessageId},111,g999,seq-1,";
-            Assert.StartsWith(prefix, sig.SignaturePayload);
-            var seenAt = long.Parse(sig.SignaturePayload!.Substring(prefix.Length));
-            Assert.InRange(seenAt, before, after);
+            var signedNow = false;
+            for (var seenAt = before; seenAt <= after && !signedNow; seenAt++)
+                signedNow = Signs(chat, sig, $"{prefix}{seenAt}");
+            Assert.True(signedNow, $"seen_at in [{before}, {after}]");
         }
 
         [Fact]
@@ -972,8 +980,6 @@ namespace ChatXdk.Tests
 
             Assert.Single(prepared.ConversationParticipantKeys);
             Assert.Single(prepared.ActionSignatures);
-            // Absent: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
 
             // The participant keys serialize under the request's field names.
             var json = JsonSerializer.SerializeToElement(prepared);
@@ -1227,18 +1233,15 @@ namespace ChatXdk.Tests
             Assert.Equal("g123", prepared.ConversationId);
             // A member add emits two signed actions: the key change and the add.
             Assert.Equal(2, prepared.ActionSignatures.Count);
-            // Absent: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[0].EncodedMessageEventDetail);
-            Assert.StartsWith("GroupChangeEvent.GroupMemberAddChange,", prepared.ActionSignatures[1].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
-            // Unset screen-capture blocking signs as the trailing null sentinel.
-            var add = prepared.ActionSignatures[1];
-            Assert.EndsWith(",null", add.SignaturePayload);
             // The title goes out encrypted under the new key, the value the request
-            // sends as encrypted_title; the signature covers the ciphertext.
-            Assert.Contains(prepared.EncryptedTitle!, add.SignaturePayload);
-            Assert.DoesNotContain("Test Group", add.SignaturePayload);
+            // sends as encrypted_title; the signature covers the ciphertext. Unset
+            // screen-capture blocking signs as the trailing null sentinel.
+            var add = prepared.ActionSignatures[1];
+            Assert.True(Signs(chat, add,
+                $"GroupChangeEvent.GroupMemberAddChange,{add.MessageId},910002,g123,910006,910002,910002," +
+                $"{prepared.EncryptedTitle},null,null,{prepared.ConversationKeyVersion},null"));
             Assert.Equal("Test Group", chat.Decrypt(prepared.EncryptedTitle!, prepared.ConversationKey));
             Assert.Null(prepared.EncryptedDescription);
             Assert.Equal("7", add.MessageEventSignature.SignatureVersion);
@@ -1271,8 +1274,9 @@ namespace ChatXdk.Tests
             // the avatar URL is signed as passed.
             var add = prepared.ActionSignatures[1];
             Assert.Equal("8", add.MessageEventSignature.SignatureVersion);
-            Assert.EndsWith($",null,{prepared.EncryptedDescription}", add.SignaturePayload);
-            Assert.Contains($",{avatarUrl},", add.SignaturePayload);
+            Assert.True(Signs(chat, add,
+                $"GroupChangeEvent.GroupMemberAddChange,{add.MessageId},910002,g123,910006,910002,910002," +
+                $"{prepared.EncryptedTitle},{avatarUrl},null,{prepared.ConversationKeyVersion},null,{prepared.EncryptedDescription}"));
         }
 
         [Fact]
@@ -1295,8 +1299,10 @@ namespace ChatXdk.Tests
             });
 
             // The group's screen-capture-blocking state fills the trailing signed slot.
-            Assert.StartsWith("GroupChangeEvent.GroupMemberAddChange,", prepared.ActionSignatures[1].SignaturePayload);
-            Assert.EndsWith(",true", prepared.ActionSignatures[1].SignaturePayload);
+            var add = prepared.ActionSignatures[1];
+            Assert.True(Signs(chat, add,
+                $"GroupChangeEvent.GroupMemberAddChange,{add.MessageId},910002,g123,910006,910002,910002," +
+                $"null,null,null,{prepared.ConversationKeyVersion},true"));
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
         }
 
@@ -1320,16 +1326,14 @@ namespace ChatXdk.Tests
             Assert.Equal("g123", prepared.ConversationId);
             // A group create emits two signed actions: the key change and the create.
             Assert.Equal(2, prepared.ActionSignatures.Count);
-            // Absent: the payload embeds the plaintext conversation key and is withheld.
-            Assert.Null(prepared.ActionSignatures[0].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[0].EncodedMessageEventDetail);
-            var payload = prepared.ActionSignatures[1].SignaturePayload!;
-            Assert.StartsWith("GroupChangeEvent.GroupCreate,", payload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
             // The title goes out encrypted under the new key, the value the request
             // sends as group_name; the signature covers the ciphertext.
-            Assert.Contains(prepared.EncryptedTitle!, payload);
-            Assert.DoesNotContain("Test Group", payload);
+            var create = prepared.ActionSignatures[1];
+            Assert.True(Signs(chat, create,
+                $"GroupChangeEvent.GroupCreate,{create.MessageId},910002,{prepared.ConversationKeyVersion}," +
+                $"910002,910005,null,{prepared.EncryptedTitle},null"));
             Assert.Equal("Test Group", chat.Decrypt(prepared.EncryptedTitle!, prepared.ConversationKey));
             Assert.Null(prepared.EncryptedDescription);
         }
@@ -2040,7 +2044,10 @@ namespace ChatXdk.Tests
                     Title = title,
                 });
                 // Trailing slots: legacy upgrade, title, avatar_url — all unset → null sentinels.
-                Assert.EndsWith(",null,null,null", prepared.ActionSignatures[1].SignaturePayload);
+                var create = prepared.ActionSignatures[1];
+                Assert.True(Signs(chat, create,
+                    $"GroupChangeEvent.GroupCreate,{create.MessageId},910002,{prepared.ConversationKeyVersion}," +
+                    "910002,910005,null,null,null"));
                 Assert.Null(prepared.EncryptedTitle);
             }
         }

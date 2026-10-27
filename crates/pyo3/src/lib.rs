@@ -365,11 +365,6 @@ fn action_signature_to_pydict<'py>(
     message_event_signature.set_item("public_key_version", &signed.public_key_version)?;
     message_event_signature.set_item("signing_public_key", &signed.signing_public_key)?;
     dict.set_item("message_event_signature", message_event_signature)?;
-    // Absent for conversation-key changes: the signed payload embeds the
-    // plaintext conversation key and is withheld.
-    if !sig.signature_payload.is_empty() {
-        dict.set_item("signature_payload", &sig.signature_payload)?;
-    }
     Ok(dict)
 }
 
@@ -2894,7 +2889,7 @@ impl Chat {
     ///     A dict with ``action_signatures``: one dict with ``message_id``,
     ///     ``encoded_message_event_detail``, ``message_event_signature``
     ///     (``signature``, ``signature_version``, ``public_key_version``,
-    ///     ``signing_public_key``) and ``signature_payload``.
+    ///     ``signing_public_key``).
     fn prepare_message_delete(
         &self,
         py: Python<'_>,

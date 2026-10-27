@@ -83,6 +83,17 @@ class ChatTest {
         return prepared.actionSignatures.get(0);
     }
 
+    /**
+     * Whether {@code sig}'s signature verifies, under the signer's own signing key, over
+     * {@code payload}: the comma-joined fields its event signs.
+     */
+    private static boolean signs(Chat chat, ActionSignature sig, String payload) {
+        return chat.verify(
+                sig.messageEventSignature.signingPublicKey,
+                Base64.getDecoder().decode(sig.messageEventSignature.signature),
+                payload.getBytes(StandardCharsets.UTF_8));
+    }
+
     /** File-encryption params under the fixture conversation key. */
     private static EncryptFileParams encryptFileParams(JsonNode v, byte[] file, String eventB64, String mediaHashKey) {
         EncryptFileParams params = new EncryptFileParams(file, eventB64, mediaHashKey);
@@ -586,9 +597,7 @@ class ChatTest {
             assertFalse(entry.has("signature"), entry.toString());
             assertEquals(signed.signingPublicKey,
                     entry.get("message_event_signature").get("signing_public_key").asText());
-            assertEquals(
-                    "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11",
-                    sig.signaturePayload);
+            assertTrue(signs(chat, sig, "MessageDeleteEvent," + sig.messageId + ",111,111:222,2,seq-10,seq-11"));
         }
     }
 
@@ -601,9 +610,7 @@ class ChatTest {
             p.senderId = "111";
             p.signingKeyVersion = "1";
             ActionSignature sig = onlyAction(chat.prepareMessageDelete(p));
-            assertEquals(
-                    "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1",
-                    sig.signaturePayload);
+            assertTrue(signs(chat, sig, "MessageDeleteEvent," + sig.messageId + ",111,g999,1,seq-1"));
         }
     }
 
@@ -623,10 +630,9 @@ class ChatTest {
             assertEquals(1, rotated.conversationParticipantKeys.size());
             assertEquals(2, rotated.actionSignatures.size());
             assertEquals("11", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
-            assertTrue(rotated.actionSignatures.get(0).signaturePayload.endsWith(
-                    ",910007," + rotated.conversationKeyVersion + ",signature_version=11"));
-            assertTrue(rotated.actionSignatures.get(1).signaturePayload == null
-                    || rotated.actionSignatures.get(1).signaturePayload.isEmpty());
+            ActionSignature removed = rotated.actionSignatures.get(0);
+            assertTrue(signs(chat, removed, "GroupChangeEvent.GroupMemberRemoveChange," + removed.messageId
+                    + ",111,g100,910007," + rotated.conversationKeyVersion + ",signature_version=11"));
 
             GroupMembersRemoveParams noKeys =
                     new GroupMembersRemoveParams(List.of(), "g100", List.of("910007"));
@@ -645,8 +651,14 @@ class ChatTest {
             leave.conversationKeyVersion = "7";
             PreparedAction left = chat.prepareGroupLeave(leave);
             assertEquals(3, left.actionSignatures.size());
-            assertTrue(left.actionSignatures.get(1).signaturePayload.endsWith(",910008"));
-            assertTrue(left.actionSignatures.get(2).signaturePayload.startsWith("ConversationDeleteEvent,"));
+            ActionSignature leaving = left.actionSignatures.get(0);
+            ActionSignature promoting = left.actionSignatures.get(1);
+            ActionSignature deleting = left.actionSignatures.get(2);
+            assertTrue(signs(chat, leaving, "GroupChangeEvent.GroupMemberRemoveChange," + leaving.messageId
+                    + ",111,g100,111,7,signature_version=11"));
+            assertTrue(signs(chat, promoting,
+                    "GroupChangeEvent.GroupAdminAddChange," + promoting.messageId + ",111,g100,910008"));
+            assertTrue(signs(chat, deleting, "ConversationDeleteEvent," + deleting.messageId + ",111,g100"));
 
             GroupTitleChangeParams titleParams = new GroupTitleChangeParams("g100", "Board: layoffs, Q3");
             titleParams.senderId = "111";
@@ -656,11 +668,9 @@ class ChatTest {
             PreparedGroupMetadataChange title = chat.prepareGroupTitleChange(titleParams);
             assertEquals(rotated.conversationKeyVersion, title.conversationKeyVersion);
             assertEquals(1, title.actionSignatures.size());
-            String titlePayload = title.actionSignatures.get(0).signaturePayload;
-            assertTrue(titlePayload.startsWith("GroupChangeEvent.GroupTitleChange,"), titlePayload);
-            assertTrue(titlePayload.endsWith(
-                    "," + title.conversationKeyVersion + "," + title.encryptedValue), titlePayload);
-            assertFalse(titlePayload.contains("Board: layoffs, Q3"), titlePayload);
+            ActionSignature titleSig = title.actionSignatures.get(0);
+            assertTrue(signs(chat, titleSig, "GroupChangeEvent.GroupTitleChange," + titleSig.messageId
+                    + ",111,g100," + title.conversationKeyVersion + "," + title.encryptedValue));
             assertEquals("Board: layoffs, Q3", chat.decrypt(title.encryptedValue, rotated.conversationKey));
 
             String avatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
@@ -670,10 +680,9 @@ class ChatTest {
             avatarParams.signingKeyVersion = "1";
             PreparedAction avatar = chat.prepareGroupAvatarChange(avatarParams);
             assertEquals(1, avatar.actionSignatures.size());
-            String avatarPayload = avatar.actionSignatures.get(0).signaturePayload;
-            assertTrue(avatarPayload.startsWith("GroupChangeEvent.GroupAvatarUrlChange,"), avatarPayload);
-            assertTrue(avatarPayload.endsWith(
-                    "," + rotated.conversationKeyVersion + "," + avatarUrl), avatarPayload);
+            ActionSignature avatarSig = avatar.actionSignatures.get(0);
+            assertTrue(signs(chat, avatarSig, "GroupChangeEvent.GroupAvatarUrlChange," + avatarSig.messageId
+                    + ",111,g100," + rotated.conversationKeyVersion + "," + avatarUrl));
 
             GroupDescriptionChangeParams descriptionParams =
                     new GroupDescriptionChangeParams("g100", "Rules: be kind");
@@ -682,8 +691,10 @@ class ChatTest {
             descriptionParams.conversationKey = rotated.conversationKey;
             descriptionParams.conversationKeyVersion = rotated.conversationKeyVersion;
             PreparedGroupMetadataChange description = chat.prepareGroupDescriptionChange(descriptionParams);
-            assertTrue(description.actionSignatures.get(0).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupDescriptionChange,"));
+            ActionSignature descriptionSig = description.actionSignatures.get(0);
+            assertTrue(signs(chat, descriptionSig, "GroupChangeEvent.GroupDescriptionChange,"
+                    + descriptionSig.messageId + ",111,g100," + description.conversationKeyVersion + ","
+                    + description.encryptedValue));
             assertEquals("Rules: be kind", chat.decrypt(description.encryptedValue, rotated.conversationKey));
 
             GroupTitleChangeParams uncached = new GroupTitleChangeParams("g100", "Board");
@@ -701,14 +712,16 @@ class ChatTest {
             withTitle.title = "Board";
             PreparedConversationChange removedWithTitle = chat.prepareGroupMembersRemove(withTitle);
             assertEquals(3, removedWithTitle.actionSignatures.size());
-            assertTrue(removedWithTitle.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupTitleChange,"));
+            ActionSignature rotatedTitle = removedWithTitle.actionSignatures.get(1);
+            assertEquals("7", rotatedTitle.messageEventSignature.signatureVersion);
+            assertFalse(rotatedTitle.encodedMessageEventDetail.isEmpty());
 
             ScreenCaptureParams capture = new ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled);
             capture.senderId = "111";
             capture.signingKeyVersion = "1";
-            assertTrue(onlyAction(chat.prepareScreenCapture(capture)).signaturePayload.startsWith(
-                    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"));
+            ActionSignature blocking = onlyAction(chat.prepareScreenCapture(capture));
+            assertTrue(signs(chat, blocking,
+                    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking," + blocking.messageId + ",111,g100"));
         }
     }
 
@@ -726,14 +739,8 @@ class ChatTest {
             assertFalse(sig.encodedMessageEventDetail.isEmpty());
             assertEquals("1", sig.messageEventSignature.publicKeyVersion);
             assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
-            assertEquals(
-                    "MarkConversationReadEvent," + sig.messageId
-                            + ",111,111:222,2011626338877079553,1700000000123",
-                    sig.signaturePayload);
-            assertTrue(chat.verify(
-                    chat.getPublicKeys().signing,
-                    Base64.getDecoder().decode(sig.messageEventSignature.signature),
-                    sig.signaturePayload.getBytes(StandardCharsets.UTF_8)));
+            assertTrue(signs(chat, sig, "MarkConversationReadEvent," + sig.messageId
+                    + ",111,111:222,2011626338877079553,1700000000123"));
         }
     }
 
@@ -748,9 +755,11 @@ class ChatTest {
 
             assertEquals("7", sig.messageEventSignature.publicKeyVersion);
             String prefix = "MarkConversationReadEvent," + sig.messageId + ",111,g999,seq-1,";
-            assertTrue(sig.signaturePayload.startsWith(prefix), sig.signaturePayload);
-            long seenAt = Long.parseLong(sig.signaturePayload.substring(prefix.length()));
-            assertTrue(seenAt >= before && seenAt <= after, "seen_at " + seenAt);
+            boolean signedNow = false;
+            for (long seenAt = before; seenAt <= after && !signedNow; seenAt++) {
+                signedNow = signs(chat, sig, prefix + seenAt);
+            }
+            assertTrue(signedNow, "seen_at in [" + before + ", " + after + "]");
         }
     }
 
@@ -845,8 +854,6 @@ class ChatTest {
             assertEquals(1, prepared.conversationParticipantKeys.size());
             assertFalse(prepared.conversationParticipantKeys.get(0).encryptedConversationKey.isEmpty());
             assertEquals(1, prepared.actionSignatures.size());
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             // The participant keys serialize under the request's field names.
             JsonNode entry = ChatJson.MAPPER.valueToTree(prepared).get("conversation_participant_keys").get(0);
             assertEquals(
@@ -882,19 +889,15 @@ class ChatTest {
             assertEquals("g123", prepared.conversationId);
             // A member add emits two signed actions: the key change and the add.
             assertEquals(2, prepared.actionSignatures.size());
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupMemberAddChange,"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
-            // Unset screen-capture blocking signs as the trailing null sentinel.
-            String payload = prepared.actionSignatures.get(1).signaturePayload;
-            assertTrue(payload.endsWith(",null"));
             // The title goes out encrypted under the new key, the value the request
-            // sends as encrypted_title; the signature covers the ciphertext.
-            assertTrue(payload.contains(prepared.encryptedTitle), payload);
-            assertFalse(payload.contains("Test Group"), payload);
+            // sends as encrypted_title; the signature covers the ciphertext. Unset
+            // screen-capture blocking signs as the trailing null sentinel.
+            ActionSignature add = prepared.actionSignatures.get(1);
+            assertTrue(signs(chat, add, "GroupChangeEvent.GroupMemberAddChange," + add.messageId
+                    + ",910002,g123,910006,910002,910002," + prepared.encryptedTitle + ",null,null,"
+                    + prepared.conversationKeyVersion + ",null"));
             assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
             assertNull(prepared.encryptedDescription);
             assertEquals("7", prepared.actionSignatures.get(1).messageEventSignature.signatureVersion);
@@ -923,9 +926,9 @@ class ChatTest {
             // the avatar URL is signed as passed.
             ActionSignature add = prepared.actionSignatures.get(1);
             assertEquals("8", add.messageEventSignature.signatureVersion);
-            assertTrue(add.signaturePayload.endsWith(",null," + prepared.encryptedDescription),
-                    add.signaturePayload);
-            assertTrue(add.signaturePayload.contains("," + avatarUrl + ","), add.signaturePayload);
+            assertTrue(signs(chat, add, "GroupChangeEvent.GroupMemberAddChange," + add.messageId
+                    + ",910002,g123,910006,910002,910002," + prepared.encryptedTitle + "," + avatarUrl
+                    + ",null," + prepared.conversationKeyVersion + ",null," + prepared.encryptedDescription));
         }
     }
 
@@ -944,9 +947,10 @@ class ChatTest {
             p.currentScreenCaptureBlockingEnabled = true;
             PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
             // The group's screen-capture-blocking state fills the trailing signed slot.
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupMemberAddChange,"));
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.endsWith(",true"));
+            ActionSignature add = prepared.actionSignatures.get(1);
+            assertTrue(signs(chat, add, "GroupChangeEvent.GroupMemberAddChange," + add.messageId
+                    + ",910002,g123,910006,910002,910002,null,null,null," + prepared.conversationKeyVersion
+                    + ",true"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
         }
     }
@@ -968,16 +972,13 @@ class ChatTest {
             assertEquals("g123", prepared.conversationId);
             // A group create emits two signed actions: the key change and the create.
             assertEquals(2, prepared.actionSignatures.size());
-            // Empty: the payload embeds the plaintext conversation key and is withheld.
-            assertNull(prepared.actionSignatures.get(0).signaturePayload);
             assertFalse(prepared.actionSignatures.get(0).encodedMessageEventDetail.isEmpty());
-            String payload = prepared.actionSignatures.get(1).signaturePayload;
-            assertTrue(payload.startsWith("GroupChangeEvent.GroupCreate,"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
             // The title goes out encrypted under the new key, the value the request
             // sends as group_name; the signature covers the ciphertext.
-            assertTrue(payload.contains(prepared.encryptedTitle), payload);
-            assertFalse(payload.contains("Test Group"), payload);
+            ActionSignature create = prepared.actionSignatures.get(1);
+            assertTrue(signs(chat, create, "GroupChangeEvent.GroupCreate," + create.messageId + ",910002,"
+                    + prepared.conversationKeyVersion + ",910002,910005,null," + prepared.encryptedTitle + ",null"));
             assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
             assertNull(prepared.encryptedDescription);
         }
@@ -1988,11 +1989,12 @@ class ChatTest {
                 p.signingKeyVersion = "1";
                 p.title = title;
                 PreparedConversationChange prepared = chat.prepareGroupCreate(p);
-                String payload = prepared.actionSignatures.get(1).signaturePayload;
                 // Trailing slots: legacy upgrade, title, avatar_url — all unset → null
                 // sentinels.
-                assertTrue(payload.endsWith(",null,null,null"),
-                        "the title and avatar must sign as the null sentinel, got: " + payload);
+                ActionSignature create = prepared.actionSignatures.get(1);
+                assertTrue(signs(chat, create, "GroupChangeEvent.GroupCreate," + create.messageId + ",910002,"
+                        + prepared.conversationKeyVersion + ",910002,910005,null,null,null"),
+                        "the title and avatar must sign as the null sentinel");
                 assertNull(prepared.encryptedTitle);
             }
         }

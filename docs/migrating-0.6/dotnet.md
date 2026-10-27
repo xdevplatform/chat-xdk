@@ -352,9 +352,8 @@ using var decryptor = chat.FileDecryptor(new FileDecryptorParams(fileEventB64, k
 The prepare methods return each `ActionSignature` in the shape a request's
 `action_signatures` takes: `MessageId`, `EncodedMessageEventDetail`, the
 signature in `MessageEventSignature` (with `SigningPublicKey`, your signing
-public key as `GetPublicKeys` returns it) and, except for conversation-key
-changes, `SignaturePayload`, a `string?` that is left out of the JSON when
-absent. Serialize them as returned:
+public key as `GetPublicKeys` returns it), and nothing else: the signed
+payload stays inside the SDK. Serialize them as returned:
 
 ```csharp
 // 0.5.x

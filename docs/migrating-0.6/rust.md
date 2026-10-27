@@ -429,7 +429,7 @@ The prepare methods return each `ActionSignature` in the shape a request's
 `action_signatures` takes: `message_id`, `encoded_message_event_detail`, the
 signature in `message_event_signature` (a `signatures::MessageEventSignature`
 with `signing_public_key`, your signing public key as `get_public_keys`
-returns it) and, except for conversation-key changes, `signature_payload`.
+returns it), and nothing else: the signed payload stays inside the SDK.
 Serialize them as returned:
 
 ```rust

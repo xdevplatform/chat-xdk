@@ -384,9 +384,8 @@ must(err)
 The prepare methods return each `ActionSignature` in the shape a request's
 `action_signatures` takes: `MessageID`, `EncodedMessageEventDetail`, the
 signature in `MessageEventSignature` (with `SigningPublicKey`, your signing
-public key as `GetPublicKeys` returns it) and, except for conversation-key
-changes, `SignaturePayload`, which is left out of the JSON when empty.
-Marshal them as returned:
+public key as `GetPublicKeys` returns it), and nothing else: the signed
+payload stays inside the SDK. Marshal them as returned:
 
 ```go
 // 0.5.x

@@ -57,6 +57,18 @@ def _only_action(prepared):
     return entry
 
 
+def _signs(chat, sig, payload):
+    """Whether ``sig``'s signature verifies, under the signer's own signing
+    key, over ``payload``: the comma-joined fields its event signs."""
+    signed = sig["message_event_signature"]
+    signature = signed["signature"]
+    return chat.verify(
+        signed["signing_public_key"],
+        base64.b64decode(signature + "=" * (-len(signature) % 4)),
+        payload.encode(),
+    )
+
+
 class TestUtilityFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -732,8 +744,6 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(len(result["action_signatures"]), 1)
         sig = result["action_signatures"][0]
         self.assertTrue(sig["message_event_signature"]["signature"])
-        # Absent: the payload embeds the plaintext conversation key and is withheld.
-        self.assertNotIn("signature_payload", sig)
 
     def test_extract_conversation_keys_empty_shape(self):
         chat, _ = self._unlocked_chat()
@@ -771,22 +781,23 @@ class TestApiShapes(unittest.TestCase):
         # A member add emits two signed actions: the key change and the add.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
-        # Absent: the payload embeds the plaintext conversation key and is withheld.
-        self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         add = result["action_signatures"][1]
-        self.assertTrue(add["message_event_signature"]["signature"])
-        self.assertTrue(
-            add["signature_payload"].startswith("GroupChangeEvent.GroupMemberAddChange,")
-        )
         self.assertTrue(add["encoded_message_event_detail"])
-        # Unset screen-capture blocking signs as the trailing null sentinel.
-        self.assertTrue(add["signature_payload"].endswith(",null"))
         # The title goes out encrypted under the new key, the value the
-        # request sends as encrypted_title; the signature covers the ciphertext.
+        # request sends as encrypted_title; the signature covers the
+        # ciphertext. Unset screen-capture blocking signs as the trailing null
+        # sentinel.
         encrypted_title = result["encrypted_title"]
-        self.assertNotIn("Team", add["signature_payload"])
-        self.assertIn(encrypted_title, add["signature_payload"])
+        self.assertTrue(
+            _signs(
+                chat,
+                add,
+                f"GroupChangeEvent.GroupMemberAddChange,{add['message_id']},910002,g123,"
+                f"910009,910002,910002,{encrypted_title},null,null,"
+                f"{result['conversation_key_version']},null",
+            )
+        )
         self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
         self.assertNotIn("encrypted_description", result)
         self.assertEqual(add["message_event_signature"]["signature_version"], "7")
@@ -822,8 +833,15 @@ class TestApiShapes(unittest.TestCase):
         # The description is signed at version 8, after the screen-capture
         # slot; the avatar URL is signed as passed.
         self.assertEqual(add["message_event_signature"]["signature_version"], "8")
-        self.assertTrue(add["signature_payload"].endswith(f",null,{encrypted_description}"))
-        self.assertIn(f",{avatar_url},", add["signature_payload"])
+        self.assertTrue(
+            _signs(
+                chat,
+                add,
+                f"GroupChangeEvent.GroupMemberAddChange,{add['message_id']},910002,g123,"
+                f"910009,910002,910002,{result['encrypted_title']},{avatar_url},null,"
+                f"{result['conversation_key_version']},null,{encrypted_description}",
+            )
+        )
 
     def test_prepare_group_members_change_screen_capture_blocking(self):
         from chat_xdk import GroupMembersChangeParams
@@ -850,9 +868,13 @@ class TestApiShapes(unittest.TestCase):
         add = result["action_signatures"][1]
         # The group's screen-capture-blocking state fills the trailing slot.
         self.assertTrue(
-            add["signature_payload"].startswith("GroupChangeEvent.GroupMemberAddChange,")
+            _signs(
+                chat,
+                add,
+                f"GroupChangeEvent.GroupMemberAddChange,{add['message_id']},910002,g123,"
+                f"910009,910002,910002,null,null,null,{result['conversation_key_version']},true",
+            )
         )
-        self.assertTrue(add["signature_payload"].endswith(",true"))
         self.assertTrue(add["encoded_message_event_detail"])
 
     def test_prepare_group_create_shape(self):
@@ -880,20 +902,20 @@ class TestApiShapes(unittest.TestCase):
         # A group create emits two signed actions: the key change and the create.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
-        # Absent: the payload embeds the plaintext conversation key and is withheld.
-        self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         create = result["action_signatures"][1]
-        self.assertTrue(create["message_event_signature"]["signature"])
-        self.assertTrue(
-            create["signature_payload"].startswith("GroupChangeEvent.GroupCreate,")
-        )
         self.assertTrue(create["encoded_message_event_detail"])
         # The title goes out encrypted under the new key, the value the
         # request sends as group_name; the signature covers the ciphertext.
         encrypted_title = result["encrypted_title"]
-        self.assertNotIn("Team", create["signature_payload"])
-        self.assertIn(encrypted_title, create["signature_payload"])
+        self.assertTrue(
+            _signs(
+                chat,
+                create,
+                f"GroupChangeEvent.GroupCreate,{create['message_id']},910002,"
+                f"{result['conversation_key_version']},910002,910005,null,{encrypted_title},null",
+            )
+        )
         self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
         self.assertNotIn("encrypted_description", result)
 
@@ -950,10 +972,15 @@ class TestApiShapes(unittest.TestCase):
             )
         )
         for result in (empty, omitted):
-            payload = result["action_signatures"][1]["signature_payload"]
+            create = result["action_signatures"][1]
             self.assertTrue(
-                payload.endswith(",null,null,null"),
-                f"the title and avatar must sign as the null sentinel, got: {payload}",
+                _signs(
+                    chat,
+                    create,
+                    f"GroupChangeEvent.GroupCreate,{create['message_id']},910002,"
+                    f"{result['conversation_key_version']},910002,910005,null,null,null",
+                ),
+                "the title and avatar must sign as the null sentinel",
             )
             self.assertNotIn("encrypted_title", result)
 
@@ -992,23 +1019,29 @@ class TestApiShapes(unittest.TestCase):
         with_title = chat.prepare_group_members_remove(
             GroupMembersRemoveParams(remaining, "g100", ["910007"], title="Board", **ident)
         )
-        self.assertEqual(
-            [s["signature_payload"].split(",")[0] for s in with_title["action_signatures"][:2]],
-            ["GroupChangeEvent.GroupMemberRemoveChange", "GroupChangeEvent.GroupTitleChange"],
-        )
         self.assertEqual(len(with_title["action_signatures"]), 3)
-        self.assertIn(
-            f",{with_title['conversation_key_version']},",
-            with_title["action_signatures"][1]["signature_payload"],
+        version = with_title["conversation_key_version"]
+        removal, title = with_title["action_signatures"][:2]
+        self.assertTrue(
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
+                f"910007,{version},signature_version=11",
+            )
         )
+        self.assertEqual(title["message_event_signature"]["signature_version"], "7")
+        self.assertTrue(title["encoded_message_event_detail"])
         removal = rotated["action_signatures"][0]
         self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
         self.assertTrue(
-            removal["signature_payload"].endswith(
-                f",910007,{rotated['conversation_key_version']},signature_version=11"
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
+                f"910007,{rotated['conversation_key_version']},signature_version=11",
             )
         )
-        self.assertNotIn("signature_payload", rotated["action_signatures"][1])
         with self.assertRaises(ValueError) as raised:
             chat.prepare_group_members_remove(
                 GroupMembersRemoveParams([], "g100", ["910007"], **ident)
@@ -1022,9 +1055,24 @@ class TestApiShapes(unittest.TestCase):
             GroupLeaveParams("g100", promote_admin_id="910008", conversation_key_version="7", **ident)
         )
         self.assertEqual(len(left["action_signatures"]), 3)
-        self.assertTrue(left["action_signatures"][1]["signature_payload"].endswith(",910008"))
+        removal, promote, delete = left["action_signatures"]
         self.assertTrue(
-            left["action_signatures"][2]["signature_payload"].startswith("ConversationDeleteEvent,")
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
+                "910002,7,signature_version=11",
+            )
+        )
+        self.assertTrue(
+            _signs(
+                chat,
+                promote,
+                f"GroupChangeEvent.GroupAdminAddChange,{promote['message_id']},910002,g100,910008",
+            )
+        )
+        self.assertTrue(
+            _signs(chat, delete, f"ConversationDeleteEvent,{delete['message_id']},910002,g100")
         )
 
         conv_key = base64.b64decode(v["conversation_key_b64"])
@@ -1050,52 +1098,94 @@ class TestApiShapes(unittest.TestCase):
                 set(prepared), {"encrypted_value", "conversation_key_version", "action_signatures"}
             )
             self.assertEqual(prepared["conversation_key_version"], "4")
-            payload = prepared["action_signatures"][0]["signature_payload"]
-            self.assertTrue(payload.startswith(prefix), payload)
-            self.assertTrue(payload.endswith(f",4,{prepared['encrypted_value']}"), payload)
-            self.assertNotIn(plaintext, payload)
+            sig = prepared["action_signatures"][0]
+            self.assertTrue(
+                _signs(
+                    chat,
+                    sig,
+                    f"{prefix}{sig['message_id']},910002,g100,4,{prepared['encrypted_value']}",
+                )
+            )
             self.assertEqual(chat.decrypt(prepared["encrypted_value"], conv_key), plaintext)
         avatar_url = "https://ton.x.com/xchat_media/g100/avatar"
         avatar = chat.prepare_group_avatar_change(
             GroupAvatarChangeParams("g100", avatar_url, "4", **ident)
         )
         self.assertEqual(set(avatar), {"action_signatures"})
-        payload = avatar["action_signatures"][0]["signature_payload"]
-        self.assertTrue(payload.startswith("GroupChangeEvent.GroupAvatarUrlChange,"), payload)
-        self.assertTrue(payload.endswith(f",4,{avatar_url}"), payload)
+        sig = avatar["action_signatures"][0]
+        self.assertTrue(
+            _signs(
+                chat,
+                sig,
+                f"GroupChangeEvent.GroupAvatarUrlChange,{sig['message_id']},910002,g100,4,{avatar_url}",
+            )
+        )
         with self.assertRaises(ValueError) as raised:
             chat.prepare_group_title_change(GroupTitleChangeParams("g100", "Board", **ident))
         self.assertIn("no cached conversation key for 'g100'", str(raised.exception))
         admins = chat.prepare_group_admins_add(
             GroupAdminsAddParams("g100", ["910008", "910009"], **ident)
         )["action_signatures"][0]
-        self.assertTrue(admins["signature_payload"].endswith(",910008,910009"))
+        self.assertTrue(
+            _signs(
+                chat,
+                admins,
+                f"GroupChangeEvent.GroupAdminAddChange,{admins['message_id']},910002,g100,"
+                "910008,910009",
+            )
+        )
         invite = chat.prepare_group_invite_enable(
             GroupInviteEnableParams("g100", "https://x.com/i/invite/abc", **ident)
         )["action_signatures"][0]
-        self.assertTrue(invite["signature_payload"].endswith(",https://x.com/i/invite/abc,null,null"))
+        self.assertTrue(
+            _signs(
+                chat,
+                invite,
+                f"GroupChangeEvent.GroupInviteEnable,{invite['message_id']},910002,g100,"
+                "https://x.com/i/invite/abc,null,null",
+            )
+        )
         rejected = chat.prepare_group_join_reject(
             GroupJoinRejectParams("g100", ["910010"], **ident)
         )["action_signatures"][0]
-        self.assertTrue(rejected["signature_payload"].endswith(",910010"))
+        self.assertTrue(
+            _signs(
+                chat,
+                rejected,
+                f"GroupChangeEvent.GroupJoinReject,{rejected['message_id']},910002,g100,910010",
+            )
+        )
         ttl = chat.prepare_message_ttl_change(
             MessageTtlChangeParams("g100", 86400000, **ident)
         )["action_signatures"][0]
-        self.assertTrue(ttl["signature_payload"].endswith(",86400000"))
+        self.assertTrue(
+            _signs(
+                chat,
+                ttl,
+                "ConversationMetadataChangeEvent.MessageDurationChange,"
+                f"{ttl['message_id']},910002,g100,86400000",
+            )
+        )
         cleared = chat.prepare_message_ttl_remove(
             MessageTtlRemoveParams("g100", **ident)
         )["action_signatures"][0]
         self.assertTrue(
-            cleared["signature_payload"].startswith(
+            _signs(
+                chat,
+                cleared,
                 "ConversationMetadataChangeEvent.MessageDurationRemove,"
+                f"{cleared['message_id']},910002,g100",
             )
         )
         blocking = chat.prepare_screen_capture(
             ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled, **ident)
         )["action_signatures"][0]
         self.assertTrue(
-            blocking["signature_payload"].startswith(
+            _signs(
+                chat,
+                blocking,
                 "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"
+                f"{blocking['message_id']},910002,g100",
             )
         )
         with self.assertRaises(ValueError) as raised:
@@ -1133,9 +1223,8 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(signed["signature_version"], "7")
         self.assertEqual(signed["public_key_version"], "1")
         self.assertEqual(signed["signing_public_key"], chat.get_public_keys().signing)
-        self.assertEqual(
-            sig["signature_payload"],
-            f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11",
+        self.assertTrue(
+            _signs(chat, sig, f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11")
         )
 
     def test_prepare_message_delete_for_self(self):
@@ -1157,10 +1246,7 @@ class TestApiShapes(unittest.TestCase):
             )
         )
 
-        self.assertEqual(
-            sig["signature_payload"],
-            f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1",
-        )
+        self.assertTrue(_signs(chat, sig, f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1"))
 
     def test_prepare_mark_conversation_read_shape(self):
         from chat_xdk import MarkConversationReadParams
@@ -1187,17 +1273,13 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(
             sig["message_event_signature"]["signing_public_key"], chat.get_public_keys().signing
         )
-        self.assertEqual(
-            sig["signature_payload"],
-            f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
-            "2011626338877079553,1700000000123",
-        )
-        signature = sig["message_event_signature"]["signature"]
+        self.assertEqual(sig["message_event_signature"]["signing_public_key"], v["signing_public_b64"])
         self.assertTrue(
-            chat.verify(
-                v["signing_public_b64"],
-                base64.b64decode(signature + "=" * (-len(signature) % 4)),
-                sig["signature_payload"].encode(),
+            _signs(
+                chat,
+                sig,
+                f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
+                "2011626338877079553,1700000000123",
             )
         )
 
@@ -1218,10 +1300,9 @@ class TestApiShapes(unittest.TestCase):
         # The session identity signs; the unset time is the current time.
         self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
         prefix = f"MarkConversationReadEvent,{sig['message_id']},111,g999,seq-1,"
-        self.assertTrue(sig["signature_payload"].startswith(prefix))
-        seen_at = int(sig["signature_payload"][len(prefix) :])
-        self.assertGreaterEqual(seen_at, before)
-        self.assertLessEqual(seen_at, after)
+        self.assertTrue(
+            any(_signs(chat, sig, f"{prefix}{seen_at}") for seen_at in range(before, after + 1))
+        )
 
     def test_prepare_mark_conversation_read_rejects_empty_ids(self):
         from chat_xdk import MarkConversationReadParams

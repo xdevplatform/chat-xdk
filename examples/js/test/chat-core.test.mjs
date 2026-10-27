@@ -64,9 +64,6 @@ test("group title change signs the encrypted title, which decrypts back", async 
   });
   assert.notEqual(prepared.encryptedValue, title);
   assert.equal(prepared.conversationKeyVersion, "1");
-  const payload = prepared.actionSignatures[0].signaturePayload;
-  assert.ok(payload.startsWith("GroupChangeEvent.GroupTitleChange,"), payload);
-  assert.ok(!payload.includes(title), payload);
   assert.equal(core.decrypt(prepared.encryptedValue, key), title);
 });
 
@@ -171,8 +168,6 @@ test("prepToRequest maps the X API request shape", async () => {
   assert.ok(sig.encodedMessageEventDetail);
   assert.equal(sig.messageEventSignature.signingPublicKey, core.publicKeys().signing);
   assert.ok(sig.messageEventSignature.signature);
-  // CKCE signature payloads are withheld (they embed the plaintext key).
-  assert.ok(!("signaturePayload" in sig));
 });
 
 test("removalToRequest rotates the key for the members who stay", async () => {
@@ -229,8 +224,7 @@ test("prepareGroupCreate yields the two required signatures", async () => {
   assert.equal(prep.actionSignatures.length, 2);
   assert.ok(prep.conversationKey?.length === 32);
   // The title goes out encrypted under the new key: the group_name the
-  // create request sends, and the ciphertext the create signs.
-  assert.ok(prep.actionSignatures[1].signaturePayload.includes(prep.encryptedTitle));
+  // create request sends.
   assert.equal(core.decrypt(prep.encryptedTitle, prep.conversationKey), "hello from the js example");
 });
 
