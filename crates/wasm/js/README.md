@@ -97,7 +97,7 @@ chat.setSigningKeys([
 // come from the store; the verified conversation keys populate the cache.
 const result = chat.decryptEvents({ events: rawEvents });
 
-for (const dm of result.messages) {
+for (const dm of result.events) {
   if (dm.event.type === "message") {
     console.log(dm.event.senderId, dm.event.content.text);
   }
@@ -146,14 +146,14 @@ messages in those conversations. Key rotation does not retroactively protect
 messages encrypted under a previous key. See
 [docs/CRYPTO.md — Known Limitations](../../../docs/CRYPTO.md#known-limitations).
 
-### Key export is not exposed in the browser build
+### Exported keys are unencrypted
 
-Raw private-key export and import are not part of this binding's public API.
-`exportKeys()` would return unencrypted private key material to page
-JavaScript, where any script that can reach the chat instance — including code
-injected via XSS or a compromised dependency — could exfiltrate the identity
-permanently. Keys are managed inside the Juicebox layer (`setup`/`unlock`)
-instead, so raw key bytes never cross into application JavaScript.
+`exportKeys()` returns unencrypted private key material, as in every
+binding: any script that can reach the chat instance, including code injected
+via XSS or a compromised dependency, could take the identity with it. In a
+browser, keep keys in Juicebox (`setup`/`unlock`), which needs no export;
+where you do export them, store the bytes only where private keys belong and
+zero them with `fill(0)` once stored.
 
 ## License
 

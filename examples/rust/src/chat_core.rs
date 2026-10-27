@@ -20,9 +20,9 @@ use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventParams,
     DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
-    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams,
-    PreparedConversationChange, PublicKeyInput, PublicKeyRegistrationPayload, PublicKeys,
-    QuickReply, SigningKeyEntry,
+    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
+    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput,
+    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -47,6 +47,17 @@ pub struct ReplyOptions {
     pub quick_reply: Option<QuickReply>,
     /// Disappearing-message lifetime in milliseconds.
     pub ttl_msec: Option<i64>,
+    /// The conversation key and its version to encrypt under, overriding
+    /// the SDK's cached key: the newest one a verified key change carried.
+    pub conversation_key: Option<(XChatConversationKey, String)>,
+}
+
+impl ReplyOptions {
+    /// Encrypt under `key` at `version` rather than the SDK's cached key.
+    pub fn with_conversation_key(mut self, key: &XChatConversationKey, version: &str) -> Self {
+        self.conversation_key = Some((key.clone(), version.to_string()));
+        self
+    }
 }
 
 /// Fields the X API expects for an encrypted message send, plus the
@@ -72,11 +83,22 @@ pub struct ChatCore {
 }
 
 impl ChatCore {
+    /// A chat whose conversation-key cache is on: `decrypt_batch` fills it
+    /// from verified key changes, and the encrypt calls take the newest key
+    /// from it.
     pub fn new() -> Self {
+        let inner = SdkCore::new();
+        inner.set_cache_keys(true);
         Self {
-            inner: SdkCore::new(),
+            inner,
             signing_key_version: String::new(),
         }
+    }
+
+    /// Take the answer to `GET /2/chat/features`: its status and body. The
+    /// switches decide whether sends are v0 or v1.
+    pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
+        self.inner.set_feature_switches(status, body);
     }
 
     // -- Key management -----------------------------------------------------
@@ -173,7 +195,7 @@ impl ChatCore {
         signing_keys: &[SigningKeyEntry],
     ) -> DecryptEventsResult {
         self.inner.decrypt_events(
-            DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
+            &DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
                 .with_signing_keys(signing_keys.to_vec()),
         )
     }
@@ -186,7 +208,7 @@ impl ChatCore {
         signing_keys: &[SigningKeyEntry],
     ) -> Result<Event, SdkError> {
         self.inner.decrypt_event(
-            DecryptEventParams::new(event_b64, conversation_keys.clone())
+            &DecryptEventParams::new(event_b64, conversation_keys.clone())
                 .with_signing_keys(signing_keys.to_vec()),
         )
     }
@@ -202,19 +224,23 @@ impl ChatCore {
     /// descriptors (e.g. a media reference); `quick_reply` offers selectable
     /// options or answers them; `ttl_msec` makes the message disappear after
     /// the given lifetime. The sender identity comes from
-    /// [`ChatCore::set_identity`].
+    /// [`ChatCore::set_identity`], and the conversation key from the SDK's
+    /// cache unless `options` sets one.
     pub fn encrypt_reply(
         &self,
         conversation_id: &str,
         text: &str,
-        conversation_key: &XChatConversationKey,
-        conversation_key_version: &str,
         options: ReplyOptions,
     ) -> Result<SendBody, SdkError> {
+        let (conversation_key, conversation_key_version) = match options.conversation_key {
+            Some((key, version)) => (Some(key.to_bytes()), Some(version)),
+            None => (None, None),
+        };
         let payload = match &options.reply_to_event {
             None => {
-                let mut params = EncryptMessageParams::new(conversation_id, text)
-                    .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+                let mut params = EncryptMessageParams::new(conversation_id, text);
+                params.conversation_key = conversation_key;
+                params.conversation_key_version = conversation_key_version;
                 params.entities = options.entities;
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
@@ -223,11 +249,9 @@ impl ChatCore {
             }
             Some(reply_to_event) => {
                 let mut params =
-                    EncryptReplyParams::new(conversation_id, text, reply_to_event.clone())
-                        .with_conversation_key(
-                            conversation_key.to_bytes(),
-                            conversation_key_version,
-                        );
+                    EncryptReplyParams::new(conversation_id, text, reply_to_event.clone());
+                params.conversation_key = conversation_key;
+                params.conversation_key_version = conversation_key_version;
                 params.reply_to_ckces = options.reply_to_ckces.clone();
                 params.entities = options.entities;
                 params.attachments = options.attachments;
@@ -278,19 +302,26 @@ impl ChatCore {
     // -- Group management -----------------------------------------------------
 
     /// Prepare a group creation: fresh key + the two required signatures.
+    /// A plaintext `title` is encrypted under the new key; send the result's
+    /// `encrypted_title` as the request's `group_name`.
     pub fn prepare_group_create(
         &self,
         public_keys: &[PublicKeyInput],
         conversation_id: &str,
         member_ids: &[String],
         admin_ids: &[String],
+        title: Option<&str>,
     ) -> Result<PreparedConversationChange, SdkError> {
-        self.inner.prepare_group_create(&GroupCreateParams::new(
+        let mut params = GroupCreateParams::new(
             public_keys.to_vec(),
             conversation_id,
             member_ids.to_vec(),
             admin_ids.to_vec(),
-        ))
+        );
+        if let Some(title) = title {
+            params = params.with_title(title);
+        }
+        self.inner.prepare_group_create(&params)
     }
 
     /// Prepare a member add: rotated key + the two required signatures.
@@ -322,9 +353,12 @@ impl ChatCore {
         conversation_id: &str,
         user_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
-        let mut params = GroupMembersRemoveParams::new(conversation_id, user_ids.to_vec());
-        params.public_keys = Some(public_keys.to_vec());
-        self.inner.prepare_group_members_remove(&params)
+        self.inner
+            .prepare_group_members_remove(&GroupMembersRemoveParams::new(
+                public_keys.to_vec(),
+                conversation_id,
+                user_ids.to_vec(),
+            ))
     }
 
     // -- Media files -----------------------------------------------------------
@@ -378,7 +412,7 @@ impl ChatCore {
         conversation_keys: &HashMap<String, XChatConversationKey>,
         media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut dec = self.inner.file_decryptor(FileDecryptorParams::new(
+        let mut dec = self.inner.file_decryptor(&FileDecryptorParams::new(
             event_b64,
             conversation_keys.clone(),
             media_hash_key,
@@ -391,16 +425,26 @@ impl ChatCore {
         Ok(out)
     }
 
-    // -- Generic helpers (handy for metadata + tests) -----------------------
+    // -- Group metadata -----------------------------------------------------
 
-    pub fn encrypt(
+    /// Prepare a group title change: the SDK encrypts the plaintext title
+    /// under the conversation key and signs it. Send `encrypted_value` as the
+    /// group's name and `action_signatures` on the request.
+    pub fn prepare_group_title_change(
         &self,
-        plaintext: &str,
+        conversation_id: &str,
+        title: &str,
         conversation_key: &XChatConversationKey,
-    ) -> Result<String, SdkError> {
-        self.inner.encrypt(plaintext, conversation_key)
+        conversation_key_version: &str,
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
+        self.inner.prepare_group_title_change(
+            &GroupTitleChangeParams::new(conversation_id, title)
+                .with_conversation_key(conversation_key.to_bytes(), conversation_key_version),
+        )
     }
 
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation.
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,

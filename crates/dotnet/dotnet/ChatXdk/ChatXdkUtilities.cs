@@ -17,21 +17,7 @@ namespace ChatXdk
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
 
-        private static string Consume(FfiResult result)
-        {
-            string? data = result.data != null
-                ? Marshal.PtrToStringUTF8((IntPtr)result.data)
-                : null;
-            string? error = result.error != null
-                ? Marshal.PtrToStringUTF8((IntPtr)result.error)
-                : null;
-
-            if (result.data != null) NativeMethods.chat_xdk_free_string(result.data);
-            if (result.error != null) NativeMethods.chat_xdk_free_string(result.error);
-
-            if (error != null) throw new ChatXdkException(error);
-            return data ?? "";
-        }
+        private static string Consume(FfiResult result) => Chat.ConsumeResult(result);
 
         private static byte[] Utf8Z(string s)
         {

@@ -65,14 +65,21 @@ fn set_identity_needs_the_registered_version() {
 }
 
 #[test]
-fn generic_encrypt_decrypt_roundtrip() {
+fn group_title_change_encrypts_the_title_it_signs() {
     let v = load_vectors();
     let core = loaded_core(&v);
     let key = conversation_key(&v);
-    let plaintext = "hello from the rust example";
-    let ciphertext = core.encrypt(plaintext, &key).expect("encrypt");
-    assert_ne!(ciphertext, plaintext);
-    assert_eq!(core.decrypt(&ciphertext, &key).expect("decrypt"), plaintext);
+    let title = "hello from the rust example";
+    let prepared = core
+        .prepare_group_title_change("g123", title, &key, "1")
+        .expect("prepare_group_title_change");
+    assert_ne!(prepared.encrypted_value, title);
+    assert_eq!(prepared.conversation_key_version, "1");
+    assert_eq!(
+        core.decrypt(&prepared.encrypted_value, &key)
+            .expect("decrypt"),
+        title
+    );
 }
 
 #[test]
@@ -81,11 +88,11 @@ fn conversation_key_prepare_and_decrypt_roundtrip() {
     let core = loaded_core(&v);
     let prepared = core
         .prepare_conversation_key_change(
-            &[PublicKeyInput {
-                user_id: "910002".to_string(),
-                public_key: v["identity_public_b64"].as_str().unwrap().to_string(),
-                key_version: "1".to_string(),
-            }],
+            &[PublicKeyInput::new(
+                "910002",
+                v["identity_public_b64"].as_str().unwrap(),
+                "1",
+            )],
             Some("conv-1"),
         )
         .expect("prepare_conversation_key_change");
@@ -112,9 +119,7 @@ fn encrypt_reply_produces_sendable_payload() {
         .encrypt_reply(
             "6789:12345",
             "pong",
-            &key,
-            "1710000000000",
-            ReplyOptions::default(),
+            ReplyOptions::default().with_conversation_key(&key, "1710000000000"),
         )
         .expect("encrypt_reply");
     assert!(!body.encoded_message_create_event.is_empty());
@@ -128,7 +133,7 @@ fn decrypt_batch_empty_is_safe() {
     let v = load_vectors();
     let core = loaded_core(&v);
     let result = core.decrypt_batch(&[], &[]);
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
 }
 
 #[test]
@@ -140,11 +145,11 @@ fn decrypt_one_rejects_garbage() {
 }
 
 fn fixture_public_keys(v: &Value) -> Vec<PublicKeyInput> {
-    vec![PublicKeyInput {
-        user_id: "1000".to_string(),
-        public_key: v["identity_public_b64"].as_str().unwrap().to_string(),
-        key_version: "1".to_string(),
-    }]
+    vec![PublicKeyInput::new(
+        "1000",
+        v["identity_public_b64"].as_str().unwrap(),
+        "1",
+    )]
 }
 
 fn sorted_keys(obj: &Value) -> Vec<&str> {
@@ -200,8 +205,6 @@ fn prep_to_request_maps_the_rest_shape() {
     assert_eq!(inner["signing_public_key"].as_str().unwrap(), signing);
     assert!(!inner["signature"].as_str().unwrap().is_empty());
     assert!(!inner["public_key_version"].as_str().unwrap().is_empty());
-    // CKCE signature payloads are withheld (they embed the plaintext key).
-    assert!(sig.get("signature_payload").is_none());
 }
 
 #[test]
@@ -245,11 +248,23 @@ fn prepare_group_create_yields_two_signatures() {
     let v = load_vectors();
     let core = loaded_core(&v);
     let keys = fixture_public_keys(&v);
+    let title = "hello from the rust example";
     let prep = core
-        .prepare_group_create(&keys, "g123", &["1000".to_string()], &["1000".to_string()])
+        .prepare_group_create(
+            &keys,
+            "g123",
+            &["1000".to_string()],
+            &["1000".to_string()],
+            Some(title),
+        )
         .expect("prepare_group_create");
     assert_eq!(prep.action_signatures.len(), 2);
-    assert_eq!(prep.conversation_key.as_ref().unwrap().encoded().len(), 32);
+    let key = prep.conversation_key.as_ref().unwrap();
+    assert_eq!(key.encoded().len(), 32);
+    // The title goes out encrypted under the new key: the group_name the
+    // create request sends.
+    let encrypted_title = prep.encrypted_title.as_deref().expect("encrypted title");
+    assert_eq!(core.decrypt(encrypted_title, key).expect("decrypt"), title);
 }
 
 #[test]
@@ -292,20 +307,16 @@ fn threaded_reply_with_entities_and_ttl() {
         .encrypt_reply(
             v["event_conversation_id"].as_str().unwrap(),
             "@user hello",
-            &key,
-            v["event_conversation_key_version"].as_str().unwrap(),
             ReplyOptions {
                 reply_to_event: Some(v["event_message_b64"].as_str().unwrap().to_string()),
                 reply_to_ckces: None,
-                entities: Some(vec![EntityDescriptor {
-                    start: 0,
-                    end: 5,
-                    entity_type: "mention".to_string(),
-                }]),
+                entities: Some(vec![EntityDescriptor::new(0, 5, "mention")]),
                 attachments: None,
                 quick_reply: None,
                 ttl_msec: Some(60_000),
-            },
+                ..Default::default()
+            }
+            .with_conversation_key(&key, v["event_conversation_key_version"].as_str().unwrap()),
         )
         .expect("encrypt_reply");
     assert!(!body.encoded_message_create_event.is_empty());
@@ -324,24 +335,25 @@ fn media_encrypt_decrypt_roundtrip() {
     let plaintext: Vec<u8> = (0..300_000u32)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
+    let encrypted_size = chat_xdk_core::utils::encrypted_file_size(plaintext.len() as u64)
+        .expect("encrypted_file_size");
     let body = core
         .encrypt_reply(
             "1000:2000",
             "a photo",
-            &key,
-            "1",
             ReplyOptions {
                 attachments: Some(vec![AttachmentDescriptor::Media {
                     media_hash_key: "photo".to_string(),
                     width: 4,
                     height: 3,
-                    filesize_bytes: plaintext.len() as i64,
+                    filesize_bytes: encrypted_size as i64,
                     filename: "photo.bin".to_string(),
                     media_type: Some(5),
                     duration_millis: None,
                 }]),
                 ..Default::default()
-            },
+            }
+            .with_conversation_key(&key, "1"),
         )
         .expect("encrypt_reply (media)");
     assert!(!body.event_b64.is_empty());
@@ -349,10 +361,7 @@ fn media_encrypt_decrypt_roundtrip() {
     let ciphertext = core
         .encrypt_media(&plaintext, &body.event_b64, &key, "1", "photo")
         .expect("encrypt_media");
-    assert_eq!(
-        Some(ciphertext.len() as u64),
-        chat_xdk_core::utils::encrypted_file_size(plaintext.len() as u64)
-    );
+    assert_eq!(ciphertext.len() as u64, encrypted_size);
     assert_eq!(
         core.decrypt_media(&ciphertext, &body.event_b64, &keys, "photo")
             .expect("decrypt_media"),

@@ -16,7 +16,7 @@ namespace ChatXdk
     ///   <item>Key generation and Juicebox-backed storage (<see cref="GenerateKeypairs"/>, <see cref="Setup"/>, <see cref="Unlock"/>)</item>
     ///   <item>Event decryption (<see cref="ExtractConversationKeys"/>, <see cref="DecryptEvents"/>, <see cref="DecryptEvent"/>)</item>
     ///   <item>Signed conversation-key changes (<see cref="PrepareConversationKeyChange"/>, <see cref="PrepareGroupCreate"/>, <see cref="PrepareGroupMembersChange"/>)</item>
-    ///   <item>UTF-8 metadata encryption with the conversation key (<see cref="Encrypt"/>, <see cref="Decrypt"/>)</item>
+    ///   <item>Group metadata decryption with the conversation key (<see cref="Decrypt"/>)</item>
     ///   <item>Message / reaction / reply encryption (<see cref="EncryptMessage"/>, etc.)</item>
     ///   <item>File encryption (<see cref="EncryptFile"/>, <see cref="DecryptFile"/>, <see cref="FileEncryptor"/>, <see cref="FileDecryptor"/>)</item>
     ///   <item>Stateless helpers on <see cref="ChatXdkUtilities"/> (base64/hex, MIME, image dimensions)</item>
@@ -24,17 +24,13 @@ namespace ChatXdk
     ///
     /// <para>Always <see cref="Dispose"/> the instance when finished to release native resources.</para>
     ///
-    /// <para>Not thread-safe: do not share one instance across threads without external
-    /// synchronization. Mutating operations (<see cref="Setup"/>, <see cref="Unlock"/>,
-    /// <see cref="Delete"/>, <see cref="ChangePin"/>, <see cref="UpdateConfig"/>,
-    /// <see cref="SetRejectUnverified"/>,
-    /// <see cref="SetIdentity"/>, <see cref="SetCacheKeys"/>, <see cref="SetSigningKeys"/>)
-    /// must not race decrypt or any other call on the same instance.</para>
+    /// <para>Its methods may be called from several threads at once; <see cref="Dispose"/>
+    /// must not race them.</para>
     /// </summary>
     /// <example>
     /// <code>
-    /// using var chat = new Chat();
-    /// chat.Unlock("2580", juiceboxConfigJson);
+    /// using var chat = new Chat(juiceboxConfigJson);
+    /// chat.Unlock(pinBytes);
     /// chat.SetIdentity(new SetIdentityParams(myUserId, mySigningKeyVersion)); // session identity, once
     /// chat.SetCacheKeys(true);                                               // opt-in conversation-key cache
     /// chat.SetSigningKeys(participantSigningKeys);                           // default verification keys
@@ -66,13 +62,30 @@ namespace ChatXdk
         };
 
         /// <summary>
-        /// Create a new Chat SDK instance.
+        /// Create a Chat SDK instance without a Juicebox config, which manages its keys with
+        /// <see cref="ImportKeys"/> and <see cref="GenerateKeypairs"/> alone or takes its config
+        /// later from <see cref="UpdateConfig"/>. Until then <see cref="Setup"/>,
+        /// <see cref="Unlock"/>, <see cref="ChangePin"/> and <see cref="Delete"/> throw a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidState"/>.
         /// </summary>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown if the native library fails to initialise (e.g. missing shared library).
-        /// </exception>
-        public Chat() : this(null, TimeSpan.Zero)
+        public Chat() : this(null, null, TimeSpan.Zero)
         {
+        }
+
+        /// <summary>
+        /// Create a Chat SDK instance that keeps its keys in Juicebox, with the Juicebox
+        /// configuration JSON the X API returns. <see cref="Setup"/>, <see cref="Unlock"/>,
+        /// <see cref="ChangePin"/> and <see cref="Delete"/> use it; <see cref="UpdateConfig"/>
+        /// replaces it.
+        /// </summary>
+        /// <exception cref="ChatXdkException">
+        /// The configuration is not a Juicebox config (kind <see cref="ChatXdkErrorKind.InvalidInput"/>),
+        /// or is empty or blank (kind <see cref="ChatXdkErrorKind.InvalidState"/>, the error a chat
+        /// without a config gives its Juicebox calls).
+        /// </exception>
+        public Chat(string juiceboxConfigJson) : this(juiceboxConfigJson, null, TimeSpan.Zero)
+        {
+            ArgumentNullException.ThrowIfNull(juiceboxConfigJson);
         }
 
         /// <summary>
@@ -80,13 +93,13 @@ namespace ChatXdk
         /// <paramref name="featureEndpoint"/> within <paramref name="featureTimeout"/>, or
         /// from the default endpoint when it is null.
         /// </summary>
-        internal Chat(string? featureEndpoint, TimeSpan featureTimeout)
+        internal Chat(string? juiceboxConfigJson, string? featureEndpoint, TimeSpan featureTimeout)
         {
-            _handle = NativeMethods.chat_xdk_new();
-            if (_handle == null)
-                throw new InvalidOperationException(
-                    "chat_xdk_new() returned NULL — ensure the native library " +
-                    "(chat_xdk_dotnet.dylib / .so / .dll) is on the library search path.");
+            ChatHandle* handle = null;
+            var configBytes = juiceboxConfigJson == null ? null : Utf8Z(juiceboxConfigJson);
+            fixed (byte* configPtr = configBytes)
+                ConsumeResult(NativeMethods.chat_xdk_new(configPtr, &handle));
+            _handle = handle;
             if (featureEndpoint != null)
                 ConfigureFeatures(featureEndpoint, featureTimeout);
             FeatureFetch.Start(this);
@@ -151,9 +164,12 @@ namespace ChatXdk
             if (result.data != null) NativeMethods.chat_xdk_free_string(result.data);
             if (result.error != null) NativeMethods.chat_xdk_free_string(result.error);
 
-            if (error != null) throw new ChatXdkException(error);
+            if (error != null) throw ChatXdkException.FromDocument(error);
             return data ?? "";
         }
+
+        /// <summary>Consume a native result whose data is <c>true</c> or <c>false</c>.</summary>
+        private static bool ConsumeBool(FfiResult result) => ConsumeResult(result) == "true";
 
         /// <summary>Encode <paramref name="s"/> as a null-terminated UTF-8 byte array.</summary>
         internal static byte[] Utf8Z(string s)
@@ -189,7 +205,7 @@ namespace ChatXdk
             get
             {
                 ThrowIfDisposed();
-                bool unlocked = NativeMethods.chat_xdk_is_unlocked(_handle) == 1;
+                bool unlocked = ConsumeBool(NativeMethods.chat_xdk_is_unlocked(_handle));
                 GC.KeepAlive(this);
                 return unlocked;
             }
@@ -201,7 +217,7 @@ namespace ChatXdk
             get
             {
                 ThrowIfDisposed();
-                bool loaded = NativeMethods.chat_xdk_has_identity_key(_handle) == 1;
+                bool loaded = ConsumeBool(NativeMethods.chat_xdk_has_identity_key(_handle));
                 GC.KeepAlive(this);
                 return loaded;
             }
@@ -216,7 +232,7 @@ namespace ChatXdk
         public void SetRejectUnverified(bool reject)
         {
             ThrowIfDisposed();
-                NativeMethods.chat_xdk_set_reject_unverified(_handle, reject ? 1 : 0);
+            ConsumeResult(NativeMethods.chat_xdk_set_reject_unverified(_handle, reject ? 1 : 0));
             GC.KeepAlive(this);
         }
 
@@ -232,14 +248,14 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["user_id"] = parameters.UserId,
                 ["signing_key_version"] = parameters.SigningKeyVersion,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             fixed (byte* jsonPtr = jsonBytes)
-                ConsumeResult(NativeMethods.chat_xdk_set_identity_params(_handle, jsonPtr));
+                ConsumeResult(NativeMethods.chat_xdk_set_identity(_handle, jsonPtr));
             GC.KeepAlive(this);
         }
 
@@ -253,7 +269,7 @@ namespace ChatXdk
         public void SetCacheKeys(bool enabled)
         {
             ThrowIfDisposed();
-            NativeMethods.chat_xdk_set_cache_keys(_handle, enabled ? 1 : 0);
+            ConsumeResult(NativeMethods.chat_xdk_set_cache_keys(_handle, enabled ? 1 : 0));
             GC.KeepAlive(this);
         }
 
@@ -296,60 +312,58 @@ namespace ChatXdk
         public void Lock()
         {
             ThrowIfDisposed();
-            NativeMethods.chat_xdk_lock(_handle);
+            ConsumeResult(NativeMethods.chat_xdk_lock(_handle));
             GC.KeepAlive(this);
         }
 
         // Juicebox lifecycle
 
         /// <summary>
-        /// Update the Juicebox configuration — call this whenever the X API
-        /// issues fresh short-lived auth tokens.
+        /// Set or replace the Juicebox configuration: on first boot, for a chat created
+        /// without one, or whenever the X API issues fresh short-lived auth tokens.
         /// </summary>
         public void UpdateConfig(string configJson)
         {
             ThrowIfDisposed();
             var cfg = Utf8Z(configJson);
-                fixed (byte* cfgPtr = cfg)
-                    ConsumeResult(NativeMethods.chat_xdk_update_config(_handle, cfgPtr));
+            fixed (byte* cfgPtr = cfg)
+                ConsumeResult(NativeMethods.chat_xdk_update_config(_handle, cfgPtr));
             GC.KeepAlive(this);
         }
 
         /// <summary>
-        /// Register the SDK's keys with Juicebox (first-time setup).
-        /// Call <see cref="GenerateKeypairs"/> and POST the result to the X API first,
-        /// then call this to persist the keys under the user's PIN.
+        /// Register the SDK's keys with Juicebox under <paramref name="pin"/> (first-time
+        /// setup). Call <see cref="GenerateKeypairs"/> and POST the result to the X API first,
+        /// then call this to persist the keys under the user's PIN. Needs a chat created with
+        /// a Juicebox configuration.
         /// </summary>
-        /// <param name="pin">User-chosen PIN.</param>
-        /// <param name="configJson">Juicebox configuration JSON from the X API.</param>
+        /// <param name="pin">The user's PIN, as bytes the SDK never copies to a string, so you
+        /// can zero the array once the call returns.</param>
         /// <returns>The user's public keys to upload to the X API.</returns>
-        public PublicKeys Setup(string pin, string configJson)
+        public PublicKeys Setup(byte[] pin)
         {
             ThrowIfDisposed();
-            var pinBytes = Utf8Z(pin);
-            var cfgBytes = Utf8Z(configJson);
+            ArgumentNullException.ThrowIfNull(pin);
             string json;
-                fixed (byte* pinPtr = pinBytes)
-                fixed (byte* cfgPtr = cfgBytes)
-                    json = ConsumeResult(NativeMethods.chat_xdk_setup(_handle, pinPtr, cfgPtr));
+            fixed (byte* pinPtr = pin)
+                json = ConsumeResult(NativeMethods.chat_xdk_setup(_handle, pinPtr, (nuint)pin.Length));
             GC.KeepAlive(this);
             return JsonSerializer.Deserialize<PublicKeys>(json, JsonOpts)!;
         }
 
         /// <summary>
-        /// Recover keys from Juicebox and load them into memory.
-        /// Call on every startup after the user enters their PIN.
+        /// Recover keys from Juicebox with <paramref name="pin"/> and load them into memory.
+        /// Call on every startup after the user enters their PIN. A wrong PIN throws a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidPin"/>.
         /// </summary>
-        /// <param name="pin">The user's PIN.</param>
-        /// <param name="configJson">Juicebox configuration JSON from the X API.</param>
-        public void Unlock(string pin, string configJson)
+        /// <param name="pin">The user's PIN, as bytes the SDK never copies to a string, so you
+        /// can zero the array once the call returns.</param>
+        public void Unlock(byte[] pin)
         {
             ThrowIfDisposed();
-            var pinBytes = Utf8Z(pin);
-            var cfgBytes = Utf8Z(configJson);
-                fixed (byte* pinPtr = pinBytes)
-                fixed (byte* cfgPtr = cfgBytes)
-                    ConsumeResult(NativeMethods.chat_xdk_unlock(_handle, pinPtr, cfgPtr));
+            ArgumentNullException.ThrowIfNull(pin);
+            fixed (byte* pinPtr = pin)
+                ConsumeResult(NativeMethods.chat_xdk_unlock(_handle, pinPtr, (nuint)pin.Length));
             GC.KeepAlive(this);
         }
 
@@ -360,21 +374,37 @@ namespace ChatXdk
         public void Delete()
         {
             ThrowIfDisposed();
-                ConsumeResult(NativeMethods.chat_xdk_delete(_handle));
+            ConsumeResult(NativeMethods.chat_xdk_delete(_handle));
             GC.KeepAlive(this);
         }
 
-        /// <summary>Re-register keys under a new PIN.</summary>
-        public void ChangePin(string oldPin, string newPin)
+        /// <summary>
+        /// Re-register keys under a new PIN, unlocking with the old one first. Both PINs are
+        /// bytes you can zero once the call returns.
+        /// </summary>
+        public void ChangePin(byte[] oldPin, byte[] newPin)
         {
             ThrowIfDisposed();
-            var oldBytes = Utf8Z(oldPin);
-            var newBytes = Utf8Z(newPin);
-                fixed (byte* oldPtr = oldBytes)
-                fixed (byte* newPtr = newBytes)
-                    ConsumeResult(NativeMethods.chat_xdk_change_pin(_handle, oldPtr, newPtr));
+            ArgumentNullException.ThrowIfNull(oldPin);
+            ArgumentNullException.ThrowIfNull(newPin);
+            fixed (byte* oldPtr = oldPin)
+            fixed (byte* newPtr = newPin)
+                ConsumeResult(NativeMethods.chat_xdk_change_pin(
+                    _handle, oldPtr, (nuint)oldPin.Length, newPtr, (nuint)newPin.Length));
             GC.KeepAlive(this);
         }
+
+        /// <summary><see cref="Setup"/> on the thread pool.</summary>
+        public Task<PublicKeys> SetupAsync(byte[] pin) => Task.Run(() => Setup(pin));
+
+        /// <summary><see cref="Unlock"/> on the thread pool.</summary>
+        public Task UnlockAsync(byte[] pin) => Task.Run(() => Unlock(pin));
+
+        /// <summary><see cref="Delete"/> on the thread pool.</summary>
+        public Task DeleteAsync() => Task.Run(Delete);
+
+        /// <summary><see cref="ChangePin"/> on the thread pool.</summary>
+        public Task ChangePinAsync(byte[] oldPin, byte[] newPin) => Task.Run(() => ChangePin(oldPin, newPin));
 
         // Key management
 
@@ -416,19 +446,16 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Export private keys as raw bytes (32 or 64) for a secure backup.
-        /// Returns <see langword="null"/> when no identity key is loaded.
+        /// Export private keys as raw bytes for a secure backup: 32 bytes for the identity
+        /// key, 64 with the signing key. Throws a <see cref="ChatXdkException"/> of kind
+        /// <see cref="ChatXdkErrorKind.InvalidState"/> when no identity key is loaded.
         /// Warning: These are raw secret key bytes — store with extreme care.
         /// </summary>
-        public byte[]? ExportKeys()
+        public byte[] ExportKeys()
         {
             ThrowIfDisposed();
-            // Mirrors core's export requirement: identity key present
-            // (signing key optional, giving a 32-byte export).
-            if (!HasIdentityKey) return null;
             var b64 = ConsumeResult(NativeMethods.chat_xdk_export_keys(_handle));
             GC.KeepAlive(this);
-            if (string.IsNullOrEmpty(b64)) return null;
             return Convert.FromBase64String(b64);
         }
 
@@ -446,10 +473,10 @@ namespace ChatXdk
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
             var keys = parameters.Keys ?? Array.Empty<byte>();
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["signing_key_version"] = parameters.SigningKeyVersion,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             fixed (byte* jsonPtr = jsonBytes)
             {
@@ -457,12 +484,12 @@ namespace ChatXdk
                 // native side treats NULL + length 0 as an empty key blob.
                 if (keys.Length == 0)
                 {
-                    ConsumeResult(NativeMethods.chat_xdk_import_keys_params(_handle, null, 0, jsonPtr));
+                    ConsumeResult(NativeMethods.chat_xdk_import_keys(_handle, null, 0, jsonPtr));
                 }
                 else
                 {
                     fixed (byte* keysPtr = keys)
-                        ConsumeResult(NativeMethods.chat_xdk_import_keys_params(
+                        ConsumeResult(NativeMethods.chat_xdk_import_keys(
                             _handle, keysPtr, (nuint)keys.Length, jsonPtr));
                 }
             }
@@ -511,16 +538,16 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = parameters.EventB64,
                 ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
                 ["signing_keys"] = parameters.SigningKeys,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
-                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event_params(_handle, jsonPtr));
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_event(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
@@ -546,28 +573,28 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["events"] = parameters.Events ?? Array.Empty<string>(),
                 ["signing_keys"] = parameters.SigningKeys,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
-                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events_params(_handle, jsonPtr));
+                resultJson = ConsumeResult(NativeMethods.chat_xdk_decrypt_events(_handle, jsonPtr));
             GC.KeepAlive(this);
 
             using var doc = JsonDocument.Parse(resultJson);
             var root = doc.RootElement;
 
-            var messages = new List<DecryptedMessage>();
-            foreach (var el in root.GetProperty("messages").EnumerateArray())
+            var events = new List<DecryptedEvent>();
+            foreach (var el in root.GetProperty("events").EnumerateArray())
             {
                 var eventEl = el.GetProperty("event");
                 string? orig = null;
                 if (el.TryGetProperty("original_b64", out var ob) && ob.ValueKind == JsonValueKind.String)
                     orig = ob.GetString();
-                messages.Add(new DecryptedMessage
+                events.Add(new DecryptedEvent
                 {
                     Event = eventEl.Clone(),
                     OriginalB64 = orig,
@@ -582,7 +609,7 @@ namespace ChatXdk
 
             return new DecryptEventsResult
             {
-                Messages = messages,
+                Events = events,
                 ConversationKeys = bundle,
                 Errors = errors,
             };
@@ -613,6 +640,11 @@ namespace ChatXdk
         /// <see cref="PrepareGroupCreate"/>; a key rotation without a roster change is
         /// <see cref="PrepareConversationKeyChange"/>.
         /// Emits two action signatures: a conversation-key change and the member add.
+        /// The current title and description are plaintext: the call encrypts each under the
+        /// new conversation key, signs the ciphertext, and returns it as
+        /// <see cref="PreparedConversationChange.EncryptedTitle"/> and
+        /// <see cref="PreparedConversationChange.EncryptedDescription"/>. The current avatar URL
+        /// is signed as is.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersChange(GroupMembersChangeParams parameters)
         {
@@ -629,6 +661,10 @@ namespace ChatXdk
         /// <see cref="PrepareConversationKeyChange"/>; roster additions use
         /// <see cref="PrepareGroupMembersChange"/>.
         /// Emits two action signatures: a conversation-key change and the group create.
+        /// The title is plaintext: the call encrypts it under the new conversation key, signs
+        /// the ciphertext, and returns it as <see cref="PreparedConversationChange.EncryptedTitle"/>,
+        /// the <c>group_name</c> the create request sends. A create sets no avatar; set it
+        /// afterwards with <see cref="PrepareGroupAvatarChange"/>.
         /// </summary>
         public PreparedConversationChange PrepareGroupCreate(GroupCreateParams parameters)
         {
@@ -676,8 +712,10 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Sign a group member removal. When <c>PublicKeys</c> names the members
-        /// who stay, also rotates the conversation key and returns it.
+        /// Sign a group member removal and rotate the conversation key for the members who
+        /// stay (<c>PublicKeys</c>). The result carries the new key and the action signatures:
+        /// the removal, a title and a description change for each one the params set,
+        /// re-encrypted under the new key, and the conversation-key change.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersRemove(GroupMembersRemoveParams parameters)
         {
@@ -691,17 +729,20 @@ namespace ChatXdk
         public PreparedAction PrepareGroupLeave(GroupLeaveParams parameters)
             => CallAction(BuildPrepareGroupLeaveJson(parameters), NativeMethods.chat_xdk_prepare_group_leave);
 
-        /// <summary>Sign a group title change. CustomTitle is ciphertext.</summary>
-        public PreparedAction PrepareGroupTitleChange(GroupTitleChangeParams parameters)
-            => CallAction(BuildPrepareGroupTitleChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_title_change);
+        /// <summary>Encrypt a new group title under the conversation key and sign the change.</summary>
+        public PreparedGroupMetadataChange PrepareGroupTitleChange(GroupTitleChangeParams parameters)
+            => CallMetadataChange(BuildPrepareGroupTitleChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_title_change);
 
-        /// <summary>Sign a group avatar change.</summary>
+        /// <summary>
+        /// Sign a group avatar change: the avatar image's media URL, as is, and the version of
+        /// the key the image is encrypted under.
+        /// </summary>
         public PreparedAction PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
             => CallAction(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
 
-        /// <summary>Sign a group description change. CustomDescription is ciphertext.</summary>
-        public PreparedAction PrepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
-            => CallAction(BuildPrepareGroupDescriptionChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_description_change);
+        /// <summary>Encrypt a new group description under the conversation key and sign the change.</summary>
+        public PreparedGroupMetadataChange PrepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
+            => CallMetadataChange(BuildPrepareGroupDescriptionChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_description_change);
 
         /// <summary>Sign adding group admins.</summary>
         public PreparedAction PrepareGroupAdminsAdd(GroupAdminsAddParams parameters)
@@ -751,6 +792,17 @@ namespace ChatXdk
             return JsonSerializer.Deserialize<PreparedConversationChange>(resultJson, JsonOpts)!;
         }
 
+        private PreparedGroupMetadataChange CallMetadataChange(string paramsJson, ParamsJsonDelegate fn)
+        {
+            ThrowIfDisposed();
+            var jsonBytes = Utf8Z(paramsJson);
+            string resultJson;
+            fixed (byte* jsonPtr = jsonBytes)
+                resultJson = ConsumeResult(fn(_handle, jsonPtr));
+            GC.KeepAlive(this);
+            return JsonSerializer.Deserialize<PreparedGroupMetadataChange>(resultJson, JsonOpts)!;
+        }
+
         private PreparedAction CallAction(string paramsJson, ParamsJsonDelegate fn)
         {
             ThrowIfDisposed();
@@ -763,24 +815,9 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Encrypt a UTF-8 metadata string with the conversation key; returns base64 ciphertext (XSalsa20-Poly1305).
-        /// </summary>
-        public string Encrypt(string plaintext, byte[] conversationKey)
-        {
-            ThrowIfDisposed();
-            ArgumentNullException.ThrowIfNull(conversationKey);
-            var pt = Utf8Z(plaintext);
-            var ck = Utf8Z(Convert.ToBase64String(conversationKey));
-            string ciphertext;
-            fixed (byte* ptPtr = pt)
-            fixed (byte* ckPtr = ck)
-                ciphertext = ConsumeResult(NativeMethods.chat_xdk_encrypt(_handle, ptPtr, ckPtr));
-            GC.KeepAlive(this);
-            return ciphertext;
-        }
-
-        /// <summary>
-        /// Decrypt base64 ciphertext (from <see cref="Encrypt"/>) to a UTF-8 plaintext string.
+        /// Decrypt a group title or description the X API returns for a conversation (base64
+        /// ciphertext) with the raw 32-byte conversation key. Group changes in events need no
+        /// call of their own: <see cref="DecryptEvent"/> returns them decrypted.
         /// </summary>
         public string Decrypt(string ciphertextB64, byte[] conversationKey)
         {
@@ -902,14 +939,14 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["file"] = Convert.ToBase64String(parameters.File ?? Array.Empty<byte>()),
                 ["event_b64"] = parameters.EventB64,
                 ["media_hash_key"] = parameters.MediaHashKey,
                 ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
                 ["conversation_key_version"] = parameters.ConversationKeyVersion,
-            }, JsonOpts);
+            });
             return CallFileEndpoint(json, NativeMethods.chat_xdk_encrypt_file);
         }
 
@@ -926,13 +963,13 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["encrypted"] = Convert.ToBase64String(parameters.Encrypted ?? Array.Empty<byte>()),
                 ["event_b64"] = parameters.EventB64,
                 ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
                 ["media_hash_key"] = parameters.MediaHashKey,
-            }, JsonOpts);
+            });
             return CallFileEndpoint(json, NativeMethods.chat_xdk_decrypt_file);
         }
 
@@ -955,13 +992,13 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = parameters.EventB64,
                 ["media_hash_key"] = parameters.MediaHashKey,
                 ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
                 ["conversation_key_version"] = parameters.ConversationKeyVersion,
-            }, JsonOpts);
+            });
             var encryptor = ChatXdk.FileEncryptor.Create(_handle, json);
             GC.KeepAlive(this);
             return encryptor;
@@ -984,12 +1021,12 @@ namespace ChatXdk
 
         private static string FileParamsJson(
             string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys, string mediaHashKey)
-            => JsonSerializer.Serialize(new Dictionary<string, object?>
+            => ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = eventB64,
                 ["conversation_keys"] = ConversationKeysB64(conversationKeys),
                 ["media_hash_key"] = mediaHashKey,
-            }, JsonOpts);
+            });
 
         // Signing / verification
 
@@ -1026,9 +1063,9 @@ namespace ChatXdk
         /// <param name="data">The original signed data.</param>
         /// <returns><see langword="true"/> if the signature is valid, <see langword="false"/> if invalid.</returns>
         /// <exception cref="ChatXdkException">
-        /// Thrown when the SDK returns an error (a malformed public key or signature). Verifying
-        /// needs no loaded keys. An SDK error is always thrown, never returned as a
-        /// <see langword="false"/> result.
+        /// Thrown, of kind <see cref="ChatXdkErrorKind.InvalidInput"/>, for a malformed public key
+        /// or signature, never returned as a <see langword="false"/> result. Verifying needs no
+        /// loaded keys.
         /// </exception>
         public bool Verify(string publicKeyB64, byte[] signature, byte[] data)
         {
@@ -1039,7 +1076,7 @@ namespace ChatXdk
             var sigB64 = Convert.ToBase64String(signature);
             var pkBytes = Utf8Z(publicKeyB64);
             var sigBytes = Utf8Z(sigB64);
-            int rc;
+            bool valid;
 
             // data may be empty; handle the zero-length case explicitly so the
             // fixed statement always has a valid (non-null) pinned pointer.
@@ -1047,25 +1084,17 @@ namespace ChatXdk
             {
                 fixed (byte* pkPtr = pkBytes)
                 fixed (byte* sigPtr = sigBytes)
-                    rc = NativeMethods.chat_xdk_verify(_handle, pkPtr, sigPtr, null, 0);
+                    valid = ConsumeBool(NativeMethods.chat_xdk_verify(_handle, pkPtr, sigPtr, null, 0));
             }
             else
             {
                 fixed (byte* pkPtr = pkBytes)
                 fixed (byte* sigPtr = sigBytes)
                 fixed (byte* dataPtr = data)
-                    rc = NativeMethods.chat_xdk_verify(_handle, pkPtr, sigPtr, dataPtr, (nuint)data.Length);
+                    valid = ConsumeBool(NativeMethods.chat_xdk_verify(_handle, pkPtr, sigPtr, dataPtr, (nuint)data.Length));
             }
             GC.KeepAlive(this);
-
-            return rc switch
-            {
-                1 => true,
-                0 => false,
-                // -1: a malformed public key or signature.
-                _ => throw new ChatXdkException(
-                    "Signature verification error — ensure the public key is a base64 P-256 signing key and the signature is valid."),
-            };
+            return valid;
         }
 
         /// <summary>
@@ -1079,20 +1108,13 @@ namespace ChatXdk
             var identityBytes = Utf8Z(identityPublicKeyB64);
             var signingBytes = Utf8Z(signingPublicKeyB64);
             var sigBytes = Utf8Z(identityPublicKeySignatureB64);
-            int rc;
+            bool valid;
             fixed (byte* identityPtr = identityBytes)
             fixed (byte* signingPtr = signingBytes)
             fixed (byte* sigPtr = sigBytes)
-                rc = NativeMethods.chat_xdk_verify_key_binding(_handle, identityPtr, signingPtr, sigPtr);
+                valid = ConsumeBool(NativeMethods.chat_xdk_verify_key_binding(_handle, identityPtr, signingPtr, sigPtr));
             GC.KeepAlive(this);
-
-            return rc switch
-            {
-                1 => true,
-                0 => false,
-                _ => throw new ChatXdkException(
-                    "Key binding verification error — ensure the inputs are valid base64."),
-            };
+            return valid;
         }
 
         /// <summary>
@@ -1107,25 +1129,27 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             var pkBytes = Utf8Z(publicKeyB64);
-            int rc;
+            bool matches;
             fixed (byte* pkPtr = pkBytes)
-                rc = NativeMethods.chat_xdk_matches_registered_key(_handle, pkPtr);
+                matches = ConsumeBool(NativeMethods.chat_xdk_matches_registered_key(_handle, pkPtr));
             GC.KeepAlive(this);
-
-            return rc switch
-            {
-                1 => true,
-                0 => false,
-                _ => throw new ChatXdkException(
-                    "Registered key match error — ensure keys are loaded and the input is valid base64."),
-            };
+            return matches;
         }
 
         // JSON builders for the single-JSON params documents
 
-        // A null in any optional slot serializes as JSON null (WhenWritingNull
-        // does not apply to dictionary entries), which the FFI reads as unset —
-        // the value then resolves from the session identity / key cache.
+        /// <summary>
+        /// The params document of <paramref name="fields"/>, without the fields left
+        /// null: an unset field is omitted, never sent as JSON <c>null</c>, so the core
+        /// resolves it from the session identity or key cache, or names it when it is
+        /// required.
+        /// </summary>
+        private static string ParamsJson(Dictionary<string, object?> fields)
+            => JsonSerializer.Serialize(
+                fields.Where(field => field.Value is not null)
+                    .ToDictionary(field => field.Key, field => field.Value),
+                JsonOpts);
+
         private static string BuildEncryptMessageJson(EncryptMessageParams p)
         {
             var dict = new Dictionary<string, object?>
@@ -1142,7 +1166,7 @@ namespace ChatXdk
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildEncryptReplyJson(EncryptReplyParams p)
@@ -1169,7 +1193,7 @@ namespace ChatXdk
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildReactionJson(EncryptReactionParams p)
@@ -1185,7 +1209,7 @@ namespace ChatXdk
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildEncryptEditJson(EncryptEditParams p)
@@ -1202,7 +1226,7 @@ namespace ChatXdk
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareMessageDeleteJson(MessageDeleteParams p)
@@ -1215,24 +1239,25 @@ namespace ChatXdk
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string IdentityJson(Dictionary<string, object?> dict, string? senderId, string? signingKeyVersion)
         {
             dict["sender_id"] = senderId;
             dict["signing_key_version"] = signingKeyVersion;
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareGroupMembersRemoveJson(GroupMembersRemoveParams p)
         {
             return IdentityJson(new Dictionary<string, object?>
             {
+                ["public_keys"] = p.PublicKeys,
                 ["conversation_id"] = p.ConversationId,
                 ["user_ids"] = p.UserIds,
-                ["public_keys"] = p.PublicKeys,
-                ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["title"] = p.Title,
+                ["description"] = p.Description,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1251,8 +1276,9 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+                ["new_title"] = p.NewTitle,
+                ["conversation_key"] = p.ConversationKey is null ? null : Convert.ToBase64String(p.ConversationKey),
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["custom_title"] = p.CustomTitle,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1261,8 +1287,8 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+                ["new_avatar_url"] = p.NewAvatarUrl,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["custom_avatar_url"] = p.CustomAvatarUrl,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1271,8 +1297,9 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+                ["new_description"] = p.NewDescription,
+                ["conversation_key"] = p.ConversationKey is null ? null : Convert.ToBase64String(p.ConversationKey),
                 ["conversation_key_version"] = p.ConversationKeyVersion,
-                ["custom_description"] = p.CustomDescription,
             }, p.SenderId, p.SigningKeyVersion);
         }
 
@@ -1368,7 +1395,7 @@ namespace ChatXdk
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareConversationKeyChangeJson(ConversationKeyChangeParams p)
@@ -1380,7 +1407,7 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_id"] = p.ConversationId,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareGroupMembersChangeJson(GroupMembersChangeParams p)
@@ -1397,13 +1424,14 @@ namespace ChatXdk
                 ["current_pending_member_ids"] = p.CurrentPendingMemberIds,
                 ["current_title"] = p.CurrentTitle,
                 ["current_avatar_url"] = p.CurrentAvatarUrl,
+                ["current_description"] = p.CurrentDescription,
                 ["current_ttl_msec"] = p.CurrentTtlMsec,
                 // An unset value serializes as JSON null (WhenWritingNull does
                 // not apply to dictionary entries), which the FFI reads as
                 // unset — never a false default.
                 ["current_screen_capture_blocking_enabled"] = p.CurrentScreenCaptureBlockingEnabled,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareGroupCreateJson(GroupCreateParams p)
@@ -1417,10 +1445,9 @@ namespace ChatXdk
                 ["member_ids"] = p.MemberIds,
                 ["admin_ids"] = p.AdminIds,
                 ["title"] = p.Title,
-                ["avatar_url"] = p.AvatarUrl,
                 ["ttl_msec"] = p.TtlMsec,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         // Entities are serialised as [[start, end, "type"], ...] tuples.
@@ -1436,34 +1463,76 @@ namespace ChatXdk
         }
     }
 
+    /// <summary>What kind of failure a <see cref="ChatXdkException"/> is, the same in every binding.</summary>
+    public enum ChatXdkErrorKind
+    {
+        /// <summary>A parameter is missing or invalid; the message names it.</summary>
+        InvalidInput,
+        /// <summary>A value was neither passed nor available from the chat's state, such as no keys loaded.</summary>
+        InvalidState,
+        /// <summary>Event or other wire data is malformed.</summary>
+        Parse,
+        /// <summary>Ciphertext did not decrypt, or no key for it was available.</summary>
+        Decryption,
+        /// <summary>A signature did not verify, or could not be verified while unverified events are rejected.</summary>
+        Verification,
+        /// <summary>Juicebox rejected the PIN; see <see cref="ChatXdkException.GuessesRemaining"/>.</summary>
+        InvalidPin,
+        /// <summary>Another Juicebox key-storage failure.</summary>
+        Juicebox,
+        /// <summary>A failure inside the SDK.</summary>
+        Internal,
+    }
+
     /// <summary>
-    /// Thrown when the native chat-xdk library returns an error.
+    /// Thrown when the SDK fails, with the <see cref="Kind"/> of failure.
     /// </summary>
     public sealed class ChatXdkException : Exception
     {
-        // Stable invalid-PIN message form the core emits
-        // ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a
-        // count embedded in an unrelated pass-through message is not misread.
-        private static readonly System.Text.RegularExpressions.Regex GuessesRemainingPattern =
-            new(@"\bInvalid PIN: guesses_remaining=(\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-        public ChatXdkException(string message) : base(message)
+        public ChatXdkException(ChatXdkErrorKind kind, string message, int? guessesRemaining = null)
+            : base(message)
         {
-            var match = GuessesRemainingPattern.Match(message ?? "");
-            if (match.Success && int.TryParse(match.Groups[1].Value, out var n))
-            {
-                GuessesRemaining = n;
-            }
+            Kind = kind;
+            GuessesRemaining = guessesRemaining;
         }
 
+        /// <summary>What kind of failure this is.</summary>
+        public ChatXdkErrorKind Kind { get; }
+
         /// <summary>
-        /// Remaining PIN attempts reported by Juicebox, or <see langword="null"/> when the
-        /// message carries no count.
-        ///
-        /// <para>Present only on invalid-PIN <see cref="Chat.Unlock"/> /
-        /// <see cref="Chat.ChangePin"/> failures. <c>0</c> means the guess budget is
-        /// exhausted and the stored keys are locked.</para>
+        /// The PIN attempts left after a <see cref="ChatXdkErrorKind.InvalidPin"/> failure, when
+        /// Juicebox reports them; <c>0</c> means the guess budget is exhausted and the stored
+        /// keys are locked. <see langword="null"/> for every other failure.
         /// </summary>
         public int? GuessesRemaining { get; }
+
+        /// <summary>The exception for the native library's error document.</summary>
+        internal static ChatXdkException FromDocument(string document)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(document);
+                var root = doc.RootElement;
+                var kind = root.GetProperty("kind").GetString() switch
+                {
+                    "invalid_input" => ChatXdkErrorKind.InvalidInput,
+                    "invalid_state" => ChatXdkErrorKind.InvalidState,
+                    "parse" => ChatXdkErrorKind.Parse,
+                    "decryption" => ChatXdkErrorKind.Decryption,
+                    "verification" => ChatXdkErrorKind.Verification,
+                    "invalid_pin" => ChatXdkErrorKind.InvalidPin,
+                    "juicebox" => ChatXdkErrorKind.Juicebox,
+                    _ => ChatXdkErrorKind.Internal,
+                };
+                int? guesses = root.TryGetProperty("guesses_remaining", out var g) && g.ValueKind == JsonValueKind.Number
+                    ? g.GetInt32()
+                    : null;
+                return new ChatXdkException(kind, root.GetProperty("message").GetString() ?? "", guesses);
+            }
+            catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException)
+            {
+                return new ChatXdkException(ChatXdkErrorKind.Internal, document);
+            }
+        }
     }
 }

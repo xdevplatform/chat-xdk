@@ -32,9 +32,9 @@ func TestMain(m *testing.M) {
 // within timeout; for tests only.
 func newChatReading(t *testing.T, endpoint string, timeout time.Duration) *Chat {
 	t.Helper()
-	chat := newChat()
-	if chat == nil {
-		t.Fatal("newChat returned nil")
+	chat, err := newChat(nil)
+	if err != nil {
+		t.Fatalf("newChat failed: %v", err)
 	}
 	if err := ffiFeatureConfigure(chat.h, endpoint, timeout); err != nil {
 		chat.Close()

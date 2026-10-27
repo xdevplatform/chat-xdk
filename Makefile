@@ -46,7 +46,7 @@ test-js:
 # (parallel codegen makes the macOS object code vary run-to-run), and
 # ZERO_AR_DATE=1 so cctools ar/ranlib/libtool stamp zeroed member dates.
 go-lib:
-	ZERO_AR_DATE=1 CARGO_TARGET_DIR=$(CURDIR)/target MACOSX_DEPLOYMENT_TARGET=11.0 $(if $(filter darwin,$(HOST_OS)),RUSTFLAGS="-C codegen-units=1") cargo build -p chat-xdk-go --release
+	ZERO_AR_DATE=1 CARGO_TARGET_DIR=$(CURDIR)/target MACOSX_DEPLOYMENT_TARGET=11.0 $(if $(filter darwin,$(HOST_OS)),RUSTFLAGS="-C codegen-units=1") cargo build -p chat-xdk-ffi --release
 
 # Copy the compiled static library into libs/<os>_<arch>/ for distribution.
 # Run this after making Rust changes, then commit the updated .a file.
@@ -54,32 +54,32 @@ go-lib:
 # archive is byte-reproducible (must stay identical to go-prebuilt-darwin.yml).
 # linux: GNU strip -D keeps the archive in deterministic mode.
 prebuilt: go-lib
-	@echo "Copying libchat_xdk_go.a for $(HOST_OS)_$(HOST_ARCH)"
+	@echo "Copying libchat_xdk_ffi.a for $(HOST_OS)_$(HOST_ARCH)"
 	@mkdir -p go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)
-	cp target/release/libchat_xdk_go.a go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_go.a
+	cp target/release/libchat_xdk_ffi.a go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_ffi.a
 	@if [ "$(HOST_OS)" = "darwin" ]; then \
-		ZERO_AR_DATE=1 strip -S go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_go.a; \
-		python3 scripts/normalize_ar_dates.py go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_go.a; \
+		ZERO_AR_DATE=1 strip -S go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_ffi.a; \
+		python3 scripts/normalize_ar_dates.py go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_ffi.a; \
 	else \
-		strip -D --strip-debug go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_go.a 2>/dev/null || true; \
+		strip -D --strip-debug go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_ffi.a 2>/dev/null || true; \
 	fi
-	@echo "Done. Commit go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_go.a"
+	@echo "Done. Commit go/chatxdk/libs/$(HOST_OS)_$(HOST_ARCH)/libchat_xdk_ffi.a"
 
 # Cross-compile for Linux amd64 (glibc) from macOS using cargo-zigbuild.
 # Requires: brew install zig && cargo install cargo-zigbuild && rustup target add x86_64-unknown-linux-gnu
 prebuilt-linux-amd64:
-	cargo zigbuild -p chat-xdk-go --release --target x86_64-unknown-linux-gnu
+	cargo zigbuild -p chat-xdk-ffi --release --target x86_64-unknown-linux-gnu
 	@mkdir -p go/chatxdk/libs/linux_amd64
-	cp target/x86_64-unknown-linux-gnu/release/libchat_xdk_go.a go/chatxdk/libs/linux_amd64/libchat_xdk_go.a
-	@echo "Done. Commit go/chatxdk/libs/linux_amd64/libchat_xdk_go.a"
+	cp target/x86_64-unknown-linux-gnu/release/libchat_xdk_ffi.a go/chatxdk/libs/linux_amd64/libchat_xdk_ffi.a
+	@echo "Done. Commit go/chatxdk/libs/linux_amd64/libchat_xdk_ffi.a"
 
 # Cross-compile for Linux amd64 (musl/Alpine) from macOS using cargo-zigbuild.
 # Requires: brew install zig && cargo install cargo-zigbuild && rustup target add x86_64-unknown-linux-musl
 prebuilt-linux-amd64-musl:
-	cargo zigbuild -p chat-xdk-go --release --target x86_64-unknown-linux-musl
+	cargo zigbuild -p chat-xdk-ffi --release --target x86_64-unknown-linux-musl
 	@mkdir -p go/chatxdk/libs/linux_amd64_musl
-	cp target/x86_64-unknown-linux-musl/release/libchat_xdk_go.a go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a
-	@echo "Done. Commit go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a"
+	cp target/x86_64-unknown-linux-musl/release/libchat_xdk_ffi.a go/chatxdk/libs/linux_amd64_musl/libchat_xdk_ffi.a
+	@echo "Done. Commit go/chatxdk/libs/linux_amd64_musl/libchat_xdk_ffi.a"
 
 # Regenerate all prebuilt binaries from macOS (native + cross-compiled).
 # Run this after any Rust changes, then commit the updated .a files.
@@ -172,10 +172,10 @@ clean:
 
 # Build .NET native library (cdylib)
 dotnet-build:
-	cargo build -p chat-xdk-dotnet --release
+	cargo build -p chat-xdk-ffi --release
 
 # Build JVM bindings tests — requires JDK 17+ and Maven on PATH.
-# Builds the same native cdylib as .NET (`chat_xdk_dotnet`) then runs JUnit via Maven.
+# Builds the same native cdylib as .NET (`chat_xdk_ffi`) then runs JUnit via Maven.
 jvm-test: dotnet-build
 	cd crates/jvm/java/chatxdk && mvn test -Djna.library.path="$(CURDIR)/target/release"
 
@@ -183,7 +183,7 @@ jvm-test: dotnet-build
 # The native lib must sit next to the test assembly at runtime: build first,
 # stage the lib into the output dir, then run without rebuilding.
 dotnet-test: dotnet-build
-	@NATIVE_LIB=$$(ls target/release/libchat_xdk_dotnet.dylib target/release/libchat_xdk_dotnet.so target/release/libchat_xdk_dotnet.dll 2>/dev/null | head -1); \
+	@NATIVE_LIB=$$(ls target/release/libchat_xdk_ffi.dylib target/release/libchat_xdk_ffi.so target/release/libchat_xdk_ffi.dll 2>/dev/null | head -1); \
 	TEST_PROJ=crates/dotnet/dotnet/ChatXdk.Tests/ChatXdk.Tests.csproj; \
 	TEST_DIR=crates/dotnet/dotnet/ChatXdk.Tests/bin/Debug/net8.0; \
 	dotnet build "$$TEST_PROJ" && \

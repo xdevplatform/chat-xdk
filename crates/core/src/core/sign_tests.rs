@@ -37,16 +37,17 @@ fn signer(user_id: &str) -> ChatCore {
 #[test]
 fn sign_refuses_every_action_payload_the_sdk_signs() {
     let core = signer("111");
-    let keys = vec![PublicKeyInput {
-        user_id: "111".to_string(),
-        public_key: core.get_public_keys().unwrap().identity,
-        key_version: "1".to_string(),
-    }];
+    let keys = vec![PublicKeyInput::new(
+        "111",
+        core.get_public_keys().unwrap().identity,
+        "1",
+    )];
     let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+    let conversation_key = core.generate_conversation_key().unwrap().to_bytes();
 
-    let mut removal = GroupMembersRemoveParams::new("g1", ids(&["222"]));
-    let plain_removal = core.prepare_group_members_remove(&removal).unwrap();
-    removal.public_keys = Some(keys.clone());
+    let removal = GroupMembersRemoveParams::new(keys.clone(), "g1", ids(&["222"]))
+        .with_title("title")
+        .with_description("desc");
     let mut leave = GroupLeaveParams::new("g1");
     leave.promote_admin_id = Some("222".to_string());
 
@@ -83,26 +84,27 @@ fn sign_refuses_every_action_payload_the_sdk_signs() {
         .unwrap()
         .action_signatures,
     );
-    actions.extend(plain_removal.action_signatures);
     actions.extend(
         core.prepare_group_members_remove(&removal)
             .unwrap()
             .action_signatures,
     );
     actions.extend(core.prepare_group_leave(&leave).unwrap().action_signatures);
-    let title = GroupTitleChangeParams::new("g1", "1", "dGl0bGU");
+    let title = GroupTitleChangeParams::new("g1", "title")
+        .with_conversation_key(conversation_key.clone(), "1");
     actions.extend(
         core.prepare_group_title_change(&title)
             .unwrap()
             .action_signatures,
     );
-    let avatar = GroupAvatarChangeParams::new("g1", "1", "avatar");
+    let avatar = GroupAvatarChangeParams::new("g1", "avatar", "1");
     actions.extend(
         core.prepare_group_avatar_change(&avatar)
             .unwrap()
             .action_signatures,
     );
-    let description = GroupDescriptionChangeParams::new("g1", "1", "ZGVzYw");
+    let description = GroupDescriptionChangeParams::new("g1", "desc")
+        .with_conversation_key(conversation_key.clone(), "1");
     actions.extend(
         core.prepare_group_description_change(&description)
             .unwrap()
@@ -177,7 +179,7 @@ fn sign_refuses_every_action_payload_the_sdk_signs() {
         .map(|action| action.signature_payload.as_str())
         .filter(|payload| !payload.is_empty())
         .collect();
-    assert_eq!(payloads.len(), 24);
+    assert_eq!(payloads.len(), 25);
     for payload in payloads {
         assert!(refused(&core, payload.as_bytes()), "signed {payload}");
     }
@@ -328,7 +330,8 @@ fn sign_cannot_forge_a_key_change() {
             .set_identity(&SetIdentityParams::new("1002", SIGNING_KEY_VERSION))
             .unwrap();
         bob.core.set_cache_keys(true);
-        bob.core.set_signing_keys(vec![alice.entry.clone()]);
+        bob.core
+            .set_signing_keys(std::slice::from_ref(&alice.entry));
         bob
     };
     let key_change_to = |bob: &Party, signature: Vec<u8>| {
@@ -369,11 +372,11 @@ fn sign_cannot_forge_a_key_change() {
     let accepted = |bob: &Party, event: String| {
         let verified = matches!(
             bob.core
-                .decrypt_event(DecryptEventParams::new(event.clone(), HashMap::new())),
+                .decrypt_event(&DecryptEventParams::new(event.clone(), HashMap::new())),
             Ok(Event::KeyChange(KeyChangeEvent { verified: true, .. }))
         );
         bob.core
-            .decrypt_events(DecryptEventsParams::new(vec![event]));
+            .decrypt_events(&DecryptEventsParams::new(vec![event]));
         let sent = bob
             .core
             .encrypt_message(&EncryptMessageParams::new(CONVERSATION, "bob's secret"));

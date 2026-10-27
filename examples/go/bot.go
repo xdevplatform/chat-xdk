@@ -117,7 +117,7 @@ func (b *Bot) LoadBacklog(conversationID string) error {
 		return err
 	}
 	st.paginationToken = next
-	log.Printf("backlog_loaded conv=%s messages=%d keys=%d", conversationID, len(result.Messages), len(result.ConversationKeys.Keys))
+	log.Printf("backlog_loaded conv=%s messages=%d keys=%d", conversationID, len(result.Events), len(result.ConversationKeys.Keys))
 	return nil
 }
 

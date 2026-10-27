@@ -14,7 +14,10 @@ use chat_xdk_core::crypto::keys::KeypairPurpose;
 use chat_xdk_core::internals::{self, FixtureAttachment};
 use chat_xdk_core::keys::conversation_keys::encrypt_conversation_key;
 use chat_xdk_core::signatures::build_ckey_change_signature;
-use chat_xdk_core::{AttachmentDescriptor, ChatCore, EncryptMessageParams};
+use chat_xdk_core::{
+    AttachmentDescriptor, ChatCore, EncryptMessageParams, GroupAvatarChangeParams,
+    GroupDescriptionChangeParams,
+};
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::json;
 
@@ -29,6 +32,11 @@ const EVENT_MESSAGE_TEXT: &str = "fixture event message";
 const EVENT_REPLY_TEXT: &str = "fixture reply message";
 const EVENT_REPLY_FORGED_PREVIEW_TEXT: &str = "forged preview text";
 const EVENT_GARBAGE: &str = "!!!not-an-event!!!";
+const EVENT_GROUP_ID: &str = "g1111";
+const EVENT_GROUP_DESCRIPTION: &str = "fixture group description, encrypted";
+const EVENT_GROUP_TITLE: &str = "fixture group title, encrypted";
+const EVENT_GROUP_AVATAR_URL: &str = "https://ton.x.com/xchat_media/g1111/fixture-avatar";
+const EVENT_GROUP_CREATE_KEY_VERSION: &str = "1002";
 
 // Raw Thrift enum values embedded in the failure vector; suites assert the
 // decoded names ("RateLimitUpsell" / "Premium", camelCased in JS).
@@ -213,13 +221,13 @@ fn main() {
     )
     .expect("frame valid reply event");
 
-    let mut forged_params = chat_xdk_core::EncryptReplyParams::new(
+    let forged_params = chat_xdk_core::EncryptReplyParams::new(
         EVENT_CONVERSATION_ID,
         EVENT_REPLY_TEXT,
         event_message_b64.clone(),
     )
-    .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION);
-    forged_params.reply_to_text = Some(EVENT_REPLY_FORGED_PREVIEW_TEXT.to_string());
+    .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION)
+    .with_reply_to_text(EVENT_REPLY_FORGED_PREVIEW_TEXT);
     let reply_forged = core
         .encrypt_reply(&forged_params)
         .expect("encrypt forged reply");
@@ -230,6 +238,70 @@ fn main() {
         EVENT_CONVERSATION_ID,
     )
     .expect("frame forged reply event");
+
+    // Group description vector: a signed description change whose
+    // description is encrypted under the fixture conversation key, so every
+    // suite can check decrypt_event returns it decrypted.
+    let description_change = core
+        .prepare_group_description_change(
+            &GroupDescriptionChangeParams::new(EVENT_GROUP_ID, EVENT_GROUP_DESCRIPTION)
+                .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION),
+        )
+        .expect("prepare group description change");
+    let event_group_description_b64 = internals::frame_action_signature(
+        &description_change.action_signatures[0],
+        EVENT_SENDER_ID,
+        EVENT_GROUP_ID,
+    )
+    .expect("frame group description change");
+
+    // Group avatar vector: a signed avatar change carrying the media URL as
+    // is, with the version of the key its image is encrypted under, so every
+    // suite can check decrypt_event returns both without any key.
+    let avatar_change = core
+        .prepare_group_avatar_change(&GroupAvatarChangeParams::new(
+            EVENT_GROUP_ID,
+            EVENT_GROUP_AVATAR_URL,
+            EVENT_CONVERSATION_KEY_VERSION,
+        ))
+        .expect("prepare group avatar change");
+    let event_group_avatar_change_b64 = internals::frame_action_signature(
+        &avatar_change.action_signatures[0],
+        EVENT_SENDER_ID,
+        EVENT_GROUP_ID,
+    )
+    .expect("frame group avatar change");
+
+    // Group create vector: a signed create whose title is encrypted under
+    // the key the create seeds. The key is emitted with it, so every suite
+    // can check decrypt_event returns the title decrypted, and the
+    // ciphertext, so suites can check the title without the key.
+    let group_create = core
+        .prepare_group_create_with_version(
+            &chat_xdk_core::GroupCreateParams::new(
+                vec![chat_xdk_core::PublicKeyInput::new(
+                    EVENT_SENDER_ID,
+                    B64.encode(identity_kp.public.encoded()),
+                    EVENT_RECIPIENT_KEY_VERSION,
+                )],
+                EVENT_GROUP_ID,
+                vec![EVENT_SENDER_ID.to_string()],
+                vec![EVENT_SENDER_ID.to_string()],
+            )
+            .with_title(EVENT_GROUP_TITLE),
+            EVENT_GROUP_CREATE_KEY_VERSION,
+        )
+        .expect("prepare group create");
+    let event_group_create_b64 = internals::frame_action_signature(
+        &group_create.action_signatures[1],
+        EVENT_SENDER_ID,
+        EVENT_GROUP_ID,
+    )
+    .expect("frame group create");
+    let group_create_key = group_create
+        .conversation_key
+        .as_ref()
+        .expect("group create key");
 
     // Failure vector: an unsigned RATE_LIMIT_UPSELL failure carrying the
     // PREMIUM tier, so every suite can pin the decoded failure metadata.
@@ -334,18 +406,18 @@ fn main() {
     let media_favicon_encrypted =
         encrypt_media(MK_SECOND_ATTACHMENT_KEY_HEX, &media_favicon_plaintext);
 
-    let mut ckey_media_params = EncryptMessageParams::new(EVENT_CONVERSATION_ID, CKEY_MEDIA_TEXT)
+    let ckey_media_params = EncryptMessageParams::new(EVENT_CONVERSATION_ID, CKEY_MEDIA_TEXT)
         .with_identity(EVENT_SENDER_ID, EVENT_SIGNING_KEY_VERSION)
-        .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION);
-    ckey_media_params.attachments = Some(vec![AttachmentDescriptor::Media {
-        media_hash_key: CKEY_MEDIA_HASH_KEY.to_string(),
-        width: 4,
-        height: 3,
-        filesize_bytes: 1500,
-        filename: "fixture.jpg".to_string(),
-        media_type: Some(1),
-        duration_millis: None,
-    }]);
+        .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION)
+        .with_attachments(vec![AttachmentDescriptor::Media {
+            media_hash_key: CKEY_MEDIA_HASH_KEY.to_string(),
+            width: 4,
+            height: 3,
+            filesize_bytes: 1500,
+            filename: "fixture.jpg".to_string(),
+            media_type: Some(1),
+            duration_millis: None,
+        }]);
     let ckey_media_payload = core
         .encrypt_message(&ckey_media_params)
         .expect("encrypt conversation-key media message");
@@ -391,15 +463,15 @@ fn main() {
         ))
         .unwrap();
     replier.set_cache_keys(true);
-    let fixture_signing_keys = [chat_xdk_core::SigningKeyEntry {
-        user_id: EVENT_SENDER_ID.to_string(),
-        public_key_version: EVENT_SIGNING_KEY_VERSION.to_string(),
-        public_key: B64.encode(signing_kp.public.encoded()),
-        identity_public_key: B64.encode(identity_kp.public.encoded()),
-        identity_public_key_signature: B64.encode(&identity_binding_signature),
-    }];
+    let fixture_signing_keys = [chat_xdk_core::SigningKeyEntry::new(
+        EVENT_SENDER_ID,
+        EVENT_SIGNING_KEY_VERSION,
+        B64.encode(signing_kp.public.encoded()),
+        B64.encode(identity_kp.public.encoded()),
+        B64.encode(&identity_binding_signature),
+    )];
     let cached = replier.decrypt_events(
-        chat_xdk_core::DecryptEventsParams::new(vec![event_key_change_message_key_b64.clone()])
+        &chat_xdk_core::DecryptEventsParams::new(vec![event_key_change_message_key_b64.clone()])
             .with_signing_keys(fixture_signing_keys.to_vec()),
     );
     assert!(cached.errors.is_empty(), "{:?}", cached.errors);
@@ -433,6 +505,16 @@ fn main() {
         "signature_b64": B64.encode(signature),
         "identity_public_key_signature_b64": B64.encode(identity_binding_signature),
         "event_failure_b64": event_failure_b64,
+        "event_group_description_b64": event_group_description_b64,
+        "event_group_description": EVENT_GROUP_DESCRIPTION,
+        "event_group_id": EVENT_GROUP_ID,
+        "event_group_create_b64": event_group_create_b64,
+        "event_group_create_conversation_key_b64": B64.encode(group_create_key.encoded()),
+        "event_group_create_conversation_key_version": EVENT_GROUP_CREATE_KEY_VERSION,
+        "event_group_create_encrypted_title": group_create.encrypted_title,
+        "event_group_title": EVENT_GROUP_TITLE,
+        "event_group_avatar_change_b64": event_group_avatar_change_b64,
+        "event_group_avatar_url": EVENT_GROUP_AVATAR_URL,
         "event_key_change_b64": event_key_change_b64,
         "event_message_b64": event_message_b64,
         "event_reply_valid_b64": event_reply_valid_b64,

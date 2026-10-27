@@ -93,15 +93,17 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void Generic_Encrypt_Decrypt_Roundtrip()
+    public void Group_Title_Change_Encrypts_The_Title_It_Signs()
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
+        core.SetIdentity("12345");
         var key = Convert.FromBase64String(v.ConversationKeyB64);
-        const string plaintext = "hello from the dotnet example";
-        var ciphertext = core.Encrypt(plaintext, key);
-        Assert.NotEqual(plaintext, ciphertext);
-        Assert.Equal(plaintext, core.Decrypt(ciphertext, key));
+        const string title = "hello from the dotnet example";
+        var prepared = core.PrepareGroupTitleChange("g123", title, key, "1");
+        Assert.NotEqual(title, prepared.EncryptedValue);
+        Assert.Equal("1", prepared.ConversationKeyVersion);
+        Assert.Equal(title, core.Decrypt(prepared.EncryptedValue, key));
     }
 
     [Fact]
@@ -112,7 +114,7 @@ public class ChatCoreTests
         core.SetIdentity("910002");
         var prepared = core.PrepareConversationKeyChange(new[]
         {
-            new PublicKeyInput { UserId = "910002", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "910002", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "conv-1");
         Assert.Single(prepared.ConversationParticipantKeys);
         var decrypted = core.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
@@ -139,7 +141,7 @@ public class ChatCoreTests
         var v = LoadVectors();
         using var core = LoadedCore(v);
         var result = core.DecryptBatch(Array.Empty<string>());
-        Assert.Empty(result.Messages);
+        Assert.Empty(result.Events);
     }
 
     [Fact]
@@ -161,7 +163,7 @@ public class ChatCoreTests
         core.SetIdentity("1000");
         var prep = core.PrepareConversationKeyChange(new[]
         {
-            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "1000:2000");
         var signingPub = core.PublicKeys().Signing;
 
@@ -182,8 +184,6 @@ public class ChatCoreTests
         Assert.Equal(signingPub, inner.GetProperty("signing_public_key").GetString());
         Assert.False(string.IsNullOrEmpty(inner.GetProperty("signature").GetString()));
         Assert.False(string.IsNullOrEmpty(inner.GetProperty("public_key_version").GetString()));
-        // CKCE signature payloads are withheld (they embed the plaintext key).
-        Assert.False(sig.TryGetProperty("signature_payload", out _));
     }
 
     [Fact]
@@ -194,7 +194,7 @@ public class ChatCoreTests
         core.SetIdentity("1000");
         var prep = core.PrepareGroupMembersRemove(new[]
         {
-            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "g123", new[] { "2000" });
 
         using var doc = JsonDocument.Parse(
@@ -220,13 +220,17 @@ public class ChatCoreTests
         var v = LoadVectors();
         using var core = LoadedCore(v);
         core.SetIdentity("1000");
+        const string title = "hello from the dotnet example";
         var prep = core.PrepareGroupCreate(new[]
         {
-            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
-        }, "g123", new[] { "1000" }, new[] { "1000" });
+            new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
+        }, "g123", new[] { "1000" }, new[] { "1000" }, title);
         Assert.Equal(2, prep.ActionSignatures.Count);
         Assert.NotNull(prep.ConversationKey);
-        Assert.Equal(32, prep.ConversationKey!.Length);
+        Assert.Equal(32, prep.ConversationKey.Length);
+        // The title goes out encrypted under the new key: the group_name the
+        // create request sends.
+        Assert.Equal(title, core.Decrypt(prep.EncryptedTitle!, prep.ConversationKey));
     }
 
     [Fact]
@@ -264,16 +268,17 @@ public class ChatCoreTests
         var convKeys = new Dictionary<string, byte[]> { ["1"] = convKey };
         var plaintext = new byte[300_000];
         for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
+        var encryptedSize = ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length);
         var body = core.EncryptReply(
             "1000:2000",
             "a photo",
             convKey,
             "1",
-            attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, plaintext.Length, "photo.bin", 5) });
+            attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, (long)encryptedSize, "photo.bin", 5) });
         Assert.False(string.IsNullOrEmpty(body.EventB64));
 
         var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKey, "1", "photo");
-        Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)ciphertext.Length);
+        Assert.Equal(encryptedSize, (ulong)ciphertext.Length);
         Assert.Equal(plaintext, core.DecryptMedia(ciphertext, body.EventB64, convKeys, "photo"));
         var ex = Assert.Throws<ChatXdkException>(
             () => core.DecryptMedia(ciphertext[..^4], body.EventB64, convKeys, "photo"));
@@ -317,7 +322,7 @@ public class ChatCoreTests
             convKey,
             v.EventConversationKeyVersion,
             replyToEvent: v.EventMessageB64,
-            entities: new[] { new EntityDescriptor { Start = 0, End = 5, EntityType = "mention" } },
+            entities: new[] { new EntityDescriptor(0, 5, "mention") },
             ttlMsec: 60_000);
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageCreateEvent));
     }

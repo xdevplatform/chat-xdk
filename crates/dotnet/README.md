@@ -5,7 +5,7 @@
 ## Architecture
 
 ```
-C# (ChatXdk) → P/Invoke → Rust cdylib (chat_xdk_dotnet) → chat-xdk-core
+C# (ChatXdk) → P/Invoke → Rust cdylib (chat_xdk_ffi) → chat-xdk-core
 ```
 
 Complex values cross the FFI boundary as JSON strings. P/Invoke entry points are generated with csbindgen from `src/lib.rs` into `dotnet/ChatXdk/NativeMethods.g.cs`.
@@ -13,14 +13,14 @@ Complex values cross the FFI boundary as JSON strings. P/Invoke entry points are
 ## Prerequisites
 
 - **.NET 8+** SDK
-- **Rust** (stable) to build the native `chat_xdk_dotnet` library
+- **Rust** (stable) to build the native `chat_xdk_ffi` library
 
 ## Setup
 
 From the repo root, build the native library:
 
 ```bash
-cargo build -p chat-xdk-dotnet --release
+cargo build -p chat-xdk-ffi --release
 ```
 
 Then build the managed wrapper:
@@ -30,17 +30,17 @@ cd crates/dotnet/dotnet/ChatXdk
 dotnet build -c Release
 ```
 
-The published `XDevPlatform.ChatXdk` package bundles the native library for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) under `runtimes/<rid>/native/`. With a wrapper you build yourself, place the native library (`libchat_xdk_dotnet.dylib` / `.so` / `chat_xdk_dotnet.dll`) on the loader path next to your app. `cargo build -p chat-xdk-dotnet` regenerates `NativeMethods.g.cs` from the FFI exports in `src/lib.rs`.
+The published `XDevPlatform.ChatXdk` package bundles the native library for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) under `runtimes/<rid>/native/`. With a wrapper you build yourself, place the native library (`libchat_xdk_ffi.dylib` / `.so` / `chat_xdk_ffi.dll`) on the loader path next to your app. `NativeMethods.g.cs` is generated from the C ABI in `crates/ffi` by its build script, so building the native library regenerates it.
 
 ## Quick Start
 
 ```csharp
 using ChatXdk;
 
-using var chat = new Chat();
-chat.UpdateConfig(juiceboxConfigJson);
-chat.Unlock(pin, juiceboxConfigJson);
-// Or load a local key blob + its registered version instead of Juicebox:
+using var chat = new Chat(juiceboxConfigJson);
+await chat.UnlockAsync(pinBytes); // the PIN's UTF-8 bytes; zero them afterwards
+// Or create the chat with new Chat() and load a local key blob + its
+// registered version instead of Juicebox:
 // chat.ImportKeys(new ImportKeysParams(privateKeyBytes) { SigningKeyVersion = registeredKeyVersion });
 
 // Set the session once: your user id + registered signing-key version,
@@ -52,7 +52,7 @@ chat.SetSigningKeys(signingKeys);
 // Batch load — signing keys come from the store; the verified conversation
 // keys populate the cache.
 var batch = chat.DecryptEvents(new DecryptEventsParams(rawEventB64List));
-foreach (var dm in batch.Messages)
+foreach (var dm in batch.Events)
 {
     if (dm.Event.GetProperty("type").GetString() == "Message")
         Console.WriteLine(dm.Event.GetProperty("sender_id").GetString());

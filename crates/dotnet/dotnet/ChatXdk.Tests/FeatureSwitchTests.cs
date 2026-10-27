@@ -16,7 +16,7 @@ namespace ChatXdk.Tests
         /// <summary>A keyed chat that reads its feature switches from <paramref name="endpoint"/>.</summary>
         private static Chat NewChat(string endpoint, int timeoutMs = 2000)
         {
-            var chat = new Chat(endpoint, TimeSpan.FromMilliseconds(timeoutMs));
+            var chat = new Chat(null, endpoint, TimeSpan.FromMilliseconds(timeoutMs));
             chat.GenerateKeypairs();
             chat.SetIdentity(new SetIdentityParams("1001", "1"));
             return chat;
@@ -51,7 +51,12 @@ namespace ChatXdk.Tests
                 var members = type.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
                 Assert.DoesNotContain(members, member => member.Name.Contains("Feature"));
             }
-            Assert.Single(typeof(Chat).GetConstructors());
+            // The public constructors take no feature endpoint: Chat() and Chat(juiceboxConfigJson).
+            Assert.Equal(
+                new[] { "", "String" },
+                typeof(Chat).GetConstructors()
+                    .Select(ctor => string.Join(",", ctor.GetParameters().Select(p => p.ParameterType.Name)))
+                    .OrderBy(signature => signature));
         }
 
         [Fact]

@@ -27,12 +27,12 @@
 //! chat.unlock(b"2580").await?;
 //! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! chat.set_cache_keys(true);
-//! chat.set_signing_keys(signing_keys);
+//! chat.set_signing_keys(&signing_keys);
 //!
 //! // Handle webhook events (signatures verify with the stored signing keys).
-//! let result = chat.decrypt_events(DecryptEventsParams::new(events));
+//! let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 //! let keys = result.conversation_keys.keys.clone();
-//! let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys.clone()))?;
+//! let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, keys.clone()))?;
 //! match event {
 //!     Event::Message(msg) => println!("{}", msg.text().unwrap_or("")),
 //!     Event::KeyChange(kc) => { /* key cached automatically */ }
@@ -107,10 +107,19 @@
 //!
 //! ## Send format
 //!
-//! Encrypted sends from this crate are always v0, the format 0.5.x sends.
-//! The language bindings move sends to v1 (per-message keys) when the X API's
-//! `v1_send` feature switch turns on, but this crate never fetches the
-//! switches. It reads v1 sends like every binding.
+//! Encrypted sends are v0, the format 0.5.x sends, until the X API's
+//! `v1_send` feature switch turns on, then v1 (per-message keys). The
+//! language bindings read the switches themselves when a chat is created;
+//! this crate never makes the request. GET [`FEATURES_ENDPOINT`] when you
+//! create a chat and hand the answer to [`ChatCore::set_feature_switches`]
+//! (or [`Chat::set_feature_switches`]); without an answer every switch is
+//! off. Every chat reads v1 sends.
+//!
+//! ```rust,ignore
+//! let core = ChatCore::new();
+//! let response = http_get(FEATURES_ENDPOINT, FEATURES_TIMEOUT_MS)?; // your HTTP client
+//! core.set_feature_switches(response.status, &response.body);
+//! ```
 //!
 //! ## What This SDK Does NOT Do
 //!
@@ -183,6 +192,7 @@ pub mod keys;
 pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{FileDecryptor, FileEncryptor};
+pub use features::{FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_TIMEOUT_MS};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
@@ -208,7 +218,7 @@ pub mod js {
         JsConversationKeyResult,
         JsConversationParticipantKey,
         JsDecryptEventsResult,
-        JsDecryptedMessage,
+        JsDecryptedEvent,
         // Event hierarchy
         JsEvent,
         // Supporting types
@@ -217,6 +227,7 @@ pub mod js {
         JsFailureType,
         JsGroupChange,
         JsGroupChangeEvent,
+        JsGroupText,
         JsKeyChangeEvent,
         JsMarkedUnreadEvent,
         JsMediaAttachmentInfo,
@@ -230,6 +241,7 @@ pub mod js {
         JsPostAttachmentInfo,
         JsPreparedAction,
         JsPreparedConversationChange,
+        JsPreparedGroupMetadataChange,
         JsPublicKeyInput,
         JsPublicKeyRegistration,
         JsPublicKeyRegistrationPayload,
@@ -286,7 +298,7 @@ pub mod prelude {
     };
 
     // Errors
-    pub use crate::error::{CryptoError, SdkError, SdkResult};
+    pub use crate::error::{CryptoError, ErrorKind, SdkError, SdkResult};
 
     // Juicebox types (always available for configuration)
     pub use crate::keys::juicebox::JuiceboxConfig;

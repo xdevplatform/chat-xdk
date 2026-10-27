@@ -5,9 +5,8 @@
  * per user) that establishes the identity every message is signed and
  * encrypted against.
  *
- * JS-specific difference from the other bindings: the browser-safe WASM
- * binding deliberately exposes NO exportKeys/importKeys, so there is no
- * private-key blob to write to disk. Juicebox IS the durable store here, so a
+ * Unlike the other language examples, this script shows the Juicebox flow:
+ * it writes no private-key blob to disk, Juicebox is the durable store, so a
  * PIN is required. The account's `juicebox_config` is created BY the
  * public-key POST, so a brand-new user necessarily runs first boot in this
  * order: create the chat with no config, generate keys, POST the public key,
@@ -128,8 +127,8 @@ async function register({ force }) {
   const pin = process.env.CHAT_PIN;
   if (!pin) {
     console.error(
-      "set CHAT_PIN — the browser-safe binding has no key export, so the JS " +
-        "registration persists the identity in Juicebox under this PIN.",
+      "set CHAT_PIN — this registration persists the identity in Juicebox " +
+        "under this PIN.",
     );
     process.exit(1);
   }

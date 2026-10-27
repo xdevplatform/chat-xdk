@@ -1,6 +1,6 @@
 // Tests for the shipped JS wrapper (index.js): ChatWithJuicebox's Juicebox
-// lifecycle plumbing, every crypto delegation, and the guess-budget/config
-// resolution through createChat and updateConfig. The wasm Chat underneath is
+// lifecycle plumbing, every crypto delegation, the guess-budget/config
+// resolution through createChat and updateConfig, and the errors it throws. The wasm Chat underneath is
 // the real SDK; only the Juicebox *network client* is a stub (the SDK is
 // never mocked). Each delegated method is exercised with assertions that fail
 // if a delegation drops or reorders an argument.
@@ -11,9 +11,9 @@ import init, { Chat, bytesToBase64 } from "../pkg/chat_xdk_wasm.js";
 import { keepOffline } from "./feature_server.mjs";
 import {
   ChatWithJuicebox,
+  ChatXdkError,
   createChat,
   encryptedFileSize,
-  guessesRemaining,
 } from "../index.js";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
@@ -37,6 +37,26 @@ async function loadVectors() {
 
 function b64ToBytes(b64) {
   return Uint8Array.from(Buffer.from(b64, "base64"));
+}
+
+/** The error every binding reports for a Juicebox call on a chat without a config. */
+const NO_JUICEBOX_CONFIG =
+  "Invalid state: no Juicebox config: pass the juicebox_config the X API returns when " +
+  "you create the chat, or call update_config() first";
+
+/** The config a stub client's Juicebox Configuration was built from. */
+function configOf(client) {
+  return JSON.parse(client.configuration.value);
+}
+
+/** A check for `assert.throws`/`rejects`: a ChatXdkError of `kind` matching `message`. */
+function chatXdkError(kind, message) {
+  return (err) => {
+    assert.ok(err instanceof ChatXdkError, String(err));
+    assert.equal(err.kind, kind, err.message);
+    assert.match(err.message, message);
+    return true;
+  };
 }
 
 // Network-backend stubs (Juicebox realm I/O lives outside the SDK).
@@ -111,9 +131,20 @@ async function delegationTests() {
   assert.ok(armCount >= 1);
 
   // Weak PINs are rejected before any Juicebox call.
-  await assert.rejects(() => chat.setup("111"), /at least 4 characters/);
+  await assert.rejects(() => chat.setup("111"), chatXdkError("invalidInput", /at least 4 characters/));
   await assert.rejects(() => chat.setup("1111"), /repeated character/);
   await assert.rejects(() => chat.setup("1234"), /sequential run/);
+  await assert.rejects(() => chat.changePin("2580", "0000"), /repeated character/);
+  assert.equal(stubClient.registerCalls, 1);
+
+  // importKeys/exportKeys round-trip the loaded keys.
+  const exported = chat.exportKeys();
+  assert.equal(exported.length, 64);
+  chat.lock();
+  assert.throws(() => chat.exportKeys(), chatXdkError("invalidState", /not unlocked/));
+  chat.importKeys({ keys: exported });
+  assert.equal(chat.getPublicKeys().identity, setupKeys.identity);
+  exported.fill(0);
 
   // unlock imports exactly the bytes recover() returns: swap in the fixture
   // secret and check the fixture public keys and signature come out.
@@ -166,7 +197,7 @@ async function delegationTests() {
   chat.setIdentity({ userId: v.event_sender_id, signingKeyVersion: v.event_recipient_key_version });
   assert.throws(
     () => chat.setIdentity({ userId: "user-1", signingKeyVersion: "1" }),
-    /Invalid user_id 'user-1'/,
+    chatXdkError("invalidInput", /Invalid user_id 'user-1'/),
   );
   assert.throws(
     () => chat.setIdentity({ userId: "1001", signingKeyVersion: "v1" }),
@@ -187,7 +218,7 @@ async function delegationTests() {
   });
   assert.deepEqual(Object.keys(batch.errors), ["2"]);
   assert.equal(batch.conversationKeys.latestVersion, v.event_conversation_key_version);
-  const verifiedMessages = batch.messages.filter((m) => m.event.type === "message");
+  const verifiedMessages = batch.events.filter((m) => m.event.type === "message");
   assert.equal(verifiedMessages.length, 1);
   assert.equal(verifiedMessages[0].event.content.text, v.event_message_text);
   assert.equal(verifiedMessages[0].event.verified, true);
@@ -196,8 +227,9 @@ async function delegationTests() {
   const single = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys, signingKeys });
   assert.equal(single.content.text, v.event_message_text);
   assert.equal(single.verified, true);
-  assert.throws(() =>
-    chat.decryptEvent({ eventB64: v.event_garbage_b64, conversationKeys: {}, signingKeys }),
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_garbage_b64, conversationKeys: {}, signingKeys }),
+    chatXdkError("parse", /./),
   );
 
   const bundle = chat.extractConversationKeys([v.event_key_change_b64]);
@@ -209,7 +241,10 @@ async function delegationTests() {
   // setRejectUnverified is behavioral: with no signing keys the signed
   // message throws under the default policy and passes unverified once
   // disabled.
-  assert.throws(() => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys }));
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys }),
+    chatXdkError("verification", /./),
+  );
   chat.setRejectUnverified(false);
   const unverified = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys });
   assert.equal(unverified.verified, false);
@@ -244,7 +279,7 @@ async function delegationTests() {
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.equal(prep.conversationKey.length, 32);
@@ -256,19 +291,27 @@ async function delegationTests() {
   const groupPrep = chat.prepareGroupCreate({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     memberIds: ["910002", "910005"],
     adminIds: ["910002"],
     title: "Wrapper Group",
   });
   assert.equal(groupPrep.actionSignatures.length, 2);
-  assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
+  const create = groupPrep.actionSignatures[1];
+  assert.ok(chat.verify(
+    create.messageEventSignature.signingPublicKey,
+    b64ToBytes(create.messageEventSignature.signature),
+    new TextEncoder().encode(
+      `GroupChangeEvent.GroupCreate,${create.messageId},910002,${groupPrep.conversationKeyVersion},` +
+      `910002,910005,null,${groupPrep.encryptedTitle},null`,
+    ),
+  ));
 
   const membersPrep = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],
@@ -276,11 +319,15 @@ async function delegationTests() {
     currentPendingMemberIds: [],
   });
   assert.equal(membersPrep.actionSignatures.length, 2);
-  assert.ok(
-    membersPrep.actionSignatures[1].signaturePayload.startsWith(
-      "GroupChangeEvent.GroupMemberAddChange,",
+  const add = membersPrep.actionSignatures[1];
+  assert.ok(chat.verify(
+    add.messageEventSignature.signingPublicKey,
+    b64ToBytes(add.messageEventSignature.signature),
+    new TextEncoder().encode(
+      `GroupChangeEvent.GroupMemberAddChange,${add.messageId},910002,g-1,910005,910002,910002,` +
+      `null,null,null,${membersPrep.conversationKeyVersion},null`,
     ),
-  );
+  ));
 
   // The conversation key is secret: JSON.stringify leaves it out of every
   // prepared change, while the object, its keys and its copies still carry it.
@@ -289,7 +336,7 @@ async function delegationTests() {
     signingKeyVersion: "1",
     conversationId: "g-1",
     userIds: ["910005"],
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
   });
   for (const prepared of [prep, groupPrep, membersPrep, removalPrep]) {
     assert.equal(prepared.conversationKey.length, 32);
@@ -347,10 +394,18 @@ async function delegationTests() {
   });
   assert.ok(removeReaction.encodedMessageCreateEvent.length > 0);
 
-  // Generic + file crypto delegations (roundtrips prove every field): two
-  // files encrypted from the message's eventB64 open from the same event.
-  const ct = chat.encrypt("wrapper text", convKey);
-  assert.equal(chat.decrypt(ct, convKey), "wrapper text");
+  // Metadata + file crypto delegations (roundtrips prove every field): the
+  // title a title change encrypts decrypts with the same key, and two files
+  // encrypted from the message's eventB64 open from the same event.
+  const title = chat.prepareGroupTitleChange({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    newTitle: "wrapper text",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  });
+  assert.equal(chat.decrypt(title.encryptedValue, convKey), "wrapper text");
   const mediaKeys = { [v.event_conversation_key_version]: convKey };
   const photo = (mediaHashKey) => ({
     attachment_type: "media",
@@ -417,27 +472,26 @@ async function delegationTests() {
     signingKeys: editSigningKeys,
   });
   assert.equal(editEvent.content.contentType, "edit");
-  assert.equal(editEvent.content.newText, "edited through the wrapper");
-  assert.equal(editEvent.content.targetMessageId, "seq-7");
-  const signed = (prepared) => {
-    assert.equal(prepared.actionSignatures.length, 1);
-    const [action] = prepared.actionSignatures;
-    return [action.messageId, action.signaturePayload];
-  };
+  assert.equal(editEvent.content.updatedText, "edited through the wrapper");
+  assert.equal(editEvent.content.targetMessageSequenceId, "seq-7");
+  const signs = (action, payload) => chat.verify(
+    action.messageEventSignature.signingPublicKey,
+    b64ToBytes(action.messageEventSignature.signature),
+    new TextEncoder().encode(payload),
+  );
   const group = { ...ident, conversationId: "g100" };
+  const metadataKey = { conversationKey: convKey, conversationKeyVersion: "4" };
   const actions = [
     ["MessageDeleteEvent", ",111,g100,2,seq-5",
       () => chat.prepareMessageDelete({ ...group, sequenceIds: ["seq-5"], deleteForAll: true })],
     ["MarkConversationReadEvent", ",111,g100,seq-9,1700000000123",
       () => chat.prepareMarkConversationRead({ ...group, seenUntilSequenceId: "seq-9", seenAtMsec: 1700000000123 })],
-    ["GroupChangeEvent.GroupMemberRemoveChange", ",111,g100,910007,null,signature_version=11",
-      () => chat.prepareGroupMembersRemove({ ...group, userIds: ["910007"] })],
-    ["GroupChangeEvent.GroupTitleChange", ",111,g100,4,enc-title",
-      () => chat.prepareGroupTitleChange({ ...group, conversationKeyVersion: "4", customTitle: "enc-title" })],
+    ["GroupChangeEvent.GroupTitleChange", (result) => `,111,g100,4,${result.encryptedValue}`,
+      () => chat.prepareGroupTitleChange({ ...group, ...metadataKey, newTitle: "Team" })],
     ["GroupChangeEvent.GroupAvatarUrlChange", ",111,g100,4,https://img/a.png",
-      () => chat.prepareGroupAvatarChange({ ...group, conversationKeyVersion: "4", customAvatarUrl: "https://img/a.png" })],
-    ["GroupChangeEvent.GroupDescriptionChange", ",111,g100,4,enc-desc",
-      () => chat.prepareGroupDescriptionChange({ ...group, conversationKeyVersion: "4", customDescription: "enc-desc" })],
+      () => chat.prepareGroupAvatarChange({ ...group, conversationKeyVersion: "4", newAvatarUrl: "https://img/a.png" })],
+    ["GroupChangeEvent.GroupDescriptionChange", (result) => `,111,g100,4,${result.encryptedValue}`,
+      () => chat.prepareGroupDescriptionChange({ ...group, ...metadataKey, newDescription: "Ships the app" })],
     ["GroupChangeEvent.GroupAdminAddChange", ",111,g100,910008,910009",
       () => chat.prepareGroupAdminsAdd({ ...group, userIds: ["910008", "910009"] })],
     ["GroupChangeEvent.GroupAdminRemoveChange", ",111,g100,910008",
@@ -458,13 +512,27 @@ async function delegationTests() {
       () => chat.prepareScreenCapture({ ...group, change: "blockingEnabled" })],
   ];
   for (const [event, fields, prepare] of actions) {
-    const [messageId, payload] = signed(prepare());
-    assert.equal(payload, `${event},${messageId}${fields}`);
+    const result = prepare();
+    assert.equal(result.actionSignatures.length, 1, event);
+    const [action] = result.actionSignatures;
+    const signedFields = typeof fields === "function" ? fields(result) : fields;
+    assert.ok(signs(action, `${event},${action.messageId}${signedFields}`), event);
   }
+  const removal = chat.prepareGroupMembersRemove({
+    ...group,
+    userIds: ["910007"],
+    publicKeys: [{ userId: "111", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
+  });
+  assert.equal(removal.actionSignatures.length, 2);
+  const [removed] = removal.actionSignatures;
+  assert.ok(signs(removed,
+    `GroupChangeEvent.GroupMemberRemoveChange,${removed.messageId},111,g100,910007,` +
+    `${removal.conversationKeyVersion},signature_version=11`));
   const left = chat.prepareGroupLeave({ ...group, promoteAdminId: "910008", conversationKeyVersion: "7" });
   assert.equal(left.actionSignatures.length, 3);
-  assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
-  assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
+  const [, promoted, deleted] = left.actionSignatures;
+  assert.ok(signs(promoted, `GroupChangeEvent.GroupAdminAddChange,${promoted.messageId},111,g100,910008`));
+  assert.ok(signs(deleted, `ConversationDeleteEvent,${deleted.messageId},111,g100`));
 
   // changePin re-registers through the stub with the new PIN.
   await chat.changePin("2580", "1359");
@@ -475,7 +543,7 @@ async function delegationTests() {
   chat.updateConfig(JSON.stringify({ realms: [], max_guess_count: 3 }));
   const newClient = StubJuiceboxClient.instances.at(-1);
   assert.notEqual(newClient, stubClient);
-  assert.deepEqual(newClient.configuration.value, { realms: [], max_guess_count: 3 });
+  assert.deepEqual(configOf(newClient), { realms: [], max_guess_count: 3 });
 
   // … and delete() drives that new client, then locks the engine.
   await chat.delete();
@@ -493,12 +561,11 @@ const juiceboxModule = {
   Configuration: StubJuiceboxConfiguration,
 };
 
-function makeChat(juiceboxConfig, extraOptions = {}) {
+function makeChat(juiceboxConfig) {
   return createChat({
     juiceboxConfig: JSON.stringify(juiceboxConfig),
     getAuthToken: async () => "stub-token",
     juiceboxModule,
-    ...extraOptions,
   });
 }
 
@@ -511,7 +578,7 @@ async function guessBudgetTests() {
   // and unlock() restores exactly the registered keys.
   const chat = await makeChat({ realms: [], max_guess_count: 6 });
   const client = lastClient();
-  assert.deepEqual(client.configuration.value, { realms: [], max_guess_count: 6 });
+  assert.deepEqual(configOf(client), { realms: [], max_guess_count: 6 });
   chat.generateKeypairs();
   const keys = chat.getPublicKeys();
   await chat.setup("2580");
@@ -531,7 +598,7 @@ async function guessBudgetTests() {
   chat.updateConfig(JSON.stringify({ realms: [], max_guess_count: 3 }));
   const refreshedClient = lastClient();
   assert.notEqual(refreshedClient, client);
-  assert.deepEqual(refreshedClient.configuration.value, { realms: [], max_guess_count: 3 });
+  assert.deepEqual(configOf(refreshedClient), { realms: [], max_guess_count: 3 });
   await chat.setup("2580");
   assert.equal(refreshedClient.lastNumGuesses, 3);
 
@@ -540,15 +607,15 @@ async function guessBudgetTests() {
   await chat.setup("2580");
   assert.equal(lastClient().lastNumGuesses, 5);
 
-  // An explicit createChat maxGuessCount overrides the config and is NOT
-  // displaced by updateConfig.
-  const pinned = await makeChat({ realms: [], max_guess_count: 6 }, { maxGuessCount: 9 });
-  pinned.generateKeypairs();
-  await pinned.setup("2580");
-  assert.equal(lastClient().lastNumGuesses, 9);
-  pinned.updateConfig(JSON.stringify({ realms: [], max_guess_count: 3 }));
-  await pinned.setup("2580");
-  assert.equal(lastClient().lastNumGuesses, 9);
+  // A max_guess_count that is not a count falls back to the shape default.
+  for (const notACount of [7.5, -3, "9", 70000]) {
+    chat.updateConfig(JSON.stringify({ realms: [], max_guess_count: notACount }));
+    await chat.setup("2580");
+    assert.equal(lastClient().lastNumGuesses, 5, String(notACount));
+  }
+  chat.updateConfig(JSON.stringify({ realms: [], max_guess_count: 0 }));
+  await chat.setup("2580");
+  assert.equal(lastClient().lastNumGuesses, 0);
 
   // The sdk_config wrapper shape is unwrapped for the Juicebox client (the
   // embedded SDK config string is what the constructor receives) and
@@ -578,7 +645,7 @@ async function guessBudgetTests() {
   const tmWrapped = await makeChat(tokenMap);
   tmWrapped.generateKeypairs();
   await tmWrapped.setup("2580");
-  assert.deepEqual(lastClient().configuration.value, {
+  assert.deepEqual(configOf(lastClient()), {
     realms: [
       { id: "r1", address: "https://r1.example" },
       { id: "r2", address: "https://r2.example" },
@@ -590,10 +657,10 @@ async function guessBudgetTests() {
   assert.equal(lastClient().lastNumGuesses, 5);
   wrapped.updateConfig(JSON.stringify(tokenMap));
   await wrapped.setup("2580");
-  assert.equal(lastClient().configuration.value.register_threshold, 2);
+  assert.equal(configOf(lastClient()).register_threshold, 2);
   assert.throws(
     () => wrapped.updateConfig(JSON.stringify({ token_map: [{ key: "r1" }] })),
-    /Invalid token_map entry/,
+    chatXdkError("invalidInput", /^Invalid Juicebox config: Missing value$/),
   );
 
   // A defined but non-array token_map is rejected at config resolution with
@@ -666,7 +733,7 @@ async function guessBudgetTests() {
   // An empty token_map array derives an empty realms config, matching the
   // core parser (which accepts it and derives the same thresholds).
   wrapped.updateConfig(JSON.stringify({ token_map: [] }));
-  assert.deepEqual(lastClient().configuration.value, {
+  assert.deepEqual(configOf(lastClient()), {
     realms: [],
     register_threshold: 0,
     recover_threshold: 1,
@@ -704,7 +771,27 @@ async function firstBootTests() {
     () => chat.changePin("2580", "1359"),
     () => chat.delete(),
   ]) {
-    await assert.rejects(op, /No Juicebox config/);
+    await assert.rejects(op, (err) => {
+      chatXdkError("invalidState", /./)(err);
+      assert.equal(err.message, NO_JUICEBOX_CONFIG);
+      return true;
+    });
+  }
+  assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
+
+  // An empty or blank config is no config: createChat and updateConfig fail
+  // with the same error and build no client.
+  const noConfig = (err) => {
+    chatXdkError("invalidState", /./)(err);
+    assert.equal(err.message, NO_JUICEBOX_CONFIG);
+    return true;
+  };
+  for (const empty of ["", "  "]) {
+    await assert.rejects(
+      createChat({ juiceboxConfig: empty, getAuthToken: async () => "stub-token", juiceboxModule }),
+      noConfig,
+    );
+    assert.throws(() => chat.updateConfig(empty), noConfig);
   }
   assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
 
@@ -725,65 +812,86 @@ async function firstBootTests() {
   assert.equal(chat.isUnlocked(), true);
   assert.equal(chat.getPublicKeys().identity, keys.identity);
 
-  // An explicit createChat maxGuessCount override survives a config-less
-  // construction and still beats the config supplied later by updateConfig.
-  const pinned = await createChat({
-    getAuthToken: async () => "stub-token",
-    juiceboxModule,
-    maxGuessCount: 9,
-  });
-  pinned.updateConfig(JSON.stringify({ realms: [], max_guess_count: 3 }));
-  pinned.generateKeypairs();
-  await pinned.setup("2580");
-  assert.equal(lastClient().lastNumGuesses, 9);
-
-  // A present-but-empty config is a caller bug, not first boot: it fails at
-  // createChat rather than deferring to a missing-config error at setup.
-  await assert.rejects(
-    () =>
-      createChat({
-        juiceboxConfig: "",
-        getAuthToken: async () => "stub-token",
-        juiceboxModule,
-      }),
-    SyntaxError,
+  assert.throws(
+    () => chat.updateConfig({ realms: [] }),
+    chatXdkError("invalidInput", /juiceboxConfig must be the Juicebox config JSON string/),
   );
 
-  // getAuthToken stays mandatory even when the config is omitted.
+  // A config needs getAuthToken; without either, the chat keeps its keys
+  // with importKeys/exportKeys and loads no juicebox-sdk.
   await assert.rejects(
-    () => createChat({ juiceboxModule }),
-    /getAuthToken must be an async function/,
+    () => createChat({ juiceboxConfig: JSON.stringify({ realms: [] }), juiceboxModule }),
+    chatXdkError("invalidInput", /getAuthToken must be an async function/),
   );
+  await assert.rejects(
+    () => createChat({ getAuthToken: "token" }),
+    chatXdkError("invalidInput", /getAuthToken must be an async function/),
+  );
+  const keyless = await createChat();
+  keyless.importKeys({ keys: chat.exportKeys() });
+  assert.equal(keyless.getPublicKeys().identity, keys.identity);
+  for (const op of [
+    () => keyless.updateConfig(JSON.stringify({ realms: [] })),
+    () => keyless.setup("2580"),
+    () => keyless.unlock("2580"),
+  ]) {
+    await assert.rejects(async () => op(), chatXdkError("invalidState", /No Juicebox for this chat/));
+  }
+  keyless.free();
 }
 
-// guessesRemaining reads the attempt count out of the wrapper's own
-// invalid-PIN unlock error; 0 means the guess budget is exhausted.
-async function guessesRemainingTests() {
-  class InvalidPinClient extends StubJuiceboxClient {
+// A Juicebox failure throws the ChatXdkError the native bindings report for
+// it: juicebox-sdk rejects register and delete with a reason value, and
+// recover with an object carrying one and, for a wrong PIN, the attempts left.
+async function juiceboxErrorTests() {
+  const failures = {};
+  class FailingClient extends StubJuiceboxClient {
+    async register() {
+      throw failures.register;
+    }
     async recover() {
-      // The wire shape juicebox-sdk rejects a wrong PIN with:
-      // reason 0 = InvalidPin, plus the remaining attempt budget.
-      throw { reason: 0, guesses_remaining: 3 };
+      throw failures.recover;
+    }
+    async delete() {
+      throw failures.delete;
     }
   }
   const chat = await createChat({
     juiceboxConfig: JSON.stringify({ realms: [] }),
     getAuthToken: async () => "stub-token",
-    juiceboxModule: { Client: InvalidPinClient, Configuration: StubJuiceboxConfiguration },
+    juiceboxModule: { Client: FailingClient, Configuration: StubJuiceboxConfiguration },
   });
-  let unlockErr;
-  try {
-    await chat.unlock("2580");
-  } catch (err) {
-    unlockErr = err;
-  }
-  assert.equal(guessesRemaining(unlockErr), 3);
+  chat.generateKeypairs();
 
-  // No count on non-PIN failures, unrelated messages that happen to carry
-  // the token, or non-errors.
-  assert.equal(guessesRemaining(new Error("Juicebox recovery failed: reason=Transient")), null);
-  assert.equal(guessesRemaining(new Error("delete failed: guesses_remaining=7")), null);
-  assert.equal(guessesRemaining(undefined), null);
+  failures.recover = { reason: 0, guesses_remaining: 3 };
+  await assert.rejects(
+    () => chat.unlock("2580"),
+    (err) => {
+      chatXdkError("invalidPin", /^Juicebox error: Invalid PIN: guesses_remaining=3$/)(err);
+      assert.equal(err.guessesRemaining, 3);
+      return true;
+    },
+  );
+  failures.recover = { reason: 0, guesses_remaining: 0 };
+  await assert.rejects(() => chat.changePin("2580", "1359"), (err) => err.guessesRemaining === 0);
+  failures.recover = { reason: 1 };
+  await assert.rejects(
+    () => chat.unlock("2580"),
+    (err) => {
+      chatXdkError("juicebox", /^Juicebox error: Keys not registered$/)(err);
+      assert.equal(err.guessesRemaining, null);
+      return true;
+    },
+  );
+
+  failures.register = 0;
+  await assert.rejects(() => chat.setup("2580"), chatXdkError("juicebox", /^Juicebox error: Invalid auth token$/));
+  failures.register = new Error("socket hang up");
+  await assert.rejects(() => chat.setup("2580"), chatXdkError("juicebox", /^Juicebox error: socket hang up$/));
+
+  failures.delete = 4;
+  await assert.rejects(() => chat.delete(), chatXdkError("juicebox", /^Juicebox error: Delete failed: Transient$/));
+  assert.equal(chat.isUnlocked(), true, "a failed delete keeps the keys loaded");
 }
 
 // The juicebox-sdk WASM must be loaded once per process: its glue keeps
@@ -825,7 +933,7 @@ async function main() {
   assert.equal(encryptedFileSize(5000), 5109);
   await guessBudgetTests();
   await firstBootTests();
-  await guessesRemainingTests();
+  await juiceboxErrorTests();
   await realJuiceboxSingletonTests();
   console.log("wrapper.test.mjs: all assertions passed");
 }

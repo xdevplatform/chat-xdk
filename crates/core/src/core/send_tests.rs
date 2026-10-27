@@ -134,7 +134,7 @@ fn open_file(
     media_hash_key: &str,
     encrypted: &[u8],
 ) -> Result<Vec<u8>, SdkError> {
-    ChatCore::new().decrypt_file(DecryptFileParams::new(
+    ChatCore::new().decrypt_file(&DecryptFileParams::new(
         encrypted.to_vec(),
         frame(event),
         keys(KEY_VERSION, ckey),
@@ -239,7 +239,7 @@ fn the_signature_covers_the_contents_encryption_version() {
 
     let receive = |event: &ThriftEvent| {
         ChatCore::new().decrypt_event(
-            DecryptEventParams::new(frame(event), keys(KEY_VERSION, &ckey))
+            &DecryptEventParams::new(frame(event), keys(KEY_VERSION, &ckey))
                 .with_signing_keys(vec![author.entry.clone()]),
         )
     };
@@ -306,7 +306,7 @@ fn event_b64_is_the_sent_message_as_recipients_receive_it() {
 
         let Event::Message(message) = ChatCore::new()
             .decrypt_event(
-                DecryptEventParams::new(payload.event_b64.clone(), keys(KEY_VERSION, &ckey))
+                &DecryptEventParams::new(payload.event_b64.clone(), keys(KEY_VERSION, &ckey))
                     .with_signing_keys(vec![author.entry.clone()]),
             )
             .unwrap()
@@ -559,7 +559,7 @@ fn the_file_encryptor_and_decryptor_match_the_one_shot_calls() {
     assert_eq!(open_file(&event, &ckey, "second", &one_shot).unwrap(), file);
 
     let mut decryptor = ChatCore::new()
-        .file_decryptor(FileDecryptorParams::new(
+        .file_decryptor(&FileDecryptorParams::new(
             frame(&event),
             keys(KEY_VERSION, &ckey),
             "second",
@@ -947,11 +947,13 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
     assert!(err.contains("call set_identity() first"), "{err}");
 
     let author = author();
-    let as_other = SigningKeyEntry {
-        user_id: "1002".to_string(),
-        public_key_version: "2".to_string(),
-        ..author.entry.clone()
-    };
+    let as_other = SigningKeyEntry::new(
+        "1002",
+        "2",
+        &author.entry.public_key,
+        &author.entry.identity_public_key,
+        &author.entry.identity_public_key_signature,
+    );
     let cases = [
         (
             &anonymous,
@@ -986,7 +988,7 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
             if has_file {
                 let encrypted = encrypt_file(&payload, &ckey, "photo", b"photo").unwrap();
                 let opened = ChatCore::new()
-                    .decrypt_file(DecryptFileParams::new(
+                    .decrypt_file(&DecryptFileParams::new(
                         encrypted,
                         frame(&event),
                         keys(KEY_VERSION, &ckey),
@@ -1049,11 +1051,7 @@ fn every_user_id_input_must_be_numeric() {
     author.core.encrypt_reply(&reply).unwrap();
 
     let public_key = author.core.get_public_keys().unwrap().identity;
-    let participant = |user_id: &str| PublicKeyInput {
-        user_id: user_id.into(),
-        public_key: public_key.clone(),
-        key_version: "1".into(),
-    };
+    let participant = |user_id: &str| PublicKeyInput::new(user_id, &public_key, "1");
     let err = error_text(author.core.prepare_conversation_key_change(
         &ConversationKeyChangeParams::new(vec![participant(AUTHOR), participant("bob")]),
     ));
@@ -1110,15 +1108,12 @@ fn every_key_version_input_takes_the_api_form() {
     );
 
     let public_key = author.core.get_public_keys().unwrap().identity;
-    let mut key_change = ConversationKeyChangeParams::new(vec![PublicKeyInput {
-        user_id: AUTHOR.into(),
-        public_key,
-        key_version: "v2".into(),
-    }]);
-    key_change.conversation_id = Some(CONVERSATION.into());
+    let key_change =
+        ConversationKeyChangeParams::new(vec![PublicKeyInput::new(AUTHOR, public_key, "v2")])
+            .with_conversation_id(CONVERSATION);
     let err = error_text(author.core.prepare_conversation_key_change(&key_change));
     assert!(
-        err.starts_with("Invalid public_keys key_version 'v2'"),
+        err.starts_with("Invalid public_keys public_key_version 'v2'"),
         "{err}"
     );
 }

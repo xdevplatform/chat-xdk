@@ -41,13 +41,13 @@ impl Party {
     pub(super) fn new(user_id: &str) -> Self {
         let core = ChatCore::new();
         let reg = core.generate_keypairs().unwrap();
-        let entry = SigningKeyEntry {
-            user_id: user_id.to_string(),
-            public_key_version: SIGNING_KEY_VERSION.to_string(),
-            public_key: reg.public_key.signing_public_key,
-            identity_public_key: reg.public_key.public_key,
-            identity_public_key_signature: reg.public_key.identity_public_key_signature,
-        };
+        let entry = SigningKeyEntry::new(
+            user_id,
+            SIGNING_KEY_VERSION,
+            reg.public_key.signing_public_key,
+            reg.public_key.public_key,
+            reg.public_key.identity_public_key_signature,
+        );
         Self {
             core,
             user_id: user_id.to_string(),

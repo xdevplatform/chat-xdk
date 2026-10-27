@@ -7,7 +7,7 @@ use chat_xdk_core::crypto::{
 use chat_xdk_core::keys::conversation_keys::{decrypt_conversation_key, encrypt_conversation_key};
 use chat_xdk_core::ImportKeysParams;
 use chat_xdk_core::{
-    DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams,
+    DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams, GroupText,
 };
 
 #[derive(serde::Deserialize)]
@@ -23,6 +23,16 @@ struct Vectors {
     signature_b64: String,
     identity_public_key_signature_b64: String,
     event_failure_b64: String,
+    event_group_description_b64: String,
+    event_group_description: String,
+    event_group_id: String,
+    event_group_create_b64: String,
+    event_group_create_conversation_key_b64: String,
+    event_group_create_conversation_key_version: String,
+    event_group_create_encrypted_title: String,
+    event_group_title: String,
+    event_group_avatar_change_b64: String,
+    event_group_avatar_url: String,
     event_key_change_b64: String,
     event_message_b64: String,
     event_reply_valid_b64: String,
@@ -174,13 +184,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     )
     .unwrap();
 
-    let signing_keys = [chat_xdk_core::SigningKeyEntry {
-        user_id: v.event_sender_id.clone(),
-        public_key_version: v.event_signing_key_version.clone(),
-        public_key: v.signing_public_b64.clone(),
-        identity_public_key: v.identity_public_b64.clone(),
-        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
-    }];
+    let signing_keys = [signing_key_for(&v, &v.event_sender_id)];
 
     // Batch path: [KeyChange, message, garbage] never throws; the garbage
     // event is collected as an indexed error.
@@ -190,7 +194,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
         v.event_garbage_b64.clone(),
     ];
     let result = core
-        .decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys.to_vec()));
+        .decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys.to_vec()));
 
     assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
     assert!(
@@ -212,7 +216,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     );
 
     let key_changes: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::KeyChange(kc) => Some(kc),
@@ -245,7 +249,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
 
     // Exactly one verified message with the fixture text.
     let messages: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::Message(msg) => Some(msg),
@@ -260,7 +264,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     let cached = result.conversation_keys.keys.clone();
     let event = core
         .decrypt_event(
-            DecryptEventParams::new(v.event_message_b64.clone(), cached)
+            &DecryptEventParams::new(v.event_message_b64.clone(), cached)
                 .with_signing_keys(signing_keys.to_vec()),
         )
         .unwrap();
@@ -275,10 +279,180 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     // … and throws on the garbage event.
     assert!(core
         .decrypt_event(
-            DecryptEventParams::new(v.event_garbage_b64.clone(), Default::default())
+            &DecryptEventParams::new(v.event_garbage_b64.clone(), Default::default())
                 .with_signing_keys(signing_keys.to_vec()),
         )
         .is_err());
+}
+
+#[test]
+fn vectors_group_description_change_decrypts_on_receive() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    let conversation_keys = std::collections::HashMap::from([(
+        v.event_conversation_key_version.clone(),
+        XChatConversationKey::from_bytes(B64.decode(&v.conversation_key_b64).unwrap()).unwrap(),
+    )]);
+    let event = core
+        .decrypt_event(
+            &DecryptEventParams::new(v.event_group_description_b64.clone(), conversation_keys)
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => {
+            assert!(change.verified);
+            assert_eq!(
+                change.meta.conversation_id.as_deref(),
+                Some(v.event_group_id.as_str())
+            );
+            match change.change {
+                chat_xdk_core::GroupChange::DescriptionChanged {
+                    new_description, ..
+                } => {
+                    assert_eq!(text_of(&new_description), v.event_group_description)
+                }
+                other => panic!("Expected DescriptionChanged, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+
+    // Without the key the description was encrypted under, the change still
+    // decrypts, with the description unavailable.
+    let event = core
+        .decrypt_event(
+            &DecryptEventParams::new(v.event_group_description_b64.clone(), Default::default())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => match change.change {
+            chat_xdk_core::GroupChange::DescriptionChanged {
+                new_description, ..
+            } => match new_description {
+                GroupText::Unavailable { raw, .. } => {
+                    assert!(!raw.is_empty());
+                    assert_ne!(raw, v.event_group_description);
+                }
+                other => panic!("Expected an unavailable description, got {:?}", other),
+            },
+            other => panic!("Expected DescriptionChanged, got {:?}", other),
+        },
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+}
+
+fn text_of(value: &GroupText) -> &str {
+    match value {
+        GroupText::Text { text, .. } => text,
+        other => panic!("Expected decrypted text, got {:?}", other),
+    }
+}
+
+#[test]
+fn vectors_group_avatar_change_carries_the_media_url() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    let event = core
+        .decrypt_event(
+            &DecryptEventParams::new(v.event_group_avatar_change_b64.clone(), Default::default())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => {
+            assert!(change.verified);
+            match change.change {
+                chat_xdk_core::GroupChange::AvatarChanged {
+                    new_avatar_url,
+                    conversation_key_version,
+                    ..
+                } => {
+                    assert_eq!(new_avatar_url, v.event_group_avatar_url);
+                    assert_eq!(
+                        conversation_key_version.as_deref(),
+                        Some(v.event_conversation_key_version.as_str())
+                    );
+                }
+                other => panic!("Expected AvatarChanged, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+}
+
+#[test]
+fn vectors_group_create_decrypts_its_title_on_receive() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    let conversation_keys = std::collections::HashMap::from([(
+        v.event_group_create_conversation_key_version.clone(),
+        XChatConversationKey::from_bytes(
+            B64.decode(&v.event_group_create_conversation_key_b64)
+                .unwrap(),
+        )
+        .unwrap(),
+    )]);
+    let event = core
+        .decrypt_event(
+            &DecryptEventParams::new(v.event_group_create_b64.clone(), conversation_keys)
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => {
+            assert!(change.verified);
+            match change.change {
+                chat_xdk_core::GroupChange::Created {
+                    member_ids,
+                    title,
+                    avatar_url,
+                    conversation_key_version,
+                    ..
+                } => {
+                    assert_eq!(member_ids, std::slice::from_ref(&v.event_sender_id));
+                    assert_eq!(
+                        title.as_ref().map(text_of),
+                        Some(v.event_group_title.as_str())
+                    );
+                    assert_eq!(avatar_url, None);
+                    assert_eq!(
+                        conversation_key_version.as_deref(),
+                        Some(v.event_group_create_conversation_key_version.as_str())
+                    );
+                }
+                other => panic!("Expected Created, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+
+    // Without the key the create seeded, the create still decrypts, with its
+    // title unavailable as the ciphertext the create carries.
+    let event = core
+        .decrypt_event(
+            &DecryptEventParams::new(v.event_group_create_b64.clone(), Default::default())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => match change.change {
+            chat_xdk_core::GroupChange::Created {
+                member_ids, title, ..
+            } => {
+                assert_eq!(member_ids, std::slice::from_ref(&v.event_sender_id));
+                match title {
+                    Some(GroupText::Unavailable { raw, .. }) => {
+                        assert_eq!(raw, v.event_group_create_encrypted_title)
+                    }
+                    other => panic!("Expected an unavailable title, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Created, got {:?}", other),
+        },
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
 }
 
 #[test]
@@ -289,7 +463,7 @@ fn vectors_failure_event_decodes_type_and_rate_limit_tier() {
     // Failure events are unsigned by protocol, so they decode with no
     // conversation or signing keys even under the default reject policy.
     let event = core
-        .decrypt_event(DecryptEventParams::new(
+        .decrypt_event(&DecryptEventParams::new(
             v.event_failure_b64.clone(),
             Default::default(),
         ))
@@ -320,13 +494,7 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
     )
     .unwrap();
 
-    let signing_keys = [chat_xdk_core::SigningKeyEntry {
-        user_id: v.event_sender_id.clone(),
-        public_key_version: v.event_signing_key_version.clone(),
-        public_key: v.signing_public_b64.clone(),
-        identity_public_key: v.identity_public_b64.clone(),
-        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
-    }];
+    let signing_keys = [signing_key_for(&v, &v.event_sender_id)];
 
     let events = vec![
         v.event_key_change_b64.clone(),
@@ -334,11 +502,11 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
         v.event_reply_forged_b64.clone(),
     ];
     let result = core
-        .decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys.to_vec()));
+        .decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys.to_vec()));
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 
     let messages: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::Message(msg) => Some(msg),
@@ -362,13 +530,13 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
 
 /// The fixture signing key, registered to `user_id`.
 fn signing_key_for(v: &Vectors, user_id: &str) -> chat_xdk_core::SigningKeyEntry {
-    chat_xdk_core::SigningKeyEntry {
-        user_id: user_id.to_string(),
-        public_key_version: v.event_signing_key_version.clone(),
-        public_key: v.signing_public_b64.clone(),
-        identity_public_key: v.identity_public_b64.clone(),
-        identity_public_key_signature: v.identity_public_key_signature_b64.clone(),
-    }
+    chat_xdk_core::SigningKeyEntry::new(
+        user_id,
+        &v.event_signing_key_version,
+        &v.signing_public_b64,
+        &v.identity_public_b64,
+        &v.identity_public_key_signature_b64,
+    )
 }
 
 fn key_map(
@@ -415,13 +583,13 @@ fn open_media(
 ) -> Result<Vec<u8>, chat_xdk_core::error::SdkError> {
     let core = chat_xdk_core::ChatCore::new();
     let encrypted = B64.decode(encrypted_b64).unwrap();
-    let whole = core.decrypt_file(DecryptFileParams::new(
+    let whole = core.decrypt_file(&DecryptFileParams::new(
         encrypted.clone(),
         event_b64,
         keys.clone(),
         media_hash_key,
     ))?;
-    let mut decryptor = core.file_decryptor(FileDecryptorParams::new(
+    let mut decryptor = core.file_decryptor(&FileDecryptorParams::new(
         event_b64,
         keys.clone(),
         media_hash_key,
@@ -442,7 +610,7 @@ fn media_error(
     encrypted: &[u8],
 ) -> String {
     chat_xdk_core::ChatCore::new()
-        .decrypt_file(DecryptFileParams::new(
+        .decrypt_file(&DecryptFileParams::new(
             encrypted.to_vec(),
             event_b64,
             keys.clone(),
@@ -458,7 +626,7 @@ fn vectors_message_key_event_decrypts_with_the_conversation_key() {
     let message = expect_message(
         chat_xdk_core::ChatCore::new()
             .decrypt_event(
-                DecryptEventParams::new(v.event_message_key_b64.clone(), message_key_map(&v))
+                &DecryptEventParams::new(v.event_message_key_b64.clone(), message_key_map(&v))
                     .with_signing_keys(vec![signing_key_for(&v, &v.message_key_sender_id)]),
             )
             .unwrap(),
@@ -652,7 +820,7 @@ fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
         signing_key_for(&v, &v.message_key_sender_id),
     ];
     let result = core.decrypt_events(
-        DecryptEventsParams::new(vec![
+        &DecryptEventsParams::new(vec![
             v.event_key_change_message_key_b64.clone(),
             v.event_message_key_b64.clone(),
         ])
@@ -668,7 +836,7 @@ fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
         v.message_key_conversation_key_hex
     );
     let texts: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::Message(msg) => msg.text().map(str::to_string),
@@ -694,7 +862,7 @@ fn vectors_short_sender_message_key_event_verifies_at_v11() {
     let message = expect_message(
         chat_xdk_core::ChatCore::new()
             .decrypt_event(
-                DecryptEventParams::new(
+                &DecryptEventParams::new(
                     v.event_message_key_short_b64.clone(),
                     key_map(
                         &v.message_key_short_conversation_key_version,
@@ -719,7 +887,7 @@ fn vectors_reply_carrying_a_message_key_validates_and_opens_the_quoted_media() {
     let keys = fixture_key_map(&v);
     let message = expect_message(
         core.decrypt_event(
-            DecryptEventParams::new(v.event_reply_message_key_b64.clone(), keys.clone())
+            &DecryptEventParams::new(v.event_reply_message_key_b64.clone(), keys.clone())
                 .with_signing_keys(vec![
                     signing_key_for(&v, &v.event_sender_id),
                     signing_key_for(&v, &v.message_key_sender_id),

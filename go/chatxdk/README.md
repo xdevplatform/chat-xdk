@@ -5,7 +5,7 @@ Go bindings for the X Chat SDK — encryption for X Direct Messages.
 ## Architecture
 
 ```
-Go (chatxdk) → cgo → C FFI (chat_xdk.h) → Rust static lib (libchat_xdk_go.a) → chat-xdk-core
+Go (chatxdk) → cgo → C FFI (chat_xdk.h) → Rust static lib (libchat_xdk_ffi.a) → chat-xdk-core
 ```
 
 Complex values cross the FFI boundary as JSON strings and are unmarshaled into idiomatic Go structs.
@@ -64,7 +64,7 @@ func main() {
         panic(err)
     }
 
-    for _, row := range batch.Messages {
+    for _, row := range batch.Events {
         if row.Event.Type == "Message" {
             fmt.Println(row.Event.AsMessage().Text())
         }

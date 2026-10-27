@@ -135,8 +135,8 @@ async function loadBacklog() {
   // the SDK's key cache for encryptMessage to resolve later.
   const batch = chat.decryptEvents({ events: eventsB64 });
   state.paginationToken = page.meta?.next_token;
-  for (const m of batch.messages) renderMessage(m.event);
-  log(`backlog: ${batch.messages.length} messages, ${Object.keys(batch.conversationKeys.keys ?? {}).length} keys`);
+  for (const m of batch.events) renderMessage(m.event);
+  log(`backlog: ${batch.events.length} messages, ${Object.keys(batch.conversationKeys.keys ?? {}).length} keys`);
 }
 
 async function poll() {

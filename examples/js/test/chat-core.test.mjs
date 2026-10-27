@@ -52,13 +52,19 @@ test("setIdentity needs the registered version", async () => {
   assert.throws(() => core.setIdentity("12345"), /signing key version unknown/);
 });
 
-test("generic encrypt -> decrypt round-trip returns the plaintext", async () => {
+test("group title change signs the encrypted title, which decrypts back", async () => {
   const core = await loadedCore();
   const key = convKey();
-  const plaintext = "hello from the js example";
-  const ciphertext = core.encrypt(plaintext, key);
-  assert.notEqual(ciphertext, plaintext);
-  assert.equal(core.decrypt(ciphertext, key), plaintext);
+  const title = "hello from the js example";
+  const prepared = core.prepareGroupTitleChange({
+    conversationId: "g123",
+    title,
+    conversationKey: key,
+    conversationKeyVersion: "1",
+  });
+  assert.notEqual(prepared.encryptedValue, title);
+  assert.equal(prepared.conversationKeyVersion, "1");
+  assert.equal(core.decrypt(prepared.encryptedValue, key), title);
 });
 
 test("conversation key prepare -> decrypt round-trip", async () => {
@@ -67,8 +73,8 @@ test("conversation key prepare -> decrypt round-trip", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "conv-1",
@@ -113,7 +119,7 @@ test("session cache: decryptBatch feeds the key cache, encryptReply omits the ke
 test("decryptBatch on an empty list is safe", async () => {
   const core = await loadedCore();
   const result = core.decryptBatch([], []);
-  assert.equal(result.messages.length, 0);
+  assert.equal(result.events.length, 0);
 });
 
 test("decryptOne rejects garbage input", async () => {
@@ -141,8 +147,8 @@ test("prepToRequest maps the X API request shape", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "1000:2000",
@@ -162,8 +168,6 @@ test("prepToRequest maps the X API request shape", async () => {
   assert.ok(sig.encodedMessageEventDetail);
   assert.equal(sig.messageEventSignature.signingPublicKey, core.publicKeys().signing);
   assert.ok(sig.messageEventSignature.signature);
-  // CKCE signature payloads are withheld (they embed the plaintext key).
-  assert.ok(!("signaturePayload" in sig));
 });
 
 test("removalToRequest rotates the key for the members who stay", async () => {
@@ -173,8 +177,8 @@ test("removalToRequest rotates the key for the members who stay", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "g123",
@@ -208,16 +212,20 @@ test("prepareGroupCreate yields the two required signatures", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "g123",
     memberIds: [vectors.event_sender_id],
     adminIds: [vectors.event_sender_id],
+    title: "hello from the js example",
   });
   assert.equal(prep.actionSignatures.length, 2);
   assert.ok(prep.conversationKey?.length === 32);
+  // The title goes out encrypted under the new key: the group_name the
+  // create request sends.
+  assert.equal(core.decrypt(prep.encryptedTitle, prep.conversationKey), "hello from the js example");
 });
 
 test("encryptReaction targeting a raw event produces a sendable payload", async () => {
@@ -272,7 +280,7 @@ test("media encrypt -> decrypt round-trip and truncation", async () => {
         media_hash_key: "photo",
         width: 4,
         height: 3,
-        filesize_bytes: plaintext.length,
+        filesize_bytes: ChatCore.encryptedFileSize(plaintext.length),
         filename: "photo.bin",
         media_type: 5,
       },

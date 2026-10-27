@@ -14,22 +14,26 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `SetIdentity`](#setidentity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `ImportKeys`](#importkeys-takes-importkeysparams)
+- [ ] [Pass the Juicebox config to `new Chat(config)`, and PINs as `byte[]`](#keys-stored-in-juicebox)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `DecryptEvents`](#decryptevents-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `DecryptEvents` and read its `Events`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `DecryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Build an `EntityDescriptor` and a `UrlAttachmentImageDescriptor` with their constructors](#entities-and-preview-images-take-their-values-in-the-constructor)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a `PublicKeyInput`'s properties `IdentityPublicKey` and `PublicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
+- [ ] [Tell exceptions apart by `Kind`](#errors-carry-their-kind)
+- [ ] [Name a native library you build yourself `chat_xdk_ffi`](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -40,14 +44,18 @@ loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
 `DecryptEvents` returns, `bundle` for a `ConversationKeyBundle`, `payload`
 for a `SendPayload`, `prepared` for a `PreparedConversationChange`, and
-`keyChange` and `message` for a decrypted key change and message, as
-`JsonElement`s.
-`api.Post(path, body)` stands for your HTTP client: it POSTs `body`,
-serialized with `System.Text.Json`'s default options, to
+`keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
+decrypted key change, message, deletion, read receipt and group change, as
+`JsonElement`s. `api.Post(path, body)` stands for your HTTP client: it POSTs
+`body`, serialized with `System.Text.Json`'s default options, to
 `https://api.x.com` + `path` with your user access token and returns the
 parsed JSON response as a `JsonElement`. `PhotoAttachment(mediaHashKey)`
-stands for your code that builds a photo's `AttachmentDescriptor`. The types
-are in the `ChatXdk` namespace.
+stands for your code that builds a photo's `AttachmentDescriptor`, and
+`ShowEdit`, `ShowTitle`, `ShowDescription`, `ShowAvatar`, `ShowEvent` and
+`ShowGuessesLeft` for your code that displays an edit, a group's title,
+description or avatar, a decrypted event, or the PIN attempts left. `pin` is
+the PIN, `juiceboxConfig` the Juicebox config the X API returns, and `e` a
+`ChatXdkException` a call threw. The types are in the `ChatXdk` namespace.
 
 ## Upgrade readers before v1 sends start
 
@@ -109,6 +117,10 @@ var response = api.Post($"/2/users/{userId}/public_keys", new { public_key = reg
 chat.SetIdentity(new SetIdentityParams(userId, response.GetProperty("data").GetProperty("public_key_version").GetString()!));
 ```
 
+`PublicKeys`, which `GetPublicKeys` and `Setup` return, holds the two public
+keys, `Identity` and `Signing`, and no `Version`: their version is the
+`public_key_version` the registration request returns.
+
 ## `SetIdentity` takes `SetIdentityParams`
 
 Pass the user id and the signing-key version in a `SetIdentityParams`. It
@@ -140,6 +152,45 @@ chat.ImportKeys(new ImportKeysParams(privateKeys));
 chat.ImportKeys(new ImportKeysParams(privateKeys) { SigningKeyVersion = signingKeyVersion });
 ```
 
+`ExportKeys` throws a `ChatXdkException` of kind `InvalidState` when no
+identity key is loaded, where it returned `null`; check `HasIdentityKey`
+first where that can happen.
+
+## Keys stored in Juicebox
+
+A chat that keeps its keys in Juicebox takes the Juicebox config the X API
+returns when it's created, with `new Chat(juiceboxConfig)`, or later with
+`UpdateConfig`, on first boot, before the account has one. `Setup` and
+`Unlock` take only the PIN, as `ChangePin` and `Delete` take no config, and
+every PIN is a `byte[]`, so you can zero it once the call returns.
+`SetupAsync`, `UnlockAsync`, `ChangePinAsync` and `DeleteAsync` run the same
+calls off the calling thread, and `new Chat()` creates a chat that manages
+its keys with `ImportKeys` and `ExportKeys` alone:
+
+```csharp
+// 0.5.x
+using var chat = new Chat();
+chat.Unlock(pin, juiceboxConfig);
+
+// 0.6.0
+using var chat = new Chat(juiceboxConfig);
+var pinBytes = Encoding.UTF8.GetBytes(pin);
+await chat.UnlockAsync(pinBytes);
+Array.Clear(pinBytes);
+```
+
+Every method of a `Chat`, `UpdateConfig` included, is safe to call from
+several threads at once; a Juicebox call already under way keeps the config
+it started with. Until a chat has a config, `Setup`, `Unlock`, `ChangePin`
+and `Delete` and their async forms throw a `ChatXdkException` of kind
+`InvalidState`, `Invalid state: no Juicebox config: pass the
+juicebox_config the X API returns when you create the chat, or call
+update_config() first`, the error every binding gives, and a wrong PIN
+throws one of kind `InvalidPin` (see
+[Errors carry their kind](#errors-carry-their-kind)). `new Chat(config)` and
+`UpdateConfig` throw the same `InvalidState` exception for an empty or blank
+config; `new Chat()` creates a chat without one.
+
 ## User ids are strings of digits
 
 Every user id is a string of digits: the `SetIdentityParams` user id,
@@ -163,7 +214,7 @@ var reply = new EncryptReplyParams(conversationId, "pong", eventB64) { ReplyToSe
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `SigningKeyVersion` and each public key's
-`KeyVersion`) and `ConversationKeyVersion`. Anything else throws
+`PublicKeyVersion`) and `ConversationKeyVersion`. Anything else throws
 `ChatXdkException` naming the field, such as `Invalid signing_key_version
 'v1': pass the key version as the X API returns it, an integer in digits`.
 There's no code to change if you pass the versions the X API returns.
@@ -172,22 +223,31 @@ There's no code to change if you pass the versions the X API returns.
 
 Pass the events, an `IReadOnlyList<string>` such as an array or a list, in
 a `DecryptEventsParams`, and the signing keys as `SigningKeys`. Left
-`null`, the keys `SetSigningKeys` stored verify the events. The result is
-unchanged, and per-event errors are still collected in it.
-
-The events of `DecryptEvents` and the signing keys of both decrypt calls are
-`IReadOnlyList`s, where 0.5.x took any `IEnumerable`. Call `ToList()` on a
-LINQ query (`signingKeyQuery` below is an `IEnumerable<SigningKeyEntry>`):
+`null`, the keys `SetSigningKeys` stored verify the events. Per-event errors
+are still collected in the result, and the call throws only for invalid
+params. The result holds the decrypted events, of every event type, in
+`Events`, each a `DecryptedEvent`. The events of `DecryptEvents` and the
+signing keys of both decrypt calls are `IReadOnlyList`s, where 0.5.x took any
+`IEnumerable`, so call `ToList()` on a LINQ query (`signingKeyQuery` below is
+an `IEnumerable<SigningKeyEntry>`):
 
 ```csharp
 // 0.5.x
 var result = chat.DecryptEvents(events, signingKeys);
+foreach (var decrypted in result.Messages) ShowEvent(decrypted.Event);
 var fromQuery = chat.DecryptEvents(events, signingKeyQuery);
 
 // 0.6.0
 var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys });
+foreach (var decrypted in result.Events) ShowEvent(decrypted.Event);
 var fromQuery = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeyQuery.ToList() });
 ```
+
+`result.ConversationKeys.LatestVersion`, the version to encrypt with, is
+the newest version whose key change verified, and it never moves back for
+the chat's lifetime. It's `null` until a key change verifies: a key change
+the SDK can't verify still adds its key to `result.ConversationKeys.Keys`,
+for decrypting, but never becomes the version you encrypt with.
 
 ## `DecryptEvent` takes `DecryptEventParams`
 
@@ -239,6 +299,25 @@ code that stores payloads. A payload also carries `EventB64`, the message
 as recipients receive it. It isn't part of the send request: keep it to
 encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
+
+## Entities and preview images take their values in the constructor
+
+An `EntityDescriptor` takes its start, end and type in its constructor, and a
+`UrlAttachmentImageDescriptor` its media hash key, size and filename, with
+`Width` and `Height` set in an initializer. Those values are read-only, and
+an `AttachmentDescriptor` comes only from `AttachmentDescriptor.Media`,
+`UrlCard` or `Post`, so none of them can leave a required value at `""` or
+`0`:
+
+```csharp
+// 0.5.x
+var mention = new EntityDescriptor { Start = 0, End = 5, EntityType = "mention" };
+var banner = new UrlAttachmentImageDescriptor { MediaHashKey = "banner-hash", FilesizeBytes = 24_000, Filename = "banner.jpg" };
+
+// 0.6.0
+var mention = new EntityDescriptor(0, 5, "mention");
+var banner = new UrlAttachmentImageDescriptor("banner-hash", 24_000, "banner.jpg") { Width = 1200, Height = 630 };
+```
 
 ## Encrypt a file from its message
 
@@ -308,10 +387,14 @@ and the key version from `EventB64`.
 Upload each file for one message only. In v1 the id of a message with files
 is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
-the same message again gives the same id, so files you already encrypted
-for it stay valid, and a second message that reuses the first one's uploads
-gets the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected.
+the same message again gives the same id, so files you already encrypted for
+it stay valid, and a second message that reuses the first one's uploads gets
+the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected, and so is a
+file whose `Filename` is empty or whose `FilesizeBytes` is 0 or less, which
+receiving clients would discard, or whose `Width` or `Height` is negative:
+give each file its name and the encrypted size
+`ChatXdkUtilities.EncryptedFileSize` gives.
 
 ## Decrypt a file with its message's event
 
@@ -357,9 +440,8 @@ using FileDecryptor decryptor = chat.FileDecryptor(new FileDecryptorParams(fileE
 The prepare methods return each `ActionSignature` in the shape a request's
 `action_signatures` takes: `MessageId`, `EncodedMessageEventDetail`, the
 signature in `MessageEventSignature` (with `SigningPublicKey`, your signing
-public key as `GetPublicKeys` returns it) and, except for conversation-key
-changes, `SignaturePayload`, a `string?` that is left out of the JSON when
-absent. Serialize them as returned:
+public key as `GetPublicKeys` returns it), and nothing else: the signed
+payload stays inside the SDK. Serialize them as returned:
 
 ```csharp
 // 0.5.x
@@ -378,6 +460,21 @@ var actionSignatures = prepared.ActionSignatures.Select(sig => new Dictionary<st
 
 // 0.6.0
 var actionSignatures = prepared.ActionSignatures;
+```
+
+## Public key inputs name the identity key and its version
+
+A `PublicKeyInput`, one participant a conversation key is encrypted to,
+names its key `IdentityPublicKey` and the key's version `PublicKeyVersion`,
+as `SigningKeyEntry` does: the `public_key` the X API returns for a user is
+their identity key:
+
+```csharp
+// 0.5.x
+var input = new PublicKeyInput { UserId = userId, PublicKey = identityPublicKey, KeyVersion = publicKeyVersion };
+
+// 0.6.0
+var input = new PublicKeyInput { UserId = userId, IdentityPublicKey = identityPublicKey, PublicKeyVersion = publicKeyVersion };
 ```
 
 ## Participant keys take the key requests' names
@@ -424,7 +521,7 @@ var encrypted = keyChange.GetProperty("conversation_participant_keys")[0]
     .GetProperty("encrypted_conversation_key").GetString();
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 A decrypted message or key change carries its conversation key version as
 `conversation_key_version`, the name the X API's events and the Thrift
@@ -440,11 +537,43 @@ var messageVersion = message.GetProperty("conversation_key_version").GetString()
 var keyChangeVersion = keyChange.GetProperty("conversation_key_version").GetString();
 ```
 
+Fields that hold sequence ids take the names of the params that send them,
+as those params serialize. `Reaction`, `ReactionRemoved` and `Edit`
+content names its target `target_message_sequence_id`, as
+`EncryptReactionParams` and `EncryptEditParams` do. A `MessageDeleted`
+event names its messages `sequence_ids`, as `MessageDeleteParams` does, and
+a `ReadReceipt` or `MarkedUnread` event names its position
+`seen_until_sequence_id`, as `MarkConversationReadParams` does. An edit's
+text is `updated_text`, as `EncryptEditParams` names it, and a v1 edit
+carries the signed message id of the message it edits as
+`target_message_id`, absent for a v0 edit:
+
+```csharp
+// 0.5.x
+var content = message.GetProperty("content");
+if (content.GetProperty("content_type").GetString() == "Edit")
+{
+    ShowEdit(content.GetProperty("target_message_id").GetString(), content.GetProperty("new_text").GetString());
+}
+var deletedSequenceIds = deleted.GetProperty("message_ids");
+var seenUntil = receipt.GetProperty("seen_until_id").GetString();
+
+// 0.6.0
+var content = message.GetProperty("content");
+if (content.GetProperty("content_type").GetString() == "Edit")
+{
+    ShowEdit(content.GetProperty("target_message_sequence_id").GetString(), content.GetProperty("updated_text").GetString());
+}
+var deletedSequenceIds = deleted.GetProperty("sequence_ids");
+var seenUntil = receipt.GetProperty("seen_until_sequence_id").GetString();
+```
+
 ## Deletes return a `PreparedAction`
 
 `PrepareMessageDelete` returns a `PreparedAction` whose `ActionSignatures`
-hold one entry, shaped as the previous section shows. Read the action's
-`MessageId` from that entry, and send `ActionSignatures` as returned:
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `MessageId`
+from that entry, and send `ActionSignatures` as returned:
 
 ```csharp
 // 0.5.x
@@ -458,14 +587,40 @@ var deletion = chat.PrepareMessageDelete(
 var messageId = deletion.ActionSignatures[0].MessageId;
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter throws `ChatXdkException` with a message that
-names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
-(digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+Every SDK failure throws a `ChatXdkException`, whose `Kind`, a
+`ChatXdkErrorKind`, names the failure the same way in every binding:
+`InvalidInput`, `InvalidState`, `Parse`, `Decryption`, `Verification`,
+`InvalidPin`, `Juicebox` or `Internal`. After a wrong PIN, its
+`GuessesRemaining` holds the attempts Juicebox reports left, `0` once the
+stored keys are locked and `null` when Juicebox reports no count.
+
+A missing or invalid parameter throws one of kind `InvalidInput` with a
+message that names the value, such as `Invalid sender_id 'user-1': pass a
+numeric user id (digits only)` or `too many attachments: at most 10 per
+message`, without an `Invalid state:` prefix. That covers a key or signature
+that `Verify`, `VerifyKeyBinding` or `MatchesRegisteredKey` can't decode. An
+entity of a type the SDK doesn't know, an empty one included, fails the same
+way, with `Invalid entity_type 'user_mention': pass url, mention, hashtag,
+cashtag, email, address or phone_number`, where 0.5.x sent the message
+without that entity. Entity offsets count bytes of the text's UTF-8
+encoding, the start inclusive and the end exclusive, and an entity whose
+offsets are negative, end before they start or run past the end of the text
+fails the same way, such as `Invalid entity offsets 3..8: end is past the
+end of the text, which is 7 bytes of UTF-8`, where 0.5.x sent it. So do a
+URL card with an empty `Url` and a post attachment with neither `RestId` nor
+`PostUrl`. Errors about state the chat lacks, such as a missing session
+identity or an empty key cache, are of kind `InvalidState` and keep their
+prefix. Tell them apart by kind rather than by message:
+
+```csharp
+// 0.5.x
+var invalidInput = !e.Message.StartsWith("Invalid state:");
+
+// 0.6.0
+var invalidInput = e.Kind == ChatXdkErrorKind.InvalidInput;
+```
 
 ## The package bundles the linux-arm64 native library
 
@@ -473,7 +628,10 @@ The package bundles the native library for 64-bit ARM Linux (`linux-arm64`)
 as well, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need
 no copy of their own. There's no code to change. If you shipped a library
 you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
-entry points 0.6.0 calls (see [C ABI](c-abi.md)).
+entry points 0.6.0 calls (see [C ABI](c-abi.md)). The native library is
+`chat_xdk_ffi` (`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`,
+`chat_xdk_ffi.dll`), built from the `chat-xdk-ffi` crate: name one you
+build yourself for another platform the same way.
 
 ## Group actions should be signed
 
@@ -482,27 +640,138 @@ Apps should sign each group update below. The sender comes from
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
 
+### Creating a group
+
+`PrepareGroupCreate` encrypts the group's title under the conversation key
+it creates, so set it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`EncryptedTitle` (null when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
+
+```csharp
+// 0.5.x
+var prepared = chat.PrepareGroupCreate(
+    new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title, AvatarUrl = avatarUrl });
+var body = new { group_name = title, group_avatar_url = avatarUrl };
+
+// 0.6.0
+var prepared = chat.PrepareGroupCreate(
+    new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title });
+var body = new { group_name = prepared.EncryptedTitle };
+```
+
+`DecryptEvent` returns a received group create with its title decrypted with
+the key for the version the create names, from the call's key map or the key
+cache: a `Created` change's `title` deserializes to a `GroupText`. `Kind`
+`"Text"` holds the title in `Text`. `Kind` `"Unavailable"` holds, in `Raw`,
+the value as the create carries it, when that key isn't there or the value
+doesn't decrypt under it, and the rest of the create still decrypts. 0.5.x
+signed a create's title as the app passed it, so a 0.5.x app's create with a
+plaintext title arrives as `"Unavailable"` with the title in `Raw`: show
+`Raw` when a title isn't decryptable. A create that names no key version
+carries its title as plaintext, and arrives as `"Text"`. The encrypted
+`group_name` and `group_description` the X API returns with a conversation
+still open with `Decrypt`.
+
+```csharp
+// 0.5.x
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "Created"
+    && change.GetProperty("title").GetString() is string encryptedTitle)
+{
+    ShowTitle(chat.Decrypt(encryptedTitle, keys[conversationKeyVersion]));
+}
+
+// 0.6.0
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "Created"
+    && change.GetProperty("title").Deserialize<GroupText>() is GroupText groupTitle)
+{
+    ShowTitle(groupTitle.Kind == "Text" ? groupTitle.Text! : groupTitle.Raw!);
+}
+```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`PrepareGroupMembersChange` rotates the conversation key, so it re-encrypts
+the group's title and description under the key it generates: set them as
+plaintext, in `CurrentTitle` and `CurrentDescription`, not as values your
+code encrypted. The result carries them encrypted, as `EncryptedTitle` and
+`EncryptedDescription` (null when unset). Send `EncryptedTitle` as the
+add-members request's `encrypted_title`; the description travels in the
+signed member add.
+
+```csharp
+// 0.5.x
+var prepared = chat.PrepareGroupMembersChange(
+    new GroupMembersChangeParams(publicKeys, conversationId, newMemberIds, memberIds, adminIds, new List<string>())
+    {
+        CurrentTitle = title,
+    });
+
+// 0.6.0
+var prepared = chat.PrepareGroupMembersChange(
+    new GroupMembersChangeParams(publicKeys, conversationId, newMemberIds, memberIds, adminIds, new List<string>())
+    {
+        CurrentTitle = title,
+        CurrentDescription = description,
+    });
+var body = new { encrypted_title = prepared.EncryptedTitle };
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `CurrentAvatarUrl` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
+
 ### Removing members
 
-`PrepareGroupMembersRemove` removes `UserIds`. Pass the identity keys of the
-members who stay as `PublicKeys` and it also rotates the conversation key
-for them: the result is a `PreparedConversationChange` with the new
-conversation key, `ConversationParticipantKeys` for those members, and
-`ActionSignatures` in this order — the removal, then the conversation-key
-change. Without `PublicKeys` it signs the removal alone, with no new key,
-and the removed members can still decrypt later messages, so pass them on
-every removal.
+`PrepareGroupMembersRemove` removes `UserIds` and rotates the conversation
+key, so the members removed don't receive the key the group encrypts under
+next. `GroupMembersRemoveParams` takes the identity keys of the members who
+stay, the conversation id and the members to remove; a key for a member
+being removed throws `ChatXdkException`. The group's title and description
+are encrypted under the conversation key: set the ones the group has, as
+plaintext, in `Title` and `Description`, and the call encrypts each under
+the new key and signs it as a key-rotation re-encryption, which X clients
+don't show as a change. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange`: the new `ConversationKey`,
+`ConversationParticipantKeys` for the members who stay, and
+`ActionSignatures` in request order — the removal, a title change and a
+description change for the ones set, then the conversation-key change. Store
+the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```csharp
 // 0.6.0
-var prepared = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(conversationId, userIds)
-{
-    PublicKeys = remainingPublicKeys,
-});
+var prepared = chat.PrepareGroupMembersRemove(
+    new GroupMembersRemoveParams(remainingPublicKeys, conversationId, userIds) { Title = title });
 api.Post($"/2/chat/conversations/{conversationId}/members/remove", new
 {
     user_ids = userIds,
@@ -533,31 +802,109 @@ var left = chat.PrepareGroupLeave(new GroupLeaveParams(conversationId)
 
 ### Changing the title
 
-`CustomTitle` is the ciphertext the request sends. The result is a
-`PreparedAction`; send its `ActionSignatures` on the request.
+`PrepareGroupTitleChange` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version in
+`ConversationKey` and `ConversationKeyVersion`, or resolves both from the
+key cache when they're null. The result is a `PreparedGroupMetadataChange`:
+the `EncryptedValue` the request sends as the title, the
+`ConversationKeyVersion` it's encrypted under, and the `ActionSignatures`
+to send with it.
 
 ```csharp
+// 0.5.x
+var encryptedTitle = chat.Encrypt(title, keys[conversationKeyVersion]);
+
 // 0.6.0
-var title = chat.PrepareGroupTitleChange(
-    new GroupTitleChangeParams(conversationId, conversationKeyVersion, customTitle));
+var prepared = chat.PrepareGroupTitleChange(new GroupTitleChangeParams(conversationId, title));
+var encryptedTitle = prepared.EncryptedValue;
+```
+
+`DecryptEvent` returns a received title change decrypted: the `new_title` of
+a `TitleChanged` change deserializes to a `GroupText`, as a create's `title`
+does. It decrypts with the key for the version the change names, from the
+call's key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `"Unavailable"` with the value as carried, and the event
+still decrypts.
+
+```csharp
+// 0.5.x
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "TitleChanged")
+{
+    ShowTitle(chat.Decrypt(change.GetProperty("new_title").GetString()!, keys[conversationKeyVersion]));
+}
+
+// 0.6.0
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "TitleChanged")
+{
+    var newTitle = change.GetProperty("new_title").Deserialize<GroupText>()!;
+    ShowTitle(newTitle.Kind == "Text" ? newTitle.Text! : newTitle.Raw!);
+}
 ```
 
 ### Changing the avatar
 
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `PrepareGroupAvatarChange`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction`; send its `ActionSignatures` with the URL. A URL containing
+a comma is rejected, since signatures join their fields with commas.
+
+```csharp
+// 0.5.x
+var encryptedAvatarUrl = chat.Encrypt(avatarUrl, keys[conversationKeyVersion]);
+
+// 0.6.0
+var prepared = chat.PrepareGroupAvatarChange(
+    new GroupAvatarChangeParams(conversationId, avatarUrl, conversationKeyVersion));
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
 ```csharp
 // 0.6.0
-var avatar = chat.PrepareGroupAvatarChange(
-    new GroupAvatarChangeParams(conversationId, conversationKeyVersion, customAvatarUrl));
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "AvatarChanged")
+{
+    ShowAvatar(
+        change.GetProperty("new_avatar_url").GetString()!,
+        change.GetProperty("conversation_key_version").GetString());
+}
 ```
 
 ### Changing the description
 
-`CustomDescription` is the ciphertext the request sends.
+`PrepareGroupDescriptionChange` takes the new description as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does.
+
+```csharp
+// 0.5.x
+var encryptedDescription = chat.Encrypt(description, keys[conversationKeyVersion]);
+
+// 0.6.0
+var prepared = chat.PrepareGroupDescriptionChange(
+    new GroupDescriptionChangeParams(conversationId, description));
+var encryptedDescription = prepared.EncryptedValue;
+```
+
+A received description change is a `DescriptionChanged` change holding
+`new_description`, which deserializes to a `GroupText`; read it as a title
+change's `new_title`:
 
 ```csharp
 // 0.6.0
-var description = chat.PrepareGroupDescriptionChange(
-    new GroupDescriptionChangeParams(conversationId, conversationKeyVersion, customDescription));
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "DescriptionChanged")
+{
+    var newDescription = change.GetProperty("new_description").Deserialize<GroupText>()!;
+    ShowDescription(newDescription.Kind == "Text" ? newDescription.Text! : newDescription.Raw!);
+}
 ```
 
 ### Adding admins

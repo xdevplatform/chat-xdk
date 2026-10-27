@@ -24,10 +24,10 @@
 //! chat.unlock(b"2580").await?;
 //! chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version))?;
 //! chat.set_cache_keys(true);
-//! chat.set_signing_keys(signing_keys);
+//! chat.set_signing_keys(&signing_keys);
 //!
 //! // Decrypt incoming events; verified conversation keys are cached
-//! let result = chat.decrypt_events(DecryptEventsParams::new(events));
+//! let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 //!
 //! // Send messages. The SDK generates the message id and returns it in the
 //! // payload (payload.message_id); sender, signing-key version, and the
@@ -61,7 +61,7 @@
 //! | [`Chat::prepare_conversation_key_change`] | Generate, encrypt, and sign a key change |
 //! | [`Chat::prepare_group_create`] | Generate, encrypt, and sign a group create |
 //! | [`Chat::prepare_group_members_change`] | Generate, encrypt, and sign a member add |
-//! | [`Chat::prepare_group_members_remove`] | Sign a member removal, rotating the key when given the remaining members |
+//! | [`Chat::prepare_group_members_remove`] | Sign a member removal and rotate the key for the members who stay |
 //! | [`Chat::prepare_group_leave`] | Sign leaving a group |
 //! | [`Chat::decrypt_conversation_key`] | Decrypt a conversation key |
 //! | [`Chat::sign`] | Sign application data |
@@ -136,10 +136,10 @@ use zeroize::Zeroize;
 /// chat.unlock(b"2580").await?;
 /// chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version))?;
 /// chat.set_cache_keys(true);
-/// chat.set_signing_keys(signing_keys);
+/// chat.set_signing_keys(&signing_keys);
 ///
 /// // Handle incoming webhook (signatures verify with the stored signing keys)
-/// let event = chat.decrypt_event(DecryptEventParams::new(event_b64, conversation_keys))?;
+/// let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, conversation_keys))?;
 /// if let Event::Message(msg) = event {
 ///     let sender = msg.meta.sender_id.as_deref().unwrap_or("");
 ///     println!("{}: {}", sender, msg.text().unwrap_or(""));
@@ -157,42 +157,8 @@ use zeroize::Zeroize;
 pub struct Chat {
     /// The platform-agnostic encryption core.
     pub(crate) inner: crate::core::ChatCore,
-    config: JuiceboxConfig,
+    config: std::sync::RwLock<Option<JuiceboxConfig>>,
     juicebox: Arc<dyn JuiceboxApi>,
-}
-
-/// Minimum PIN length in bytes accepted for new registrations.
-#[cfg(feature = "juicebox")]
-pub(crate) const MIN_PIN_LENGTH: usize = 4;
-
-/// Validate PIN strength for new registrations.
-///
-/// Rejects PINs that are shorter than [`MIN_PIN_LENGTH`], use a single
-/// repeated character (`0000`), or are an ascending/descending run of
-/// digits (`1234`, `9876`). Applied by [`Chat::setup`] and
-/// [`Chat::change_pin`]; never applied on unlock, so existing
-/// registrations stay recoverable.
-#[cfg(feature = "juicebox")]
-pub(crate) fn validate_pin_strength(pin: &[u8]) -> Result<(), SdkError> {
-    if pin.len() < MIN_PIN_LENGTH {
-        return Err(SdkError::Key(KeyError::WeakPin(format!(
-            "PIN must be at least {} characters",
-            MIN_PIN_LENGTH
-        ))));
-    }
-    if pin.iter().all(|&b| b == pin[0]) {
-        return Err(SdkError::Key(KeyError::WeakPin(
-            "PIN must not be a single repeated character".into(),
-        )));
-    }
-    let ascending = pin.windows(2).all(|w| w[1] == w[0].wrapping_add(1));
-    let descending = pin.windows(2).all(|w| w[1] == w[0].wrapping_sub(1));
-    if pin.iter().all(u8::is_ascii_digit) && (ascending || descending) {
-        return Err(SdkError::Key(KeyError::WeakPin(
-            "PIN must not be a sequential run of digits".into(),
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(feature = "juicebox")]
@@ -202,18 +168,18 @@ impl Chat {
     /// # Arguments
     /// * `config` - Juicebox configuration from the X API
     pub fn new(config: JuiceboxConfig) -> Self {
-        Self {
-            inner: crate::core::ChatCore::new(),
-            config,
-            juicebox: Arc::new(JuiceboxClient::new()),
-        }
+        Self::with_juicebox(config, Arc::new(JuiceboxClient::new()))
     }
 
     /// Create with a custom Juicebox implementation
     pub fn with_juicebox(config: JuiceboxConfig, juicebox: Arc<dyn JuiceboxApi>) -> Self {
+        Self::from_parts(Some(config), juicebox)
+    }
+
+    fn from_parts(config: Option<JuiceboxConfig>, juicebox: Arc<dyn JuiceboxApi>) -> Self {
         Self {
             inner: crate::core::ChatCore::new(),
-            config,
+            config: std::sync::RwLock::new(config),
             juicebox,
         }
     }
@@ -222,7 +188,7 @@ impl Chat {
     /// signed event whose signature cannot be verified (invalid, missing, or
     /// no matching signing key) instead of returning it with
     /// `verified: false`.
-    pub fn set_reject_unverified(&mut self, reject: bool) {
+    pub fn set_reject_unverified(&self, reject: bool) {
         self.inner.set_reject_unverified(reject);
     }
     /// Set the session identity: the owner's user id and signing-key version,
@@ -240,8 +206,13 @@ impl Chat {
     /// Store signing keys to use when a decrypt call omits its `signing_keys`
     /// argument. Only this call populates the store; each call replaces the
     /// previous set.
-    pub fn set_signing_keys(&self, entries: Vec<SigningKeyEntry>) {
+    pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.set_signing_keys(entries);
+    }
+    /// Set this chat's feature switches from the answer to `GET
+    /// /2/chat/features`; see [`crate::ChatCore::set_feature_switches`].
+    pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
+        self.inner.set_feature_switches(status, body);
     }
     /// The engine underneath, for the language bindings (see
     /// `crate::bindings`).
@@ -249,9 +220,22 @@ impl Chat {
     pub(crate) fn core(&self) -> &crate::core::ChatCore {
         &self.inner
     }
-    /// Replace the Juicebox configuration.
-    pub fn update_config(&mut self, config: JuiceboxConfig) {
-        self.config = config;
+    /// Set or replace the Juicebox configuration: on first boot, for a chat
+    /// created without one, or to refresh its auth tokens. Operations
+    /// already under way keep the configuration they started with.
+    pub fn update_config(&self, config: JuiceboxConfig) {
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(config);
+    }
+
+    /// The current Juicebox configuration, copied so no lock is held across
+    /// a Juicebox round trip.
+    fn config(&self) -> Result<JuiceboxConfig, SdkError> {
+        self.config
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .filter(|config| !config.config_json.trim().is_empty())
+            .ok_or_else(crate::keys::juicebox::no_config_error)
     }
 
     // Juicebox key storage
@@ -271,11 +255,12 @@ impl Chat {
     /// single repeated character or a sequential digit run). It is passed as
     /// bytes so callers can zeroize their own buffer after the call.
     pub async fn setup(&self, pin: &[u8]) -> Result<PublicKeys, SdkError> {
-        validate_pin_strength(pin)?;
+        crate::keys::juicebox::validate_pin_strength(pin)?;
+        let config = self.config()?;
         let mut secret = self.inner.export_keys()?;
         let result = self
             .juicebox
-            .register_private_key(pin, &self.config, &secret)
+            .register_private_key(pin, &config, &secret)
             .await;
         secret.zeroize();
         match result {
@@ -290,7 +275,8 @@ impl Chat {
     /// recoverable regardless of current PIN policy.
     pub async fn unlock(&self, pin: &[u8]) -> Result<(), SdkError> {
         use crate::keys::juicebox::RecoverResult;
-        match self.juicebox.recover_private_key(pin, &self.config).await {
+        let config = self.config()?;
+        match self.juicebox.recover_private_key(pin, &config).await {
             RecoverResult::Success(secret) => {
                 self.inner
                     .import_keys(&ImportKeysParams::new(secret.to_vec()))?;
@@ -315,7 +301,8 @@ impl Chat {
     /// Delete the stored keys from Juicebox and clear them from memory.
     pub async fn delete(&self) -> Result<(), SdkError> {
         use crate::keys::juicebox::DeleteResult;
-        match self.juicebox.delete_keys(&self.config).await {
+        let config = self.config()?;
+        match self.juicebox.delete_keys(&config).await {
             DeleteResult::Success => {
                 self.inner.lock();
                 Ok(())
@@ -330,12 +317,13 @@ impl Chat {
     ///
     /// The new PIN must meet the same strength requirements as [`Chat::setup`].
     pub async fn change_pin(&self, old_pin: &[u8], new_pin: &[u8]) -> Result<(), SdkError> {
-        validate_pin_strength(new_pin)?;
+        crate::keys::juicebox::validate_pin_strength(new_pin)?;
         self.unlock(old_pin).await?;
+        let config = self.config()?;
         let mut secret = self.inner.export_keys()?;
         let result = self
             .juicebox
-            .register_private_key(new_pin, &self.config, &secret)
+            .register_private_key(new_pin, &config, &secret)
             .await;
         secret.zeroize();
         match result {
@@ -353,13 +341,13 @@ impl Chat {
 
     /// Decrypt a raw webhook event payload; see
     /// [`crate::ChatCore::decrypt_event`].
-    pub fn decrypt_event(&self, params: DecryptEventParams) -> Result<Event, SdkError> {
+    pub fn decrypt_event(&self, params: &DecryptEventParams) -> Result<Event, SdkError> {
         self.inner.decrypt_event(params)
     }
 
     /// Decrypt multiple events in batch; see
     /// [`crate::ChatCore::decrypt_events`].
-    pub fn decrypt_events(&self, params: DecryptEventsParams) -> DecryptEventsResult {
+    pub fn decrypt_events(&self, params: &DecryptEventsParams) -> DecryptEventsResult {
         self.inner.decrypt_events(params)
     }
 
@@ -426,7 +414,7 @@ impl Chat {
     }
 
     /// Decrypt a file; see [`crate::ChatCore::decrypt_file`].
-    pub fn decrypt_file(&self, params: DecryptFileParams) -> Result<Vec<u8>, SdkError> {
+    pub fn decrypt_file(&self, params: &DecryptFileParams) -> Result<Vec<u8>, SdkError> {
         self.inner.decrypt_file(params)
     }
 
@@ -434,21 +422,13 @@ impl Chat {
     /// [`crate::ChatCore::file_decryptor`].
     pub fn file_decryptor(
         &self,
-        params: FileDecryptorParams,
+        params: &FileDecryptorParams,
     ) -> Result<crate::FileDecryptor, SdkError> {
         self.inner.file_decryptor(params)
     }
 
-    /// Encrypt a UTF-8 string using XSalsa20-Poly1305 and return base64.
-    pub fn encrypt(
-        &self,
-        plaintext: &str,
-        conversation_key: &XChatConversationKey,
-    ) -> Result<String, SdkError> {
-        self.inner.encrypt(plaintext, conversation_key)
-    }
-
-    /// Decrypt a base64-encoded XSalsa20-Poly1305 ciphertext to a UTF-8 string.
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation; see [`crate::ChatCore::decrypt`].
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,
@@ -481,7 +461,9 @@ impl Chat {
     /// [`Self::prepare_group_members_change`].
     ///
     /// Emits two action signatures: a conversation-key change and the
-    /// group-create action the backend validates together.
+    /// group-create action the backend validates together. The plaintext
+    /// title is encrypted under the new conversation key and returned as
+    /// `encrypted_title`; see [`crate::ChatCore::prepare_group_create`].
     pub fn prepare_group_create(
         &self,
         params: &GroupCreateParams,
@@ -503,8 +485,8 @@ impl Chat {
     ) -> Result<PreparedConversationChange, SdkError> {
         self.inner.prepare_group_members_change(params)
     }
-    /// Sign a group member removal. See
-    /// [`crate::ChatCore::prepare_group_members_remove`].
+    /// Sign a group member removal and rotate the conversation key for the
+    /// members who stay. See [`crate::ChatCore::prepare_group_members_remove`].
     pub fn prepare_group_members_remove(
         &self,
         params: &GroupMembersRemoveParams,
@@ -518,25 +500,27 @@ impl Chat {
     ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_group_leave(params)
     }
-    /// Sign a group title change.
+    /// Encrypt a new group title and sign the change. See
+    /// [`crate::ChatCore::prepare_group_title_change`].
     pub fn prepare_group_title_change(
         &self,
         params: &GroupTitleChangeParams,
-    ) -> Result<crate::PreparedAction, SdkError> {
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
         self.inner.prepare_group_title_change(params)
     }
-    /// Sign a group avatar change.
+    /// Sign a group avatar change: the avatar image's media URL, as is, and
+    /// the version of the key the image is encrypted under.
     pub fn prepare_group_avatar_change(
         &self,
         params: &GroupAvatarChangeParams,
-    ) -> Result<crate::PreparedAction, SdkError> {
+    ) -> Result<PreparedAction, SdkError> {
         self.inner.prepare_group_avatar_change(params)
     }
-    /// Sign a group description change.
+    /// Encrypt a new group description and sign the change.
     pub fn prepare_group_description_change(
         &self,
         params: &GroupDescriptionChangeParams,
-    ) -> Result<crate::PreparedAction, SdkError> {
+    ) -> Result<PreparedGroupMetadataChange, SdkError> {
         self.inner.prepare_group_description_change(params)
     }
     /// Sign adding group admins.
@@ -670,6 +654,18 @@ impl Chat {
 }
 
 #[cfg(feature = "juicebox")]
+impl Default for Chat {
+    /// A chat without a Juicebox config, for first boot, when the account has
+    /// none yet: every crypto call works, and `setup`, `unlock`,
+    /// `change_pin` and `delete` fail with an [`SdkError::InvalidState`] until
+    /// [`Chat::update_config`] gives it one. A chat that keeps its keys with
+    /// [`Chat::import_keys`] alone never needs one.
+    fn default() -> Self {
+        Self::from_parts(None, Arc::new(JuiceboxClient::new()))
+    }
+}
+
+#[cfg(feature = "juicebox")]
 impl std::fmt::Debug for Chat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Chat")
@@ -691,6 +687,44 @@ mod tests {
 
     fn test_config() -> JuiceboxConfig {
         JuiceboxConfig::from_json(r#"{"realms": []}"#.to_string())
+    }
+
+    #[tokio::test]
+    async fn a_chat_without_a_juicebox_config_says_so_until_it_gets_one() {
+        let chat = Chat::from_parts(None, Arc::new(MockJuiceboxApi::new()));
+        chat.generate_keypairs().unwrap();
+        let expected = "Invalid state: no Juicebox config: pass the juicebox_config the X API \
+                        returns when you create the chat, or call update_config() first";
+        let failures = [
+            chat.setup(b"2580").await.unwrap_err(),
+            chat.unlock(b"2580").await.unwrap_err(),
+            chat.change_pin(b"2580", b"1359").await.unwrap_err(),
+            chat.delete().await.unwrap_err(),
+        ];
+        for err in failures {
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidState);
+            assert_eq!(err.to_string(), expected);
+        }
+        assert!(chat.is_unlocked(), "the keys stay loaded");
+
+        chat.update_config(test_config());
+        chat.setup(b"2580").await.unwrap();
+        chat.unlock(b"2580").await.unwrap();
+
+        assert_eq!(
+            Chat::default().delete().await.unwrap_err().to_string(),
+            expected
+        );
+        for empty in ["", "  "] {
+            let chat = Chat::with_juicebox(
+                JuiceboxConfig::from_json(empty.to_string()),
+                Arc::new(MockJuiceboxApi::new()),
+            );
+            chat.generate_keypairs().unwrap();
+            let err = chat.setup(b"2580").await.unwrap_err();
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidState);
+            assert_eq!(err.to_string(), expected);
+        }
     }
 
     #[tokio::test]
@@ -947,12 +981,12 @@ mod tests {
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
-        let mut params = EncryptReplyParams::new("conv-1", "This is a reply", "")
+        let params = EncryptReplyParams::new("conv-1", "This is a reply", "")
             .with_identity("4101", "67")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.reply_to_sequence_id = Some("seq-99".into());
-        params.reply_to_sender_id = Some("12345".to_string());
-        params.reply_to_text = Some("Original message".into());
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-99")
+            .with_reply_to_sender_id("12345")
+            .with_reply_to_text("Original message");
         let payload = chat.encrypt_reply(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
     }
@@ -964,20 +998,14 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let ckey = chat.inner.generate_conversation_key().unwrap();
-        let mut params = EncryptReactionParams::new("", "👍")
+        let params = EncryptReactionParams::new("", "👍")
             .with_identity("4101", "67")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.conversation_id = Some("conv-1".into());
-        params.target_message_sequence_id = Some("seq-42".into());
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_conversation_id("conv-1")
+            .with_target_message_sequence_id("seq-42");
 
         let add_payload = chat.encrypt_add_reaction(&params).unwrap();
         assert!(!add_payload.encoded_message_create_event.is_empty());
-
-        let mut params = EncryptReactionParams::new("", "👍")
-            .with_identity("4101", "67")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.conversation_id = Some("conv-1".into());
-        params.target_message_sequence_id = Some("seq-42".into());
 
         let remove_payload = chat.encrypt_remove_reaction(&params).unwrap();
         assert!(!remove_payload.encoded_message_create_event.is_empty());
@@ -992,11 +1020,11 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         // should_notify=false, ttl_msec=30s
-        let mut params = EncryptMessageParams::new("conv-1", "Disappearing!")
+        let params = EncryptMessageParams::new("conv-1", "Disappearing!")
             .with_identity("4201", "66")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.should_notify = Some(false);
-        params.ttl_msec = Some(30_000);
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_should_notify(false)
+            .with_ttl_msec(30_000);
         let payload = chat.encrypt_message(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.should_notify);
@@ -1011,46 +1039,21 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
 
         let entities = vec![
-            EntityDescriptor {
-                start: 0,
-                end: 5,
-                entity_type: "url".into(),
-            },
-            EntityDescriptor {
-                start: 6,
-                end: 10,
-                entity_type: "mention".into(),
-            },
-            EntityDescriptor {
-                start: 11,
-                end: 15,
-                entity_type: "hashtag".into(),
-            },
-            EntityDescriptor {
-                start: 16,
-                end: 20,
-                entity_type: "cashtag".into(),
-            },
-            EntityDescriptor {
-                start: 21,
-                end: 30,
-                entity_type: "email".into(),
-            },
-            EntityDescriptor {
-                start: 31,
-                end: 40,
-                entity_type: "address".into(),
-            },
-            EntityDescriptor {
-                start: 41,
-                end: 50,
-                entity_type: "phone_number".into(),
-            },
+            EntityDescriptor::new(0, 7, "url"),
+            EntityDescriptor::new(8, 13, "mention"),
+            EntityDescriptor::new(14, 18, "hashtag"),
+            EntityDescriptor::new(19, 23, "cashtag"),
+            EntityDescriptor::new(24, 30, "email"),
+            EntityDescriptor::new(31, 40, "address"),
+            EntityDescriptor::new(41, 50, "phone_number"),
         ];
-        let mut params = EncryptMessageParams::new("conv-1", "text with all entity types")
-            .with_identity("4201", "66")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.entities = Some(entities);
+        let params = EncryptMessageParams::new(
+            "conv-1",
+            "x.com/a @user #tag $TAG a@b.co 1 Main St +15550100",
+        )
+        .with_identity("4201", "66")
+        .with_conversation_key(ckey.to_bytes(), "1")
+        .with_entities(entities);
         let payload = chat.encrypt_message(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
     }
@@ -1065,22 +1068,22 @@ mod tests {
 
         chat.set_identity(&SetIdentityParams::new("4201", "66"))
             .unwrap();
-        let mut params = EncryptReplyParams::new("conv-1", "Reply with media", "")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.reply_to_sequence_id = Some("seq-99".into());
-        params.reply_to_sender_id = Some("12345".to_string());
-        params.reply_to_text = Some("Original".into());
-        params.attachments = Some(vec![AttachmentDescriptor::Media {
-            media_hash_key: "hash123".into(),
-            width: 1024,
-            height: 768,
-            filesize_bytes: 50000,
-            filename: "photo.jpg".into(),
-            media_type: Some(1),
-            duration_millis: None,
-        }]);
-        params.should_notify = Some(false);
-        params.ttl_msec = Some(60_000);
+        let params = EncryptReplyParams::new("conv-1", "Reply with media", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-99")
+            .with_reply_to_sender_id("12345")
+            .with_reply_to_text("Original")
+            .with_attachments(vec![AttachmentDescriptor::Media {
+                media_hash_key: "hash123".into(),
+                width: 1024,
+                height: 768,
+                filesize_bytes: 50000,
+                filename: "photo.jpg".into(),
+                media_type: Some(1),
+                duration_millis: None,
+            }])
+            .with_should_notify(false)
+            .with_ttl_msec(60_000);
         let payload = chat.encrypt_reply(&params).unwrap();
         assert!(!payload.encoded_message_create_event.is_empty());
         assert!(!payload.should_notify);
@@ -1093,14 +1096,11 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("910002", &public_keys.identity, "1")];
 
-        let mut params = ConversationKeyChangeParams::new(input).with_identity("910002", "1");
-        params.conversation_id = Some("conv-1".into());
+        let params = ConversationKeyChangeParams::new(input)
+            .with_identity("910002", "1")
+            .with_conversation_id("conv-1");
         let result = chat.prepare_conversation_key_change(&params).unwrap();
 
         assert_eq!(result.conversation_id, "conv-1");
@@ -1146,20 +1146,13 @@ mod tests {
         let public_keys = chat.get_public_keys().unwrap();
         // Same user with two key versions — should pick version "2"
         let input = vec![
-            PublicKeyInput {
-                user_id: "910001".into(),
-                public_key: public_keys.identity.clone(),
-                key_version: "1".into(),
-            },
-            PublicKeyInput {
-                user_id: "910001".into(),
-                public_key: public_keys.identity.clone(),
-                key_version: "2".into(),
-            },
+            PublicKeyInput::new("910001", &public_keys.identity, "1"),
+            PublicKeyInput::new("910001", &public_keys.identity, "2"),
         ];
 
-        let mut params = ConversationKeyChangeParams::new(input).with_identity("910001", "1");
-        params.conversation_id = Some("conv-1".into());
+        let params = ConversationKeyChangeParams::new(input)
+            .with_identity("910001", "1")
+            .with_conversation_id("conv-1");
         let result = chat.prepare_conversation_key_change(&params).unwrap();
         assert_eq!(result.conversation_participant_keys.len(), 1);
         assert_eq!(
@@ -1184,16 +1177,8 @@ mod tests {
 
         // Numeric ids: the smaller sorts first regardless of input order.
         let input = vec![
-            PublicKeyInput {
-                user_id: "1491585161162473473".into(),
-                public_key: alice_pk.identity.clone(),
-                key_version: "1".into(),
-            },
-            PublicKeyInput {
-                user_id: "17380288".into(),
-                public_key: bob_pk.identity.clone(),
-                key_version: "3".into(),
-            },
+            PublicKeyInput::new("1491585161162473473", &alice_pk.identity, "1"),
+            PublicKeyInput::new("17380288", &bob_pk.identity, "3"),
         ];
 
         // Omitting conversation_id derives the canonical one-to-one id.
@@ -1234,8 +1219,9 @@ mod tests {
         chat.generate_keypairs().unwrap();
         chat.setup(b"2580").await.unwrap();
 
-        let mut params = ConversationKeyChangeParams::new(vec![]).with_identity("910002", "1");
-        params.conversation_id = Some("conv-1".into());
+        let params = ConversationKeyChangeParams::new(vec![])
+            .with_identity("910002", "1")
+            .with_conversation_id("conv-1");
         let result = chat.prepare_conversation_key_change(&params);
         assert!(result.is_err());
     }
@@ -1247,11 +1233,7 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "solo".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("solo", &public_keys.identity, "1")];
 
         // No conversation_id and only one participant cannot derive an id.
         let result = chat.prepare_conversation_key_change(
@@ -1267,13 +1249,9 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("910002", &public_keys.identity, "1")];
 
-        let mut params = GroupMembersChangeParams::new(
+        let params = GroupMembersChangeParams::new(
             input,
             "g123",
             vec!["910006".to_string()],
@@ -1281,8 +1259,8 @@ mod tests {
             vec!["910002".to_string()],
             vec![],
         )
-        .with_identity("910002", "1");
-        params.current_title = Some("Team".into());
+        .with_identity("910002", "1")
+        .with_current_title("Team");
         let result = chat.prepare_group_members_change(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g123");
@@ -1309,20 +1287,16 @@ mod tests {
         chat.setup(b"2580").await.unwrap();
 
         let public_keys = chat.get_public_keys().unwrap();
-        let input = vec![PublicKeyInput {
-            user_id: "910002".into(),
-            public_key: public_keys.identity.clone(),
-            key_version: "1".into(),
-        }];
+        let input = vec![PublicKeyInput::new("910002", &public_keys.identity, "1")];
 
-        let mut params = GroupCreateParams::new(
+        let params = GroupCreateParams::new(
             input,
             "g123",
             vec!["910002".to_string(), "910005".to_string()],
             vec!["910002".to_string()],
         )
-        .with_identity("910002", "1");
-        params.title = Some("Team".into());
+        .with_identity("910002", "1")
+        .with_title("Team");
         let result = chat.prepare_group_create(&params).unwrap();
 
         assert_eq!(result.conversation_id, "g123");
@@ -1366,19 +1340,19 @@ mod tests {
     #[test]
     fn test_validate_pin_strength() {
         // Too short
-        assert!(validate_pin_strength(b"123").is_err());
-        assert!(validate_pin_strength(b"").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"123").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"").is_err());
         // Single repeated character
-        assert!(validate_pin_strength(b"0000").is_err());
-        assert!(validate_pin_strength(b"aaaaaa").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"0000").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"aaaaaa").is_err());
         // Sequential digit runs
-        assert!(validate_pin_strength(b"1234").is_err());
-        assert!(validate_pin_strength(b"0123456").is_err());
-        assert!(validate_pin_strength(b"9876").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"1234").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"0123456").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"9876").is_err());
         // Acceptable
-        assert!(validate_pin_strength(b"2580").is_ok());
-        assert!(validate_pin_strength(b"1357").is_ok());
-        assert!(validate_pin_strength(b"correct horse").is_ok());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"2580").is_ok());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"1357").is_ok());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"correct horse").is_ok());
     }
 
     #[tokio::test]
@@ -1405,7 +1379,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_reject_unverified() {
-        let mut chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
+        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
         chat.generate_keypairs().unwrap();
         chat.setup(b"2580").await.unwrap();
         chat.set_reject_unverified(true);
@@ -1453,7 +1427,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_config() {
-        let mut chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
+        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
         let new_config = JuiceboxConfig::from_json(r#"{"realms": []}"#.to_string());
         chat.update_config(new_config);
         // Doesn't panic — config is updated
@@ -1563,17 +1537,17 @@ mod tests {
         String,
         std::collections::HashMap<String, XChatConversationKey>,
     ) {
-        let mut params = EncryptMessageParams::new("1000:2000", "a file")
-            .with_conversation_key(ckey.to_bytes(), "1");
-        params.attachments = Some(vec![crate::AttachmentDescriptor::Media {
-            media_hash_key: media_hash_key.to_string(),
-            width: 4,
-            height: 3,
-            filesize_bytes: 64,
-            filename: "photo.png".to_string(),
-            media_type: None,
-            duration_millis: None,
-        }]);
+        let params = EncryptMessageParams::new("1000:2000", "a file")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_attachments(vec![crate::AttachmentDescriptor::Media {
+                media_hash_key: media_hash_key.to_string(),
+                width: 4,
+                height: 3,
+                filesize_bytes: 64,
+                filename: "photo.png".to_string(),
+                media_type: None,
+                duration_millis: None,
+            }]);
         let payload = chat.encrypt_message(&params).unwrap();
         (
             payload.event_b64,
@@ -1598,7 +1572,7 @@ mod tests {
         assert!(encrypted.len() > plaintext.len()); // overhead from nonce, tag, header
 
         let decrypted = chat
-            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
+            .decrypt_file(&DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert_eq!(decrypted, plaintext);
     }
@@ -1631,7 +1605,7 @@ mod tests {
 
         for encrypted in [&encrypted, &incremental_encrypted] {
             let decrypted = chat
-                .decrypt_file(DecryptFileParams::new(
+                .decrypt_file(&DecryptFileParams::new(
                     encrypted.clone(),
                     event.clone(),
                     keys.clone(),
@@ -1642,7 +1616,7 @@ mod tests {
         }
 
         let mut decryptor = chat
-            .file_decryptor(FileDecryptorParams::new(event, keys, "hash-1"))
+            .file_decryptor(&FileDecryptorParams::new(event, keys, "hash-1"))
             .unwrap();
         let mut incremental = Vec::new();
         for chunk in encrypted.chunks(700) {
@@ -1674,7 +1648,7 @@ mod tests {
             )
             .unwrap();
         assert!(chat
-            .decrypt_file(DecryptFileParams::new(
+            .decrypt_file(&DecryptFileParams::new(
                 encrypted, event, wrong_keys, "hash-1"
             ))
             .is_err());
@@ -1700,6 +1674,7 @@ mod tests {
                 &["admin-1".to_string()],
                 "1",
                 Some("Group Name"),
+                None,
                 None,
                 None,
                 None,

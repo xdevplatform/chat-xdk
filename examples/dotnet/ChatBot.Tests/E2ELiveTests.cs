@@ -82,8 +82,8 @@ public class E2ELiveTests
         pks.Select(pk => new PublicKeyInput
         {
             UserId = userId,
-            PublicKey = Str(pk, "public_key") ?? "",
-            KeyVersion = Str(pk, "public_key_version") ?? "",
+            IdentityPublicKey = Str(pk, "public_key") ?? "",
+            PublicKeyVersion = Str(pk, "public_key_version") ?? "",
         }).ToList();
 
     /// <summary>
@@ -189,7 +189,7 @@ public class E2ELiveTests
         }
 
         var batch = core.DecryptBatch(keyEventsB64.Concat(EventsB64(raw)).ToList(), signing);
-        var decrypted = batch.Messages.Count(m => !string.IsNullOrEmpty(EventHelpers.MessageText(m.Event)));
+        var decrypted = batch.Events.Count(m => !string.IsNullOrEmpty(EventHelpers.MessageText(m.Event)));
         var convKeys = new Dictionary<string, byte[]>(batch.ConversationKeys.Keys);
         Console.WriteLine($"live inbound messages decrypted: {decrypted}; conversation keys: {convKeys.Count}");
         Assert.True(decrypted > 0, "expected to decrypt at least one live message");
@@ -198,7 +198,7 @@ public class E2ELiveTests
         // thread the reply on, from the decrypted batch.
         var canonicalConv = conv;
         string? lastInboundEventB64 = null;
-        foreach (var m in batch.Messages)
+        foreach (var m in batch.Events)
         {
             var ev = m.Event;
             if (Str(ev, "conversation_id") is { Length: > 0 } cid) canonicalConv = cid;
@@ -241,7 +241,7 @@ public class E2ELiveTests
         // -- 3. Send under the rotated key; fetch back; single-event decrypt ----
         // The reply threads on the raw inbound event; its key version predates
         // the rotation, so its KeyChange events ride along for the preview.
-        var ckces = batch.Messages
+        var ckces = batch.Events
             .Where(m => Str(m.Event, "type") == "KeyChange" && m.OriginalB64 is { Length: > 0 })
             .Select(m => m.OriginalB64!)
             .ToList();
@@ -252,7 +252,7 @@ public class E2ELiveTests
             key,
             kv,
             replyToEvent: lastInboundEventB64,
-            entities: new[] { new EntityDescriptor { Start = 0, End = 5, EntityType = "mention" } },
+            entities: new[] { new EntityDescriptor(0, 5, "mention") },
             ttlMsec: 24L * 60 * 60 * 1000,
             replyToCkces: ckces);
         await api.SendMessageAsync(canonicalConv, body);
@@ -297,8 +297,8 @@ public class E2ELiveTests
             // emits several frames and any corruption is byte-attributable.
             var plaintext = new byte[300_000];
             for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
-            var (sessionId, mediaHashKey) = await api.StartMediaUploadAsync(
-                canonicalConv, ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length));
+            var encryptedSize = ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length);
+            var (sessionId, mediaHashKey) = await api.StartMediaUploadAsync(canonicalConv, encryptedSize);
 
             var mediaMsg = core.EncryptReply(
                 canonicalConv,
@@ -307,7 +307,7 @@ public class E2ELiveTests
                 kv,
                 attachments: new[]
                 {
-                    AttachmentDescriptor.Media(mediaHashKey, 0, 0, plaintext.Length, "e2e.bin", 5),
+                    AttachmentDescriptor.Media(mediaHashKey, 0, 0, (long)encryptedSize, "e2e.bin", 5),
                 },
                 ttlMsec: 24L * 60 * 60 * 1000);
             var ciphertext = core.EncryptMedia(plaintext, mediaMsg.EventB64, key, kv, mediaHashKey);
@@ -359,13 +359,13 @@ public class E2ELiveTests
 
         // Create with the caller as sole member/admin so the member add below
         // exercises PrepareGroupMembersChange with the partner.
-        var prep = core.PrepareGroupCreate(myKeys, groupId, new[] { myId }, new[] { myId });
+        var prep = core.PrepareGroupCreate(myKeys, groupId, new[] { myId }, new[] { myId }, "chat-xdk e2e");
         var members = new List<string> { myId };
         var body = EventHelpers.PrepToRequest(prep);
         body["conversation_id"] = groupId;
         body["group_members"] = members;
         body["group_admins"] = new[] { myId };
-        body["group_name"] = "chat-xdk e2e";
+        body["group_name"] = prep.EncryptedTitle;
         try
         {
             await api.CreateConversationAsync(body);
@@ -374,17 +374,17 @@ public class E2ELiveTests
         {
             // Some deployments reject single-member groups; fall back to creating
             // with both participants (skipping the member-add below).
-            prep = core.PrepareGroupCreate(bothKeys, groupId, new[] { myId, partnerId }, new[] { myId });
+            prep = core.PrepareGroupCreate(bothKeys, groupId, new[] { myId, partnerId }, new[] { myId }, "chat-xdk e2e");
             members = new List<string> { myId, partnerId };
             body = EventHelpers.PrepToRequest(prep);
             body["conversation_id"] = groupId;
             body["group_members"] = members;
             body["group_admins"] = new[] { myId };
-            body["group_name"] = "chat-xdk e2e";
+            body["group_name"] = prep.EncryptedTitle;
             await api.CreateConversationAsync(body);
         }
         var kv = prep.ConversationKeyVersion;
-        var key = prep.ConversationKey!;
+        var key = prep.ConversationKey;
         Console.WriteLine($"group created: {groupId} with {members.Count} member(s)");
 
         var marker = $"chat-xdk e2e group [dotnet] {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";

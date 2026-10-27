@@ -9,7 +9,7 @@
     "start": "node server.mjs",
     "bot": "node src/bot.mjs",
     "register": "node src/register.mjs",
-    "build:wasm": "cd ../../crates/wasm && wasm-pack build --target web --out-dir pkg"
+    "build:wasm": "cd ../.. && make wasm"
   },
   "dependencies": {
     "@xdevplatform/chat-xdk": "file:../../crates/wasm/js"

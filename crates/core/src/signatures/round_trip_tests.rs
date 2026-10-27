@@ -1,9 +1,9 @@
-//! Integration tests for the signatures module.
+//! Sign-and-verify round trips of the public signature builders.
 
+use crate::crypto::key_factory::KeyFactory;
+use crate::crypto::keys::KeypairPurpose;
+use crate::signatures::{build_ckey_change_signature, build_group_member_add_signature};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
-use chat_xdk_core::crypto::key_factory::KeyFactory;
-use chat_xdk_core::crypto::keys::KeypairPurpose;
-use chat_xdk_core::signatures::{build_ckey_change_signature, build_group_member_add_signature};
 
 fn decode_no_pad(s: &str) -> Vec<u8> {
     STANDARD_NO_PAD.decode(s).unwrap()

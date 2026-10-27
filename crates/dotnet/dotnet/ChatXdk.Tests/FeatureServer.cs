@@ -30,7 +30,7 @@ namespace ChatXdk.Tests
         /// A chat whose feature switches turn v1_send on, as the X API would: it reads them
         /// from a local server that answers so. <see cref="WaitForV1"/> waits for the answer.
         /// </summary>
-        internal static Chat V1Chat() => new(V1Server.Value.Endpoint, TimeSpan.FromSeconds(2));
+        internal static Chat V1Chat() => new(null, V1Server.Value.Endpoint, TimeSpan.FromSeconds(2));
 
         /// <summary>Send from <paramref name="chat"/>, which has keys, until a send is v1.</summary>
         internal static void WaitForV1(Chat chat)

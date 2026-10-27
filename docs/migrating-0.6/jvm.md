@@ -14,24 +14,28 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `setIdentity`](#setidentity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `importKeys`](#importkeys-takes-importkeysparams)
+- [ ] [Pass the Juicebox config to `new Chat(config)`, and PINs as `byte[]`](#keys-stored-in-juicebox)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `decryptEvents`](#decryptevents-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `decryptEvents` and read its `events`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Build descriptors and key entries with their constructors](#descriptors-and-key-entries-take-their-values-in-constructors)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Pass a `PublicKeyInput` the identity key and its version](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read `conversation_key_version` on decrypted events](#decrypted-events-name-the-conversation-key-version-as-the-x-api-does)
+- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Tell exceptions apart by `getKind()`](#errors-carry-their-kind)
 - [ ] [Know which calls throw `ChatXdkException`](#exceptions)
 - [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
-- [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
+- [ ] [Name a native library you build yourself `chat_xdk_ffi`](#the-jar-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -42,14 +46,19 @@ loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
 `decryptEvents` returns, `bundle` for a `ConversationKeyBundle`, `payload`
 for a `SendPayload`, `prepared` for a `PreparedConversationChange`, and
-`keyChange` and `message` for a decrypted key change and message, as
-`JsonNode`s.
-`api.post(path, body)` stands for your HTTP client: it POSTs `body`,
-serialized with Jackson, to `https://api.x.com` + `path` with your user
-access token and returns the parsed JSON response as a `JsonNode`.
+`keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
+decrypted key change, message, deletion, read receipt and group change, as
+`JsonNode`s. `api.post(path, body)` stands for your HTTP client: it POSTs
+`body`, serialized with Jackson, to `https://api.x.com` + `path` with your
+user access token and returns the parsed JSON response as a `JsonNode`.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-`AttachmentDescriptor`. The types import from `com.x.chatxdk`,
-`com.x.chatxdk.Types` and `java.util`.
+`AttachmentDescriptor`, and `showEdit`, `showTitle`, `showDescription`,
+`showAvatar` and `showEvent` for your code that displays an edit, a group's
+title, description or avatar, or a decrypted event. `pin` is the PIN,
+`juiceboxConfig` the Juicebox config the X API returns, and `e` a
+`ChatXdkException` a call threw. The types import from `com.x.chatxdk`,
+`com.x.chatxdk.Types`, `com.fasterxml.jackson.databind`,
+`java.nio.charset` and `java.util`.
 
 ## Upgrade readers before v1 sends start
 
@@ -109,6 +118,10 @@ JsonNode response = api.post("/2/users/" + userId + "/public_keys", Map.of("publ
 chat.setIdentity(new SetIdentityParams(userId, response.path("data").path("public_key_version").asText()));
 ```
 
+`PublicKeys`, which `getPublicKeys` and `setup` return, holds the two public
+keys, `identity` and `signing`, and no `version`: their version is the
+`public_key_version` the registration request returns.
+
 ## `setIdentity` takes `SetIdentityParams`
 
 Pass the user id and the signing-key version in a `SetIdentityParams`. It
@@ -140,6 +153,46 @@ chat.importKeys(new ImportKeysParams(privateKeys));
 chat.importKeys(new ImportKeysParams(privateKeys, signingKeyVersion));
 ```
 
+`exportKeys` throws a `ChatXdkException` of kind `INVALID_STATE` when no
+identity key is loaded, where it returned `null`; check `hasIdentityKey`
+first where that can happen.
+
+## Keys stored in Juicebox
+
+A chat that keeps its keys in Juicebox takes the Juicebox config the X API
+returns when it's created, with `new Chat(juiceboxConfig)`, or later with
+`updateConfig`, on first boot, before the account has one. `setup` and
+`unlock` take only the PIN, as `changePin` and `delete` take no config, and
+every PIN is a `byte[]`, so you can zero it once the call returns.
+`setupAsync`, `unlockAsync`, `changePinAsync` and `deleteAsync` return a
+`CompletableFuture` that runs the same call off the calling thread, and
+`new Chat()` creates a chat that manages its keys with `importKeys` and
+`exportKeys` alone:
+
+```java
+// 0.5.x
+Chat chat = new Chat();
+chat.unlock(pin, juiceboxConfig);
+
+// 0.6.0
+Chat chat = new Chat(juiceboxConfig);
+byte[] pinBytes = pin.getBytes(StandardCharsets.UTF_8);
+chat.unlockAsync(pinBytes).join();
+Arrays.fill(pinBytes, (byte) 0);
+```
+
+Every method of a `Chat`, `updateConfig` included, is safe to call from
+several threads at once; a Juicebox call already under way keeps the config
+it started with. Until a chat has a config, `setup`, `unlock`, `changePin`
+and `delete` and their async forms throw a `ChatXdkException` of kind
+`INVALID_STATE`, `Invalid state: no Juicebox config: pass the
+juicebox_config the X API returns when you create the chat, or call
+update_config() first`, the error every binding gives, and a wrong PIN
+throws one of kind `INVALID_PIN` (see
+[Errors carry their kind](#errors-carry-their-kind)). `new Chat(config)` and
+`updateConfig` throw the same `INVALID_STATE` exception for an empty or blank
+config; `new Chat()` creates a chat without one.
+
 ## User ids are strings of digits
 
 Every user id is a string of digits: the `SetIdentityParams` user id,
@@ -165,7 +218,7 @@ reply.replyToSenderId = "4201";
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `signingKeyVersion` and each public key's
-`keyVersion`) and `conversationKeyVersion`. Anything else throws
+`publicKeyVersion`) and `conversationKeyVersion`. Anything else throws
 `ChatXdkException` naming the field, such as `Invalid signing_key_version
 'v1': pass the key version as the X API returns it, an integer in digits`.
 There's no code to change if you pass the versions the X API returns.
@@ -174,18 +227,27 @@ There's no code to change if you pass the versions the X API returns.
 
 Pass the events in a `DecryptEventsParams`, and the signing keys in its
 `signingKeys` field. Left `null`, the keys `setSigningKeys` stored verify
-the events. The result is unchanged, and per-event errors are still
-collected in it.
+the events. Per-event errors are still collected in the result, and the
+call throws only for invalid params. The result holds the decrypted events,
+of every event type, in `events`, each a `DecryptedEvent`:
 
 ```java
 // 0.5.x
 DecryptEventsResult result = chat.decryptEvents(events, signingKeys);
+for (DecryptedMessage decrypted : result.messages) showEvent(decrypted.event);
 
 // 0.6.0
 DecryptEventsParams batch = new DecryptEventsParams(events);
 batch.signingKeys = signingKeys;
 DecryptEventsResult result = chat.decryptEvents(batch);
+for (DecryptedEvent decrypted : result.events) showEvent(decrypted.event);
 ```
+
+`result.conversationKeys.latestVersion`, the version to encrypt with, is
+the newest version whose key change verified, and it never moves back for
+the chat's lifetime. It's `null` until a key change verifies: a key change
+the SDK can't verify still adds its key to `result.conversationKeys.keys`,
+for decrypting, but never becomes the version you encrypt with.
 
 ## `decryptEvent` takes `DecryptEventParams`
 
@@ -236,6 +298,40 @@ code that stores payloads. A payload also carries `eventB64`, the message
 as recipients receive it. It isn't part of the send request: keep it to
 encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
+
+## Descriptors and key entries take their values in constructors
+
+An `EntityDescriptor`, a `UrlAttachmentImageDescriptor`, a `SigningKeyEntry`
+and a `PublicKeyInput` take their required values in their constructor and
+keep them in final fields; a preview image's `width` and `height` stay
+settable. An `AttachmentDescriptor` comes from `media`, `urlCard` or `post`
+and has final fields. None can be built without its required values, and a
+`null` one throws `NullPointerException`:
+
+```java
+// 0.5.x
+EntityDescriptor mention = new EntityDescriptor();
+mention.start = 0;
+mention.end = 5;
+mention.entityType = "mention";
+UrlAttachmentImageDescriptor banner = UrlAttachmentImageDescriptor.of(
+        mediaHashKey, ChatXdkUtilities.encryptedStreamSize(photo.length), "banner.jpg");
+banner.width = 1200L;
+SigningKeyEntry signingKey = new SigningKeyEntry();
+signingKey.userId = userId;
+signingKey.publicKeyVersion = publicKeyVersion;
+signingKey.publicKey = signingPublicKey;
+signingKey.identityPublicKey = identityPublicKey;
+signingKey.identityPublicKeySignature = identityPublicKeySignature;
+
+// 0.6.0
+EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
+UrlAttachmentImageDescriptor banner = new UrlAttachmentImageDescriptor(
+        mediaHashKey, ChatXdkUtilities.encryptedFileSize(photo.length), "banner.jpg");
+banner.width = 1200L;
+SigningKeyEntry signingKey = new SigningKeyEntry(
+        userId, publicKeyVersion, signingPublicKey, identityPublicKey, identityPublicKeySignature);
+```
 
 ## Encrypt a file from its message
 
@@ -295,10 +391,14 @@ and the key version from `eventB64`.
 Upload each file for one message only. In v1 the id of a message with files
 is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
-the same message again gives the same id, so files you already encrypted
-for it stay valid, and a second message that reuses the first one's uploads
-gets the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected.
+the same message again gives the same id, so files you already encrypted for
+it stay valid, and a second message that reuses the first one's uploads gets
+the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected, and so is a
+file whose `filename` is empty or whose `filesizeBytes` is 0 or less, which
+receiving clients would discard, or whose `width` or `height` is negative:
+give each file its name and the encrypted size
+`ChatXdkUtilities.encryptedFileSize` gives.
 
 ## Decrypt a file with its message's event
 
@@ -342,9 +442,9 @@ FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(fileEventB6
 The prepare methods return each `ActionSignature` in the shape a request's
 `action_signatures` takes: `messageId`, `encodedMessageEventDetail`, the
 signature in `messageEventSignature` (a `MessageEventSignature` with
-`signingPublicKey`, your signing public key as `getPublicKeys` returns it)
-and, except for conversation-key changes, `signaturePayload`, which is
-`null` and left out of the JSON when absent. Serialize them as returned:
+`signingPublicKey`, your signing public key as `getPublicKeys` returns it),
+and nothing else: the signed payload stays inside the SDK. Serialize them as
+returned:
 
 ```java
 // 0.5.x
@@ -364,14 +464,24 @@ for (ActionSignature sig : prepared.actionSignatures) {
 List<ActionSignature> actionSignatures = prepared.actionSignatures;
 ```
 
-A withheld `signaturePayload` is `null`, where 0.5.x set it to `""`:
+## Public key inputs name the identity key and its version
+
+A `PublicKeyInput`, one participant a conversation key is encrypted to,
+names its key `identityPublicKey` and the key's version `publicKeyVersion`,
+as `SigningKeyEntry` does: the `public_key` the X API returns for a user is
+their identity key. Its constructor takes the user id, the key and the
+version (see
+[Descriptors and key entries take their values in constructors](#descriptors-and-key-entries-take-their-values-in-constructors)):
 
 ```java
 // 0.5.x
-boolean withheld = sig.signaturePayload.isEmpty();
+PublicKeyInput input = new PublicKeyInput();
+input.userId = userId;
+input.publicKey = identityPublicKey;
+input.keyVersion = publicKeyVersion;
 
 // 0.6.0
-boolean withheld = sig.signaturePayload == null;
+PublicKeyInput input = new PublicKeyInput(userId, identityPublicKey, publicKeyVersion);
 ```
 
 ## Participant keys take the key requests' names
@@ -417,7 +527,7 @@ String encrypted = keyChange.path("conversation_participant_keys").get(0)
         .path("encrypted_conversation_key").asText();
 ```
 
-## Decrypted events name the conversation key version as the X API does
+## Decrypted events use the names the calls take
 
 A decrypted message or key change carries its conversation key version as
 `conversation_key_version`, the name the X API's events and the Thrift
@@ -433,11 +543,41 @@ String messageVersion = message.path("conversation_key_version").asText();
 String keyChangeVersion = keyChange.path("conversation_key_version").asText();
 ```
 
+Fields that hold sequence ids take the names of the params that send them,
+as those params serialize. `Reaction`, `ReactionRemoved` and `Edit`
+content names its target `target_message_sequence_id`, as
+`EncryptReactionParams` and `EncryptEditParams` do. A `MessageDeleted`
+event names its messages `sequence_ids`, as `MessageDeleteParams` does, and
+a `ReadReceipt` or `MarkedUnread` event names its position
+`seen_until_sequence_id`, as `MarkConversationReadParams` does. An edit's
+text is `updated_text`, as `EncryptEditParams` names it, and a v1 edit
+carries the signed message id of the message it edits as
+`target_message_id`, absent for a v0 edit:
+
+```java
+// 0.5.x
+JsonNode content = message.path("content");
+if (content.path("content_type").asText().equals("Edit")) {
+    showEdit(content.path("target_message_id").asText(), content.path("new_text").asText());
+}
+JsonNode deletedSequenceIds = deleted.path("message_ids");
+String seenUntil = receipt.path("seen_until_id").asText();
+
+// 0.6.0
+JsonNode content = message.path("content");
+if (content.path("content_type").asText().equals("Edit")) {
+    showEdit(content.path("target_message_sequence_id").asText(), content.path("updated_text").asText());
+}
+JsonNode deletedSequenceIds = deleted.path("sequence_ids");
+String seenUntil = receipt.path("seen_until_sequence_id").asText();
+```
+
 ## Deletes return a `PreparedAction`
 
 `prepareMessageDelete` returns a `PreparedAction` whose `actionSignatures`
-hold one entry, shaped as the previous section shows. Read the action's
-`messageId` from that entry, and send `actionSignatures` as returned:
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `messageId`
+from that entry, and send `actionSignatures` as returned:
 
 ```java
 // 0.5.x
@@ -451,22 +591,48 @@ PreparedAction deletion = chat.prepareMessageDelete(
 String messageId = deletion.actionSignatures.get(0).messageId;
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter throws `ChatXdkException` with a message that
-names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
-(digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+Every SDK failure throws a `ChatXdkException`, whose `getKind()`, a
+`ChatXdkException.Kind`, names the failure the same way in every binding:
+`INVALID_INPUT`, `INVALID_STATE`, `PARSE`, `DECRYPTION`, `VERIFICATION`,
+`INVALID_PIN`, `JUICEBOX` or `INTERNAL`. After a wrong PIN, its
+`getGuessesRemaining()` holds the attempts Juicebox reports left, `0` once
+the stored keys are locked and `null` when Juicebox reports no count.
+
+A missing or invalid parameter throws one of kind `INVALID_INPUT` with a
+message that names the value, such as `Invalid sender_id 'user-1': pass a
+numeric user id (digits only)` or `too many attachments: at most 10 per
+message`, without an `Invalid state:` prefix. An entity of a type the SDK
+doesn't know, an empty one included, fails the same way, with `Invalid
+entity_type 'user_mention': pass url, mention, hashtag, cashtag, email,
+address or phone_number`, where 0.5.x sent the message without that entity.
+Entity offsets count bytes of the text's UTF-8 encoding, the start
+inclusive and the end exclusive, and an entity whose offsets are negative,
+end before they start or run past the end of the text fails the same way,
+such as `Invalid entity offsets 3..8: end is past the end of the text,
+which is 7 bytes of UTF-8`, where 0.5.x sent it. So do a URL card with an
+empty `url` and a post attachment with neither `restId` nor `postUrl`.
+Errors about state the chat lacks, such as a missing session identity or an
+empty key cache, are of kind `INVALID_STATE` and keep their prefix. Tell
+them apart by kind rather than by message:
+
+```java
+// 0.5.x
+boolean invalidInput = !e.getMessage().startsWith("Invalid state:");
+
+// 0.6.0
+boolean invalidInput = e.getKind() == ChatXdkException.Kind.INVALID_INPUT;
+```
 
 ## Exceptions
 
 There's no code to change. `ChatXdkException` is unchecked. `setIdentity`
-and `importKeys` throw it on invalid input, and the file methods
-(`encryptFile`, `decryptFile`, `fileEncryptor`, `fileDecryptor`) declare no
-checked exceptions and throw it too. The methods that declare
-`throws Exception` keep that clause.
+and `importKeys` throw it on invalid input; `verify`, `verifyKeyBinding` and
+`matchesRegisteredKey` throw it for a key or signature they can't decode,
+naming it; and the file methods (`encryptFile`, `decryptFile`,
+`fileEncryptor`, `fileDecryptor`) declare no checked exceptions and throw it
+too. The methods that declare `throws Exception` keep that clause.
 
 ## `ChatNative`
 
@@ -479,7 +645,10 @@ The jar bundles the native library for 64-bit ARM Linux (`linux-arm64`) as
 well, and on ARM64 Linux loads it ahead of any copy on `jna.library.path`.
 There's no code to change. If you built a library to run 0.5.x there,
 remove it: a 0.5.x build doesn't export the entry points 0.6.0 calls (see
-[C ABI](c-abi.md)).
+[C ABI](c-abi.md)). The native library is `chat_xdk_ffi`
+(`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`, `chat_xdk_ffi.dll`), built
+from the `chat-xdk-ffi` crate: name one you build yourself for another
+platform the same way.
 
 ## Group actions should be signed
 
@@ -488,25 +657,137 @@ Apps should sign each group update below. The sender comes from
 [Action signatures come nested](#action-signatures-come-nested) shows. Send
 those entries on the update's request.
 
+### Creating a group
+
+`prepareGroupCreate` encrypts the group's title under the conversation key
+it creates, so set it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`encryptedTitle` (null when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
+
+```java
+// 0.5.x
+GroupCreateParams create = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
+create.title = title;
+create.avatarUrl = avatarUrl;
+PreparedConversationChange prepared = chat.prepareGroupCreate(create);
+Map<String, Object> body = Map.of("group_name", title, "group_avatar_url", avatarUrl);
+
+// 0.6.0
+GroupCreateParams create = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
+create.title = title;
+PreparedConversationChange prepared = chat.prepareGroupCreate(create);
+Map<String, Object> body = Map.of("group_name", prepared.encryptedTitle);
+```
+
+`decryptEvent` returns a received group create with its title decrypted with
+the key for the version the create names, from the call's key map or the key
+cache: a `Created` change's `title` converts to a `Types.GroupText` with
+Jackson's `treeToValue`. `kind` `"Text"` holds the title in `text`. `kind`
+`"Unavailable"` holds, in `raw`, the value as the create carries it, when
+that key isn't there or the value doesn't decrypt under it, and the rest of
+the create still decrypts. 0.5.x signed a create's title as the app passed
+it, so a 0.5.x app's create with a plaintext title arrives as
+`"Unavailable"` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `"Text"`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`decrypt`.
+
+```java
+// 0.5.x
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("Created") && change.hasNonNull("title")) {
+    showTitle(chat.decrypt(change.path("title").asText(), keys.get(conversationKeyVersion)));
+}
+
+// 0.6.0
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("Created") && change.hasNonNull("title")) {
+    GroupText groupTitle = new ObjectMapper().treeToValue(change.path("title"), GroupText.class);
+    showTitle(groupTitle.kind.equals("Text") ? groupTitle.text : groupTitle.raw);
+}
+```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`prepareGroupMembersChange` rotates the conversation key, so it re-encrypts
+the group's title and description under the key it generates: set them as
+plaintext, in `currentTitle` and `currentDescription`, not as values your
+code encrypted. The result carries them encrypted, as `encryptedTitle` and
+`encryptedDescription` (null when unset). Send `encryptedTitle` as the
+add-members request's `encrypted_title`; the description travels in the
+signed member add.
+
+```java
+// 0.5.x
+GroupMembersChangeParams add = new GroupMembersChangeParams(
+        publicKeys, conversationId, newMemberIds, memberIds, adminIds, List.of());
+add.currentTitle = title;
+PreparedConversationChange prepared = chat.prepareGroupMembersChange(add);
+
+// 0.6.0
+GroupMembersChangeParams add = new GroupMembersChangeParams(
+        publicKeys, conversationId, newMemberIds, memberIds, adminIds, List.of());
+add.currentTitle = title;
+add.currentDescription = description;
+PreparedConversationChange prepared = chat.prepareGroupMembersChange(add);
+Map<String, Object> body = Map.of("encrypted_title", prepared.encryptedTitle);
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `currentAvatarUrl` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
+
 ### Removing members
 
-`prepareGroupMembersRemove` removes `userIds`. Pass the identity keys of the
-members who stay as `publicKeys` and it also rotates the conversation key
-for them: the result is a `PreparedConversationChange` with the new
-conversation key, `conversationParticipantKeys` for those members, and
-`actionSignatures` in this order — the removal, then the conversation-key
-change. Without `publicKeys` it signs the removal alone, with no new key,
-and the removed members can still decrypt later messages, so pass them on
-every removal.
+`prepareGroupMembersRemove` removes `userIds` and rotates the conversation
+key, so the members removed don't receive the key the group encrypts under
+next. `GroupMembersRemoveParams` takes the identity keys of the members who
+stay, the conversation id and the members to remove; a key for a member
+being removed throws `ChatXdkException`. The group's title and description
+are encrypted under the conversation key: set the ones the group has, as
+plaintext, in `title` and `description`, and the call encrypts each under
+the new key and signs it as a key-rotation re-encryption, which X clients
+don't show as a change. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
+The result is a `PreparedConversationChange`: the new `conversationKey`,
+`conversationParticipantKeys` for the members who stay, and
+`actionSignatures` in request order — the removal, a title change and a
+description change for the ones set, then the conversation-key change. Store
+the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
+
+POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
 `conversation_key_version` and `conversation_participant_keys`.
 
 ```java
 // 0.6.0
-GroupMembersRemoveParams removal = new GroupMembersRemoveParams(conversationId, userIds);
-removal.publicKeys = remainingPublicKeys;
+GroupMembersRemoveParams removal = new GroupMembersRemoveParams(remainingPublicKeys, conversationId, userIds);
+removal.title = title;
 PreparedConversationChange prepared = chat.prepareGroupMembersRemove(removal);
 api.post("/2/chat/conversations/" + conversationId + "/members/remove", Map.of(
         "user_ids", userIds,
@@ -533,31 +814,105 @@ PreparedAction left = chat.prepareGroupLeave(leave);
 
 ### Changing the title
 
-`customTitle` is the ciphertext the request sends. The result is a
-`PreparedAction`; send its `actionSignatures` on the request.
+`prepareGroupTitleChange` takes the new title as plaintext, encrypts it
+under the conversation key and signs it. Like `EncryptMessageParams`,
+`GroupTitleChangeParams` takes the key and its version in
+`conversationKey` and `conversationKeyVersion`, or resolves both from the
+key cache when they're null. The result is a `PreparedGroupMetadataChange`:
+the `encryptedValue` the request sends as the title, the
+`conversationKeyVersion` it's encrypted under, and the `actionSignatures`
+to send with it.
 
 ```java
+// 0.5.x
+String encryptedTitle = chat.encrypt(title, keys.get(conversationKeyVersion));
+
 // 0.6.0
-PreparedAction title = chat.prepareGroupTitleChange(
-        new GroupTitleChangeParams(conversationId, conversationKeyVersion, customTitle));
+PreparedGroupMetadataChange prepared = chat.prepareGroupTitleChange(
+        new GroupTitleChangeParams(conversationId, title));
+String encryptedTitle = prepared.encryptedValue;
+```
+
+`decryptEvent` returns a received title change decrypted: the `new_title` of
+a `TitleChanged` change converts to a `GroupText`, as a create's `title`
+does. It decrypts with the key for the version the change names, from the
+call's key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `"Unavailable"` with the value as carried, and the event
+still decrypts.
+
+```java
+// 0.5.x
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("TitleChanged")) {
+    showTitle(chat.decrypt(change.path("new_title").asText(), keys.get(conversationKeyVersion)));
+}
+
+// 0.6.0
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("TitleChanged")) {
+    GroupText newTitle = new ObjectMapper().treeToValue(change.path("new_title"), GroupText.class);
+    showTitle(newTitle.kind.equals("Text") ? newTitle.text : newTitle.raw);
+}
 ```
 
 ### Changing the avatar
 
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `prepareGroupAvatarChange`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction`; send its `actionSignatures` with the URL. A URL containing
+a comma is rejected, since signatures join their fields with commas.
+
+```java
+// 0.5.x
+String encryptedAvatarUrl = chat.encrypt(avatarUrl, keys.get(conversationKeyVersion));
+
+// 0.6.0
+PreparedAction prepared = chat.prepareGroupAvatarChange(
+        new GroupAvatarChangeParams(conversationId, avatarUrl, conversationKeyVersion));
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
 ```java
 // 0.6.0
-PreparedAction avatar = chat.prepareGroupAvatarChange(
-        new GroupAvatarChangeParams(conversationId, conversationKeyVersion, customAvatarUrl));
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("AvatarChanged")) {
+    showAvatar(change.path("new_avatar_url").asText(), change.path("conversation_key_version").asText());
+}
 ```
 
 ### Changing the description
 
-`customDescription` is the ciphertext the request sends.
+`prepareGroupDescriptionChange` takes the new description as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does.
+
+```java
+// 0.5.x
+String encryptedDescription = chat.encrypt(description, keys.get(conversationKeyVersion));
+
+// 0.6.0
+PreparedGroupMetadataChange prepared = chat.prepareGroupDescriptionChange(
+        new GroupDescriptionChangeParams(conversationId, description));
+String encryptedDescription = prepared.encryptedValue;
+```
+
+A received description change is a `DescriptionChanged` change holding
+`new_description`, which converts to a `GroupText`; read it as a title
+change's `new_title`:
 
 ```java
 // 0.6.0
-PreparedAction description = chat.prepareGroupDescriptionChange(
-        new GroupDescriptionChangeParams(conversationId, conversationKeyVersion, customDescription));
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("DescriptionChanged")) {
+    GroupText newDescription =
+            new ObjectMapper().treeToValue(change.path("new_description"), GroupText.class);
+    showDescription(newDescription.kind.equals("Text") ? newDescription.text : newDescription.raw);
+}
 ```
 
 ### Adding admins

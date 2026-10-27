@@ -39,7 +39,6 @@ class ConversationState:
     """In-memory state for one conversation."""
 
     conversation_keys: dict[str, bytes] = field(default_factory=dict)
-    latest_key_version: str | None = None
     seen_event_ids: set[str] = field(default_factory=set)
     pagination_token: str | None = None
 
@@ -114,12 +113,11 @@ class ChatBot:
         batch = self.core.decrypt_batch(events_b64)
         keys = batch["conversation_keys"].get("keys") or {}
         st.conversation_keys.update(keys)
-        st.latest_key_version = batch["conversation_keys"].get("latest_version")
         st.pagination_token = page.get("meta", {}).get("next_token")
         logger.info(
             "backlog_loaded conv=%s messages=%d keys=%d",
             conversation_id,
-            len(batch["messages"]),
+            len(batch["events"]),
             len(keys),
         )
 
@@ -144,9 +142,6 @@ class ChatBot:
         if key_events_b64:
             rotated = self.core.decrypt_batch(list(key_events_b64))
             st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
-            st.latest_key_version = (
-                rotated["conversation_keys"].get("latest_version") or st.latest_key_version
-            )
 
         for item in raw:
             event_b64 = item.get("encoded_event")
@@ -161,10 +156,6 @@ class ChatBot:
             if event.get("type") == "KeyChange":
                 rotated = self.core.decrypt_batch([event_b64])
                 st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
-                st.latest_key_version = (
-                    rotated["conversation_keys"].get("latest_version")
-                    or st.latest_key_version
-                )
                 continue
 
             self._maybe_reply(conversation_id, event)

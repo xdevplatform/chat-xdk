@@ -26,8 +26,8 @@ manual `go/v*` tag, for a GitHub Release tarball) can build prebuilts.
 
 Committed archives:
 
-- `go/chatxdk/libs/linux_amd64/libchat_xdk_go.a` (glibc)
-- `go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a` (musl / Alpine)
+- `go/chatxdk/libs/linux_amd64/libchat_xdk_ffi.a` (glibc)
+- `go/chatxdk/libs/linux_amd64_musl/libchat_xdk_ffi.a` (musl / Alpine)
 
 `go-prebuilt-linux.yml`:
 
@@ -56,8 +56,8 @@ The musl variant is selected at build time via the `musl` Go build tag
 
 Committed archives:
 
-- `go/chatxdk/libs/darwin_arm64/libchat_xdk_go.a`
-- `go/chatxdk/libs/darwin_amd64/libchat_xdk_go.a`
+- `go/chatxdk/libs/darwin_arm64/libchat_xdk_ffi.a`
+- `go/chatxdk/libs/darwin_amd64/libchat_xdk_ffi.a`
 
 `go-prebuilt-darwin.yml` mirrors Linux: PR verify (rebuild both Apple targets on
 `macos-latest`, `strip -S`, byte-compare) and push / workflow_dispatch sync (one

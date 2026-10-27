@@ -64,12 +64,12 @@ class E2ELiveTest {
     }
 
     private static SigningKeyEntry signingFrom(JsonNode pk, String userId) {
-        SigningKeyEntry e = new SigningKeyEntry();
-        e.userId = userId;
-        e.publicKeyVersion = pk.path("public_key_version").asText("");
-        e.publicKey = pk.path("signing_public_key").asText("");
-        e.identityPublicKey = pk.path("public_key").asText("");
-        e.identityPublicKeySignature = pk.path("identity_public_key_signature").asText("");
+        SigningKeyEntry e = new SigningKeyEntry(
+                userId,
+                pk.path("public_key_version").asText(""),
+                pk.path("signing_public_key").asText(""),
+                pk.path("public_key").asText(""),
+                pk.path("identity_public_key_signature").asText(""));
         return e;
     }
 
@@ -77,10 +77,7 @@ class E2ELiveTest {
     private static List<PublicKeyInput> keyEntries(List<JsonNode> pks, String userId) {
         List<PublicKeyInput> out = new ArrayList<>();
         for (JsonNode pk : pks) {
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = userId;
-            input.publicKey = pk.path("public_key").asText("");
-            input.keyVersion = pk.path("public_key_version").asText("");
+            PublicKeyInput input = new PublicKeyInput(userId, pk.path("public_key").asText(""), pk.path("public_key_version").asText(""));
             out.add(input);
         }
         return out;
@@ -223,7 +220,7 @@ class E2ELiveTest {
                 }
             }
             DecryptEventsResult batch = core.decryptBatch(eventsB64, signing);
-            long decrypted = batch.messages.stream()
+            long decrypted = batch.events.stream()
                     .filter(m -> ChatCore.messageText(m.event) != null)
                     .count();
             Map<String, byte[]> convKeys = new HashMap<>(batch.conversationKeys.keys);
@@ -235,7 +232,7 @@ class E2ELiveTest {
             // to thread the reply on, from the decrypted batch.
             String canonicalConv = conv;
             String lastInboundEventB64 = null;
-            for (var m : batch.messages) {
+            for (var m : batch.events) {
                 JsonNode ev = m.event;
                 if (ev == null) {
                     continue;
@@ -297,7 +294,7 @@ class E2ELiveTest {
             // predates the rotation, so its KeyChange events ride along for
             // the preview.
             List<String> ckces = new ArrayList<>();
-            for (var m : batch.messages) {
+            for (var m : batch.events) {
                 if (m.event != null
                         && "KeyChange".equals(m.event.path("type").asText())
                         && m.originalB64 != null) {
@@ -305,10 +302,7 @@ class E2ELiveTest {
                 }
             }
             String marker = "chat-xdk e2e [jvm] " + (System.currentTimeMillis() / 1000);
-            EntityDescriptor mention = new EntityDescriptor();
-            mention.start = 0;
-            mention.end = 5;
-            mention.entityType = "mention";
+            EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
             ChatCore.SendBody body = core.encryptReply(
                     canonicalConv,
                     "@user " + marker,
@@ -381,12 +375,12 @@ class E2ELiveTest {
         for (int i = 0; i < plaintext.length; i++) {
             plaintext[i] = (byte) ((i * 31 + 7) % 256);
         }
-        XChatClient.MediaUpload upload =
-                api.startMediaUpload(canonicalConv, ChatXdkUtilities.encryptedFileSize(plaintext.length));
+        long encryptedSize = ChatXdkUtilities.encryptedFileSize(plaintext.length);
+        XChatClient.MediaUpload upload = api.startMediaUpload(canonicalConv, encryptedSize);
         String mediaHashKey = upload.mediaHashKey();
 
         AttachmentDescriptor descriptor =
-                AttachmentDescriptor.media(mediaHashKey, 0, 0, plaintext.length, "e2e.bin", 5, null);
+                AttachmentDescriptor.media(mediaHashKey, 0, 0, encryptedSize, "e2e.bin", 5, null);
         ChatCore.SendBody mediaMsg = core.encryptReply(
                 canonicalConv,
                 "chat-xdk e2e media [jvm] " + (System.currentTimeMillis() / 1000),
@@ -439,7 +433,7 @@ class E2ELiveTest {
         // Create with the caller as sole member/admin so the member add below
         // exercises prepareGroupMembersChange with the partner.
         PreparedConversationChange prep =
-                core.prepareGroupCreate(myKeys, groupId, List.of(myId), List.of(myId));
+                core.prepareGroupCreate(myKeys, groupId, List.of(myId), List.of(myId), "chat-xdk e2e");
         List<String> members = List.of(myId);
         try {
             api.createConversation(groupCreateBody(groupId, members, myId, prep));
@@ -447,7 +441,7 @@ class E2ELiveTest {
             // Some deployments reject single-member groups; fall back to creating
             // with both participants (skipping the member-add below).
             prep = core.prepareGroupCreate(
-                    bothKeys, groupId, List.of(myId, partnerId), List.of(myId));
+                    bothKeys, groupId, List.of(myId, partnerId), List.of(myId), "chat-xdk e2e");
             members = List.of(myId, partnerId);
             api.createConversation(groupCreateBody(groupId, members, myId, prep));
         }
@@ -492,7 +486,7 @@ class E2ELiveTest {
         var groupMembers = body.putArray("group_members");
         members.forEach(groupMembers::add);
         body.putArray("group_admins").add(adminId);
-        body.put("group_name", "chat-xdk e2e");
+        body.put("group_name", prep.encryptedTitle);
         return body;
     }
 }

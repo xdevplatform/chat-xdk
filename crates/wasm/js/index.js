@@ -15,7 +15,14 @@
  * calls.
  */
 
-import { __featureComplete } from './pkg/chat_xdk_wasm.js';
+import {
+  __featureComplete,
+  __juiceboxClientConfig,
+  __juiceboxError,
+  __noJuiceboxConfig,
+  __setErrorClass,
+  __validateNewPin,
+} from './pkg/chat_xdk_wasm.js';
 
 function isNodeRuntime() {
   return (
@@ -24,6 +31,24 @@ function isNodeRuntime() {
   );
 }
 
+/**
+ * The error every SDK call throws. `kind` names the failure the same way in
+ * every binding: `invalidInput`, `invalidState`, `parse`, `decryption`,
+ * `verification`, `invalidPin`, `juicebox` or `internal`.
+ * `guessesRemaining` holds the PIN attempts left after an `invalidPin`
+ * failure when Juicebox reports them (0: the stored keys are locked), and
+ * is null otherwise.
+ */
+export class ChatXdkError extends Error {
+  constructor(kind, message, guessesRemaining = null) {
+    super(message);
+    this.name = "ChatXdkError";
+    this.kind = kind;
+    this.guessesRemaining = guessesRemaining;
+  }
+}
+
+// The names of the failure reasons juicebox-sdk rejects with, by value.
 const REGISTER_REASON_BY_VALUE = {
   0: "InvalidAuth",
   1: "UpgradeRequired",
@@ -42,78 +67,40 @@ const RECOVER_REASON_BY_VALUE = {
   6: "Transient",
 };
 
-const MIN_PIN_LENGTH = 4;
+const DELETE_REASON_BY_VALUE = REGISTER_REASON_BY_VALUE;
 
 function toPinBytes(pin) {
   return typeof pin === 'string' ? new TextEncoder().encode(pin) : pin;
 }
 
 /**
- * Validate PIN strength for new registrations: at least MIN_PIN_LENGTH
- * characters, not a single repeated character, not an ascending or
- * descending run of digits. Never applied on unlock.
+ * The ChatXdkError for a failed Juicebox `operation` (`register`, `recover`
+ * or `delete`): juicebox-sdk rejects with a reason value, or with an object
+ * carrying one and, for a wrong PIN, the attempts left.
  */
-function validatePinStrength(pinBytes) {
-  // Error messages match the native core's weak-PIN errors byte-for-byte so
-  // callers can match on them across bindings.
-  if (pinBytes.length < MIN_PIN_LENGTH) {
-    throw new Error(`PIN must be at least ${MIN_PIN_LENGTH} characters`);
-  }
-  if (pinBytes.every((b) => b === pinBytes[0])) {
-    throw new Error('PIN must not be a single repeated character');
-  }
-  const allDigits = pinBytes.every((b) => b >= 0x30 && b <= 0x39);
-  let ascending = true;
-  let descending = true;
-  for (let i = 1; i < pinBytes.length; i++) {
-    if (pinBytes[i] !== pinBytes[i - 1] + 1) ascending = false;
-    if (pinBytes[i] !== pinBytes[i - 1] - 1) descending = false;
-  }
-  if (allDigits && (ascending || descending)) {
-    throw new Error('PIN must not be a sequential run of digits');
-  }
+function juiceboxError(operation, failure, reasonByValue) {
+  const value = typeof failure === "object" && failure !== null ? failure.reason : failure;
+  const reason = typeof value === "number" ? reasonByValue[value] : value;
+  const guessesRemaining = failure?.guesses_remaining;
+  return __juiceboxError(
+    operation,
+    typeof reason === "string" ? reason : String(failure?.message ?? failure),
+    Number.isInteger(guessesRemaining) ? guessesRemaining : undefined,
+  );
 }
-
-function formatJuiceboxError(err, reasonMap) {
-  if (!err) {
-    return "Unknown Juicebox error";
-  }
-  const reasonValue = err.reason ?? err.reasonCode ?? err.code;
-  const reason =
-    typeof reasonValue === "number" ? reasonMap[reasonValue] : reasonValue;
-  const guessesRemaining =
-    err.guesses_remaining ?? err.guessesRemaining ?? err.guesses;
-  const parts = [];
-  if (reason) {
-    parts.push(`reason=${reason}`);
-  }
-  if (guessesRemaining !== undefined) {
-    parts.push(`guesses_remaining=${guessesRemaining}`);
-  }
-  if (!parts.length) {
-    return `Unknown Juicebox error: ${String(err)}`;
-  }
-  return parts.join(" ");
-}
-
-// Stable invalid-PIN error form this wrapper emits
-// ("reason=InvalidPin guesses_remaining=N"). Anchored on the full form so a
-// count embedded in an unrelated message is not misread.
-const GUESSES_REMAINING = /\breason=InvalidPin guesses_remaining=(\d+)\b/;
 
 /**
- * Remaining PIN attempts from an invalid-PIN unlock()/changePin() failure,
- * or null when the error carries no count. 0 means the guess budget is
- * exhausted and the stored keys are locked.
- *
- * @param {unknown} err - The error thrown by unlock() or changePin()
- * @returns {number | null}
+ * The Juicebox client config and PIN guess budget of an X API Juicebox
+ * config, as the core reads them: `{ sdkConfig, maxGuessCount }`.
  */
-export function guessesRemaining(err) {
-  const message =
-    err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  const match = GUESSES_REMAINING.exec(message);
-  return match ? Number(match[1]) : null;
+function juiceboxClientConfig(juiceboxConfig) {
+  if (typeof juiceboxConfig !== "string") {
+    throw new ChatXdkError(
+      "invalidInput",
+      "juiceboxConfig must be the Juicebox config JSON string from the X API",
+    );
+  }
+  return __juiceboxClientConfig(juiceboxConfig);
 }
 
 async function initWasmModule() {
@@ -134,7 +121,7 @@ async function initWasmModule() {
       wasmModule?.init ||
       wasmModule?.__wbindgen_init;
     if (typeof init !== "function") {
-      throw new Error("WASM init function not found in chat_xdk_wasm module.");
+      throw new ChatXdkError("internal", "WASM init function not found in chat_xdk_wasm module.");
     }
     const fs = await import("fs");
     const wasmUrl = new URL("./pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
@@ -153,10 +140,11 @@ async function initWasmModule() {
       wasmModule?.init ||
       wasmModule?.__wbindgen_init;
     if (typeof init !== "function") {
-      throw new Error("WASM init function not found in chat_xdk_wasm module.");
+      throw new ChatXdkError("internal", "WASM init function not found in chat_xdk_wasm module.");
     }
     await init();
   }
+  __setErrorClass(ChatXdkError);
   return wasmModule;
 }
 
@@ -197,104 +185,6 @@ async function loadJuiceboxSdkOnce() {
   return await import("juicebox-sdk");
 }
 
-/**
- * Resolve the PIN guess budget for Juicebox registration, matching the
- * native bindings: a `max_guess_count` that is a non-negative integer
- * (including 0) applies as-is; a fractional, negative, or non-numeric value
- * falls back to the shape default — 20 for the `sdk_config` and
- * `key_store_token_map_json` shapes, 5 otherwise. An explicit
- * `maxGuessCount` option overrides the config under
- * the same integer rule. Exported for tests; `createChat` calls it
- * internally.
- *
- * @param {Object} configValue - Parsed Juicebox config JSON from the X API
- * @param {number} [maxGuessCount] - Explicit override from createChat options
- * @returns {number} The number of PIN guesses to register with
- */
-export function resolveMaxGuessCount(configValue, maxGuessCount) {
-  if (Number.isSafeInteger(maxGuessCount) && maxGuessCount >= 0) {
-    return maxGuessCount;
-  }
-  const fromConfig = configValue?.max_guess_count;
-  if (Number.isSafeInteger(fromConfig) && fromConfig >= 0) {
-    return fromConfig;
-  }
-  return typeof configValue?.sdk_config === "string" ||
-    typeof configValue?.key_store_token_map_json === "string"
-    ? 20
-    : 5;
-}
-
-/**
- * Derive the value to hand the Juicebox `Configuration` constructor from a
- * parsed X API config. The `sdk_config` wrapper shape is unwrapped to its
- * embedded SDK config JSON string (which the Juicebox constructor accepts
- * directly); the X API `juicebox_config` object shape is unwrapped to its
- * `key_store_token_map_json` string, which is used **verbatim** because it
- * carries each realm's `public_key` and the server's register/recover
- * thresholds — the realms require both; a raw realms config passes through
- * unchanged; a bare `token_map` shape (an array of
- * `{ key, value: { address } }` entries, no `key_store_token_map_json`) is
- * converted to a realms config with majority recover threshold, the same
- * derivation the native bindings apply. A non-array `token_map` is rejected
- * here, with the same message the core parser uses, rather than handed to
- * the Juicebox constructor to fail obscurely. Realm auth tokens are not
- * taken from the config in this wrapper — they come from the `getAuthToken`
- * callback.
- */
-export function juiceboxClientConfig(configValue) {
-  if (typeof configValue?.sdk_config === "string") {
-    return configValue.sdk_config;
-  }
-  if (configValue?.key_store_token_map_json !== undefined) {
-    if (typeof configValue.key_store_token_map_json !== "string") {
-      throw new Error("key_store_token_map_json must be a string");
-    }
-    // A malformed embedded config is an error rather than a fall-through to
-    // the lossy token_map derivation, which would silently drop the realm
-    // public keys and produce configs that can never reach the recover
-    // threshold. It must parse to a JSON object — merely valid JSON like
-    // "42" or "[]" would be handed to the Juicebox constructor to fail
-    // obscurely at setup/unlock time.
-    let parsed;
-    try {
-      parsed = JSON.parse(configValue.key_store_token_map_json);
-    } catch (e) {
-      throw new Error(`Invalid key_store_token_map_json: ${e.message}`);
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("Invalid key_store_token_map_json: not a JSON object");
-    }
-    return configValue.key_store_token_map_json;
-  }
-  if (
-    configValue?.token_map !== undefined &&
-    configValue?.realms === undefined &&
-    !Array.isArray(configValue.token_map)
-  ) {
-    throw new Error("Missing token_map or sdk_config");
-  }
-  if (Array.isArray(configValue?.token_map) && configValue?.realms === undefined) {
-    const realms = configValue.token_map.map((entry) => {
-      const id = entry?.key;
-      const address = entry?.value?.address;
-      if (typeof id !== "string" || typeof address !== "string") {
-        throw new Error(
-          "Invalid token_map entry: expected { key, value: { address } }",
-        );
-      }
-      return { id, address };
-    });
-    return {
-      realms,
-      register_threshold: realms.length,
-      recover_threshold: Math.floor(realms.length / 2) + 1,
-      pin_hashing_mode: "Standard2019",
-    };
-  }
-  return configValue;
-}
-
 // The conversation key is secret: JSON.stringify leaves it out of a prepared
 // change. toJSON is non-enumerable, so keys, spreads and copies are unaffected.
 function preparedChangeToJson() {
@@ -330,10 +220,6 @@ export class ChatWithJuicebox {
   // never touch it; the Juicebox lifecycle methods refuse while it is null.
   #juiceboxClient;
   #numGuesses;
-  // The raw `maxGuessCount` createChat option (undefined when not provided),
-  // kept so updateConfig re-resolves the budget under the same override
-  // semantics as construction: an explicit option keeps winning.
-  #maxGuessCountOverride;
   #JuiceboxConfiguration;
   #JuiceboxClient;
   // Points the process-global `JuiceboxGetAuthToken` at this instance's token
@@ -348,12 +234,11 @@ export class ChatWithJuicebox {
     JuiceboxConfiguration,
     JuiceboxClientCtor,
     armAuthTokenHook,
-    maxGuessCountOverride,
   ) {
+    __setErrorClass(ChatXdkError);
     this.#inner = wasmChat;
     this.#juiceboxClient = juiceboxClient;
     this.#numGuesses = numGuesses;
-    this.#maxGuessCountOverride = maxGuessCountOverride;
     this.#JuiceboxConfiguration = JuiceboxConfiguration;
     this.#JuiceboxClient = JuiceboxClientCtor;
     this.#armAuthTokenHook = armAuthTokenHook ?? (() => {});
@@ -362,6 +247,17 @@ export class ChatWithJuicebox {
 
   // Juicebox lifecycle (handled in this JS layer)
 
+  /** A chat created without `getAuthToken` keeps its keys without Juicebox. */
+  #requireJuicebox() {
+    if (!this.#JuiceboxConfiguration) {
+      throw new ChatXdkError(
+        "invalidState",
+        "No Juicebox for this chat: pass getAuthToken to createChat() to use " +
+          "updateConfig/setup/unlock/changePin/delete.",
+      );
+    }
+  }
+
   /**
    * Every Juicebox operation needs a client, which exists only once a config
    * has been supplied (to createChat or updateConfig). A first-boot instance
@@ -369,12 +265,9 @@ export class ChatWithJuicebox {
    * from calling register/recover/delete on null.
    */
   #requireJuiceboxClient() {
+    this.#requireJuicebox();
     if (!this.#juiceboxClient) {
-      throw new Error(
-        "No Juicebox config: pass juiceboxConfig to createChat() or call " +
-          "updateConfig() with the juicebox_config from the X API before " +
-          "setup/unlock/changePin/delete.",
-      );
+      throw __noJuiceboxConfig();
     }
     return this.#juiceboxClient;
   }
@@ -387,24 +280,12 @@ export class ChatWithJuicebox {
    * Requires a Juicebox config (from createChat or updateConfig).
    */
   async setup(pin) {
-    const client = this.#requireJuiceboxClient();
     const pinBytes = toPinBytes(pin);
-    const ownsPin = typeof pin === 'string';
-    validatePinStrength(pinBytes);
-    const secretBytes = this.#inner.exportKeys();
     try {
-      this.#armAuthTokenHook();
-      await client.register(
-        pinBytes,
-        secretBytes,
-        new Uint8Array(0),
-        this.#numGuesses,
-      );
-    } catch (err) {
-      throw new Error(`Juicebox register failed: ${formatJuiceboxError(err, REGISTER_REASON_BY_VALUE)}`);
+      __validateNewPin(pinBytes);
+      await this.#register(this.#requireJuiceboxClient(), pinBytes);
     } finally {
-      secretBytes.fill(0);
-      if (ownsPin) pinBytes.fill(0);
+      if (typeof pin === 'string') pinBytes.fill(0);
     }
     return this.#inner.getPublicKeys();
   }
@@ -423,7 +304,7 @@ export class ChatWithJuicebox {
       this.#armAuthTokenHook();
       secretBytes = await client.recover(pinBytes, new Uint8Array(0));
     } catch (err) {
-      throw new Error(`Juicebox recovery failed: ${formatJuiceboxError(err, RECOVER_REASON_BY_VALUE)}`);
+      throw juiceboxError("recover", err, RECOVER_REASON_BY_VALUE);
     } finally {
       if (ownsPin) pinBytes.fill(0);
     }
@@ -440,8 +321,12 @@ export class ChatWithJuicebox {
    */
   async delete() {
     const client = this.#requireJuiceboxClient();
-    this.#armAuthTokenHook();
-    await client.delete();
+    try {
+      this.#armAuthTokenHook();
+      await client.delete();
+    } catch (err) {
+      throw juiceboxError("delete", err, DELETE_REASON_BY_VALUE);
+    }
     this.#inner.lock();
   }
 
@@ -450,41 +335,43 @@ export class ChatWithJuicebox {
    * requirements. Requires a Juicebox config (from createChat or updateConfig).
    */
   async changePin(oldPin, newPin) {
-    const client = this.#requireJuiceboxClient();
     const newPinBytes = toPinBytes(newPin);
-    const ownsNewPin = typeof newPin === 'string';
-    validatePinStrength(newPinBytes);
-    await this.unlock(oldPin);
+    try {
+      __validateNewPin(newPinBytes);
+      const client = this.#requireJuiceboxClient();
+      await this.unlock(oldPin);
+      await this.#register(client, newPinBytes);
+    } finally {
+      if (typeof newPin === 'string') newPinBytes.fill(0);
+    }
+  }
+
+  /** Register the loaded keys under `pinBytes`, wiping the exported copy. */
+  async #register(client, pinBytes) {
     const secretBytes = this.#inner.exportKeys();
     try {
       this.#armAuthTokenHook();
-      await client.register(
-        newPinBytes,
-        secretBytes,
-        new Uint8Array(0),
-        this.#numGuesses,
-      );
+      await client.register(pinBytes, secretBytes, new Uint8Array(0), this.#numGuesses);
     } catch (err) {
-      throw new Error(`Juicebox re-registration failed: ${formatJuiceboxError(err, REGISTER_REASON_BY_VALUE)}`);
+      throw juiceboxError("register", err, REGISTER_REASON_BY_VALUE);
     } finally {
       secretBytes.fill(0);
-      if (ownsNewPin) newPinBytes.fill(0);
     }
   }
 
   /**
-   * Update Juicebox config (e.g. to refresh auth tokens). (Re-)creates the
-   * client and re-resolves the PIN guess budget from the new config; an
-   * explicit createChat `maxGuessCount` override keeps winning. On an
-   * instance created without a config, this is what enables
+   * Update Juicebox config (e.g. to refresh auth tokens): (re-)creates the
+   * client, with the PIN guess budget the config sets. On an instance
+   * created without a config, this is what enables
    * setup/unlock/changePin/delete — first boot calls it with the
    * `juicebox_config` created by the public-key POST, then `setup(pin)`.
    */
   updateConfig(juiceboxConfig) {
-    const configValue = JSON.parse(juiceboxConfig);
-    const config = new this.#JuiceboxConfiguration(juiceboxClientConfig(configValue));
+    this.#requireJuicebox();
+    const { sdkConfig, maxGuessCount } = juiceboxClientConfig(juiceboxConfig);
+    const config = new this.#JuiceboxConfiguration(sdkConfig);
     this.#juiceboxClient = new this.#JuiceboxClient(config, []);
-    this.#numGuesses = resolveMaxGuessCount(configValue, this.#maxGuessCountOverride);
+    this.#numGuesses = maxGuessCount;
   }
 
   // Forwarded crypto methods — delegate to inner WasmChat
@@ -494,6 +381,8 @@ export class ChatWithJuicebox {
   setIdentity(params) { return this.#inner.setIdentity(params); }
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
+  importKeys(params) { return this.#inner.importKeys(params); }
+  exportKeys() { return this.#inner.exportKeys(); }
   getPublicKeys() { return this.#inner.getPublicKeys(); }
   getPublicKeyFingerprint() { return this.#inner.getPublicKeyFingerprint(); }
   isUnlocked() { return this.#inner.isUnlocked(); }
@@ -520,7 +409,6 @@ export class ChatWithJuicebox {
   fileEncryptor(params) { return this.#inner.fileEncryptor(params); }
   decryptFile(params) { return this.#inner.decryptFile(params); }
   fileDecryptor(params) { return this.#inner.fileDecryptor(params); }
-  encrypt(plaintext, key) { return this.#inner.encrypt(plaintext, key); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
   prepareConversationKeyChange(params) { return keepKeyOutOfJson(this.#inner.prepareConversationKeyChange(params)); }
   prepareGroupMembersChange(params) { return keepKeyOutOfJson(this.#inner.prepareGroupMembersChange(params)); }
@@ -620,6 +508,7 @@ function getWithNode(http, url, timeoutMs, maxBytes) {
         const done = () =>
           finish({ status: response.statusCode, body: new Uint8Array(globalThis.Buffer.concat(chunks)) });
         response.on("data", (chunk) => {
+          if (settled) return;
           chunks.push(chunk.subarray(0, maxBytes + 1 - size));
           size += chunk.length;
           if (size > maxBytes) done();
@@ -651,20 +540,24 @@ async function getWithFetch(url, timeoutMs, maxBytes) {
       redirect: "error",
       signal: request.signal,
     });
-    return { status: response.status, body: await readCappedBody(response, maxBytes) };
+    const body = await readCappedBody(response, maxBytes);
+    return body ? { status: response.status, body } : NO_RESPONSE;
   } catch {
     return NO_RESPONSE;
   } finally {
     clearTimeout(timer);
+    request.abort();
   }
 }
 
-/** The body, read to its end or to one byte past `maxBytes`. */
+/**
+ * The body, read to its end or to one byte past `maxBytes`, or null when
+ * the runtime cannot stream it: reading it whole could take any size.
+ */
 async function readCappedBody(response, maxBytes) {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return new Uint8Array(await response.arrayBuffer()).subarray(0, maxBytes + 1);
-  }
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body?.getReader?.();
+  if (!reader) return null;
   const chunks = [];
   let size = 0;
   while (size <= maxBytes) {
@@ -685,21 +578,21 @@ async function readCappedBody(response, maxBytes) {
 }
 
 /**
- * Create a Chat instance with integrated Juicebox support.
- * 
- * @param {Object} options - Configuration options
+ * Create a Chat instance, with Juicebox key storage when `getAuthToken` is
+ * given.
+ *
+ * @param {Object} [options] - Configuration options
  * @param {string} [options.juiceboxConfig] - Juicebox configuration JSON from
  *                                            the X API. Omit on first boot —
  *                                            before the first public-key POST
  *                                            the account has no
  *                                            juicebox_config; supply it later
  *                                            via updateConfig()
- * @param {Function} options.getAuthToken - Async function to get auth token for a realm
- *                                          Signature: (realmId: string) => Promise<string>
- * @param {number} [options.maxGuessCount] - Optional override for the PIN guess
- *                                           budget (see CreateChatOptions)
+ * @param {Function} [options.getAuthToken] - Async function to get auth token for a realm,
+ *                                            required to use Juicebox
+ *                                            Signature: (realmId: string) => Promise<string>
  * @returns {Promise<ChatWithJuicebox>} Initialized chat instance
- * 
+ *
  * @example
  * // First boot — the account has no juicebox_config yet
  * const chat = await createChat({ getAuthToken });
@@ -708,7 +601,7 @@ async function readCappedBody(response, maxBytes) {
  * // then GET it back and store the keys under a PIN:
  * chat.updateConfig(configFromXApi);
  * await chat.setup("2580");
- * 
+ *
  * // Subsequent sessions — the account is provisioned
  * const chat = await createChat({
  *   juiceboxConfig: configFromXApi,
@@ -718,29 +611,63 @@ async function readCappedBody(response, maxBytes) {
  *   },
  * });
  * await chat.unlock("2580");
+ *
+ * // Keys kept elsewhere: no Juicebox, so no juicebox-sdk either
+ * const chat = await createChat();
+ * chat.importKeys({ keys, signingKeyVersion });
  */
-export async function createChat(options) {
-  const { juiceboxConfig, getAuthToken, maxGuessCount } = options;
+export async function createChat(options = {}) {
+  const { juiceboxConfig, getAuthToken } = options;
 
-  if (!getAuthToken || typeof getAuthToken !== 'function') {
-    throw new Error('getAuthToken must be an async function');
+  if (
+    (getAuthToken !== undefined || juiceboxConfig != null) &&
+    typeof getAuthToken !== 'function'
+  ) {
+    throw new ChatXdkError('invalidInput', 'getAuthToken must be an async function');
   }
 
-  // Load Juicebox WASM SDK. Tests inject stub constructors through the
-  // internal `juiceboxModule` option so this flow runs without the
-  // juicebox-sdk WASM or network realms; it is not part of the public API.
-  let JuiceboxClientCtor;
-  let JuiceboxConfiguration;
-  if (options.juiceboxModule) {
-    JuiceboxClientCtor = options.juiceboxModule.Client;
-    JuiceboxConfiguration = options.juiceboxModule.Configuration;
-  } else {
+  const wasmModule = await initWasmModule();
+  const juicebox = getAuthToken ? await juiceboxRuntime(options, getAuthToken) : null;
+
+  // First boot has no config yet (the account's juicebox_config is created
+  // by the public-key POST), so no Juicebox Configuration/Client is built;
+  // updateConfig() constructs them once the real config exists. Crypto
+  // methods and generateKeypairs need neither. Only an absent config means
+  // first boot: the core fails an empty one here with the missing-config
+  // error, as every binding's constructor does.
+  let juiceboxClient = null;
+  let numGuesses;
+  if (juiceboxConfig != null) {
+    const { sdkConfig, maxGuessCount } = juiceboxClientConfig(juiceboxConfig);
+    juiceboxClient = new juicebox.Client(new juicebox.Configuration(sdkConfig), []);
+    numGuesses = maxGuessCount;
+  }
+
+  return new ChatWithJuicebox(
+    new wasmModule.Chat(),
+    juiceboxClient,
+    numGuesses,
+    juicebox?.Configuration ?? null,
+    juicebox?.Client ?? null,
+    juicebox?.armAuthTokenHook ?? null,
+  );
+}
+
+/**
+ * The juicebox-sdk constructors, and the hook that points juicebox-sdk at
+ * `getAuthToken`.
+ */
+async function juiceboxRuntime(options, getAuthToken) {
+  // Tests inject stub constructors through the internal `juiceboxModule`
+  // option so this flow runs without the juicebox-sdk WASM or network
+  // realms; it is not part of the public API.
+  let juiceboxModule = options.juiceboxModule;
+  if (!juiceboxModule) {
     try {
-      const juiceboxModule = await loadJuiceboxSdk();
-      JuiceboxClientCtor = juiceboxModule.Client;
-      JuiceboxConfiguration = juiceboxModule.Configuration;
+      juiceboxModule = await loadJuiceboxSdk();
     } catch (e) {
-      throw new Error(
+      throw new ChatXdkError(
+        "juicebox",
         "Failed to load juicebox-sdk (an optional peer dependency). " +
         "Install it with `npm install juicebox-sdk`, or build it from " +
         "https://github.com/juicebox-systems/juicebox-sdk:\n" +
@@ -750,8 +677,8 @@ export async function createChat(options) {
       );
     }
   }
-  if (!JuiceboxConfiguration) {
-    throw new Error('juicebox-sdk Configuration export is missing');
+  if (!juiceboxModule.Configuration) {
+    throw new ChatXdkError('juicebox', 'juicebox-sdk Configuration export is missing');
   }
 
   // The juicebox-sdk WASM resolves `JuiceboxGetAuthToken` as a bare-name
@@ -772,35 +699,11 @@ export async function createChat(options) {
     globalThis.JuiceboxGetAuthToken = authTokenHook;
   };
   armAuthTokenHook();
-
-  // First boot has no config yet (the account's juicebox_config is created
-  // by the public-key POST), so no Juicebox Configuration/Client is built;
-  // updateConfig() constructs them once the real config exists. Crypto
-  // methods and generateKeypairs need neither. Only an absent config means
-  // first boot — a present-but-empty value is a caller bug and fails to
-  // parse here rather than surfacing later as a missing-config error.
-  let juiceboxClient = null;
-  let numGuesses;
-  if (juiceboxConfig != null) {
-    const configValue = JSON.parse(juiceboxConfig);
-    const config = new JuiceboxConfiguration(juiceboxClientConfig(configValue));
-    juiceboxClient = new JuiceboxClientCtor(config, []);
-    numGuesses = resolveMaxGuessCount(configValue, maxGuessCount);
-  }
-
-  // Load Rust WASM crypto engine
-  const wasmModule = await initWasmModule();
-  const wasmChat = new wasmModule.Chat();
-
-  return new ChatWithJuicebox(
-    wasmChat,
-    juiceboxClient,
-    numGuesses,
-    JuiceboxConfiguration,
-    JuiceboxClientCtor,
+  return {
+    Client: juiceboxModule.Client,
+    Configuration: juiceboxModule.Configuration,
     armAuthTokenHook,
-    maxGuessCount,
-  );
+  };
 }
 
 // Re-export utility functions.

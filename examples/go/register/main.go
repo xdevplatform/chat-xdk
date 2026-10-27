@@ -184,7 +184,10 @@ func register(force bool) error {
 	if pin != "" {
 		cfg, _, cfgErr := api.GetJuiceboxConfig(userID)
 		if cfgErr == nil {
-			_, cfgErr = chat.Setup([]byte(pin), cfg)
+			cfgErr = chat.UpdateConfig(cfg)
+		}
+		if cfgErr == nil {
+			_, cfgErr = chat.Setup([]byte(pin))
 		}
 		if cfgErr != nil {
 			fmt.Fprintf(os.Stderr, "Juicebox backup failed (keys are still saved locally): %v\n", cfgErr)

@@ -51,8 +51,8 @@ def _key_entries(pks: list[dict], user_id: str) -> list[dict]:
     return [
         {
             "user_id": user_id,
-            "public_key": pk.get("public_key") or "",
-            "key_version": str(pk.get("public_key_version") or ""),
+            "identity_public_key": pk.get("public_key") or "",
+            "public_key_version": str(pk.get("public_key_version") or ""),
         }
         for pk in pks
     ]
@@ -146,7 +146,7 @@ def main() -> None:
 
     events_b64 = key_events_b64 + [e["encoded_event"] for e in raw if e.get("encoded_event")]
     batch = core.decrypt_batch(events_b64, signing)
-    decrypted = sum(1 for m in batch["messages"] if message_text(m["event"]))
+    decrypted = sum(1 for m in batch["events"] if message_text(m["event"]))
     conv_keys = dict(batch["conversation_keys"]["keys"])
     print(f"live inbound messages decrypted: {decrypted}; conversation keys: {len(conv_keys)}")
     assert decrypted > 0, "expected to decrypt at least one live message"
@@ -155,7 +155,7 @@ def main() -> None:
     canonical_conv = conversation_id
     partner_id = next(iter(ids - {my_id}), None)
     last_inbound_seq = None
-    for m in batch["messages"]:
+    for m in batch["events"]:
         ev = m["event"] or {}
         if ev.get("conversation_id"):
             canonical_conv = ev["conversation_id"]
@@ -248,9 +248,8 @@ def main() -> None:
         # A deterministic multi-chunk payload, so the incremental encryptor
         # emits several frames and any corruption is byte-attributable.
         plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
-        session_id, media_hash_key = api.start_media_upload(
-            canonical_conv, encrypted_file_size(len(plaintext))
-        )
+        encrypted_size = encrypted_file_size(len(plaintext))
+        session_id, media_hash_key = api.start_media_upload(canonical_conv, encrypted_size)
 
         media_msg = core.encrypt_reply(
             conversation_id=canonical_conv,
@@ -263,7 +262,7 @@ def main() -> None:
                     "media_hash_key": media_hash_key,
                     "width": 0,
                     "height": 0,
-                    "filesize_bytes": len(plaintext),
+                    "filesize_bytes": encrypted_size,
                     "filename": "e2e.bin",
                     "media_type": 5,
                 }
@@ -320,12 +319,12 @@ def _groups_flow(
 
     # Create with the caller as sole member/admin so the member add below
     # exercises prepare_group_members_change with the partner.
-    prep = core.prepare_group_create(my_keys, group_id, [my_id], [my_id])
+    prep = core.prepare_group_create(my_keys, group_id, [my_id], [my_id], title="chat-xdk e2e")
     body = {
         "conversation_id": group_id,
         "group_members": [my_id],
         "group_admins": [my_id],
-        "group_name": "chat-xdk e2e",
+        "group_name": prep["encrypted_title"],
         **prep_to_request(prep),
     }
     try:
@@ -334,12 +333,14 @@ def _groups_flow(
     except Exception:
         # Some deployments reject single-member groups; fall back to creating
         # with both participants (skipping the member-add below).
-        prep = core.prepare_group_create(both_keys, group_id, [my_id, partner_id], [my_id])
+        prep = core.prepare_group_create(
+            both_keys, group_id, [my_id, partner_id], [my_id], title="chat-xdk e2e"
+        )
         body = {
             "conversation_id": group_id,
             "group_members": [my_id, partner_id],
             "group_admins": [my_id],
-            "group_name": "chat-xdk e2e",
+            "group_name": prep["encrypted_title"],
             **prep_to_request(prep),
         }
         api.create_conversation(body)

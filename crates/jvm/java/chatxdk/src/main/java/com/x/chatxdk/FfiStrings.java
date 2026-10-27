@@ -40,8 +40,13 @@ final class FfiStrings {
             ChatNative.INSTANCE.chat_xdk_free_string(result.error);
         }
         if (error != null) {
-            throw new ChatXdkException(error);
+            throw ChatXdkException.fromDocument(error);
         }
         return data == null ? "" : data;
+    }
+
+    /** Consume a result whose data is {@code true} or {@code false}. */
+    static boolean consumeBool(FfiResult.ByValue result) {
+        return "true".equals(consume(result));
     }
 }

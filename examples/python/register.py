@@ -88,8 +88,6 @@ def _registration_body(chat: Chat) -> dict:
 def _save_blob(chat: Chat) -> None:
     """Write the exported private keys to disk (mode 600)."""
     exported = chat.export_keys()
-    if not exported:
-        raise SystemExit("export_keys() returned nothing — no identity to save")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     BLOB_PATH.write_text(base64.b64encode(bytes(exported)).decode("ascii") + "\n", encoding="utf-8")
     BLOB_PATH.chmod(0o600)

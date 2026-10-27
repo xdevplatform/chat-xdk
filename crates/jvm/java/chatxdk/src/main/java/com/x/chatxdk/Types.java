@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /** Data types for the Chat SDK public API. */
 public final class Types {
@@ -22,10 +23,6 @@ public final class Types {
         /** Base64-encoded signing public key. */
         @JsonProperty("signing")
         public String signing = "";
-
-        /** Version assigned to this set of public keys. */
-        @JsonProperty("version")
-        public String version = "";
     }
 
     /**
@@ -156,14 +153,6 @@ public final class Types {
         /** The signature over the action, with its versions and the signer's signing public key. */
         @JsonProperty("message_event_signature")
         public MessageEventSignature messageEventSignature = new MessageEventSignature();
-
-        /**
-         * The comma-separated payload string that was signed; {@code null} for
-         * conversation-key changes, whose payload embeds the plaintext
-         * conversation key and is withheld.
-         */
-        @JsonProperty("signature_payload")
-        public String signaturePayload;
     }
 
     /** The signature of an {@link ActionSignature}. */
@@ -198,51 +187,93 @@ public final class Types {
         public List<ActionSignature> actionSignatures = Collections.emptyList();
     }
 
+    /**
+     * A signed group title or description change: the value encrypted under the
+     * conversation key and the {@code action_signatures} a request carries.
+     * Returned by {@link Chat#prepareGroupTitleChange} and
+     * {@link Chat#prepareGroupDescriptionChange}.
+     */
+    public static final class PreparedGroupMetadataChange {
+        /** The value encrypted under the conversation key, base64: what the request sends. */
+        @JsonProperty("encrypted_value")
+        public String encryptedValue = "";
+
+        /** Version of the conversation key the value is encrypted under. */
+        @JsonProperty("conversation_key_version")
+        public String conversationKeyVersion = "";
+
+        /** The signed change, as the request's {@code action_signatures} entries. */
+        @JsonProperty("action_signatures")
+        public List<ActionSignature> actionSignatures = Collections.emptyList();
+    }
+
     /** A signing key entry for {@link Chat#decryptEvent} and {@link Chat#decryptEvents}. */
     public static final class SigningKeyEntry {
         /** ID of the user this signing key belongs to. */
         @JsonProperty("user_id")
-        public String userId;
+        public final String userId;
 
         /** Version of the user's signing public key as returned by the X API. */
         @JsonProperty("public_key_version")
-        public String publicKeyVersion;
+        public final String publicKeyVersion;
 
         /** Base64-encoded signing public key (SEC1 or SPKI). */
         @JsonProperty("public_key")
-        public String publicKey;
+        public final String publicKey;
 
         /** Base64-encoded identity public key (SEC1 or SPKI) for this user. */
         @JsonProperty("identity_public_key")
-        public String identityPublicKey;
+        public final String identityPublicKey;
 
         /**
          * Base64-encoded raw r||s signature proving the signing key is bound to the
          * identity key. Returned by the X API on the public keys response.
          */
         @JsonProperty("identity_public_key_signature")
-        public String identityPublicKeySignature;
+        public final String identityPublicKeySignature;
+
+        /** A user's signing key, as the X API's public keys response carries it. */
+        public SigningKeyEntry(
+                String userId,
+                String publicKeyVersion,
+                String publicKey,
+                String identityPublicKey,
+                String identityPublicKeySignature) {
+            this.userId = Objects.requireNonNull(userId, "userId");
+            this.publicKeyVersion = Objects.requireNonNull(publicKeyVersion, "publicKeyVersion");
+            this.publicKey = Objects.requireNonNull(publicKey, "publicKey");
+            this.identityPublicKey = Objects.requireNonNull(identityPublicKey, "identityPublicKey");
+            this.identityPublicKeySignature =
+                    Objects.requireNonNull(identityPublicKeySignature, "identityPublicKeySignature");
+        }
     }
 
     /** Public key entry for the prepare methods ({@link Chat#prepareConversationKeyChange}). */
     public static final class PublicKeyInput {
         /** ID of the user this public key belongs to. */
         @JsonProperty("user_id")
-        public String userId;
+        public final String userId;
 
-        /** Base64-encoded identity public key (SEC1 or SPKI). */
-        @JsonProperty("public_key")
-        public String publicKey;
+        /** Base64-encoded identity public key (SEC1 or SPKI): the X API's {@code public_key}. */
+        @JsonProperty("identity_public_key")
+        public final String identityPublicKey;
 
-        /** Version of the user's public key as returned by the X API. */
-        @JsonProperty("key_version")
-        public String keyVersion;
+        /** The key's version, as the X API returns it. */
+        @JsonProperty("public_key_version")
+        public final String publicKeyVersion;
+
+        /** A user's identity key and its version, as the X API returns them. */
+        public PublicKeyInput(String userId, String identityPublicKey, String publicKeyVersion) {
+            this.userId = Objects.requireNonNull(userId, "userId");
+            this.identityPublicKey = Objects.requireNonNull(identityPublicKey, "identityPublicKey");
+            this.publicKeyVersion = Objects.requireNonNull(publicKeyVersion, "publicKeyVersion");
+        }
     }
 
     /**
-     * Returned by {@link Chat#prepareConversationKeyChange}, {@link Chat#prepareGroupCreate},
-     * {@link Chat#prepareGroupMembersChange}, and {@link Chat#prepareGroupMembersRemove}.
-     * Carries everything needed to POST the change.
+     * Returned by {@link Chat#prepareConversationKeyChange},
+     * {@link Chat#prepareGroupCreate}, {@link Chat#prepareGroupMembersChange}, and
+     * {@link Chat#prepareGroupMembersRemove}. Carries everything needed to POST the change.
      */
     public static final class PreparedConversationChange {
         /** Conversation id the change applies to (derived for a one-to-one, or the id you passed). */
@@ -250,9 +281,9 @@ public final class Types {
         public String conversationId = "";
 
         /**
-         * Raw 32-byte conversation key when one was generated, otherwise {@code null}.
-         * Unlike a String, the array can be zeroed once no longer needed. It is secret, so
-         * serializing this object to JSON leaves it out.
+         * Raw 32-byte conversation key the call generated. Unlike a String, the array
+         * can be zeroed once no longer needed. It is secret, so serializing this object to JSON
+         * leaves it out.
          */
         @JsonProperty(value = "conversation_key", access = JsonProperty.Access.WRITE_ONLY)
         public byte[] conversationKey;
@@ -268,6 +299,26 @@ public final class Types {
         /** Action signatures authenticating the change, ready to POST. */
         @JsonProperty("action_signatures")
         public List<ActionSignature> actionSignatures = Collections.emptyList();
+
+        /**
+         * Set by {@link Chat#prepareGroupCreate} and
+         * {@link Chat#prepareGroupMembersChange} when the params carry a title: the
+         * title encrypted under the new conversation key, base64, the
+         * {@code group_name} a create request sends and the {@code encrypted_title}
+         * an add-members request sends; otherwise {@code null}.
+         */
+        @JsonProperty("encrypted_title")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public String encryptedTitle;
+
+        /**
+         * Set by {@link Chat#prepareGroupMembersChange} when the params carry a
+         * description: the description encrypted under the new conversation key,
+         * base64, as the signed member add carries it; otherwise {@code null}.
+         */
+        @JsonProperty("encrypted_description")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public String encryptedDescription;
     }
 
     /**
@@ -278,7 +329,11 @@ public final class Types {
         /** Version string &#8594; raw 32-byte conversation key. */
         public Map<String, byte[]> keys = Collections.emptyMap();
 
-        /** Latest key version, or {@code null}. */
+        /**
+         * The version to encrypt with: from {@link Chat#decryptEvents}, the newest version whose
+         * key change verified ({@code null} until one verifies); from
+         * {@link Chat#extractConversationKeys}, the batch's highest version.
+         */
         public String latestVersion;
     }
 
@@ -295,8 +350,8 @@ public final class Types {
         public ImageDimensions() {}
     }
 
-    /** One decrypted event from {@link Chat#decryptEvents}. */
-    public static final class DecryptedMessage {
+    /** One event {@link Chat#decryptEvents} decrypted, of any event type. */
+    public static final class DecryptedEvent {
         /** The decrypted event JSON ({@code type}, &#8230;). */
         public JsonNode event;
 
@@ -306,14 +361,41 @@ public final class Types {
 
     /** Result of {@link Chat#decryptEvents}. */
     public static final class DecryptEventsResult {
-        /** The successfully decrypted events. */
-        public List<DecryptedMessage> messages = Collections.emptyList();
+        /** The events that decrypted, in batch order, of every event type. */
+        public List<DecryptedEvent> events = Collections.emptyList();
 
         /** Extracted keys and {@link ConversationKeyBundle#latestVersion}. */
         public ConversationKeyBundle conversationKeys = new ConversationKeyBundle();
 
         /** String indices into the input batch for events that failed to decrypt. */
         public Map<String, String> errors = Collections.emptyMap();
+    }
+
+    /**
+     * A group title or description as a received group change carries it: the
+     * {@code title} of a {@code Created} change, the {@code new_title} of a
+     * {@code TitleChanged} one and the {@code new_description} of a
+     * {@code DescriptionChanged} one. A value converts from the decrypted event JSON with
+     * {@code new ObjectMapper().treeToValue(node, GroupText.class)}. {@code kind}
+     * {@code "Text"} carries {@link #text}: the value decrypted, or the plaintext an event
+     * that names no key version carries. {@code kind} {@code "Unavailable"} carries
+     * {@link #raw}: a value the SDK could not decrypt, as the event carries it. 0.5.x apps
+     * sent titles as plaintext while naming a key version, so show {@link #raw} when a title
+     * isn't decryptable.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class GroupText {
+        /** {@code "Text"} or {@code "Unavailable"}. */
+        @JsonProperty("kind")
+        public String kind;
+
+        /** The decrypted or plaintext value, for {@code "Text"}. */
+        @JsonProperty("text")
+        public String text;
+
+        /** The value as the event carries it, for {@code "Unavailable"}. */
+        @JsonProperty("raw")
+        public String raw;
     }
 
     /**
@@ -337,81 +419,136 @@ public final class Types {
 
     /**
      * Rich-text entity (URL, mention, hashtag, etc.) descriptor.
-     * {@link #start} and {@link #end} are byte offsets into the message text.
+     * {@link #start} and {@link #end} count bytes of the text's UTF-8 encoding, not {@code String}
+     * indices ({@code text.substring(0, i).getBytes(StandardCharsets.UTF_8).length} converts index
+     * {@code i}), so {@code 0 <= start <= end <=} the text's UTF-8 length; other offsets fail the
+     * call with a {@link ChatXdkException} of kind {@code INVALID_INPUT}.
      */
     public static final class EntityDescriptor {
-        /** Byte offset of the start of the entity in the message text. */
-        public int start;
+        /** UTF-8 byte offset into the text where the entity begins. */
+        public final int start;
 
-        /** Byte offset of the end of the entity in the message text. */
-        public int end;
+        /** UTF-8 byte offset into the text where the entity ends (exclusive). */
+        public final int end;
 
-        /** One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number". */
-        public String entityType = "";
+        /**
+         * One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".
+         * Any other value, an empty one included, fails the call with a {@link ChatXdkException}
+         * of kind {@code INVALID_INPUT} naming it.
+         */
+        public final String entityType;
+
+        /** Describe an entity of {@code entityType} spanning bytes {@code start} to {@code end}. */
+        public EntityDescriptor(int start, int end, String entityType) {
+            this.start = start;
+            this.end = end;
+            this.entityType = Objects.requireNonNull(entityType, "entityType");
+        }
     }
 
     /**
-     * Attachment descriptor. Use the factory methods to create well-formed instances.
+     * Attachment descriptor, created by {@link #media}, {@link #urlCard} or {@link #post}.
+     *
+     * <p>A URL card with an empty {@code url}, or a post with neither {@code restId} nor
+     * {@code postUrl}, fails the send with a {@link ChatXdkException} of kind
+     * {@code INVALID_INPUT}.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class AttachmentDescriptor {
         /** Attachment kind: one of "media", "url", or "post". */
         @JsonProperty("attachment_type")
-        public String attachmentType = "";
+        public final String attachmentType;
 
         /** Media hash key identifying the uploaded media. */
         @JsonProperty("media_hash_key")
-        public String mediaHashKey;
+        public final String mediaHashKey;
 
-        /** Media width in pixels. */
+        /** Media width in pixels. A negative one fails the send with {@code INVALID_INPUT}. */
         @JsonProperty("width")
-        public Long width;
+        public final Long width;
 
-        /** Media height in pixels. */
+        /** Media height in pixels. A negative one fails the send with {@code INVALID_INPUT}. */
         @JsonProperty("height")
-        public Long height;
+        public final Long height;
 
-        /** Media file size in bytes. */
+        /**
+         * Size of the encrypted media file in bytes: {@code encryptedFileSize} of its size. 0 or
+         * less fails the send with a {@link ChatXdkException} of kind {@code INVALID_INPUT}.
+         */
         @JsonProperty("filesize_bytes")
-        public Long filesizeBytes;
+        public final Long filesizeBytes;
 
-        /** Media file name. */
+        /**
+         * Media file name. An empty one fails the send with a {@link ChatXdkException} of kind
+         * {@code INVALID_INPUT}.
+         */
         @JsonProperty("filename")
-        public String filename;
+        public final String filename;
 
         /** 1=image, 2=gif, 3=video, 4=audio, 5=file, 6=svg. */
         @JsonProperty("media_type")
-        public Integer mediaType;
+        public final Integer mediaType;
 
         /** Media duration in milliseconds (for audio/video). */
         @JsonProperty("duration_millis")
-        public Long durationMillis;
+        public final Long durationMillis;
 
         /** URL for a URL-card attachment. */
         @JsonProperty("url")
-        public String url;
+        public final String url;
 
         /** Display title for a URL-card attachment. */
         @JsonProperty("display_title")
-        public String displayTitle;
+        public final String displayTitle;
 
         /** Encrypted banner (preview) image for a URL-card attachment. */
         @JsonProperty("banner_image")
-        public UrlAttachmentImageDescriptor bannerImage;
+        public final UrlAttachmentImageDescriptor bannerImage;
 
         /** Encrypted favicon image for a URL-card attachment. */
         @JsonProperty("favicon_image")
-        public UrlAttachmentImageDescriptor faviconImage;
+        public final UrlAttachmentImageDescriptor faviconImage;
 
         /** Numeric post (tweet) ID for a post attachment. */
         @JsonProperty("rest_id")
-        public String restId;
+        public final String restId;
 
         /** Canonical post (tweet) URL for a post attachment. */
         @JsonProperty("post_url")
-        public String postUrl;
+        public final String postUrl;
 
-        /** Create a media attachment. */
+        private AttachmentDescriptor(
+                String attachmentType,
+                String mediaHashKey,
+                Long width,
+                Long height,
+                Long filesizeBytes,
+                String filename,
+                Integer mediaType,
+                Long durationMillis,
+                String url,
+                String displayTitle,
+                UrlAttachmentImageDescriptor bannerImage,
+                UrlAttachmentImageDescriptor faviconImage,
+                String restId,
+                String postUrl) {
+            this.attachmentType = attachmentType;
+            this.mediaHashKey = mediaHashKey;
+            this.width = width;
+            this.height = height;
+            this.filesizeBytes = filesizeBytes;
+            this.filename = filename;
+            this.mediaType = mediaType;
+            this.durationMillis = durationMillis;
+            this.url = url;
+            this.displayTitle = displayTitle;
+            this.bannerImage = bannerImage;
+            this.faviconImage = faviconImage;
+            this.restId = restId;
+            this.postUrl = postUrl;
+        }
+
+        /** Create a media attachment. {@code mediaType} and {@code durationMillis} may be null. */
         public static AttachmentDescriptor media(
                 String mediaHashKey,
                 long width,
@@ -420,52 +557,63 @@ public final class Types {
                 String filename,
                 Integer mediaType,
                 Long durationMillis) {
-            AttachmentDescriptor a = new AttachmentDescriptor();
-            a.attachmentType = "media";
-            a.mediaHashKey = mediaHashKey;
-            a.width = width;
-            a.height = height;
-            a.filesizeBytes = filesizeBytes;
-            a.filename = filename;
-            a.mediaType = mediaType;
-            a.durationMillis = durationMillis;
-            return a;
+            return new AttachmentDescriptor(
+                    "media",
+                    Objects.requireNonNull(mediaHashKey, "mediaHashKey"),
+                    width,
+                    height,
+                    filesizeBytes,
+                    Objects.requireNonNull(filename, "filename"),
+                    mediaType,
+                    durationMillis,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
         }
 
-        /** Create a URL card attachment. */
+        /** Create a URL card attachment. {@code displayTitle} may be null. */
         public static AttachmentDescriptor urlCard(String url, String displayTitle) {
-            AttachmentDescriptor a = new AttachmentDescriptor();
-            a.attachmentType = "url";
-            a.url = url;
-            a.displayTitle = displayTitle;
-            return a;
+            return urlCard(url, displayTitle, null, null);
         }
 
         /**
-         * Create a URL card attachment with encrypted preview images. Supplying a display
-         * title plus a banner image makes receiving clients render a full clickable preview
-         * card: start the image's upload to the conversation's media store, reference the
-         * media hash key it returns, then encrypt the image with {@link Chat#encryptFile} and
-         * the message's {@link SendPayload#eventB64} and finish the upload.
+         * Create a URL card attachment with encrypted preview images, either of which may be null.
+         * Supplying a display title plus a banner image makes receiving clients render a full
+         * clickable preview card: start the image's upload to the conversation's media store,
+         * reference the media hash key it returns, then encrypt the image with
+         * {@link Chat#encryptFile} and the message's {@link SendPayload#eventB64} and finish the
+         * upload.
          */
         public static AttachmentDescriptor urlCard(
                 String url,
                 String displayTitle,
                 UrlAttachmentImageDescriptor bannerImage,
                 UrlAttachmentImageDescriptor faviconImage) {
-            AttachmentDescriptor a = urlCard(url, displayTitle);
-            a.bannerImage = bannerImage;
-            a.faviconImage = faviconImage;
-            return a;
+            return new AttachmentDescriptor(
+                    "url",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Objects.requireNonNull(url, "url"),
+                    displayTitle,
+                    bannerImage,
+                    faviconImage,
+                    null,
+                    null);
         }
 
-        /** Create a post/tweet attachment. */
+        /** Create a post/tweet attachment from its {@code restId}, its {@code postUrl}, or both. */
         public static AttachmentDescriptor post(String restId, String postUrl) {
-            AttachmentDescriptor a = new AttachmentDescriptor();
-            a.attachmentType = "post";
-            a.restId = restId;
-            a.postUrl = postUrl;
-            return a;
+            return new AttachmentDescriptor(
+                    "post", null, null, null, null, null, null, null, null, null, null, null,
+                    restId, postUrl);
         }
     }
 
@@ -475,38 +623,41 @@ public final class Types {
      *
      * <p>{@code filesizeBytes} and {@code filename} are required alongside
      * {@code mediaHashKey}: receiving clients' shared ingest silently discards
-     * the whole preview image when either is missing on the wire.
+     * the whole preview image when either is missing on the wire, so a send fails
+     * with a {@link ChatXdkException} of kind {@code INVALID_INPUT} when the filename
+     * is empty, the size isn't above 0, or a width or height is negative.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class UrlAttachmentImageDescriptor {
         /** Media hash key the image's upload started with. */
         @JsonProperty("media_hash_key")
-        public String mediaHashKey = "";
+        public final String mediaHashKey;
 
-        /** Size of the encrypted image in bytes: {@code encryptedFileSize} of the image's size. Required. */
+        /** Size of the encrypted image in bytes: {@code encryptedFileSize} of the image's size. */
         @JsonProperty("filesize_bytes")
-        public long filesizeBytes;
+        public final long filesizeBytes;
 
-        /** Original filename of the image. Required. */
+        /** Original filename of the image. */
         @JsonProperty("filename")
-        public String filename = "";
+        public final String filename;
 
-        /** Image width in pixels. */
+        /** Image width in pixels, or null when not known. */
         @JsonProperty("width")
         public Long width;
 
-        /** Image height in pixels. */
+        /** Image height in pixels, or null when not known. */
         @JsonProperty("height")
         public Long height;
 
-        /** Create an image descriptor with the required fields. */
-        public static UrlAttachmentImageDescriptor of(
-                String mediaHashKey, long filesizeBytes, String filename) {
-            UrlAttachmentImageDescriptor d = new UrlAttachmentImageDescriptor();
-            d.mediaHashKey = mediaHashKey;
-            d.filesizeBytes = filesizeBytes;
-            d.filename = filename;
-            return d;
+        /**
+         * Describe the image whose upload started with {@code mediaHashKey}: {@code filesizeBytes}
+         * is the encrypted image's size, {@code encryptedFileSize} of the image's size, and
+         * {@code filename} its original name. Set {@link #width} and {@link #height} when known.
+         */
+        public UrlAttachmentImageDescriptor(String mediaHashKey, long filesizeBytes, String filename) {
+            this.mediaHashKey = Objects.requireNonNull(mediaHashKey, "mediaHashKey");
+            this.filesizeBytes = filesizeBytes;
+            this.filename = Objects.requireNonNull(filename, "filename");
         }
     }
 
@@ -892,7 +1043,12 @@ public final class Types {
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupMembersChange}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupMembersChange}. {@link #currentTitle} and
+     * {@link #currentDescription} are plaintext: the call encrypts each under the new
+     * conversation key it generates. {@link #currentAvatarUrl} is the avatar's media URL,
+     * signed as is.
+     */
     public static final class GroupMembersChangeParams {
         /** Public keys for the updated roster. */
         public final List<PublicKeyInput> publicKeys;
@@ -918,11 +1074,14 @@ public final class Types {
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
-        /** Current conversation title, if any. */
+        /** Current conversation title, as plaintext, if any; the call encrypts it. */
         public String currentTitle;
 
-        /** Current conversation avatar URL, if any. */
+        /** Current conversation avatar media URL, if any. */
         public String currentAvatarUrl;
+
+        /** Current conversation description, as plaintext, if any; the call encrypts it. */
+        public String currentDescription;
 
         /** Current disappearing-message TTL in milliseconds, if any. */
         public Long currentTtlMsec;
@@ -956,7 +1115,10 @@ public final class Types {
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupCreate}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupCreate}. A create sets no avatar; set it
+     * afterwards with {@link Chat#prepareGroupAvatarChange}.
+     */
     public static final class GroupCreateParams {
         /** Public keys for the new roster. */
         public final List<PublicKeyInput> publicKeys;
@@ -976,11 +1138,8 @@ public final class Types {
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
-        /** Group title, if any. */
+        /** Group title, as plaintext, if any; the create encrypts it. */
         public String title;
-
-        /** Group avatar URL, if any. */
-        public String avatarUrl;
 
         /** Disappearing-message TTL in milliseconds, if any. */
         public Long ttlMsec;
@@ -1346,22 +1505,29 @@ public final class Types {
         DetectionDisabled
     }
 
-    /** Parameters for {@link Chat#prepareGroupMembersRemove}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupMembersRemove}. The call rotates the
+     * conversation key for the members who stay.
+     */
     public static final class GroupMembersRemoveParams {
+        /** Identity public keys of the members who stay; the new key is encrypted for them. */
+        public final List<PublicKeyInput> publicKeys;
         /** ID of the group conversation. */
         public final String conversationId;
         /** User IDs being removed. */
         public final List<String> userIds;
-        /** Identity public keys of the members who remain. Null does not rotate. */
-        public List<PublicKeyInput> publicKeys;
-        /** Version bound into a removal that does not rotate. Null signs {@code null}. */
-        public String conversationKeyVersion;
+        /** The group's title, re-encrypted under the new conversation key; null leaves it out. */
+        public String title;
+        /** The group's description, re-encrypted under the new conversation key; null leaves it out. */
+        public String description;
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
-        public GroupMembersRemoveParams(String conversationId, List<String> userIds) {
+        public GroupMembersRemoveParams(
+                List<PublicKeyInput> publicKeys, String conversationId, List<String> userIds) {
+            this.publicKeys = publicKeys;
             this.conversationId = conversationId;
             this.userIds = userIds;
         }
@@ -1382,50 +1548,78 @@ public final class Types {
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupTitleChange}. {@code customTitle} is ciphertext. */
+    /**
+     * Parameters for {@link Chat#prepareGroupTitleChange}. {@code newTitle} is plaintext: the
+     * call encrypts it under the conversation key, {@link #conversationKey} /
+     * {@link #conversationKeyVersion} or, both null, the key cache.
+     */
     public static final class GroupTitleChangeParams {
+        /** ID of the group conversation. */
         public final String conversationId;
-        public final String conversationKeyVersion;
-        public final String customTitle;
+        /** The group's new title, as plaintext. */
+        public final String newTitle;
+        /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
+        /** Raw 32-byte conversation key; resolves from the key cache when null. */
+        public byte[] conversationKey;
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
 
-        public GroupTitleChangeParams(String conversationId, String conversationKeyVersion, String customTitle) {
+        public GroupTitleChangeParams(String conversationId, String newTitle) {
             this.conversationId = conversationId;
-            this.conversationKeyVersion = conversationKeyVersion;
-            this.customTitle = customTitle;
+            this.newTitle = newTitle;
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupAvatarChange}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupAvatarChange}. A group's avatar URL is not
+     * encrypted: {@code newAvatarUrl} is the media URL of the avatar image, which the app
+     * encrypts under the conversation key and uploads first.
+     */
     public static final class GroupAvatarChangeParams {
+        /** ID of the group conversation. */
         public final String conversationId;
+        /** The media URL of the group's new avatar image, signed and sent as is. */
+        public final String newAvatarUrl;
+        /** Version of the conversation key the avatar image is encrypted under. */
         public final String conversationKeyVersion;
-        public final String customAvatarUrl;
+        /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
         public GroupAvatarChangeParams(
-                String conversationId, String conversationKeyVersion, String customAvatarUrl) {
+                String conversationId, String newAvatarUrl, String conversationKeyVersion) {
             this.conversationId = conversationId;
+            this.newAvatarUrl = newAvatarUrl;
             this.conversationKeyVersion = conversationKeyVersion;
-            this.customAvatarUrl = customAvatarUrl;
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupDescriptionChange}. {@code customDescription} is ciphertext. */
+    /**
+     * Parameters for {@link Chat#prepareGroupDescriptionChange}. {@code newDescription} is plaintext: the
+     * call encrypts it under the conversation key, {@link #conversationKey} /
+     * {@link #conversationKeyVersion} or, both null, the key cache.
+     */
     public static final class GroupDescriptionChangeParams {
+        /** ID of the group conversation. */
         public final String conversationId;
-        public final String conversationKeyVersion;
-        public final String customDescription;
+        /** The group's new description, as plaintext. */
+        public final String newDescription;
+        /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
+        /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
+        /** Raw 32-byte conversation key; resolves from the key cache when null. */
+        public byte[] conversationKey;
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
 
-        public GroupDescriptionChangeParams(
-                String conversationId, String conversationKeyVersion, String customDescription) {
+        public GroupDescriptionChangeParams(String conversationId, String newDescription) {
             this.conversationId = conversationId;
-            this.conversationKeyVersion = conversationKeyVersion;
-            this.customDescription = customDescription;
+            this.newDescription = newDescription;
         }
     }
 

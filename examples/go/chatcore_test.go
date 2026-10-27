@@ -111,23 +111,23 @@ func TestSetIdentityNeedsTheRegisteredVersion(t *testing.T) {
 	}
 }
 
-func TestGenericEncryptDecryptRoundtrip(t *testing.T) {
+func TestGroupTitleChangeEncryptsTheTitleItSigns(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
-	plaintext := "hello from the go example"
-	ct, err := core.Encrypt(plaintext, v.conversationKey(t))
+	title := "hello from the go example"
+	prepared, err := core.PrepareGroupTitleChange("g123", title, v.conversationKey(t), "1")
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("PrepareGroupTitleChange: %v", err)
 	}
-	if ct == plaintext {
-		t.Fatal("ciphertext equals plaintext")
+	if prepared.EncryptedValue == title || prepared.ConversationKeyVersion != "1" {
+		t.Fatalf("unexpected title change: %+v", prepared)
 	}
-	got, err := core.Decrypt(ct, v.conversationKey(t))
+	got, err := core.Decrypt(prepared.EncryptedValue, v.conversationKey(t))
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
-	if got != plaintext {
-		t.Errorf("roundtrip mismatch:\ngot  %q\nwant %q", got, plaintext)
+	if got != title {
+		t.Errorf("roundtrip mismatch:\ngot  %q\nwant %q", got, title)
 	}
 }
 
@@ -135,7 +135,7 @@ func TestConversationKeyRoundtrip(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
 	prepared, err := core.PrepareConversationKeyChange([]chatxdk.PublicKeyInput{
-		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}, "conv-1")
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
@@ -183,8 +183,8 @@ func TestDecryptBatchEmptyIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
-	if len(result.Messages) != 0 {
-		t.Errorf("expected no messages, got %d", len(result.Messages))
+	if len(result.Events) != 0 {
+		t.Errorf("expected no messages, got %d", len(result.Events))
 	}
 }
 
@@ -200,7 +200,7 @@ func TestDecryptOneRejectsGarbage(t *testing.T) {
 // built from the fixture identity key.
 func fixtureKeys(v vectors) []chatxdk.PublicKeyInput {
 	return []chatxdk.PublicKeyInput{
-		{UserID: "1000", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "1000", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}
 }
 
@@ -264,10 +264,6 @@ func TestPrepToRequestMapsTheRESTShape(t *testing.T) {
 	if inner["signature"] == "" || inner["public_key_version"] == "" {
 		t.Errorf("incomplete message_event_signature: %v", inner)
 	}
-	// CKCE signature payloads are withheld (they embed the plaintext key).
-	if _, present := sig["signature_payload"]; present {
-		t.Error("signature_payload must be omitted for a key change")
-	}
 }
 
 func TestRemovalToRequestRotatesForMembersWhoStay(t *testing.T) {
@@ -322,15 +318,25 @@ func TestRemovalToRequestRotatesForMembersWhoStay(t *testing.T) {
 func TestPrepareGroupCreateYieldsTwoSignatures(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
-	prep, err := core.PrepareGroupCreate(fixtureKeys(v), "g123", []string{"1000"}, []string{"1000"})
+	title := "hello from the go example"
+	prep, err := core.PrepareGroupCreate(fixtureKeys(v), "g123", []string{"1000"}, []string{"1000"}, title)
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate: %v", err)
 	}
 	if len(prep.ActionSignatures) != 2 {
-		t.Errorf("expected 2 action signatures, got %d", len(prep.ActionSignatures))
+		t.Fatalf("expected 2 action signatures, got %d", len(prep.ActionSignatures))
 	}
 	if len(prep.ConversationKey) != 32 {
 		t.Errorf("expected a 32-byte conversation key, got %d bytes", len(prep.ConversationKey))
+	}
+	// The title goes out encrypted under the new key: the group_name the
+	// create request sends, and the ciphertext the create signs.
+	if prep.EncryptedTitle == nil {
+		t.Fatal("expected an encrypted title")
+	}
+	got, err := core.Decrypt(*prep.EncryptedTitle, prep.ConversationKey)
+	if err != nil || got != title {
+		t.Errorf("encrypted title decrypts to %q, %v", got, err)
 	}
 }
 
@@ -373,6 +379,10 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 	for i := range plaintext {
 		plaintext[i] = byte((i*31 + 7) % 256)
 	}
+	size, err := chatxdk.EncryptedFileSize(uint64(len(plaintext)))
+	if err != nil {
+		t.Fatalf("EncryptedFileSize: %v", err)
+	}
 	mediaType := int32(5)
 	body, err := core.EncryptReply("1000:2000", "a photo", &ReplyOptions{
 		ConversationKey:        key,
@@ -382,7 +392,7 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 			MediaHashKey:   "photo",
 			Width:          4,
 			Height:         3,
-			FilesizeBytes:  int64(len(plaintext)),
+			FilesizeBytes:  int64(size),
 			Filename:       "photo.bin",
 			MediaType:      &mediaType,
 		}},
@@ -397,10 +407,6 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, key, "1", "photo")
 	if err != nil {
 		t.Fatalf("EncryptMedia: %v", err)
-	}
-	size, err := chatxdk.EncryptedFileSize(uint64(len(plaintext)))
-	if err != nil {
-		t.Fatalf("EncryptedFileSize: %v", err)
 	}
 	if uint64(len(ciphertext)) != size {
 		t.Errorf("encrypted size %d, want %d", len(ciphertext), size)

@@ -39,7 +39,7 @@ pub trait ChatApi {
 }
 
 #[cfg(feature = "http")]
-pub use http_impl::{HttpChatApi, RegisterError};
+pub use http_impl::{get_feature_switches, HttpChatApi, RegisterError};
 
 #[cfg(feature = "http")]
 mod http_impl {
@@ -79,6 +79,34 @@ mod http_impl {
             Value::Number(n) => n.to_string(),
             _ => String::new(),
         }
+    }
+
+    /// The answer to `GET /2/chat/features`, its status and body, read as the
+    /// SDK asks: without credentials or query parameters, within its timeout,
+    /// and at most one byte past its size limit. `None` when no response
+    /// arrived; every switch then stays off.
+    pub fn get_feature_switches() -> Option<(u16, Vec<u8>)> {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_millis(
+                chat_xdk_core::FEATURES_TIMEOUT_MS,
+            ))
+            .build();
+        let response = match agent
+            .get(chat_xdk_core::FEATURES_ENDPOINT)
+            .set("Accept", "application/json")
+            .call()
+        {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => response,
+            Err(_) => return None,
+        };
+        let status = response.status();
+        let mut body = Vec::new();
+        response
+            .into_reader()
+            .take(chat_xdk_core::FEATURES_MAX_BODY as u64 + 1)
+            .read_to_end(&mut body)
+            .ok()?;
+        Some((status, body))
     }
 
     /// X Chat API client over HTTPS (ureq).
@@ -346,15 +374,15 @@ mod http_impl {
             };
             Ok(items
                 .iter()
-                .map(|pk| SigningKeyEntry {
-                    user_id: user_id.to_string(),
-                    public_key_version: pk["public_key_version"].as_str().unwrap_or("").to_string(),
-                    public_key: pk["signing_public_key"].as_str().unwrap_or("").to_string(),
-                    identity_public_key: pk["public_key"].as_str().unwrap_or("").to_string(),
-                    identity_public_key_signature: pk["identity_public_key_signature"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
+                .map(|pk| {
+                    let field = |name: &str| pk[name].as_str().unwrap_or("").to_string();
+                    SigningKeyEntry::new(
+                        user_id,
+                        field("public_key_version"),
+                        field("signing_public_key"),
+                        field("public_key"),
+                        field("identity_public_key_signature"),
+                    )
                 })
                 .collect())
         }

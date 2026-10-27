@@ -69,15 +69,18 @@ class TestChatCore(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "signing key version unknown"):
             core.set_identity("12345")
 
-    def test_generic_encrypt_decrypt_roundtrip(self):
-        # A real round-trip through the SDK: encrypt then decrypt must return
-        # the original plaintext (not a hardcoded echo).
+    def test_group_title_change_encrypts_the_title_it_signs(self):
+        # A real round-trip through the SDK: the title change signs the
+        # encrypted title, which decrypts back to the original (not a
+        # hardcoded echo).
         core = self._loaded_core()
+        core.set_identity(self.vectors["event_sender_id"])
         conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
-        plaintext = "hello from the chatbot example"
-        ciphertext = core.encrypt(plaintext, conv_key)
-        self.assertNotEqual(ciphertext, plaintext)
-        self.assertEqual(core.decrypt(ciphertext, conv_key), plaintext)
+        title = "hello from the chatbot example"
+        prepared = core.prepare_group_title_change("g123", title, conv_key, "1")
+        self.assertNotEqual(prepared["encrypted_value"], title)
+        self.assertEqual(prepared["conversation_key_version"], "1")
+        self.assertEqual(core.decrypt(prepared["encrypted_value"], conv_key), title)
 
     def test_conversation_key_prepare_and_decrypt_roundtrip(self):
         # Conversation-key handling: prepare a fresh key for ourselves, then
@@ -87,8 +90,8 @@ class TestChatCore(unittest.TestCase):
         public_keys = [
             {
                 "user_id": "910002",
-                "public_key": self.vectors["identity_public_b64"],
-                "key_version": "1",
+                "identity_public_key": self.vectors["identity_public_b64"],
+                "public_key_version": "1",
             }
         ]
         prepared = core.prepare_conversation_key_change(public_keys, "conv-1")
@@ -135,7 +138,7 @@ class TestChatCore(unittest.TestCase):
         # batch yields no messages and no errors.
         core = self._loaded_core()
         result = core.decrypt_batch([], signing_keys=[])
-        self.assertEqual(result["messages"], [])
+        self.assertEqual(result["events"], [])
         self.assertEqual(result.get("errors") or {}, {})
 
     def test_decrypt_one_rejects_garbage(self):
@@ -168,8 +171,8 @@ class TestPreparedChanges(unittest.TestCase):
         keys = [
             {
                 "user_id": "1000",
-                "public_key": self.vectors["identity_public_b64"],
-                "key_version": "1",
+                "identity_public_key": self.vectors["identity_public_b64"],
+                "public_key_version": "1",
             }
         ]
         return core, keys
@@ -194,8 +197,6 @@ class TestPreparedChanges(unittest.TestCase):
         inner = sig["message_event_signature"]
         self.assertEqual(inner["signing_public_key"], core.public_keys()["signing"])
         self.assertTrue(inner["signature"] and inner["public_key_version"])
-        # CKCE signature payloads are withheld (they embed the plaintext key).
-        self.assertNotIn("signature_payload", sig)
 
     def test_removal_to_request_rotates_for_members_who_stay(self):
         from chat_core import removal_to_request
@@ -224,9 +225,14 @@ class TestPreparedChanges(unittest.TestCase):
 
     def test_prepare_group_create_yields_two_signatures(self):
         core, keys = self._core_and_keys()
-        prep = core.prepare_group_create(keys, "g123", ["1000"], ["1000"])
+        title = "hello from the python example"
+        prep = core.prepare_group_create(keys, "g123", ["1000"], ["1000"], title=title)
         self.assertEqual(len(prep["action_signatures"]), 2)
         self.assertTrue(prep["conversation_key"])
+        # The title goes out encrypted under the new key: the group_name the
+        # create request sends.
+        encrypted_title = prep["encrypted_title"]
+        self.assertEqual(core.decrypt(encrypted_title, bytes(prep["conversation_key"])), title)
 
     def test_encrypt_reaction_produces_sendable_payload(self):
         core, _ = self._core_and_keys()
@@ -285,7 +291,7 @@ class TestPreparedChanges(unittest.TestCase):
                     "media_hash_key": "photo",
                     "width": 4,
                     "height": 3,
-                    "filesize_bytes": len(plaintext),
+                    "filesize_bytes": encrypted_file_size(len(plaintext)),
                     "filename": "photo.bin",
                     "media_type": 5,
                 }

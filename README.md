@@ -11,7 +11,7 @@ Thrift wire protocol, exposed through idiomatic bindings for six languages.
 | Rust | `chat-xdk-core` | — | [docs/API.md](docs/API.md) |
 | Python | `chat_xdk` | PyO3 | [crates/pyo3/README.md](crates/pyo3/README.md) |
 | JavaScript / WASM | `@xdevplatform/chat-xdk` | wasm-bindgen | [crates/wasm/js/README.md](crates/wasm/js/README.md) |
-| Go | `github.com/xdevplatform/chat-xdk/go/chatxdk` | cgo | [crates/go/README.md](crates/go/README.md) |
+| Go | `github.com/xdevplatform/chat-xdk/go/chatxdk` | cgo | [go/chatxdk/README.md](go/chatxdk/README.md) |
 | .NET | `ChatXdk` | P/Invoke | [crates/dotnet/README.md](crates/dotnet/README.md) |
 | JVM | `com.x.chatxdk` | JNA | [crates/jvm/README.md](crates/jvm/README.md) |
 
@@ -87,7 +87,7 @@ chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)
 
 result = chat.decrypt_events(DecryptEventsParams(raw_events))
-for dm in result["messages"]:
+for dm in result["events"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
 
@@ -107,7 +107,7 @@ chat.setCacheKeys(true);
 chat.setSigningKeys(signingKeys);
 
 const result = chat.decryptEvents({ events: rawEvents });
-for (const dm of result.messages) {
+for (const dm of result.events) {
   if (dm.event.type === "message") console.log(dm.event.senderId, dm.event.content.text);
 }
 const event = chat.decryptEvent({ eventB64: newEventB64 });
@@ -122,10 +122,8 @@ runnable code for all six is in [`examples/`](examples).
 Private keys can be held two ways:
 
 - **Local blob** — `exportKeys()` / `importKeys()` move raw private-key bytes
-  yourself (native bindings: Python, Go, .NET, JVM, Rust). Simplest; the bytes
-  are **unencrypted identity material** — never commit them or log them. The
-  browser/WASM build does not expose raw export/import and manages keys through
-  Juicebox instead.
+  yourself, in every binding. Simplest; the bytes are **unencrypted identity
+  material** — never commit them or log them, and zero them once stored.
 - **Juicebox (production)** — `generate_keypairs()` creates the keys, then
   `setup(pin)` stores the generated keys in
   [Juicebox](https://juicebox.xyz/) distributed PIN-protected storage;
@@ -147,7 +145,9 @@ a request is in flight share it.
 The request carries no credentials and never delays or fails an SDK call.
 Until it answers, and for the chat's lifetime if it fails or is blocked, every
 switch stays off and sends stay in v0, the format 0.5.x sends. The Rust crate
-never makes the request, so its sends are always v0.
+and the C ABI never make the request: a Rust app or a C caller makes it and
+hands the chat the answer (`set_feature_switches`,
+`chat_xdk_set_feature_switches`), and a chat that gets none sends v0.
 
 ## Cryptography
 
@@ -191,8 +191,10 @@ chat-xdk/
 │   ├── core/     # chat-xdk-core: ChatCore engine, crypto, keys, Thrift types
 │   ├── pyo3/     # Python binding (chat_xdk)
 │   ├── wasm/     # JS/WASM binding (+ js/ wrapper and tests)
-│   ├── go/       # Go binding (cgo + prebuilt staticlib)
-│   └── dotnet/   # .NET + JVM native cdylib (chat_xdk_dotnet)
+│   ├── ffi/      # C ABI (chat_xdk.h): Go's static archive, .NET's and the JVM's shared library
+│   ├── dotnet/   # .NET binding (P/Invoke)
+│   └── jvm/      # JVM binding (JNA)
+├── go/chatxdk/   # Go binding (cgo + prebuilt static archives)
 ├── examples/     # one clone-and-run bot per binding (+ Makefile, CI)
 ├── docs/         # API.md, ARCHITECTURE.md, CRYPTO.md
 └── tests/        # cross-binding fixtures (sdk_vectors.json)

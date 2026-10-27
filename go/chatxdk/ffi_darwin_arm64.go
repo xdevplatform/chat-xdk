@@ -3,6 +3,6 @@
 package chatxdk
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/libs/darwin_arm64 -lchat_xdk_go
+#cgo LDFLAGS: -L${SRCDIR}/libs/darwin_arm64 -lchat_xdk_ffi
 */
 import "C"

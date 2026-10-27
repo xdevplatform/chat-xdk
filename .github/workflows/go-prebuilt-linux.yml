@@ -1,6 +1,6 @@
 # Committed prebuilts (reproducible by default with GNU ar):
-#   go/chatxdk/libs/linux_amd64/libchat_xdk_go.a       (glibc)
-#   go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a  (musl / Alpine)
+#   go/chatxdk/libs/linux_amd64/libchat_xdk_ffi.a       (glibc)
+#   go/chatxdk/libs/linux_amd64_musl/libchat_xdk_ffi.a  (musl / Alpine)
 #
 # verify (pull_request): build both targets on Ubuntu and fail if archives
 #   don't match (required for fork PRs -- bots cannot push there).
@@ -19,7 +19,7 @@ on:
     branches: ["**"]
     paths:
       - "crates/core/**"
-      - "crates/go/**"
+      - "crates/ffi/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "go/chatxdk/libs/**"
@@ -28,7 +28,7 @@ on:
     branches: ["**"]
     paths:
       - "crates/core/**"
-      - "crates/go/**"
+      - "crates/ffi/**"
       - "go/chatxdk/libs/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -48,8 +48,8 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_TARGET_GNU: x86_64-unknown-linux-gnu
   RUST_TARGET_MUSL: x86_64-unknown-linux-musl
-  COMMITTED_GNU: go/chatxdk/libs/linux_amd64/libchat_xdk_go.a
-  COMMITTED_MUSL: go/chatxdk/libs/linux_amd64_musl/libchat_xdk_go.a
+  COMMITTED_GNU: go/chatxdk/libs/linux_amd64/libchat_xdk_ffi.a
+  COMMITTED_MUSL: go/chatxdk/libs/linux_amd64_musl/libchat_xdk_ffi.a
 
 jobs:
   verify:
@@ -83,22 +83,22 @@ jobs:
           sudo apt-get install -y build-essential musl-tools
       - name: Build static libraries (glibc + musl)
         run: |
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_GNU"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_GNU"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_MUSL"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_MUSL"
       - name: Strip (deterministic archives)
         run: |
           # -D pins GNU deterministic-archive mode (zeroed member dates) even if
           # a runner's binutils is not configured with it as the default.
-          strip -D --strip-debug "target/$RUST_TARGET_GNU/release/libchat_xdk_go.a"
-          strip -D --strip-debug "target/$RUST_TARGET_MUSL/release/libchat_xdk_go.a"
+          strip -D --strip-debug "target/$RUST_TARGET_GNU/release/libchat_xdk_ffi.a"
+          strip -D --strip-debug "target/$RUST_TARGET_MUSL/release/libchat_xdk_ffi.a"
       - name: Must match committed archives
         shell: bash
         run: |
           set -euo pipefail
-          BUILT_GNU="target/${RUST_TARGET_GNU}/release/libchat_xdk_go.a"
-          BUILT_MUSL="target/${RUST_TARGET_MUSL}/release/libchat_xdk_go.a"
+          BUILT_GNU="target/${RUST_TARGET_GNU}/release/libchat_xdk_ffi.a"
+          BUILT_MUSL="target/${RUST_TARGET_MUSL}/release/libchat_xdk_ffi.a"
           for pair in "$BUILT_GNU:$COMMITTED_GNU" "$BUILT_MUSL:$COMMITTED_MUSL"; do
             BUILT="${pair%%:*}"
             COMMITTED="${pair#*:}"
@@ -162,23 +162,23 @@ jobs:
           sudo apt-get install -y build-essential musl-tools
       - name: Build static libraries (glibc + musl)
         run: |
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_GNU"
-          cargo clean -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
-          cargo build -p chat-xdk-go --release --target "$RUST_TARGET_MUSL"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_GNU"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_GNU"
+          cargo clean -p chat-xdk-ffi --release --target "$RUST_TARGET_MUSL"
+          cargo build -p chat-xdk-ffi --release --target "$RUST_TARGET_MUSL"
       - name: Strip (deterministic archives)
         run: |
           # -D pins GNU deterministic-archive mode (zeroed member dates) even if
           # a runner's binutils is not configured with it as the default.
-          strip -D --strip-debug "target/$RUST_TARGET_GNU/release/libchat_xdk_go.a"
-          strip -D --strip-debug "target/$RUST_TARGET_MUSL/release/libchat_xdk_go.a"
+          strip -D --strip-debug "target/$RUST_TARGET_GNU/release/libchat_xdk_ffi.a"
+          strip -D --strip-debug "target/$RUST_TARGET_MUSL/release/libchat_xdk_ffi.a"
       - name: Commit prebuilts if changed
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "$COMMITTED_GNU")" "$(dirname "$COMMITTED_MUSL")"
-          cp -f "target/${RUST_TARGET_GNU}/release/libchat_xdk_go.a" "$COMMITTED_GNU"
-          cp -f "target/${RUST_TARGET_MUSL}/release/libchat_xdk_go.a" "$COMMITTED_MUSL"
+          cp -f "target/${RUST_TARGET_GNU}/release/libchat_xdk_ffi.a" "$COMMITTED_GNU"
+          cp -f "target/${RUST_TARGET_MUSL}/release/libchat_xdk_ffi.a" "$COMMITTED_MUSL"
           if git diff --quiet -- "$COMMITTED_GNU" "$COMMITTED_MUSL"; then
             echo "No change to linux prebuilts; nothing to commit."
             exit 0
@@ -186,7 +186,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$COMMITTED_GNU" "$COMMITTED_MUSL"
-          git commit -m "chore(go): sync libchat_xdk_go.a (linux_amd64 glibc + musl)"
+          git commit -m "chore(go): sync libchat_xdk_ffi.a (linux_amd64 glibc + musl)"
           if ! git push origin "HEAD:refs/heads/$(git rev-parse --abbrev-ref HEAD)"; then
             echo "::warning::git push failed. Use a write-capable token (set PREBUILT_SYNC_PAT) or relax branch protection for the Actions app."
             exit 1

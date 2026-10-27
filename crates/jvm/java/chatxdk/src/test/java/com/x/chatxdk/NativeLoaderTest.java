@@ -11,11 +11,11 @@ class NativeLoaderTest {
     @Test
     void releasedPlatformsResolveToTheirBundledLibrary() {
         String[][] platforms = {
-            {"Mac OS X", "aarch64", "osx-arm64", "libchat_xdk_dotnet.dylib"},
-            {"Mac OS X", "x86_64", "osx-x64", "libchat_xdk_dotnet.dylib"},
-            {"Linux", "amd64", "linux-x64", "libchat_xdk_dotnet.so"},
-            {"Linux", "aarch64", "linux-arm64", "libchat_xdk_dotnet.so"},
-            {"Windows 11", "amd64", "win-x64", "chat_xdk_dotnet.dll"},
+            {"Mac OS X", "aarch64", "osx-arm64", "libchat_xdk_ffi.dylib"},
+            {"Mac OS X", "x86_64", "osx-x64", "libchat_xdk_ffi.dylib"},
+            {"Linux", "amd64", "linux-x64", "libchat_xdk_ffi.so"},
+            {"Linux", "aarch64", "linux-arm64", "libchat_xdk_ffi.so"},
+            {"Windows 11", "amd64", "win-x64", "chat_xdk_ffi.dll"},
         };
         for (String[] p : platforms) {
             String rid = NativeLoader.detectRid(p[0], p[1]);

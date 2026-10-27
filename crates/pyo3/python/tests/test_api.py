@@ -57,6 +57,18 @@ def _only_action(prepared):
     return entry
 
 
+def _signs(chat, sig, payload):
+    """Whether ``sig``'s signature verifies, under the signer's own signing
+    key, over ``payload``: the comma-joined fields its event signs."""
+    signed = sig["message_event_signature"]
+    signature = signed["signature"]
+    return chat.verify(
+        signed["signing_public_key"],
+        base64.b64decode(signature + "=" * (-len(signature) % 4)),
+        payload.encode(),
+    )
+
+
 class TestUtilityFunctions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -294,8 +306,8 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
-            lambda: GroupMembersRemoveParams("g1"),
-            lambda: GroupTitleChangeParams("g1", "1"),
+            lambda: GroupMembersRemoveParams([], "g1"),
+            lambda: GroupTitleChangeParams("g1"),
             lambda: ScreenCaptureParams("g1"),
             lambda: MarkConversationReadParams("conv-1"),
             lambda: SetIdentityParams("1001"),
@@ -320,7 +332,8 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], [], [], "1001"),
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
-            lambda: GroupMembersRemoveParams("g1", ["1"], []),
+            lambda: GroupMembersRemoveParams([], "g1", ["1"], "1001"),
+            lambda: GroupTitleChangeParams("g1", "Board", "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
             lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
@@ -486,31 +499,68 @@ class TestApiShapes(unittest.TestCase):
             chat.update_config(bad_config)
         self.assertIn("Invalid key_store_token_map_json", str(ctx.exception))
 
-    def test_guesses_remaining_parses_invalid_pin_message(self):
-        from chat_xdk import guesses_remaining
-
-        # The core's invalid-PIN unlock error carries the stable
-        # "guesses_remaining=N" token in the message; 0 means exhausted.
-        self.assertEqual(
-            guesses_remaining(ValueError("Juicebox error: Invalid PIN: guesses_remaining=3")),
-            3,
+    def test_errors_are_typed_by_kind(self):
+        from chat_xdk import (
+            Chat,
+            ChatXdkError,
+            DecryptEventParams,
+            InvalidInputError,
+            InvalidStateError,
+            ParseError,
         )
-        self.assertEqual(
-            guesses_remaining(ValueError("Juicebox error: Invalid PIN: guesses_remaining=0")),
-            0,
-        )
-        self.assertIsNone(guesses_remaining(ValueError("Juicebox error: Invalid PIN")))
-        # The count is read only from the invalid-PIN form, not from unrelated
-        # messages that happen to contain the token.
-        self.assertIsNone(guesses_remaining(ValueError("Delete failed: guesses_remaining=7")))
-
-    def test_guesses_remaining_none_on_non_pin_errors(self):
-        from chat_xdk import Chat, guesses_remaining
 
         chat = Chat()
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(InvalidInputError) as ctx:
             chat.update_config("not json")
-        self.assertIsNone(guesses_remaining(ctx.exception))
+        self.assertEqual(ctx.exception.kind, "invalid_input")
+        self.assertIsNone(ctx.exception.guesses_remaining)
+        self.assertIsInstance(ctx.exception, ChatXdkError)
+        self.assertIsInstance(ctx.exception, ValueError)
+        with self.assertRaises(InvalidInputError):
+            chat.setup("123")
+        with self.assertRaises(ParseError) as ctx:
+            chat.decrypt_event(DecryptEventParams("not base64!"))
+        self.assertEqual(ctx.exception.kind, "parse")
+        with self.assertRaises(InvalidStateError) as ctx:
+            chat.sign(b"data")
+        self.assertEqual(ctx.exception.kind, "invalid_state")
+        with self.assertRaises(InvalidStateError):
+            chat.export_keys()
+
+    def test_juicebox_calls_without_a_config_fail_with_the_cores_invalid_state_error(self):
+        import asyncio
+
+        from chat_xdk import Chat, InvalidStateError
+
+        want = (
+            "Invalid state: no Juicebox config: pass the juicebox_config the X API returns "
+            "when you create the chat, or call update_config() first"
+        )
+        for chat in (Chat(), Chat("{}")):
+            chat.generate_keypairs()
+            for call in (
+                lambda: chat.setup("2580"),
+                lambda: chat.unlock("2580"),
+                lambda: chat.change_pin("2580", "1359"),
+                lambda: chat.delete(),
+                lambda: asyncio.run(chat.unlock_async("2580")),
+            ):
+                with self.assertRaises(InvalidStateError) as ctx:
+                    call()
+                self.assertEqual(ctx.exception.kind, "invalid_state")
+                self.assertEqual(str(ctx.exception), want)
+            self.assertTrue(chat.is_unlocked())
+
+    def test_async_variants_run_the_same_calls(self):
+        import asyncio
+
+        from chat_xdk import Chat, InvalidInputError
+
+        chat = Chat()
+        with self.assertRaises(InvalidInputError):
+            asyncio.run(chat.setup_async("123"))
+        with self.assertRaises(InvalidInputError):
+            asyncio.run(chat.change_pin_async("2580", "1111"))
 
     def test_pin_accepts_str_bytes_and_bytearray(self):
         from chat_xdk import Chat
@@ -735,7 +785,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
@@ -760,8 +810,75 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(len(result["action_signatures"]), 1)
         sig = result["action_signatures"][0]
         self.assertTrue(sig["message_event_signature"]["signature"])
-        # Absent: the payload embeds the plaintext conversation key and is withheld.
-        self.assertNotIn("signature_payload", sig)
+
+    def test_results_carry_the_keys_their_types_declare(self):
+        import chat_xdk
+        from chat_xdk import (
+            ConversationKeyChangeParams,
+            DecryptEventsParams,
+            GroupTitleChangeParams,
+            MessageDeleteParams,
+        )
+
+        def declared(typed_dict):
+            return set(typed_dict.__annotations__)
+
+        chat, v = self._unlocked_chat()
+        key_input: chat_xdk.PublicKeyInput = {
+            "user_id": "910002",
+            "identity_public_key": v["identity_public_b64"],
+            "public_key_version": "1",
+        }
+        change = chat.prepare_conversation_key_change(
+            ConversationKeyChangeParams(
+                [key_input], conversation_id="conv-1", sender_id="910002", signing_key_version="1"
+            )
+        )
+        self.assertEqual(
+            set(change) | {"encrypted_title", "encrypted_description"},
+            declared(chat_xdk.PreparedConversationChange),
+        )
+        self.assertEqual(
+            set(change["conversation_participant_keys"][0]),
+            declared(chat_xdk.ConversationParticipantKey),
+        )
+        signature = change["action_signatures"][0]
+        self.assertEqual(set(signature), declared(chat_xdk.ActionSignature))
+        self.assertEqual(
+            set(signature["message_event_signature"]),
+            declared(chat_xdk.MessageEventSignature),
+        )
+        title = chat.prepare_group_title_change(
+            GroupTitleChangeParams(
+                "g100",
+                "Team",
+                sender_id="910002",
+                signing_key_version="1",
+                conversation_key=change["conversation_key"],
+                conversation_key_version=change["conversation_key_version"],
+            )
+        )
+        self.assertEqual(set(title), declared(chat_xdk.PreparedGroupMetadataChange))
+        delete = chat.prepare_message_delete(
+            MessageDeleteParams("conv-1", ["1"], True, sender_id="910002", signing_key_version="1")
+        )
+        self.assertEqual(set(delete), declared(chat_xdk.PreparedAction))
+
+        signing_key: chat_xdk.SigningKeyEntry = self._signing_key(
+            v["event_sender_id"], v["event_signing_key_version"]
+        )
+        self.assertEqual(set(signing_key), declared(chat_xdk.SigningKeyEntry))
+        batch = chat.decrypt_events(
+            DecryptEventsParams(
+                [v["event_key_change_b64"], v["event_message_b64"]], signing_keys=[signing_key]
+            )
+        )
+        self.assertEqual(set(batch), declared(chat_xdk.DecryptEventsResult))
+        self.assertEqual(
+            set(batch["conversation_keys"]), declared(chat_xdk.ConversationKeyResult)
+        )
+        for decrypted in batch["events"]:
+            self.assertLessEqual(set(decrypted), declared(chat_xdk.DecryptedEvent))
 
     def test_extract_conversation_keys_empty_shape(self):
         chat, _ = self._unlocked_chat()
@@ -778,7 +895,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
@@ -799,17 +916,67 @@ class TestApiShapes(unittest.TestCase):
         # A member add emits two signed actions: the key change and the add.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
-        # Absent: the payload embeds the plaintext conversation key and is withheld.
-        self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         add = result["action_signatures"][1]
-        self.assertTrue(add["message_event_signature"]["signature"])
-        self.assertTrue(
-            add["signature_payload"].startswith("GroupChangeEvent.GroupMemberAddChange,")
-        )
         self.assertTrue(add["encoded_message_event_detail"])
-        # Unset screen-capture blocking signs as the trailing null sentinel.
-        self.assertTrue(add["signature_payload"].endswith(",null"))
+        # The title goes out encrypted under the new key, the value the
+        # request sends as encrypted_title; the signature covers the
+        # ciphertext. Unset screen-capture blocking signs as the trailing null
+        # sentinel.
+        encrypted_title = result["encrypted_title"]
+        self.assertTrue(
+            _signs(
+                chat,
+                add,
+                f"GroupChangeEvent.GroupMemberAddChange,{add['message_id']},910002,g123,"
+                f"910009,910002,910002,{encrypted_title},null,null,"
+                f"{result['conversation_key_version']},null",
+            )
+        )
+        self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
+        self.assertNotIn("encrypted_description", result)
+        self.assertEqual(add["message_event_signature"]["signature_version"], "7")
+
+    def test_prepare_group_members_change_encrypts_the_description(self):
+        from chat_xdk import GroupMembersChangeParams
+
+        chat, v = self._unlocked_chat()
+        public_keys = [
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
+        ]
+        avatar_url = "https://ton.x.com/xchat_media/g123/avatar"
+        result = chat.prepare_group_members_change(
+            GroupMembersChangeParams(
+                public_keys,
+                "g123",
+                ["910009"],
+                ["910002"],
+                ["910002"],
+                [],
+                sender_id="910002",
+                signing_key_version="1",
+                current_title="Team",
+                current_description="Ships the app",
+                current_avatar_url=avatar_url,
+            )
+        )
+        add = result["action_signatures"][1]
+        encrypted_description = result["encrypted_description"]
+        self.assertEqual(
+            chat.decrypt(encrypted_description, result["conversation_key"]), "Ships the app"
+        )
+        # The description is signed at version 8, after the screen-capture
+        # slot; the avatar URL is signed as passed.
+        self.assertEqual(add["message_event_signature"]["signature_version"], "8")
+        self.assertTrue(
+            _signs(
+                chat,
+                add,
+                f"GroupChangeEvent.GroupMemberAddChange,{add['message_id']},910002,g123,"
+                f"910009,910002,910002,{result['encrypted_title']},{avatar_url},null,"
+                f"{result['conversation_key_version']},null,{encrypted_description}",
+            )
+        )
 
     def test_prepare_group_members_change_screen_capture_blocking(self):
         from chat_xdk import GroupMembersChangeParams
@@ -817,7 +984,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
@@ -836,9 +1003,13 @@ class TestApiShapes(unittest.TestCase):
         add = result["action_signatures"][1]
         # The group's screen-capture-blocking state fills the trailing slot.
         self.assertTrue(
-            add["signature_payload"].startswith("GroupChangeEvent.GroupMemberAddChange,")
+            _signs(
+                chat,
+                add,
+                f"GroupChangeEvent.GroupMemberAddChange,{add['message_id']},910002,g123,"
+                f"910009,910002,910002,null,null,null,{result['conversation_key_version']},true",
+            )
         )
-        self.assertTrue(add["signature_payload"].endswith(",true"))
         self.assertTrue(add["encoded_message_event_detail"])
 
     def test_prepare_group_create_shape(self):
@@ -847,7 +1018,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_create(
             GroupCreateParams(
@@ -866,15 +1037,43 @@ class TestApiShapes(unittest.TestCase):
         # A group create emits two signed actions: the key change and the create.
         self.assertEqual(len(result["action_signatures"]), 2)
         ckce = result["action_signatures"][0]
-        # Absent: the payload embeds the plaintext conversation key and is withheld.
-        self.assertNotIn("signature_payload", ckce)
         self.assertTrue(ckce["encoded_message_event_detail"])
         create = result["action_signatures"][1]
-        self.assertTrue(create["message_event_signature"]["signature"])
-        self.assertTrue(
-            create["signature_payload"].startswith("GroupChangeEvent.GroupCreate,")
-        )
         self.assertTrue(create["encoded_message_event_detail"])
+        # The title goes out encrypted under the new key, the value the
+        # request sends as group_name; the signature covers the ciphertext.
+        encrypted_title = result["encrypted_title"]
+        self.assertTrue(
+            _signs(
+                chat,
+                create,
+                f"GroupChangeEvent.GroupCreate,{create['message_id']},910002,"
+                f"{result['conversation_key_version']},910002,910005,null,{encrypted_title},null",
+            )
+        )
+        self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
+        self.assertNotIn("encrypted_description", result)
+
+    def test_prepare_group_create_encrypts_a_title_with_a_comma(self):
+        from chat_xdk import GroupCreateParams
+
+        chat, v = self._unlocked_chat()
+        public_keys = [
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
+        ]
+        result = chat.prepare_group_create(
+            GroupCreateParams(
+                public_keys,
+                "g123",
+                ["910002"],
+                ["910002"],
+                sender_id="910002",
+                signing_key_version="1",
+                title="Team, the sequel",
+            )
+        )
+        key = result["conversation_key"]
+        self.assertEqual(chat.decrypt(result["encrypted_title"], key), "Team, the sequel")
 
     def test_prepare_group_create_empty_title_signs_as_omitted(self):
         from chat_xdk import GroupCreateParams
@@ -882,7 +1081,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         # An empty string is the "not set" encoding: it must sign the null
         # sentinel, exactly like leaving the field None.
@@ -895,7 +1094,6 @@ class TestApiShapes(unittest.TestCase):
                 sender_id="910002",
                 signing_key_version="1",
                 title="",
-                avatar_url="",
             )
         )
         omitted = chat.prepare_group_create(
@@ -909,11 +1107,17 @@ class TestApiShapes(unittest.TestCase):
             )
         )
         for result in (empty, omitted):
-            payload = result["action_signatures"][1]["signature_payload"]
+            create = result["action_signatures"][1]
             self.assertTrue(
-                payload.endswith(",null,null,null"),
-                f"title/avatar must sign as the null sentinel, got: {payload}",
+                _signs(
+                    chat,
+                    create,
+                    f"GroupChangeEvent.GroupCreate,{create['message_id']},910002,"
+                    f"{result['conversation_key_version']},910002,910005,null,null,null",
+                ),
+                "the title and avatar must sign as the null sentinel",
             )
+            self.assertNotIn("encrypted_title", result)
 
     def test_group_actions_sign_the_verifier_payloads(self):
         from chat_xdk import (
@@ -934,93 +1138,189 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
         ident = dict(sender_id="910002", signing_key_version="1")
 
-        plain = chat.prepare_group_members_remove(
-            GroupMembersRemoveParams("g100", ["910007"], **ident)
-        )
-        self.assertNotIn("conversation_key", plain)
-        self.assertEqual(plain["conversation_participant_keys"], [])
-        removal = plain["action_signatures"][0]
-        self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
-        self.assertTrue(removal["signature_payload"].endswith(",910007,null,signature_version=11"))
-
+        remaining = [
+            {
+                "user_id": "910002",
+                "identity_public_key": v["identity_public_b64"],
+                "public_key_version": "1",
+            }
+        ]
         rotated = chat.prepare_group_members_remove(
-            GroupMembersRemoveParams(
-                "g100",
-                ["910007"],
-                public_keys=[
-                    {
-                        "user_id": "910002",
-                        "public_key": v["identity_public_b64"],
-                        "key_version": "1",
-                    }
-                ],
-                **ident,
-            )
+            GroupMembersRemoveParams(remaining, "g100", ["910007"], **ident)
         )
         self.assertEqual(len(rotated["conversation_key"]), 32)
+        self.assertEqual(len(rotated["conversation_participant_keys"]), 1)
         self.assertEqual(len(rotated["action_signatures"]), 2)
-        self.assertIn(",910007,", rotated["action_signatures"][0]["signature_payload"])
-        self.assertTrue(
-            rotated["action_signatures"][0]["signature_payload"].endswith(",signature_version=11")
+        with_title = chat.prepare_group_members_remove(
+            GroupMembersRemoveParams(remaining, "g100", ["910007"], title="Board", **ident)
         )
-        self.assertNotIn("signature_payload", rotated["action_signatures"][1])
+        self.assertEqual(len(with_title["action_signatures"]), 3)
+        version = with_title["conversation_key_version"]
+        removal, title = with_title["action_signatures"][:2]
+        self.assertTrue(
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
+                f"910007,{version},signature_version=11",
+            )
+        )
+        self.assertEqual(title["message_event_signature"]["signature_version"], "7")
+        self.assertTrue(title["encoded_message_event_detail"])
+        removal = rotated["action_signatures"][0]
+        self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
+        self.assertTrue(
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
+                f"910007,{rotated['conversation_key_version']},signature_version=11",
+            )
+        )
+        with self.assertRaises(ValueError) as raised:
+            chat.prepare_group_members_remove(
+                GroupMembersRemoveParams([], "g100", ["910007"], **ident)
+            )
+        self.assertEqual(
+            str(raised.exception),
+            "public_keys is empty: pass the public keys of the remaining members",
+        )
 
         left = chat.prepare_group_leave(
             GroupLeaveParams("g100", promote_admin_id="910008", conversation_key_version="7", **ident)
         )
         self.assertEqual(len(left["action_signatures"]), 3)
-        self.assertTrue(left["action_signatures"][1]["signature_payload"].endswith(",910008"))
+        removal, promote, delete = left["action_signatures"]
         self.assertTrue(
-            left["action_signatures"][2]["signature_payload"].startswith("ConversationDeleteEvent,")
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
+                "910002,7,signature_version=11",
+            )
+        )
+        self.assertTrue(
+            _signs(
+                chat,
+                promote,
+                f"GroupChangeEvent.GroupAdminAddChange,{promote['message_id']},910002,g100,910008",
+            )
+        )
+        self.assertTrue(
+            _signs(chat, delete, f"ConversationDeleteEvent,{delete['message_id']},910002,g100")
         )
 
-        title = chat.prepare_group_title_change(
-            GroupTitleChangeParams("g100", "4", "enc-title", **ident)
-        )["action_signatures"][0]
-        self.assertTrue(title["signature_payload"].endswith(",4,enc-title"))
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        key = dict(conversation_key=conv_key, conversation_key_version="4")
+        metadata = [
+            (
+                chat.prepare_group_title_change(
+                    GroupTitleChangeParams("g100", "Board: layoffs, Q3", **key, **ident)
+                ),
+                "GroupChangeEvent.GroupTitleChange,",
+                "Board: layoffs, Q3",
+            ),
+            (
+                chat.prepare_group_description_change(
+                    GroupDescriptionChangeParams("g100", "Rules: be kind", **key, **ident)
+                ),
+                "GroupChangeEvent.GroupDescriptionChange,",
+                "Rules: be kind",
+            ),
+        ]
+        for prepared, prefix, plaintext in metadata:
+            self.assertEqual(
+                set(prepared), {"encrypted_value", "conversation_key_version", "action_signatures"}
+            )
+            self.assertEqual(prepared["conversation_key_version"], "4")
+            sig = prepared["action_signatures"][0]
+            self.assertTrue(
+                _signs(
+                    chat,
+                    sig,
+                    f"{prefix}{sig['message_id']},910002,g100,4,{prepared['encrypted_value']}",
+                )
+            )
+            self.assertEqual(chat.decrypt(prepared["encrypted_value"], conv_key), plaintext)
+        avatar_url = "https://ton.x.com/xchat_media/g100/avatar"
         avatar = chat.prepare_group_avatar_change(
-            GroupAvatarChangeParams("g100", "4", "https://img/a.png", **ident)
-        )["action_signatures"][0]
-        self.assertTrue(
-            avatar["signature_payload"].startswith("GroupChangeEvent.GroupAvatarUrlChange,")
+            GroupAvatarChangeParams("g100", avatar_url, "4", **ident)
         )
-        description = chat.prepare_group_description_change(
-            GroupDescriptionChangeParams("g100", "4", "enc-desc", **ident)
-        )["action_signatures"][0]
+        self.assertEqual(set(avatar), {"action_signatures"})
+        sig = avatar["action_signatures"][0]
         self.assertTrue(
-            description["signature_payload"].startswith("GroupChangeEvent.GroupDescriptionChange,")
+            _signs(
+                chat,
+                sig,
+                f"GroupChangeEvent.GroupAvatarUrlChange,{sig['message_id']},910002,g100,4,{avatar_url}",
+            )
         )
-        self.assertTrue(description["signature_payload"].endswith(",4,enc-desc"))
+        with self.assertRaises(ValueError) as raised:
+            chat.prepare_group_title_change(GroupTitleChangeParams("g100", "Board", **ident))
+        self.assertIn("no cached conversation key for 'g100'", str(raised.exception))
         admins = chat.prepare_group_admins_add(
             GroupAdminsAddParams("g100", ["910008", "910009"], **ident)
         )["action_signatures"][0]
-        self.assertTrue(admins["signature_payload"].endswith(",910008,910009"))
+        self.assertTrue(
+            _signs(
+                chat,
+                admins,
+                f"GroupChangeEvent.GroupAdminAddChange,{admins['message_id']},910002,g100,"
+                "910008,910009",
+            )
+        )
         invite = chat.prepare_group_invite_enable(
             GroupInviteEnableParams("g100", "https://x.com/i/invite/abc", **ident)
         )["action_signatures"][0]
-        self.assertTrue(invite["signature_payload"].endswith(",https://x.com/i/invite/abc,null,null"))
+        self.assertTrue(
+            _signs(
+                chat,
+                invite,
+                f"GroupChangeEvent.GroupInviteEnable,{invite['message_id']},910002,g100,"
+                "https://x.com/i/invite/abc,null,null",
+            )
+        )
         rejected = chat.prepare_group_join_reject(
             GroupJoinRejectParams("g100", ["910010"], **ident)
         )["action_signatures"][0]
-        self.assertTrue(rejected["signature_payload"].endswith(",910010"))
+        self.assertTrue(
+            _signs(
+                chat,
+                rejected,
+                f"GroupChangeEvent.GroupJoinReject,{rejected['message_id']},910002,g100,910010",
+            )
+        )
         ttl = chat.prepare_message_ttl_change(
             MessageTtlChangeParams("g100", 86400000, **ident)
         )["action_signatures"][0]
-        self.assertTrue(ttl["signature_payload"].endswith(",86400000"))
+        self.assertTrue(
+            _signs(
+                chat,
+                ttl,
+                "ConversationMetadataChangeEvent.MessageDurationChange,"
+                f"{ttl['message_id']},910002,g100,86400000",
+            )
+        )
         cleared = chat.prepare_message_ttl_remove(
             MessageTtlRemoveParams("g100", **ident)
         )["action_signatures"][0]
         self.assertTrue(
-            cleared["signature_payload"].startswith(
+            _signs(
+                chat,
+                cleared,
                 "ConversationMetadataChangeEvent.MessageDurationRemove,"
+                f"{cleared['message_id']},910002,g100",
             )
         )
         blocking = chat.prepare_screen_capture(
             ScreenCaptureParams("g100", ScreenCaptureChange.BlockingEnabled, **ident)
         )["action_signatures"][0]
         self.assertTrue(
-            blocking["signature_payload"].startswith(
+            _signs(
+                chat,
+                blocking,
                 "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"
+                f"{blocking['message_id']},910002,g100",
             )
         )
         with self.assertRaises(ValueError) as raised:
@@ -1029,8 +1329,9 @@ class TestApiShapes(unittest.TestCase):
 
     def test_group_actions_sign_each_action(self):
         """The group and conversation-metadata actions each sign one action at
-        signature version 7: its payload names the event and ends with the
-        signed fields, and its signature verifies with the signer's signing key."""
+        signature version 7 over the event name, the action's message id, the
+        sender, the conversation and the signed fields, and the signature
+        verifies with the signer's signing key."""
         from chat_xdk import (
             GroupAdminsAddParams,
             GroupAdminsRemoveParams,
@@ -1048,40 +1349,47 @@ class TestApiShapes(unittest.TestCase):
         chat, _ = self._unlocked_chat()
         chat.set_identity(SetIdentityParams("111", "1"))
         signing_key = chat.get_public_keys().signing
+        description = lambda: chat.prepare_group_description_change(
+            GroupDescriptionChangeParams(
+                "g100",
+                "Ships the app",
+                conversation_key=bytes(32),
+                conversation_key_version="4",
+            )
+        )
         cases = [
-            ("GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
-             lambda: chat.prepare_group_avatar_change(GroupAvatarChangeParams("g100", "4", "https://img/a.png"))),
-            ("GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
-             lambda: chat.prepare_group_description_change(GroupDescriptionChangeParams("g100", "4", "enc-desc"))),
-            ("GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+            ("GroupChangeEvent.GroupAvatarUrlChange", lambda result: ",g100,4,https://img/a.png",
+             lambda: chat.prepare_group_avatar_change(GroupAvatarChangeParams("g100", "https://img/a.png", "4"))),
+            ("GroupChangeEvent.GroupDescriptionChange",
+             lambda result: ",g100,4," + result["encrypted_value"], description),
+            ("GroupChangeEvent.GroupAdminAddChange", lambda result: ",g100,910008,910009",
              lambda: chat.prepare_group_admins_add(GroupAdminsAddParams("g100", ["910008", "910009"]))),
-            ("GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+            ("GroupChangeEvent.GroupAdminRemoveChange", lambda result: ",g100,910008",
              lambda: chat.prepare_group_admins_remove(GroupAdminsRemoveParams("g100", ["910008"]))),
-            ("GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null",
+            ("GroupChangeEvent.GroupInviteEnable", lambda result: ",g100,https://x.com/i/invite/abc,null,null",
              lambda: chat.prepare_group_invite_enable(GroupInviteEnableParams("g100", "https://x.com/i/invite/abc"))),
-            ("GroupChangeEvent.GroupInviteDisable", ",g100,111",
+            ("GroupChangeEvent.GroupInviteDisable", lambda result: ",g100,111",
              lambda: chat.prepare_group_invite_disable(GroupInviteDisableParams("g100"))),
-            ("GroupChangeEvent.GroupJoinRequest", ",g100,111",
+            ("GroupChangeEvent.GroupJoinRequest", lambda result: ",g100,111",
              lambda: chat.prepare_group_join_request(GroupJoinRequestParams("g100"))),
-            ("GroupChangeEvent.GroupJoinReject", ",g100,910010",
+            ("GroupChangeEvent.GroupJoinReject", lambda result: ",g100,910010",
              lambda: chat.prepare_group_join_reject(GroupJoinRejectParams("g100", ["910010"]))),
-            ("ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000",
+            ("ConversationMetadataChangeEvent.MessageDurationChange", lambda result: ",g100,86400000",
              lambda: chat.prepare_message_ttl_change(MessageTtlChangeParams("g100", 86400000))),
-            ("ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+            ("ConversationMetadataChangeEvent.MessageDurationRemove", lambda result: ",g100",
              lambda: chat.prepare_message_ttl_remove(MessageTtlRemoveParams("g100"))),
         ]
-        for event, suffix, prepare in cases:
+        for event, signed_fields, prepare in cases:
             with self.subTest(event=event):
-                action = _only_action(prepare())
-                payload = action["signature_payload"]
-                self.assertTrue(payload.startswith(event + ","), payload)
-                self.assertTrue(payload.endswith(suffix), payload)
+                result = prepare()
+                (action,) = result["action_signatures"]
+                payload = f"{event},{action['message_id']},111{signed_fields(result)}"
                 sig = action["message_event_signature"]
                 self.assertEqual(sig["signature_version"], "7")
                 self.assertEqual(sig["signing_public_key"], signing_key)
                 # The signature is base64 without padding, as the wire carries it.
                 raw = base64.b64decode(sig["signature"] + "=" * (-len(sig["signature"]) % 4))
-                self.assertTrue(chat.verify(signing_key, raw, payload.encode("utf-8")))
+                self.assertTrue(chat.verify(signing_key, raw, payload.encode("utf-8")), payload)
 
     def test_prepare_message_delete_shape(self):
         from chat_xdk import MessageDeleteParams
@@ -1114,9 +1422,8 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(signed["signature_version"], "7")
         self.assertEqual(signed["public_key_version"], "1")
         self.assertEqual(signed["signing_public_key"], chat.get_public_keys().signing)
-        self.assertEqual(
-            sig["signature_payload"],
-            f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11",
+        self.assertTrue(
+            _signs(chat, sig, f"MessageDeleteEvent,{sig['message_id']},111,111:222,2,seq-10,seq-11")
         )
 
     def test_prepare_message_delete_for_self(self):
@@ -1138,10 +1445,7 @@ class TestApiShapes(unittest.TestCase):
             )
         )
 
-        self.assertEqual(
-            sig["signature_payload"],
-            f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1",
-        )
+        self.assertTrue(_signs(chat, sig, f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1"))
 
     def test_prepare_mark_conversation_read_shape(self):
         from chat_xdk import MarkConversationReadParams
@@ -1168,17 +1472,13 @@ class TestApiShapes(unittest.TestCase):
         self.assertEqual(
             sig["message_event_signature"]["signing_public_key"], chat.get_public_keys().signing
         )
-        self.assertEqual(
-            sig["signature_payload"],
-            f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
-            "2011626338877079553,1700000000123",
-        )
-        signature = sig["message_event_signature"]["signature"]
+        self.assertEqual(sig["message_event_signature"]["signing_public_key"], v["signing_public_b64"])
         self.assertTrue(
-            chat.verify(
-                v["signing_public_b64"],
-                base64.b64decode(signature + "=" * (-len(signature) % 4)),
-                sig["signature_payload"].encode(),
+            _signs(
+                chat,
+                sig,
+                f"MarkConversationReadEvent,{sig['message_id']},111,111:222,"
+                "2011626338877079553,1700000000123",
             )
         )
 
@@ -1199,10 +1499,9 @@ class TestApiShapes(unittest.TestCase):
         # The session identity signs; the unset time is the current time.
         self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
         prefix = f"MarkConversationReadEvent,{sig['message_id']},111,g999,seq-1,"
-        self.assertTrue(sig["signature_payload"].startswith(prefix))
-        seen_at = int(sig["signature_payload"][len(prefix) :])
-        self.assertGreaterEqual(seen_at, before)
-        self.assertLessEqual(seen_at, after)
+        self.assertTrue(
+            any(_signs(chat, sig, f"{prefix}{seen_at}") for seen_at in range(before, after + 1))
+        )
 
     def test_prepare_mark_conversation_read_rejects_empty_ids(self):
         from chat_xdk import MarkConversationReadParams
@@ -1224,8 +1523,8 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "1491585161162473473", "public_key": v["identity_public_b64"], "key_version": "1"},
-            {"user_id": "17380288", "public_key": v["identity_public_b64"], "key_version": "1"},
+            {"user_id": "1491585161162473473", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"},
+            {"user_id": "17380288", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"},
         ]
         # Leaving conversation_id None derives the canonical numeric-sorted id.
         result = chat.prepare_conversation_key_change(
@@ -1235,17 +1534,25 @@ class TestApiShapes(unittest.TestCase):
         )
         self.assertEqual(result["conversation_id"], "17380288:1491585161162473473")
 
-    def test_encrypt_decrypt_generic_roundtrip(self):
-        chat, v = self._unlocked_chat()
+    def test_decrypt_reads_the_title_a_title_change_sends(self):
+        from chat_xdk import GroupTitleChangeParams
 
+        chat, v = self._unlocked_chat()
         conv_key = base64.b64decode(v["conversation_key_b64"])
-        plaintext = "metadata payload \U0001F31F with unicode"
-        ciphertext = chat.encrypt(plaintext, conv_key)
-        self.assertIsInstance(ciphertext, str)
-        self.assertNotEqual(ciphertext, plaintext)
+        title = "metadata payload \U0001F31F with unicode"
+        params = GroupTitleChangeParams(
+            "g100",
+            title,
+            sender_id="910002",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="4",
+        )
+        first = chat.prepare_group_title_change(params)["encrypted_value"]
+        self.assertNotEqual(first, title)
         # Randomized nonce: two encryptions differ.
-        self.assertNotEqual(chat.encrypt(plaintext, conv_key), ciphertext)
-        self.assertEqual(chat.decrypt(ciphertext, conv_key), plaintext)
+        self.assertNotEqual(chat.prepare_group_title_change(params)["encrypted_value"], first)
+        self.assertEqual(chat.decrypt(first, conv_key), title)
 
     def test_export_lock_reimport_roundtrip(self):
         from chat_xdk import ImportKeysParams
@@ -1258,8 +1565,8 @@ class TestApiShapes(unittest.TestCase):
 
         chat.lock()
         self.assertFalse(chat.is_unlocked())
-        # Locked: export returns None instead of raising.
-        self.assertIsNone(chat.export_keys())
+        with self.assertRaises(ValueError):
+            chat.export_keys()
 
         chat.import_keys(ImportKeysParams(bytes(exported)))
         self.assertTrue(chat.is_unlocked())
@@ -1303,6 +1610,148 @@ class TestApiShapes(unittest.TestCase):
                         }
                     ],
                 )
+            )
+
+    def test_a_file_without_a_name_or_a_size_fails_with_invalid_input(self):
+        from chat_xdk import EncryptMessageParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+        no_name = "has an empty filename: pass the file's original name"
+        no_size = (
+            "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives"
+        )
+
+        def card(**image):
+            return {"attachment_type": "url", "url": "https://example.com", **image}
+
+        cases = [
+            ({**_media("photo"), "filename": ""}, f"media_hash_key 'photo' {no_name}"),
+            (_media("photo", filesize_bytes=0), f"media_hash_key 'photo' {no_size}"),
+            (
+                card(banner_image={"media_hash_key": "banner", "filesize_bytes": 1000, "filename": ""}),
+                f"media_hash_key 'banner' {no_name}",
+            ),
+            (
+                card(favicon_image={"media_hash_key": "favicon", "filesize_bytes": 0, "filename": "f.png"}),
+                f"media_hash_key 'favicon' {no_size}",
+            ),
+        ]
+        for attachment, message in cases:
+            with self.assertRaises(InvalidInputError) as ctx:
+                chat.encrypt_message(
+                    EncryptMessageParams(
+                        "123:456",
+                        "a file",
+                        sender_id="123",
+                        signing_key_version="1",
+                        conversation_key=bytes(32),
+                        conversation_key_version="1",
+                        attachments=[attachment],
+                    )
+                )
+            self.assertEqual(ctx.exception.kind, "invalid_input")
+            self.assertEqual(str(ctx.exception), message)
+
+    def test_invalid_offsets_links_posts_and_dimensions_fail_with_invalid_input(self):
+        from chat_xdk import EncryptMessageParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+
+        def send(text="hi @bob", **fields):
+            return chat.encrypt_message(
+                EncryptMessageParams(
+                    "123:456",
+                    text,
+                    sender_id="123",
+                    signing_key_version="1",
+                    conversation_key=bytes(32),
+                    conversation_key_version="1",
+                    **fields,
+                )
+            )
+
+        banner = {"media_hash_key": "banner", "filesize_bytes": 1000, "filename": "b.png"}
+        cases = [
+            (
+                {"entities": [(-1, 4, "mention")]},
+                "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0",
+            ),
+            ({"entities": [(5, 3, "mention")]}, "Invalid entity offsets 5..3: end is before start"),
+            (
+                {"entities": [(3, 8, "mention")]},
+                "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes "
+                "of UTF-8",
+            ),
+            (
+                {"attachments": [{"attachment_type": "url", "url": ""}]},
+                "a URL card's url is empty: pass the link the card shows",
+            ),
+            (
+                {"attachments": [{"attachment_type": "post"}]},
+                "a post attachment has neither rest_id nor post_url: pass the post's id or its URL",
+            ),
+            (
+                {"attachments": [{**_media("photo"), "width": -1}]},
+                "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more",
+            ),
+            (
+                {
+                    "attachments": [
+                        {
+                            "attachment_type": "url",
+                            "url": "https://example.com",
+                            "banner_image": {**banner, "height": -1},
+                        }
+                    ]
+                },
+                "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more",
+            ),
+        ]
+        for fields, message in cases:
+            with self.assertRaises(InvalidInputError) as ctx:
+                send(**fields)
+            self.assertEqual(str(ctx.exception), message)
+        # Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+        send(text="é @bob", entities=[(3, 7, "mention")])
+
+    def test_an_empty_juicebox_config_fails_with_the_no_config_error(self):
+        from chat_xdk import Chat, InvalidStateError
+
+        want = (
+            "Invalid state: no Juicebox config: pass the juicebox_config the X API returns "
+            "when you create the chat, or call update_config() first"
+        )
+        for empty in ("", "  "):
+            with self.assertRaises(InvalidStateError) as ctx:
+                Chat(empty)
+            self.assertEqual(str(ctx.exception), want)
+        chat = Chat()
+        with self.assertRaises(InvalidStateError) as ctx:
+            chat.update_config("")
+        self.assertEqual(str(ctx.exception), want)
+
+    def test_an_unknown_or_empty_entity_type_fails_with_invalid_input(self):
+        from chat_xdk import EncryptMessageParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+        for entity_type in ("bogus", ""):
+            with self.assertRaises(InvalidInputError) as ctx:
+                chat.encrypt_message(
+                    EncryptMessageParams(
+                        "123:456",
+                        "hi @bob",
+                        sender_id="123",
+                        signing_key_version="1",
+                        conversation_key=bytes(32),
+                        conversation_key_version="1",
+                        entities=[(3, 7, entity_type)],
+                    )
+                )
+            self.assertEqual(ctx.exception.kind, "invalid_input")
+            self.assertEqual(
+                str(ctx.exception),
+                f"Invalid entity_type '{entity_type}': pass url, mention, hashtag, cashtag, "
+                "email, address or phone_number",
             )
 
     def test_mixed_attachment_types_rejected(self):

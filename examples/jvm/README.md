@@ -19,11 +19,11 @@ are generated + registered on first run); conversation state is in memory.
 ## Prerequisites
 
 - JDK 17+ and Maven
-- The native `chat_xdk_dotnet` library and the installed `chatxdk` artifact:
+- The native `chat_xdk_ffi` library and the installed `chatxdk` artifact:
 
 ```bash
 # From the repo root: build the native library...
-cargo build -p chat-xdk-dotnet --release
+cargo build -p chat-xdk-ffi --release
 # ...and install the JVM binding into your local Maven repo:
 cd crates/jvm/java/chatxdk && mvn install
 ```

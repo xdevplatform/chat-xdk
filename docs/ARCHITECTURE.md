@@ -176,20 +176,20 @@ crates/
 ├── pyo3/                         # Python bindings via PyO3
 │   └── src/lib.rs                # Thin wrapper: delegates to core Chat
 │
-├── go/                           # Go bindings (cgo + staticlib; see go/chatxdk/)
-│   ├── src/lib.rs                # C ABI (`chat_xdk.h`)
-│   └── go/chatxdk/               # Go package
+├── ffi/                          # C ABI shared by Go, .NET and the JVM
+│   └── src/lib.rs                # `chat_xdk.h` (cbindgen) and NativeMethods.g.cs (csbindgen)
 │
 ├── wasm/                         # JavaScript/WASM bindings via wasm-bindgen
 │   ├── src/lib.rs                # Thin wrapper: delegates to ChatCore
 │   └── js/                       # JS wrapper, TypeScript types, tests
 │
-├── dotnet/                       # .NET bindings (P/Invoke over a Rust cdylib)
-│   ├── src/lib.rs                # C ABI (csbindgen-generated NativeMethods)
+├── dotnet/                       # .NET bindings (P/Invoke over the ffi shared library)
 │   └── dotnet/ChatXdk/           # C# package
 │
-└── jvm/                          # JVM bindings (JNA over the dotnet cdylib)
+└── jvm/                          # JVM bindings (JNA over the ffi shared library)
     └── java/chatxdk/             # Java package
+
+go/chatxdk/                       # Go bindings (cgo over the ffi static archive)
 ```
 
 ### Feature Switches
@@ -200,7 +200,13 @@ the format 0.5.x sends, while it is off, and v1 (per-message keys) while it is o
 The core holds the whole policy: when to fetch, how chats share an answer,
 response validation and the fail-closed default. It never makes the request
 itself. Each language binding performs the GET the core hands it, with its own
-HTTP stack (`fetch` in a browser), and hands the status and body back:
+HTTP stack (`fetch` in a browser), and hands the status and body back. A Rust
+app, or code that calls the C ABI directly, is its own binding: it performs
+the GET and hands the status and body to `set_feature_switches`
+(`chat_xdk_set_feature_switches` in the C ABI, whose header defines the
+endpoint, timeout and body limit as `CHAT_XDK_FEATURES_*`), which applies
+the same validation and the one answer per chat; without it, every switch
+stays off:
 
 - **When:** a chat reads the switches once, when it is created, and keeps the
   answer for its lifetime. Nothing reads them again; a chat created later
@@ -222,7 +228,9 @@ HTTP stack (`fetch` in a browser), and hands the status and body back:
   process alive; on older Node, `fetch()` can hold the process open until the
   request ends, at most 2 s. At exit, Python cuts short a request still under
   way and waits for it, so no thread is inside OpenSSL while OpenSSL cleans
-  up.
+  up. Every binding reads the body as it streams, up to one byte past
+  64 KiB, so a long body is never held whole; where a runtime can't stream
+  it, the request fails.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the
@@ -483,6 +491,12 @@ See [API.md](API.md) for the complete method reference.
 
 #### `types.rs` — Developer-Facing Types
 
+Every public enum and struct here, in `params.rs`, and in `error.rs` is
+`#[non_exhaustive]`, so a release can add a variant or field without
+breaking callers: params build with `new()` and `with_*` methods, and the
+input types callers fill in (`PublicKeyInput`, `SigningKeyEntry`,
+`EntityDescriptor`, …) with `new()`.
+
 | Type | Description |
 |------|-------------|
 | `Event` | Enum with 12 variants: `Message`, `KeyChange`, `GroupChange`, `MessageDeleted`, `ConversationDeleted`, `Typing`, `ReadReceipt`, `MarkedUnread`, `Failure`, `SettingsChange`, `MemberDeleted`, `Unknown` |
@@ -491,13 +505,13 @@ See [API.md](API.md) for the complete method reference.
 | `SendPayload` | Encrypted content + signature + metadata ready for the X API |
 | `PublicKeys` | Identity + signing public keys (base64) |
 | `PublicKeyRegistrationPayload` | Registration payload for the X API |
-| `EntityDescriptor` | Rich-text entity descriptor (URL, mention, hashtag) with byte offsets; used by `EncryptMessageParams` and `EncryptReplyParams` |
+| `EntityDescriptor` | Rich-text entity descriptor (URL, mention, hashtag) with UTF-8 byte offsets; used by `EncryptMessageParams` and `EncryptReplyParams` |
 
 #### `error.rs` — Error Hierarchy
 
 | Type | Description |
 |------|-------------|
-| `SdkError` | Top-level: `Crypto`, `Key`, `Juicebox`, `Serialization`, `Parse` |
+| `SdkError` | Top-level: `Crypto`, `Key`, `Juicebox`, `Serialization`, `Parse`, `InvalidState`, `InvalidInput`; `kind()` names the failure as every binding does |
 | `CryptoError` | Key generation, encryption, decryption, signing, verification failures |
 | `KeyError` | `NotUnlocked`, `NotFound`, `WeakPin`, `ReconstructionFailed` |
 | `JuiceboxError` | `InvalidPin`, `NotRegistered`, `InvalidAuth`, `UpgradeRequired`, `Transient`, `RateLimitExceeded`, etc. |

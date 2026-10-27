@@ -16,13 +16,18 @@ pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 /// member remove: conversation-key changes, the other group changes, deletes,
 /// and read receipts. A member remove signs at
 /// [`MEMBER_REMOVE_SIGNATURE_VERSION`] so the conversation-key version is part
-/// of the payload. v1 sends sign at version 10.
+/// of the payload, and a member add that carries a description at
+/// [`MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION`]. v1 sends sign at version 10.
 pub const SIGNATURE_VERSION: &str = "7";
 
 /// Signature version of a group member remove. From this version the signed
 /// payload includes the conversation-key version (`null` when the remove does
 /// not name one).
 pub(crate) const MEMBER_REMOVE_SIGNATURE_VERSION: i32 = 11;
+
+/// Signature version of a group member add that carries a description: the
+/// first version whose member-add payload covers `current_description`.
+pub(crate) const MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION: i32 = 8;
 
 /// Signature version of v1 sends: the first version whose payload signs
 /// `contents_encryption_version`, so the choice of key for the contents is
@@ -51,6 +56,7 @@ pub const CKEY_PLAINTEXT_SIGNATURE_VERSION: i32 = 6;
 /// the signature is nested under `message_event_signature`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct ActionSignature {
     /// Unique message ID (UUID).
     pub message_id: String,
@@ -60,16 +66,19 @@ pub struct ActionSignature {
     /// signing public key.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub message_event_signature: MessageEventSignature,
-    /// The comma-separated payload string that was signed, kept as a
-    /// debugging aid. Empty for conversation-key changes, whose payload
-    /// embeds the plaintext conversation key and must not be exposed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub signature_payload: String,
+    /// The comma-separated payload that was signed, for this crate's tests:
+    /// never serialized, so it stays off the wire. Empty for
+    /// conversation-key changes, whose payload embeds the plaintext
+    /// conversation key.
+    #[serde(skip)]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) signature_payload: String,
 }
 
 /// The signature of an [`ActionSignature`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
 pub struct MessageEventSignature {
     /// Base64 ECDSA signature of the payload.
     pub signature: String,
@@ -148,20 +157,56 @@ pub fn build_group_member_add_signature(
     current_screen_capture_blocking_enabled: Option<bool>,
     conversation_key_version: &str,
 ) -> Result<ActionSignature, SdkError> {
+    sign_group_member_add(
+        signing_key,
+        public_key_version,
+        message_id,
+        sender_id,
+        conversation_id,
+        new_member_ids,
+        current_member_ids,
+        current_admin_ids,
+        current_title,
+        current_avatar_url,
+        current_ttl_msec,
+        current_screen_capture_blocking_enabled,
+        conversation_key_version,
+        None,
+    )
+}
+
+/// Sign a GroupMemberAdd as [`build_group_member_add_signature`] does, also
+/// covering `current_description` when it is set.
+///
+/// A description is first part of the payload at signature version 8, which
+/// appends it after the screen-capture slot, so a member add that carries one
+/// signs at 8 and any other at 7.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sign_group_member_add(
+    signing_key: &XChatPrivateKey,
+    public_key_version: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    new_member_ids: &[String],
+    current_member_ids: &[String],
+    current_admin_ids: &[String],
+    current_title: Option<&str>,
+    current_avatar_url: Option<&str>,
+    current_ttl_msec: Option<i64>,
+    current_screen_capture_blocking_enabled: Option<bool>,
+    conversation_key_version: &str,
+    current_description: Option<&str>,
+) -> Result<ActionSignature, SdkError> {
     let mut components: Vec<&str> = vec![
         "GroupChangeEvent.GroupMemberAddChange",
         message_id,
         sender_id,
         conversation_id,
     ];
-
-    let new_ids: Vec<&str> = new_member_ids.iter().map(|s| s.as_str()).collect();
-    let current_ids: Vec<&str> = current_member_ids.iter().map(|s| s.as_str()).collect();
-    let admin_ids: Vec<&str> = current_admin_ids.iter().map(|s| s.as_str()).collect();
-
-    components.extend_from_slice(&new_ids);
-    components.extend_from_slice(&current_ids);
-    components.extend_from_slice(&admin_ids);
+    components.extend(new_member_ids.iter().map(String::as_str));
+    components.extend(current_member_ids.iter().map(String::as_str));
+    components.extend(current_admin_ids.iter().map(String::as_str));
 
     let title_str = nullable_str(current_title);
     let avatar_str = nullable_str(current_avatar_url);
@@ -173,7 +218,20 @@ pub fn build_group_member_add_signature(
     components.push(conversation_key_version);
     components.push(&screen_capture_str);
 
-    sign_payload(signing_key, public_key_version, message_id, &components)
+    let signature_version = match current_description {
+        Some(description) => {
+            components.push(description);
+            MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION
+        }
+        None => CURRENT_SIGNATURE_VERSION,
+    };
+    sign_action(
+        signing_key,
+        public_key_version,
+        message_id,
+        signature_version,
+        &components,
+    )
 }
 
 /// Build and sign a GroupCreate action signature.
@@ -247,9 +305,8 @@ fn nullable_bool(v: Option<bool>) -> String {
 /// Signs the plaintext conversation key bytes (base64 no-padding) rather
 /// than per-participant encrypted keys. Because the signed payload embeds
 /// the plaintext conversation key, it must never leave the SDK: the
-/// intermediate strings are zeroized and the returned
-/// `signature_payload` is left empty. Verifiers reconstruct the payload
-/// from the event and their decrypted copy of the key, so nothing is lost.
+/// intermediate strings are zeroized and not kept. Verifiers reconstruct
+/// the payload from the event and their decrypted copy of the key.
 pub fn build_ckey_change_signature(
     signing_key: &XChatPrivateKey,
     public_key_version: &str,
@@ -272,7 +329,7 @@ pub fn build_ckey_change_signature(
     .iter()
     .any(|c| c.contains(','))
     {
-        return Err(SdkError::Parse(
+        return Err(SdkError::InvalidInput(
             "Signature payload contains comma-separated component".into(),
         ));
     }
@@ -403,7 +460,7 @@ pub(crate) fn sign_action(
     components: &[&str],
 ) -> Result<ActionSignature, SdkError> {
     if components.iter().any(|c| c.contains(',')) {
-        return Err(SdkError::Parse(
+        return Err(SdkError::InvalidInput(
             "Signature payload contains comma-separated component".into(),
         ));
     }
@@ -472,6 +529,9 @@ fn is_public_key_encoding(data: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+mod round_trip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -509,10 +569,11 @@ mod tests {
                 assert!(json.get(flat).is_none(), "{flat} is nested, not flat");
             }
         }
-        let delete_json = serde_json::to_value(&delete).unwrap();
-        assert_eq!(delete_json["signature_payload"], delete.signature_payload);
-        let key_change_json = serde_json::to_value(&key_change).unwrap();
-        assert!(key_change_json.get("signature_payload").is_none());
+        assert!(!delete.signature_payload.is_empty());
+        for sig in [&delete, &key_change] {
+            let json = serde_json::to_value(sig).unwrap();
+            assert!(json.get("signature_payload").is_none());
+        }
     }
 
     #[test]

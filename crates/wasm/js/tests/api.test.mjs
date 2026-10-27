@@ -26,6 +26,17 @@ const onlyAction = (prepared) => {
   return prepared.actionSignatures[0];
 };
 
+/**
+ * Whether `sig`'s signature verifies, under the signer's own signing key,
+ * over `payload`: the comma-joined fields its event signs.
+ */
+const signs = (chat, sig, payload) =>
+  chat.verify(
+    sig.messageEventSignature.signingPublicKey,
+    b64ToBytes(sig.messageEventSignature.signature),
+    new TextEncoder().encode(payload),
+  );
+
 // Node 18 exposes WebCrypto only via node:crypto; the wasm module's
 // random-byte source needs it on the global scope.
 if (typeof globalThis.crypto === "undefined") {
@@ -215,7 +226,7 @@ async function main() {
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.ok(prep.conversationKey instanceof Uint8Array);
@@ -229,8 +240,6 @@ async function main() {
     "userId",
   ]);
   assert.equal(prep.actionSignatures.length, 1);
-  // Omitted: the payload embeds the plaintext conversation key and is withheld.
-  assert.equal(prep.actionSignatures[0].signaturePayload, undefined);
   // Nested as the request's actionSignatures carry it.
   assert.equal(prep.actionSignatures[0].messageEventSignature.publicKeyVersion, "1");
   assert.equal(prep.actionSignatures[0].messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
@@ -240,7 +249,7 @@ async function main() {
   const prep2 = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.notDeepEqual(prep.conversationKey, prep2.conversationKey);
@@ -250,7 +259,7 @@ async function main() {
   const groupPrep = chat.prepareGroupCreate({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     memberIds: ["910002", "910005"],
     adminIds: ["910002"],
@@ -258,11 +267,27 @@ async function main() {
   });
   assert.equal(groupPrep.conversationId, "g-1");
   assert.equal(groupPrep.actionSignatures.length, 2);
-  // Omitted: the payload embeds the plaintext conversation key and is withheld.
-  assert.equal(groupPrep.actionSignatures[0].signaturePayload, undefined);
   assert.ok(groupPrep.actionSignatures[0].encodedMessageEventDetail.length > 0);
-  assert.ok(groupPrep.actionSignatures[1].signaturePayload.startsWith("GroupChangeEvent.GroupCreate,"));
   assert.ok(groupPrep.actionSignatures[1].encodedMessageEventDetail.length > 0);
+  // The title goes out encrypted under the new key, the value the request
+  // sends as group_name; the signature covers the ciphertext.
+  assert.equal(typeof groupPrep.encryptedTitle, "string");
+  const groupCreate = groupPrep.actionSignatures[1];
+  assert.ok(signs(chat, groupCreate,
+    `GroupChangeEvent.GroupCreate,${groupCreate.messageId},910002,${groupPrep.conversationKeyVersion},` +
+    `910002,910005,null,${groupPrep.encryptedTitle},null`));
+  assert.equal(chat.decrypt(groupPrep.encryptedTitle, groupPrep.conversationKey), "My Group");
+  assert.equal("encryptedDescription" in groupPrep, false);
+  const commaPrep = chat.prepareGroupCreate({
+    senderId: "910002",
+    signingKeyVersion: "1",
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
+    conversationId: "g-1",
+    memberIds: ["910002"],
+    adminIds: ["910002"],
+    title: "Team, the sequel",
+  });
+  assert.equal(chat.decrypt(commaPrep.encryptedTitle, commaPrep.conversationKey), "Team, the sequel");
 
   // 2c. An empty title is the "not set" encoding: it signs the null
   // sentinel, exactly like omitting the field.
@@ -270,28 +295,39 @@ async function main() {
     const p = chat.prepareGroupCreate({
       senderId: "910002",
       signingKeyVersion: "1",
-      publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+      publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
       conversationId: "g-1",
       memberIds: ["910002", "910005"],
       adminIds: ["910002"],
       title,
-      avatarUrl: title,
     });
+    const create = p.actionSignatures[1];
     assert.ok(
-      p.actionSignatures[1].signaturePayload.endsWith(",null,null,null"),
-      `title/avatar must sign as the null sentinel, got: ${p.actionSignatures[1].signaturePayload}`,
+      signs(chat, create,
+        `GroupChangeEvent.GroupCreate,${create.messageId},910002,${p.conversationKeyVersion},` +
+        "910002,910005,null,null,null"),
+      "the title and avatar must sign as the null sentinel",
     );
+    assert.equal("encryptedTitle" in p, false);
   }
 
   const convKey = b64ToBytes(v.conversation_key_b64);
 
-  // 3. encrypt/decrypt (generic string) + encryptFile/decryptFile
+  // 3. decrypt (the group title a title change sends) + encryptFile/decryptFile
   const text = "group name \u{1F510} \u00e9\u00e8";
-  const ciphertextB64 = chat.encrypt(text, convKey);
+  const titleParams = {
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+    newTitle: text,
+    conversationKey: convKey,
+    conversationKeyVersion: "4",
+  };
+  const ciphertextB64 = chat.prepareGroupTitleChange(titleParams).encryptedValue;
   assert.equal(typeof ciphertextB64, "string");
   assert.equal(chat.decrypt(ciphertextB64, convKey), text);
   // randomized ciphertext
-  assert.notEqual(chat.encrypt(text, convKey), chat.encrypt(text, convKey));
+  assert.notEqual(chat.prepareGroupTitleChange(titleParams).encryptedValue, ciphertextB64);
 
   // A message with files is built first; each file is then encrypted from
   // the returned eventB64 and the media hash key its attachment names, and
@@ -552,6 +588,12 @@ async function main() {
   assert.ok(removePayload.encodedMessageCreateEvent.length > 0);
   assert.ok(removePayload.signature.length > 0);
   assert.ok(removePayload.encodedMessageEventSignature.length > 0);
+  assert.deepEqual(decryptOwn(addPayload), {
+    contentType: "reaction",
+    emoji: "\u{1F44D}",
+    targetMessageSequenceId: "seq-99",
+  });
+  assert.equal(decryptOwn(removePayload).targetMessageSequenceId, "seq-99");
 
   // 4c2. encryptEdit produces a signed payload that decrypts back to the
   // edit: updated text, target sequence id, and the [start, end, type]
@@ -571,8 +613,10 @@ async function main() {
   assert.ok(editPayload.encodedMessageEventSignature.length > 0);
   assert.ok(editPayload.messageId.length > 0);
   const decodedEdit = decryptOwn(editPayload);
-  assert.equal(decodedEdit.newText, "see https://example.com");
-  assert.equal(decodedEdit.targetMessageId, "seq-99");
+  assert.equal(decodedEdit.updatedText, "see https://example.com");
+  assert.equal(decodedEdit.targetMessageSequenceId, "seq-99");
+  // A v0 edit names its target by sequence id only.
+  assert.equal(decodedEdit.targetMessageId, undefined);
   assert.equal(decodedEdit.entities.length, 1);
   assert.equal(decodedEdit.entities[0].startIndex, 4);
   assert.equal(decodedEdit.entities[0].endIndex, 23);
@@ -599,10 +643,7 @@ async function main() {
   assert.equal(deleteSig.messageEventSignature.signatureVersion, "7");
   assert.equal(deleteSig.messageEventSignature.publicKeyVersion, "1");
   assert.equal(deleteSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
-  assert.equal(
-    deleteSig.signaturePayload,
-    `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`,
-  );
+  assert.ok(signs(chat, deleteSig, `MessageDeleteEvent,${deleteSig.messageId},111,111:222,2,seq-10,seq-11`));
   const deleteForSelfSig = onlyAction(chat.prepareMessageDelete({
     senderId: "111",
     signingKeyVersion: "1",
@@ -610,37 +651,40 @@ async function main() {
     sequenceIds: ["seq-1"],
     deleteForAll: false,
   }));
-  assert.equal(
-    deleteForSelfSig.signaturePayload,
-    `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`,
-  );
+  assert.ok(signs(chat, deleteForSelfSig, `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`));
 
-  // 4c5. Group actions: a removal signs version 11, a rotation adds a key
-  // change, and the other prepares sign one version-7 payload.
-  const removed = chat.prepareGroupMembersRemove({
-    senderId: "111",
-    signingKeyVersion: "1",
-    conversationId: "g100",
-    userIds: ["910007"],
-  });
-  assert.equal(removed.conversationKey, undefined);
-  assert.deepEqual(removed.conversationParticipantKeys, []);
-  assert.equal(removed.actionSignatures.length, 1);
-  assert.equal(removed.actionSignatures[0].messageEventSignature.signatureVersion, "11");
-  assert.ok(removed.actionSignatures[0].signaturePayload.endsWith(",910007,null,signature_version=11"));
-
+  // 4c5. Group actions: a removal signs version 11 and rotates the key for
+  // the members who stay, the title and description changes sign the value
+  // encrypted under the conversation key, the avatar change signs the media
+  // URL as is, and the other prepares sign one version-7 payload.
+  const identity = { senderId: "111", signingKeyVersion: "1" };
   const keys = chat.getPublicKeys();
+  const remaining = [{ userId: "111", identityPublicKey: keys.identity, publicKeyVersion: "1" }];
   const rotated = chat.prepareGroupMembersRemove({
     senderId: "111",
     signingKeyVersion: "1",
+    publicKeys: remaining,
     conversationId: "g100",
     userIds: ["910007"],
-    publicKeys: [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }],
   });
   assert.equal(rotated.conversationKey.length, 32);
+  assert.equal(rotated.conversationParticipantKeys.length, 1);
   assert.equal(rotated.actionSignatures.length, 2);
-  assert.ok(rotated.actionSignatures[0].signaturePayload.endsWith(",signature_version=11"));
-  assert.equal(rotated.actionSignatures[1].signaturePayload, undefined);
+  assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "11");
+  const removal = rotated.actionSignatures[0];
+  assert.ok(signs(chat, removal,
+    `GroupChangeEvent.GroupMemberRemoveChange,${removal.messageId},111,g100,910007,` +
+    `${rotated.conversationKeyVersion},signature_version=11`));
+  assert.throws(
+    () => chat.prepareGroupMembersRemove({
+      senderId: "111",
+      signingKeyVersion: "1",
+      publicKeys: [],
+      conversationId: "g100",
+      userIds: ["910007"],
+    }),
+    /public_keys is empty: pass the public keys of the remaining members/,
+  );
 
   const left = chat.prepareGroupLeave({
     senderId: "111",
@@ -650,43 +694,73 @@ async function main() {
     conversationKeyVersion: "7",
   });
   assert.equal(left.actionSignatures.length, 3);
-  assert.ok(left.actionSignatures[1].signaturePayload.endsWith(",910008"));
-  assert.ok(left.actionSignatures[2].signaturePayload.startsWith("ConversationDeleteEvent,"));
+  const [leaving, promoting, deleting] = left.actionSignatures;
+  assert.ok(signs(chat, leaving,
+    `GroupChangeEvent.GroupMemberRemoveChange,${leaving.messageId},111,g100,111,7,signature_version=11`));
+  assert.ok(signs(chat, promoting, `GroupChangeEvent.GroupAdminAddChange,${promoting.messageId},111,g100,910008`));
+  assert.ok(signs(chat, deleting, `ConversationDeleteEvent,${deleting.messageId},111,g100`));
 
-  const title = chat.prepareGroupTitleChange({
-    senderId: "111",
-    signingKeyVersion: "1",
+  const metadataKey = { conversationKey: rotated.conversationKey, conversationKeyVersion: rotated.conversationKeyVersion };
+  const metadata = [
+    [chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board: layoffs, Q3", ...metadataKey }),
+      "GroupChangeEvent.GroupTitleChange,", "Board: layoffs, Q3"],
+    [chat.prepareGroupDescriptionChange({ ...identity, conversationId: "g100", newDescription: "Rules: be kind", ...metadataKey }),
+      "GroupChangeEvent.GroupDescriptionChange,", "Rules: be kind"],
+  ];
+  for (const [prepared, prefix, plaintext] of metadata) {
+    assert.deepEqual(Object.keys(prepared).sort(), ["actionSignatures", "conversationKeyVersion", "encryptedValue"]);
+    assert.equal(prepared.conversationKeyVersion, rotated.conversationKeyVersion);
+    assert.equal(prepared.actionSignatures.length, 1);
+    const sig = prepared.actionSignatures[0];
+    assert.ok(signs(chat, sig,
+      `${prefix}${sig.messageId},111,g100,${prepared.conversationKeyVersion},${prepared.encryptedValue}`));
+    assert.equal(chat.decrypt(prepared.encryptedValue, rotated.conversationKey), plaintext);
+  }
+  const groupAvatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
+  const avatarPrep = chat.prepareGroupAvatarChange({
+    ...identity,
     conversationId: "g100",
-    conversationKeyVersion: "4",
-    customTitle: "enc-title",
+    newAvatarUrl: groupAvatarUrl,
+    conversationKeyVersion: rotated.conversationKeyVersion,
   });
-  assert.ok(onlyAction(title).signaturePayload.endsWith(",4,enc-title"));
-  const description = onlyAction(chat.prepareGroupDescriptionChange({
-    senderId: "111",
-    signingKeyVersion: "1",
+  const avatarSig = onlyAction(avatarPrep);
+  assert.ok(signs(chat, avatarSig,
+    `GroupChangeEvent.GroupAvatarUrlChange,${avatarSig.messageId},111,g100,` +
+    `${rotated.conversationKeyVersion},${groupAvatarUrl}`));
+  assert.throws(
+    () => chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board" }),
+    /no cached conversation key for 'g100'/,
+  );
+  const withTitle = chat.prepareGroupMembersRemove({
+    ...identity,
+    publicKeys: remaining,
     conversationId: "g100",
-    conversationKeyVersion: "4",
-    customDescription: "enc-desc",
-  }));
-  assert.ok(description.signaturePayload.startsWith("GroupChangeEvent.GroupDescriptionChange,"));
+    userIds: ["910007"],
+    title: "Board",
+  });
+  assert.equal(withTitle.actionSignatures.length, 3);
+  const [titledRemoval, titleChange] = withTitle.actionSignatures;
+  assert.ok(signs(chat, titledRemoval,
+    `GroupChangeEvent.GroupMemberRemoveChange,${titledRemoval.messageId},111,g100,910007,` +
+    `${withTitle.conversationKeyVersion},signature_version=11`));
+  assert.equal(titleChange.messageEventSignature.signatureVersion, "7");
+  assert.ok(titleChange.encodedMessageEventDetail.length > 0);
   const blocking = onlyAction(chat.prepareScreenCapture({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g100",
     change: "blockingEnabled",
   }));
-  assert.ok(blocking.signaturePayload.startsWith(
-    "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,",
-  ));
+  assert.ok(signs(chat, blocking,
+    `ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,${blocking.messageId},111,g100`));
   const detection = onlyAction(chat.prepareScreenCapture({
     senderId: "111",
     signingKeyVersion: "1",
     conversationId: "g100",
     change: "detectionDisabled",
   }));
-  assert.ok(detection.signaturePayload.startsWith(
-    "ConversationMetadataChangeEvent.DisableScreenCaptureDetection,",
-  ));
+  assert.ok(signs(chat, detection,
+    `ConversationMetadataChangeEvent.DisableScreenCaptureDetection,${detection.messageId},111,g100`));
   assert.throws(
     () => chat.prepareScreenCapture({
       senderId: "111",
@@ -698,42 +772,46 @@ async function main() {
   );
 
   // 4c3b. The group and conversation-metadata actions each sign one action at
-  // signature version 7: its payload names the event and ends with the signed
-  // fields, and its signature verifies with the signer's signing key.
+  // signature version 7 over the event name, the action's message id, the
+  // sender, the conversation and the signed fields, and the signature
+  // verifies with the signer's signing key.
   {
     const signingKey = chat.getPublicKeys().signing;
     const ident = { senderId: "111", signingKeyVersion: "1", conversationId: "g100" };
     const cases = [
-      ["GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
-        () => chat.prepareGroupAvatarChange({ ...ident, conversationKeyVersion: "4", customAvatarUrl: "https://img/a.png" })],
-      ["GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
-        () => chat.prepareGroupDescriptionChange({ ...ident, conversationKeyVersion: "4", customDescription: "enc-desc" })],
-      ["GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+      ["GroupChangeEvent.GroupAvatarUrlChange", () => ",g100,4,https://img/a.png",
+        () => chat.prepareGroupAvatarChange({ ...ident, conversationKeyVersion: "4", newAvatarUrl: "https://img/a.png" })],
+      ["GroupChangeEvent.GroupDescriptionChange", (result) => `,g100,4,${result.encryptedValue}`,
+        () => chat.prepareGroupDescriptionChange({
+          ...ident,
+          newDescription: "Ships the app",
+          conversationKey: new Uint8Array(32),
+          conversationKeyVersion: "4",
+        })],
+      ["GroupChangeEvent.GroupAdminAddChange", () => ",g100,910008,910009",
         () => chat.prepareGroupAdminsAdd({ ...ident, userIds: ["910008", "910009"] })],
-      ["GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+      ["GroupChangeEvent.GroupAdminRemoveChange", () => ",g100,910008",
         () => chat.prepareGroupAdminsRemove({ ...ident, userIds: ["910008"] })],
-      ["GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null",
+      ["GroupChangeEvent.GroupInviteEnable", () => ",g100,https://x.com/i/invite/abc,null,null",
         () => chat.prepareGroupInviteEnable({ ...ident, inviteUrl: "https://x.com/i/invite/abc" })],
-      ["GroupChangeEvent.GroupInviteDisable", ",g100,111", () => chat.prepareGroupInviteDisable({ ...ident })],
-      ["GroupChangeEvent.GroupJoinRequest", ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
-      ["GroupChangeEvent.GroupJoinReject", ",g100,910010",
+      ["GroupChangeEvent.GroupInviteDisable", () => ",g100,111", () => chat.prepareGroupInviteDisable({ ...ident })],
+      ["GroupChangeEvent.GroupJoinRequest", () => ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
+      ["GroupChangeEvent.GroupJoinReject", () => ",g100,910010",
         () => chat.prepareGroupJoinReject({ ...ident, userIds: ["910010"] })],
-      ["ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000",
+      ["ConversationMetadataChangeEvent.MessageDurationChange", () => ",g100,86400000",
         () => chat.prepareMessageTtlChange({ ...ident, ttlMsec: 86400000 })],
-      ["ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+      ["ConversationMetadataChangeEvent.MessageDurationRemove", () => ",g100",
         () => chat.prepareMessageTtlRemove({ ...ident })],
     ];
-    for (const [event, suffix, prepare] of cases) {
-      const action = onlyAction(prepare());
-      assert.ok(action.signaturePayload.startsWith(`${event},`), action.signaturePayload);
-      assert.ok(action.signaturePayload.endsWith(suffix), action.signaturePayload);
+    for (const [event, signedFields, prepare] of cases) {
+      const result = prepare();
+      assert.equal(result.actionSignatures.length, 1, event);
+      const [action] = result.actionSignatures;
       const sig = action.messageEventSignature;
       assert.equal(sig.signatureVersion, "7", event);
       assert.equal(sig.signingPublicKey, signingKey, event);
-      assert.ok(
-        chat.verify(signingKey, b64ToBytes(sig.signature), new TextEncoder().encode(action.signaturePayload)),
-        event,
-      );
+      const payload = `${event},${action.messageId},111${signedFields(result)}`;
+      assert.ok(signs(chat, action, payload), payload);
     }
   }
 
@@ -750,18 +828,9 @@ async function main() {
   assert.ok(readSig.encodedMessageEventDetail.length > 0);
   assert.equal(readSig.messageEventSignature.publicKeyVersion, "1");
   assert.equal(readSig.messageEventSignature.signingPublicKey, chat.getPublicKeys().signing);
-  assert.equal(
-    readSig.signaturePayload,
-    `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`,
-  );
-  assert.equal(
-    chat.verify(
-      v.signing_public_b64,
-      b64ToBytes(readSig.messageEventSignature.signature),
-      new TextEncoder().encode(readSig.signaturePayload),
-    ),
-    true,
-  );
+  assert.equal(readSig.messageEventSignature.signingPublicKey, v.signing_public_b64);
+  assert.ok(signs(chat, readSig,
+    `MarkConversationReadEvent,${readSig.messageId},111,111:222,2011626338877079553,1700000000123`));
 
   // An omitted seenAtMsec signs the JavaScript clock's current time.
   const beforeRead = Date.now();
@@ -773,9 +842,11 @@ async function main() {
   }));
   const afterRead = Date.now();
   const readNowPrefix = `MarkConversationReadEvent,${readNowSig.messageId},111,g999,seq-1,`;
-  assert.ok(readNowSig.signaturePayload.startsWith(readNowPrefix));
-  const readNowAt = Number(readNowSig.signaturePayload.slice(readNowPrefix.length));
-  assert.ok(readNowAt >= beforeRead && readNowAt <= afterRead);
+  let readNowSigned = false;
+  for (let at = beforeRead; at <= afterRead && !readNowSigned; at++) {
+    readNowSigned = signs(chat, readNowSig, `${readNowPrefix}${at}`);
+  }
+  assert.ok(readNowSigned);
 
   assert.throws(
     () =>
@@ -800,7 +871,6 @@ async function main() {
   // A millisecond field takes a finite number within the safe integer range:
   // NaN, an infinity or a number past that range names no instant or
   // duration and is rejected. A fraction is truncated toward zero.
-  const identity = { senderId: "111", signingKeyVersion: "1" };
   const invalidMsec = /a millisecond value must be a finite number within the safe integer range/;
   for (const bad of [NaN, Infinity, -Infinity, 2 ** 53, -(2 ** 60)]) {
     assert.throws(
@@ -829,17 +899,19 @@ async function main() {
     () => chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: -Infinity }),
     /got -Infinity$/,
   );
+  const ttlPayload = (sig, ttl) =>
+    `ConversationMetadataChangeEvent.MessageDurationChange,${sig.messageId},111,g999,${ttl}`;
   const fractionalTtl = onlyAction(chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: 86400000.9 }));
-  assert.ok(fractionalTtl.signaturePayload.endsWith(",g999,86400000"));
+  assert.ok(signs(chat, fractionalTtl, ttlPayload(fractionalTtl, 86400000)));
   const largestTtl = onlyAction(chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: 2 ** 53 - 1 }));
-  assert.ok(largestTtl.signaturePayload.endsWith(`,g999,${2 ** 53 - 1}`));
+  assert.ok(signs(chat, largestTtl, ttlPayload(largestTtl, 2 ** 53 - 1)));
 
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
   const membersPrep = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],
@@ -852,19 +924,49 @@ async function main() {
   assert.equal(membersPrep.actionSignatures.length, 2);
   assert.ok(membersPrep.actionSignatures[0].encodedMessageEventDetail.length > 0);
   assert.ok(membersPrep.actionSignatures[1].encodedMessageEventDetail.length > 0);
-  assert.ok(
-    membersPrep.actionSignatures[1].signaturePayload.startsWith(
-      "GroupChangeEvent.GroupMemberAddChange,",
-    ),
-  );
   // Unset screen-capture blocking signs as the trailing null sentinel.
-  assert.ok(membersPrep.actionSignatures[1].signaturePayload.endsWith(",null"));
+  const membersAdd = membersPrep.actionSignatures[1];
+  assert.ok(signs(chat, membersAdd,
+    `GroupChangeEvent.GroupMemberAddChange,${membersAdd.messageId},910002,g-1,910005,910002,910002,` +
+    `null,null,null,${membersPrep.conversationKeyVersion},null`));
+
+  // 4d1. The current title and description go out encrypted under the key
+  // the add generates, as the result returns them; the description is
+  // signed at version 8, after the screen-capture slot, and the avatar URL
+  // as passed.
+  const avatarUrl = "https://ton.x.com/xchat_media/g-1/avatar";
+  const describedPrep = chat.prepareGroupMembersChange({
+    senderId: "910002",
+    signingKeyVersion: "1",
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
+    conversationId: "g-1",
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
+    currentPendingMemberIds: [],
+    currentTitle: "Team",
+    currentDescription: "Ships the app",
+    currentAvatarUrl: avatarUrl,
+  });
+  const describedAdd = describedPrep.actionSignatures[1];
+  assert.equal(chat.decrypt(describedPrep.encryptedTitle, describedPrep.conversationKey), "Team");
+  assert.equal(
+    chat.decrypt(describedPrep.encryptedDescription, describedPrep.conversationKey),
+    "Ships the app",
+  );
+  assert.equal(describedAdd.messageEventSignature.signatureVersion, "8");
+  assert.ok(signs(chat, describedAdd,
+    `GroupChangeEvent.GroupMemberAddChange,${describedAdd.messageId},910002,g-1,910005,910002,910002,` +
+    `${describedPrep.encryptedTitle},${avatarUrl},null,${describedPrep.conversationKeyVersion},null,` +
+    describedPrep.encryptedDescription));
+  assert.equal("encryptedTitle" in membersPrep, false);
+  assert.equal(membersPrep.actionSignatures[1].messageEventSignature.signatureVersion, "7");
 
   // 4d2. The group's screen-capture-blocking state fills the trailing signed slot.
   const membersPrepScb = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],
@@ -872,7 +974,10 @@ async function main() {
     currentPendingMemberIds: [],
     currentScreenCaptureBlockingEnabled: true,
   });
-  assert.ok(membersPrepScb.actionSignatures[1].signaturePayload.endsWith(",true"));
+  const scbAdd = membersPrepScb.actionSignatures[1];
+  assert.ok(signs(chat, scbAdd,
+    `GroupChangeEvent.GroupMemberAddChange,${scbAdd.messageId},910002,g-1,910005,910002,910002,` +
+    `null,null,null,${membersPrepScb.conversationKeyVersion},true`));
 
   // 4d3. Omitting conversationId derives the canonical numeric-sorted
   // one-to-one id from the two participants.
@@ -880,8 +985,8 @@ async function main() {
     senderId: "1491585161162473473",
     signingKeyVersion: "1",
     publicKeys: [
-      { userId: "1491585161162473473", publicKey: v.identity_public_b64, keyVersion: "1" },
-      { userId: "17380288", publicKey: v.identity_public_b64, keyVersion: "1" },
+      { userId: "1491585161162473473", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" },
+      { userId: "17380288", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" },
     ],
   });
   assert.equal(derivedPrep.conversationId, "17380288:1491585161162473473");
@@ -1043,6 +1148,97 @@ async function main() {
     /attachment combination/,
   );
 
+  // 4j. A file without a name or a size, and an entity of an unknown or
+  // empty type, fail with the core's invalid-input error naming them.
+  const invalidInput = (message) => (err) => {
+    assert.equal(err.kind, "invalidInput");
+    assert.equal(err.message, message);
+    return true;
+  };
+  const send = (extra) =>
+    chat.encryptMessage({
+      senderId: "111",
+      conversationId: "conv-1",
+      conversationKey: convKey,
+      text: "hi @bob",
+      conversationKeyVersion: "1",
+      signingKeyVersion: "1",
+      ...extra,
+    });
+  const noName = "has an empty filename: pass the file's original name";
+  const noSize =
+    "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives";
+  const photo = {
+    attachment_type: "media",
+    media_hash_key: "photo",
+    width: 100,
+    height: 100,
+    filesize_bytes: 1000,
+    filename: "photo.jpg",
+    media_type: 1,
+  };
+  const card = (images) => ({ attachment_type: "url", url: "https://example.com", ...images });
+  for (const [attachment, message] of [
+    [{ ...photo, filename: "" }, `media_hash_key 'photo' ${noName}`],
+    [{ ...photo, filesize_bytes: 0 }, `media_hash_key 'photo' ${noSize}`],
+    [
+      card({ banner_image: { media_hash_key: "banner", filesize_bytes: 1000, filename: "" } }),
+      `media_hash_key 'banner' ${noName}`,
+    ],
+    [
+      card({ favicon_image: { media_hash_key: "favicon", filesize_bytes: 0, filename: "f.png" } }),
+      `media_hash_key 'favicon' ${noSize}`,
+    ],
+  ]) {
+    assert.throws(() => send({ attachments: [attachment] }), invalidInput(message));
+  }
+  for (const entityType of ["bogus", ""]) {
+    assert.throws(
+      () => send({ entities: [[3, 7, entityType]] }),
+      invalidInput(
+        `Invalid entity_type '${entityType}': pass url, mention, hashtag, cashtag, email, ` +
+          "address or phone_number",
+      ),
+    );
+  }
+  for (const [extra, message] of [
+    [
+      { entities: [[-1, 4, "mention"]] },
+      "Invalid entity offsets -1..4: offsets count bytes of the UTF-8 text, from 0",
+    ],
+    [{ entities: [[5, 3, "mention"]] }, "Invalid entity offsets 5..3: end is before start"],
+    [
+      { entities: [[3, 8, "mention"]] },
+      "Invalid entity offsets 3..8: end is past the end of the text, which is 7 bytes of UTF-8",
+    ],
+    [
+      { attachments: [{ attachment_type: "url", url: "" }] },
+      "a URL card's url is empty: pass the link the card shows",
+    ],
+    [
+      { attachments: [{ attachment_type: "post" }] },
+      "a post attachment has neither rest_id nor post_url: pass the post's id or its URL",
+    ],
+    [
+      { attachments: [{ ...photo, width: -1 }] },
+      "media_hash_key 'photo' has width -1: pass the width in pixels, 0 or more",
+    ],
+    [
+      {
+        attachments: [
+          card({
+            banner_image: { media_hash_key: "banner", filesize_bytes: 1000, filename: "b.png", height: -1 },
+          }),
+        ],
+      },
+      "media_hash_key 'banner' has height -1: pass the height in pixels, 0 or more",
+    ],
+  ]) {
+    assert.throws(() => send(extra), invalidInput(message));
+  }
+  // Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
+  send({ text: "é @bob", entities: [[3, 7, "mention"]] });
+
   // 5. decryptEvents / decryptEvent throw on a malformed (3-field) signingKeys entry
   const malformedSigningKeys = [
     { userId: "111", publicKeyVersion: "1", publicKey: v.signing_public_b64 },
@@ -1078,62 +1274,32 @@ async function main() {
     /the key for version 'keys' in the conversation key map is not 32 bytes/,
   );
 
-  // 6. Juicebox guess-budget parity with the native bindings: the config's
-  // max_guess_count applies, defaults are shape-dependent (sdk_config and
-  // key_store_token_map_json → 20, bare token_map → 5), and the explicit
-  // option is an override only.
-  const { resolveMaxGuessCount } = await import("../index.js");
-  const sdkConfigShape = { sdk_config: '{"realms":[]}', tokens: {} };
-  const tokenMapShape = { token_map: [] };
-  const xApiShape = { key_store_token_map_json: '{"realms":[]}', token_map: [] };
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 7 }), 7);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }), 7);
-  assert.equal(resolveMaxGuessCount({ ...xApiShape, max_guess_count: 7 }), 7);
-  assert.equal(resolveMaxGuessCount(sdkConfigShape), 20);
-  assert.equal(resolveMaxGuessCount(tokenMapShape), 5);
-  assert.equal(resolveMaxGuessCount(xApiShape), 20);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 7 }, 9), 9);
-  // Edge semantics match Rust's `as_u64`: a present integer (0 included) is
-  // used as-is; fractional, negative, or non-numeric values fall back to the
-  // shape default.
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 0 }), 0);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 0 }), 0);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: 7.5 }), 20);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7.5 }), 5);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: -3 }), 20);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: -3 }), 5);
-  assert.equal(resolveMaxGuessCount({ ...sdkConfigShape, max_guess_count: "9" }), 20);
-  // The explicit override obeys the same integer rule (0 valid, 7.5 not).
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }, 0), 0);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }, 7.5), 7);
-  assert.equal(resolveMaxGuessCount({ ...tokenMapShape, max_guess_count: 7 }, -1), 7);
-
-  // 7. Config-shape parity with the native bindings: every shape
-  // from_x_api_json accepts must be usable here, with the same realm
-  // derivation (register = all, recover = majority).
-  const { juiceboxClientConfig } = await import("../index.js");
-  assert.equal(juiceboxClientConfig(sdkConfigShape), '{"realms":[]}');
-  const derived = juiceboxClientConfig({
-    token_map: [
-      { key: "r1", value: { address: "https://r1.example", token: "t1" } },
-      { key: "r2", value: { address: "https://r2.example", token: "t2" } },
-      { key: "r3", value: { address: "https://r3.example", token: "t3" } },
-    ],
-  });
-  assert.deepEqual(derived.realms, [
-    { id: "r1", address: "https://r1.example" },
-    { id: "r2", address: "https://r2.example" },
-    { id: "r3", address: "https://r3.example" },
-  ]);
-  assert.equal(derived.register_threshold, 3);
-  assert.equal(derived.recover_threshold, 2);
-  assert.equal(derived.pin_hashing_mode, "Standard2019");
-  const rawRealms = { realms: [{ id: "r1", address: "https://r1.example" }] };
-  assert.equal(juiceboxClientConfig(rawRealms), rawRealms);
-  assert.throws(
-    () => juiceboxClientConfig({ token_map: [{ key: "r1" }] }),
-    /Invalid token_map entry/,
+  // 6. Every error carries its kind, named as in every binding. Before the
+  // wrapper registers its ChatXdkError class, the module throws Errors with
+  // the same name and fields.
+  const thrown = (fn) => {
+    try {
+      fn();
+    } catch (e) {
+      return e;
+    }
+    return assert.fail("expected an error");
+  };
+  const badIdentity = thrown(() => chat.setIdentity({ userId: "user-1", signingKeyVersion: "1" }));
+  assert.ok(badIdentity instanceof Error);
+  assert.equal(badIdentity.name, "ChatXdkError");
+  assert.equal(badIdentity.kind, "invalidInput");
+  assert.equal(badIdentity.guessesRemaining, null);
+  assert.equal(
+    thrown(() => chat.decryptEvent({ eventB64: v.event_garbage_b64, conversationKeys: {} })).kind,
+    "parse",
   );
+  assert.equal(thrown(() => chat.decryptEvents({ events: "AAAA" })).kind, "invalidInput");
+  assert.equal(thrown(() => encryptedFileSize(-1)).kind, "invalidInput");
+  const locked = new Chat();
+  assert.equal(thrown(() => locked.exportKeys()).kind, "invalidState");
+  assert.equal(thrown(() => locked.importKeys({ keys: new Uint8Array(5) })).kind, "invalidInput");
+  locked.free();
 
   console.log("api.test.mjs: all assertions passed");
 }
