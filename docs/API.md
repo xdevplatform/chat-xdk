@@ -270,7 +270,7 @@ lifecycle action they sign:
 | Rotate an existing conversation's key (one-to-one or group) | `prepareConversationKeyChange` — pass the conversation id | `/2/chat/conversations/{id}/keys` |
 | Create a group | `prepareGroupCreate` | `/2/chat/conversations/group/initialize` (mints the `g…` id), then `/2/chat/conversations/group` |
 | Add members to a group | `prepareGroupMembersChange` | `/2/chat/conversations/{id}/members` |
-| Remove members from a group | `prepareGroupMembersRemove` — pass the public keys of the members who stay | `/2/chat/conversations/{id}/members/remove` |
+| Remove members from a group | `prepareGroupMembersRemove` — pass the public keys of every member who stays, yours included | `/2/chat/conversations/{id}/members/remove` |
 
 The group methods are separate because they sign different events: a group
 create must carry a `GroupChangeEvent.GroupCreate` signature and a member
@@ -286,8 +286,21 @@ A member removal posts its signatures on `/members/remove` together with
 `group_key_rotation_data`: the new `conversation_key_version` and the
 `conversation_participant_keys` for the members who stay.
 
-After any of these, store the returned `conversationKey` locally and use it
-with `encryptMessage` until the next key change.
+After any of these, store the returned `conversationKey` and
+`conversationKeyVersion`, and pass both to `encryptMessage` and the other
+encrypt and prepare calls. The key cache (`setCacheKeys`) adopts the new key
+only once `decryptEvents` decrypts the key change from the conversation's
+events and verifies it; until then an encrypt call that omits the key
+resolves the previous one, which the members a removal removed still hold.
+
+```typescript
+const next = chat.encryptMessage({
+  conversationId,
+  text: "hello",
+  conversationKey: prepared.conversationKey,
+  conversationKeyVersion: prepared.conversationKeyVersion,
+});
+```
 
 Two hygiene notes:
 
@@ -494,10 +507,12 @@ change](#prepare_group_avatar_change) naming the new key version.
 
 Sign a group member removal and rotate the conversation key, so the members
 removed don't receive the key the group encrypts under next. Required:
-`public_keys`, the identity keys of the members who stay, in the same shape
-as `prepare_group_members_change`; `conversation_id`; and `user_ids`, the
-members being removed. A `public_keys` entry for someone being removed is
-rejected.
+`public_keys`, the identity keys of every member who stays, yours included,
+in the same shape as `prepare_group_members_change`; `conversation_id`; and
+`user_ids`, the members being removed. The call encrypts the new key to each
+user's newest key version, and a member left out, you included, can't read
+what the group sends under it; the SDK doesn't check that the list is
+complete. A `public_keys` entry for someone being removed is rejected.
 
 The group's title and description are encrypted under the conversation key,
 so a rotation re-encrypts them: pass the ones the group has, as plaintext,
@@ -514,9 +529,12 @@ removal, bound to the new key version; a title and a description change for
 each one passed, signed as
 [`prepare_group_title_change`](#prepare_group_title_change) and
 [`prepare_group_description_change`](#prepare_group_description_change) sign
-them and marked as key-rotation re-encryptions (`for_key_rotation`), so X
-clients don't show them as changes; then the conversation-key change. Store
-the new key as you store the key a key change returns.
+them and marked as key-rotation re-encryptions (`for_key_rotation`), which
+recipients' `decrypt_event` and `decrypt_events` drop rather than return as
+changes (see [decrypt_events](#decrypt_events--batch-self-contained)); then
+the conversation-key change. Store the new key and version, and pass them
+to the encrypt and prepare calls until the key cache holds them (see
+[Conversation lifecycle](#conversation-lifecycle--when-to-use-which-prepare-method)).
 
 Send that result as `POST /2/chat/conversations/{id}/members/remove`.
 `user_ids` are the members being removed. `action_signatures` are the
@@ -527,7 +545,9 @@ signatures, in the order returned. `group_key_rotation_data` carries the new
 
 ```python
 prepared = chat.prepare_group_members_remove(
-    GroupMembersRemoveParams(remaining_public_keys, conversation_id, ["222"], title=title)
+    GroupMembersRemoveParams(
+        remaining_public_keys, conversation_id, ["222"], title=title, description=description
+    )
 )
 api.post(f"/2/chat/conversations/{conversation_id}/members/remove", {
     "user_ids": ["222"],
@@ -545,6 +565,7 @@ const prepared = chat.prepareGroupMembersRemove({
   conversationId,
   userIds: ["222"],
   title,
+  description,
 });
 await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
   user_ids: ["222"],
@@ -840,6 +861,15 @@ version to encrypt with, is the newest version whose key change verified,
 monotonic for the chat's lifetime, and null until a key change verifies; a
 key change that doesn't verify still adds its key to `conversation_keys.keys`.
 
+A member removal re-encrypts the group's title and description under the
+new key, as title and description changes marked `for_key_rotation`. They
+aren't changes, so decrypt drops them under either reject-unverified
+setting, after verifying them, as it drops an unverified event: each is
+left out of `events` and recorded in `errors`, with a message that says it
+is a key-rotation re-encryption. The removal itself, its key change, avatar
+changes and every title or description change without the mark decrypt as
+usual.
+
 ```typescript
 // JS
 interface DecryptEventsResult {
@@ -998,7 +1028,7 @@ Decrypts a single event using conversation keys you already have — cached from
 | conversation_keys | `conversationKeys?: ConversationKeyMap \| null` | `conversation_keys: dict[str, bytes] \| None = None` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` (or the one-argument constructor) | `IReadOnlyDictionary<string, byte[]>? ConversationKeys` (optional constructor argument) | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. Optional everywhere but Rust, where the map may be empty: omitted or empty, the keys come from the opt-in key cache (`setCacheKeys`), and non-message events (typing, read receipts) need no keys at all. |
 | signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **the event's sender**. The SDK matches by `publicKeyVersion` against the version in the event's signature. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails with an error. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
-**Returns: `Event`** directly — or **throws/raises** on failure (unlike `decryptEvents` which collects errors).
+**Returns: `Event`** directly — or **throws/raises** on failure (unlike `decryptEvents` which collects errors). It also throws an invalid-input error for an event decrypt drops: a member removal's title or description re-encryption, marked `for_key_rotation` (see [decrypt_events](#decrypt_events--batch-self-contained)). A loop over single events catches the error and moves on to the next event, as it does for an unverified one.
 
 ```typescript
 // JS — returns Event, throws on error
@@ -1098,6 +1128,7 @@ if (eventJson.GetProperty("type").GetString() == "Message")
 | **Conversation keys** | Caller provides (`ConversationKeyMap`); empty ⇒ opt-in key cache (`setCacheKeys`) | SDK extracts from KeyChange events internally |
 | **Signing keys** | For the **sender only**, matched by `publicKeyVersion`; unset ⇒ `setSigningKeys` store | For **all participants**, SDK filters by `userId` per event; unset ⇒ `setSigningKeys` store |
 | **Error handling** | **Throws** on failure | Per-event errors collected in `result.errors`; throws only for invalid params |
+| **A removal's title and description re-encryptions** | Throws an invalid-input error | Left out of `events`, recorded in `errors` |
 | **Return type** | `Event` (flat) | `DecryptEventsResult` wrapping `DecryptedEvent[]` |
 | **Returns original b64** | No | Yes (`originalB64` on each message) |
 | **Returns conv keys** | No | Yes (`conversationKeys` with `latestVersion`) |
@@ -1718,7 +1749,9 @@ and `GuessesRemaining`, matched with `errors.As`. .NET and the JVM throw
 `getGuessesRemaining()`. The C ABI's `FfiResult.error` is a JSON document,
 `{"kind": "...", "message": "..."}`, with `"guesses_remaining"` after a
 wrong PIN. The message is the same in every binding, apart from the JS
-params check, which prefixes `Invalid <method> params:`.
+params check, which prefixes `Invalid <method> params:`. `decrypt_event`
+reports a member removal's title or description re-encryption, which decrypt
+drops, as `InvalidInput`.
 
 ---
 
@@ -2732,8 +2765,11 @@ change's `title`, a `titleChanged` change's `newTitle` and a
 `avatarChanged` change's `newAvatarUrl`, and the `avatarUrl` another
 client's create may carry, come back as the event carries them, with the
 `conversationKeyVersion` the image is encrypted under. Download the image
-and decrypt it with the key for that version. Rust's `GroupChange` is
-`#[non_exhaustive]`, as is each variant with named fields.
+and decrypt it with the key for that version. A member removal's title and
+description re-encryptions, marked `for_key_rotation`, never arrive as
+`titleChanged` or `descriptionChanged`: decrypt drops them (see
+[decrypt_events](#decrypt_events--batch-self-contained)). Rust's
+`GroupChange` is `#[non_exhaustive]`, as is each variant with named fields.
 
 ### GroupText
 
@@ -2746,7 +2782,9 @@ it, when that key isn't there or the value doesn't decrypt under it; the
 rest of the event still decrypts, so a create without its key still returns
 its members and admins. 0.5.x apps sent titles as plaintext while naming a
 key version: their titles arrive as `unavailable` with the title in `raw`,
-so show `raw` when a title isn't decryptable.
+so show `raw` when a title isn't decryptable. A member removal's
+re-encryptions of the title and description aren't changes, and decrypt
+drops them.
 
 ```typescript
 // JS/WASM
