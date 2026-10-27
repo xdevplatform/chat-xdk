@@ -285,6 +285,31 @@ func TestPublicKeysAndSignature(t *testing.T) {
 	}
 }
 
+// Sign refuses data only the SDK signs: an event signature payload and a
+// public key. Data that only resembles a payload is application data.
+func TestSignRefusesDataOnlyTheSDKSigns(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	identity, err := base64.StdEncoding.DecodeString(v.IdentityPublicB64)
+	if err != nil {
+		t.Fatalf("decode identity key: %v", err)
+	}
+	keyChange := "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5"
+	for _, data := range [][]byte{[]byte(keyChange), identity} {
+		if _, err := chat.Sign(data); err == nil || !strings.Contains(err.Error(), "only the SDK signs") {
+			t.Errorf("Sign(%q) error = %v, want a refusal", data, err)
+		}
+	}
+	if sig, err := chat.Sign([]byte(" " + keyChange)); err != nil || len(sig) != 64 {
+		t.Errorf("Sign of application data: %d bytes, %v", len(sig), err)
+	}
+}
+
 func TestECIESConversationKeyRoundtrip(t *testing.T) {
 	v := loadVectors(t)
 

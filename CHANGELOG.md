@@ -683,3 +683,15 @@ prepared = chat.prepare_conversation_key_change(
     `User-Agent: juicebox_networking/<juicebox version>` on every request;
   - applies the timeout juicebox-sdk sets on each request, or 30 seconds when
     it sets none.
+- `sign` refuses data that only the SDK signs: a payload recipients verify
+  as a signed event (a message, conversation-key change, group or
+  conversation-metadata change, delete or read receipt), and a P-256 public
+  key, whose signature by the signing key binds it as an identity key. An
+  app that signed data an attacker chose could otherwise hand back a
+  signature that verifies as one of those events, such as a key change to a
+  key the attacker knows. The refusal is the invalid-input error each
+  binding raises for a bad argument (`SdkError::InvalidInput` in Rust,
+  `ValueError` in Python, a thrown `Error` in JS, a returned `error` in Go,
+  `ChatXdkException` in .NET and the JVM, `FfiResult.error` in the C ABI).
+  Any other data signs to the same signature bytes, and the SDK signs events
+  on its own path, which this does not touch.

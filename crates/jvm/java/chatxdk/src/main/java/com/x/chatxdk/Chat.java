@@ -969,7 +969,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Sign arbitrary data with the signing key.
+     * Sign application data with the signing key. Throws {@link ChatXdkException} for an
+     * event signature payload or a public key, which only the SDK signs.
      *
      * @param data Bytes to sign. May be empty but not null.
      * @return 64-byte ECDSA P-256 signature.

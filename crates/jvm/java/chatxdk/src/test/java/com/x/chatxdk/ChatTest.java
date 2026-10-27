@@ -1026,6 +1026,22 @@ class ChatTest {
         }
     }
 
+    // sign refuses data only the SDK signs: an event signature payload and a public key.
+    // Data that only resembles a payload is application data.
+    @Test
+    void signRefusesDataOnlyTheSdkSigns() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            String keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+            for (byte[] data : List.of(keyChange.getBytes(StandardCharsets.UTF_8), b64(v, "identity_public_b64"))) {
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.sign(data));
+                assertTrue(e.getMessage().contains("only the SDK signs"), e.getMessage());
+            }
+            assertEquals(64, chat.sign((" " + keyChange).getBytes(StandardCharsets.UTF_8)).length);
+        }
+    }
+
     @Test
     void vectorsDecryptEventsBatchAndSingleEventContracts() throws Exception {
         JsonNode v = loadVectors();

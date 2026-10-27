@@ -1370,6 +1370,24 @@ namespace ChatXdk.Tests
                 System.Text.Encoding.UTF8.GetBytes(v.MessageUtf8 + "!")));
         }
 
+        // Sign refuses data only the SDK signs: an event signature payload and a public key.
+        // Data that only resembles a payload is application data.
+        [Fact]
+        public void Sign_RefusesDataOnlyTheSdkSigns()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+
+            const string keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+            foreach (var data in new[] { System.Text.Encoding.UTF8.GetBytes(keyChange), Convert.FromBase64String(v.IdentityPublicB64) })
+            {
+                var ex = Assert.Throws<ChatXdkException>(() => chat.Sign(data));
+                Assert.Contains("only the SDK signs", ex.Message);
+            }
+            Assert.Equal(64, chat.Sign(System.Text.Encoding.UTF8.GetBytes(" " + keyChange)).Length);
+        }
+
         [Fact]
         public void Vectors_VerifyKeyBinding_ValidAndTampered()
         {
