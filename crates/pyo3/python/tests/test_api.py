@@ -758,6 +758,75 @@ class TestApiShapes(unittest.TestCase):
         sig = result["action_signatures"][0]
         self.assertTrue(sig["message_event_signature"]["signature"])
 
+    def test_results_carry_the_keys_their_types_declare(self):
+        import chat_xdk
+        from chat_xdk import (
+            ConversationKeyChangeParams,
+            DecryptEventsParams,
+            GroupTitleChangeParams,
+            MessageDeleteParams,
+        )
+
+        def declared(typed_dict):
+            return set(typed_dict.__annotations__)
+
+        chat, v = self._unlocked_chat()
+        key_input: chat_xdk.PublicKeyInput = {
+            "user_id": "910002",
+            "identity_public_key": v["identity_public_b64"],
+            "public_key_version": "1",
+        }
+        change = chat.prepare_conversation_key_change(
+            ConversationKeyChangeParams(
+                [key_input], conversation_id="conv-1", sender_id="910002", signing_key_version="1"
+            )
+        )
+        self.assertEqual(
+            set(change) | {"encrypted_title", "encrypted_description"},
+            declared(chat_xdk.PreparedConversationChange),
+        )
+        self.assertEqual(
+            set(change["conversation_participant_keys"][0]),
+            declared(chat_xdk.ConversationParticipantKey),
+        )
+        signature = change["action_signatures"][0]
+        self.assertEqual(set(signature), declared(chat_xdk.ActionSignature))
+        self.assertEqual(
+            set(signature["message_event_signature"]),
+            declared(chat_xdk.MessageEventSignature),
+        )
+        title = chat.prepare_group_title_change(
+            GroupTitleChangeParams(
+                "g100",
+                "Team",
+                sender_id="910002",
+                signing_key_version="1",
+                conversation_key=change["conversation_key"],
+                conversation_key_version=change["conversation_key_version"],
+            )
+        )
+        self.assertEqual(set(title), declared(chat_xdk.PreparedGroupMetadataChange))
+        delete = chat.prepare_message_delete(
+            MessageDeleteParams("conv-1", ["1"], True, sender_id="910002", signing_key_version="1")
+        )
+        self.assertEqual(set(delete), declared(chat_xdk.PreparedAction))
+
+        signing_key: chat_xdk.SigningKeyEntry = self._signing_key(
+            v["event_sender_id"], v["event_signing_key_version"]
+        )
+        self.assertEqual(set(signing_key), declared(chat_xdk.SigningKeyEntry))
+        batch = chat.decrypt_events(
+            DecryptEventsParams(
+                [v["event_key_change_b64"], v["event_message_b64"]], signing_keys=[signing_key]
+            )
+        )
+        self.assertEqual(set(batch), declared(chat_xdk.DecryptEventsResult))
+        self.assertEqual(
+            set(batch["conversation_keys"]), declared(chat_xdk.ConversationKeyResult)
+        )
+        for decrypted in batch["events"]:
+            self.assertLessEqual(set(decrypted), declared(chat_xdk.DecryptedEvent))
+
     def test_extract_conversation_keys_empty_shape(self):
         chat, _ = self._unlocked_chat()
 

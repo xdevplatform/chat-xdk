@@ -33,7 +33,7 @@ import threading as _threading
 import time as _time
 import urllib.parse as _urllib_parse
 from enum import Enum
-from typing import Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 from chat_xdk import _native
 from chat_xdk._native import __version__
@@ -279,6 +279,105 @@ class GroupText(TypedDict, total=False):
     raw: str
 
 
+class SigningKeyEntry(TypedDict):
+    """A participant's signing key, as ``GET /2/users/:id/public_keys``
+    returns it, for verifying the events they sign."""
+
+    user_id: str
+    public_key_version: str
+    public_key: str
+    identity_public_key: str
+    identity_public_key_signature: str
+
+
+class PublicKeyInput(TypedDict):
+    """A participant's identity key, to encrypt a new conversation key to."""
+
+    user_id: str
+    identity_public_key: str
+    public_key_version: str
+
+
+class ConversationKeyResult(TypedDict):
+    """Conversation keys by version, and the version to encrypt with: the
+    newest key change whose signature verified, or ``None``."""
+
+    keys: dict[str, bytes]
+    latest_version: Optional[str]
+
+
+class DecryptedEvent(TypedDict, total=False):
+    """One event of a ``decrypt_events`` batch: the decrypted ``event`` and,
+    for a message, ``original_b64``, its raw event."""
+
+    event: dict[str, Any]
+    original_b64: str
+
+
+class DecryptEventsResult(TypedDict):
+    """What ``decrypt_events`` returns. ``errors`` maps the index of each
+    event that failed to its error."""
+
+    events: list[DecryptedEvent]
+    conversation_keys: ConversationKeyResult
+    errors: dict[int, str]
+
+
+class MessageEventSignature(TypedDict):
+    """The signature of an action, as requests carry it."""
+
+    signature: str
+    signature_version: str
+    public_key_version: str
+    signing_public_key: str
+
+
+class ActionSignature(TypedDict):
+    """A signed action, ready to send in a request's ``action_signatures``."""
+
+    message_id: str
+    encoded_message_event_detail: str
+    message_event_signature: MessageEventSignature
+
+
+class PreparedAction(TypedDict):
+    """The signed actions of a ``prepare_*`` call that changes no key."""
+
+    action_signatures: list[ActionSignature]
+
+
+class PreparedGroupMetadataChange(TypedDict):
+    """A group title or description encrypted under the conversation key,
+    with its signed action."""
+
+    encrypted_value: str
+    conversation_key_version: str
+    action_signatures: list[ActionSignature]
+
+
+class ConversationParticipantKey(TypedDict):
+    """A new conversation key encrypted to one participant's identity key."""
+
+    user_id: str
+    encrypted_conversation_key: str
+    public_key_version: str
+
+
+class PreparedConversationChange(TypedDict, total=False):
+    """A new conversation key, encrypted to every participant, with the
+    signed actions that carry it. ``encrypted_title`` and
+    ``encrypted_description`` are set for a title and description the
+    params set."""
+
+    conversation_id: str
+    conversation_key: bytes
+    conversation_key_version: str
+    conversation_participant_keys: list[ConversationParticipantKey]
+    action_signatures: list[ActionSignature]
+    encrypted_title: str
+    encrypted_description: str
+
+
 class Chat(_native.Chat):
     """The X Chat encryption SDK.
 
@@ -306,12 +405,17 @@ class Chat(_native.Chat):
 
 
 __all__ = [
+    "ActionSignature",
     "Chat",
     "ChatXdkError",
     "ConversationKeyChangeParams",
+    "ConversationKeyResult",
+    "ConversationParticipantKey",
     "DecryptEventParams",
     "DecryptEventsParams",
+    "DecryptEventsResult",
     "DecryptFileParams",
+    "DecryptedEvent",
     "DecryptionError",
     "EncryptEditParams",
     "EncryptFileParams",
@@ -336,19 +440,21 @@ __all__ = [
     "GroupMembersRemoveParams",
     "GroupText",
     "GroupTitleChangeParams",
+    "ImportKeysParams",
     "InvalidInputError",
     "InvalidPinError",
     "InvalidStateError",
     "JuiceboxError",
     "MarkConversationReadParams",
     "MessageDeleteParams",
+    "MessageEventSignature",
     "MessageTtlChangeParams",
     "MessageTtlRemoveParams",
     "ParseError",
-    "ScreenCaptureChange",
-    "ScreenCaptureParams",
-    "SetIdentityParams",
-    "ImportKeysParams",
+    "PreparedAction",
+    "PreparedConversationChange",
+    "PreparedGroupMetadataChange",
+    "PublicKeyInput",
     "PublicKeyRegistration",
     "PublicKeyRegistrationPayload",
     "PublicKeys",
@@ -358,8 +464,12 @@ __all__ = [
     "QuickReplyOptionsResponse",
     "QuickReplyRequest",
     "QuickReplyResponse",
+    "ScreenCaptureChange",
+    "ScreenCaptureParams",
     "SendPayload",
+    "SetIdentityParams",
     "SignatureInfo",
+    "SigningKeyEntry",
     "VerificationError",
     "base64_to_bytes",
     "bytes_to_base64",

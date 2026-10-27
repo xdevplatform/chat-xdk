@@ -1,7 +1,7 @@
 """Type stubs for chat-xdk Python bindings."""
 
 from enum import Enum
-from typing import Literal, Optional, TypedDict, Union
+from typing import Any, Literal, Optional, TypedDict, Union
 
 __version__: str
 
@@ -102,6 +102,95 @@ class GroupText(TypedDict, total=False):
     kind: Literal["Text", "Unavailable"]
     text: str
     raw: str
+
+
+class SigningKeyEntry(TypedDict):
+    """A participant's signing key, as ``GET /2/users/:id/public_keys``
+    returns it, for verifying the events they sign."""
+
+    user_id: str
+    public_key_version: str
+    public_key: str
+    identity_public_key: str
+    identity_public_key_signature: str
+
+class PublicKeyInput(TypedDict):
+    """A participant's identity key, to encrypt a new conversation key to."""
+
+    user_id: str
+    identity_public_key: str
+    public_key_version: str
+
+class ConversationKeyResult(TypedDict):
+    """Conversation keys by version, and the version to encrypt with: the
+    newest key change whose signature verified, or ``None``."""
+
+    keys: dict[str, bytes]
+    latest_version: Optional[str]
+
+class DecryptedEvent(TypedDict, total=False):
+    """One event of a ``decrypt_events`` batch: the decrypted ``event`` and,
+    for a message, ``original_b64``, its raw event."""
+
+    event: dict[str, Any]
+    original_b64: str
+
+class DecryptEventsResult(TypedDict):
+    """What ``decrypt_events`` returns. ``errors`` maps the index of each
+    event that failed to its error."""
+
+    events: list[DecryptedEvent]
+    conversation_keys: ConversationKeyResult
+    errors: dict[int, str]
+
+class MessageEventSignature(TypedDict):
+    """The signature of an action, as requests carry it."""
+
+    signature: str
+    signature_version: str
+    public_key_version: str
+    signing_public_key: str
+
+class ActionSignature(TypedDict):
+    """A signed action, ready to send in a request's ``action_signatures``."""
+
+    message_id: str
+    encoded_message_event_detail: str
+    message_event_signature: MessageEventSignature
+
+class PreparedAction(TypedDict):
+    """The signed actions of a ``prepare_*`` call that changes no key."""
+
+    action_signatures: list[ActionSignature]
+
+class PreparedGroupMetadataChange(TypedDict):
+    """A group title or description encrypted under the conversation key,
+    with its signed action."""
+
+    encrypted_value: str
+    conversation_key_version: str
+    action_signatures: list[ActionSignature]
+
+class ConversationParticipantKey(TypedDict):
+    """A new conversation key encrypted to one participant's identity key."""
+
+    user_id: str
+    encrypted_conversation_key: str
+    public_key_version: str
+
+class PreparedConversationChange(TypedDict, total=False):
+    """A new conversation key, encrypted to every participant, with the
+    signed actions that carry it. ``encrypted_title`` and
+    ``encrypted_description`` are set for a title and description the
+    params set."""
+
+    conversation_id: str
+    conversation_key: bytes
+    conversation_key_version: str
+    conversation_participant_keys: list[ConversationParticipantKey]
+    action_signatures: list[ActionSignature]
+    encrypted_title: str
+    encrypted_description: str
 
 class PublicKeys:
     identity: str
@@ -256,13 +345,13 @@ class EncryptEditParams:
     ) -> None: ...
 
 class ConversationKeyChangeParams:
-    public_keys: list[dict[str, str]]
+    public_keys: list[PublicKeyInput]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     conversation_id: Optional[str]
     def __init__(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[PublicKeyInput],
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
@@ -270,7 +359,7 @@ class ConversationKeyChangeParams:
     ) -> None: ...
 
 class GroupMembersChangeParams:
-    public_keys: list[dict[str, str]]
+    public_keys: list[PublicKeyInput]
     conversation_id: str
     new_member_ids: list[str]
     current_member_ids: list[str]
@@ -285,7 +374,7 @@ class GroupMembersChangeParams:
     current_screen_capture_blocking_enabled: Optional[bool]
     def __init__(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[PublicKeyInput],
         conversation_id: str,
         new_member_ids: list[str],
         current_member_ids: list[str],
@@ -302,7 +391,7 @@ class GroupMembersChangeParams:
     ) -> None: ...
 
 class GroupCreateParams:
-    public_keys: list[dict[str, str]]
+    public_keys: list[PublicKeyInput]
     conversation_id: str
     member_ids: list[str]
     admin_ids: list[str]
@@ -312,7 +401,7 @@ class GroupCreateParams:
     ttl_msec: Optional[int]
     def __init__(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[PublicKeyInput],
         conversation_id: str,
         member_ids: list[str],
         admin_ids: list[str],
@@ -332,7 +421,7 @@ class ScreenCaptureChange(str, Enum):
     DetectionDisabled = "DetectionDisabled"
 
 class GroupMembersRemoveParams:
-    public_keys: list[dict[str, str]]
+    public_keys: list[PublicKeyInput]
     conversation_id: str
     user_ids: list[str]
     title: Optional[str]
@@ -341,7 +430,7 @@ class GroupMembersRemoveParams:
     signing_key_version: Optional[str]
     def __init__(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[PublicKeyInput],
         conversation_id: str,
         user_ids: list[str],
         *,
@@ -592,23 +681,23 @@ class MarkConversationReadParams:
 class DecryptEventParams:
     event_b64: str
     conversation_keys: Optional[dict[str, bytes]]
-    signing_keys: Optional[list[dict[str, str]]]
+    signing_keys: Optional[list[SigningKeyEntry]]
     def __init__(
         self,
         event_b64: str,
         conversation_keys: Optional[dict[str, bytes]] = None,
         *,
-        signing_keys: Optional[list[dict[str, str]]] = None,
+        signing_keys: Optional[list[SigningKeyEntry]] = None,
     ) -> None: ...
 
 class DecryptEventsParams:
     events: list[str]
-    signing_keys: Optional[list[dict[str, str]]]
+    signing_keys: Optional[list[SigningKeyEntry]]
     def __init__(
         self,
         events: list[str],
         *,
-        signing_keys: Optional[list[dict[str, str]]] = None,
+        signing_keys: Optional[list[SigningKeyEntry]] = None,
     ) -> None: ...
 
 class EncryptFileParams:
@@ -675,7 +764,7 @@ class Chat:
     # Session state
     def set_identity(self, params: SetIdentityParams) -> None: ...
     def set_cache_keys(self, enabled: bool) -> None: ...
-    def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None: ...
+    def set_signing_keys(self, signing_keys: list[SigningKeyEntry]) -> None: ...
 
     # Juicebox Key Storage
     def setup(self, pin: Union[str, bytes, bytearray]) -> PublicKeys: ...
@@ -714,30 +803,30 @@ class Chat:
 
     # Conversation Keys
     def decrypt_conversation_key(self, encrypted_key_b64: str) -> bytes: ...
-    def prepare_conversation_key_change(self, params: ConversationKeyChangeParams) -> dict: ...
-    def prepare_group_members_change(self, params: GroupMembersChangeParams) -> dict: ...
-    def prepare_group_create(self, params: GroupCreateParams) -> dict: ...
-    def prepare_message_delete(self, params: MessageDeleteParams) -> dict: ...
-    def prepare_mark_conversation_read(self, params: MarkConversationReadParams) -> dict: ...
-    def prepare_group_members_remove(self, params: GroupMembersRemoveParams) -> dict: ...
-    def prepare_group_leave(self, params: GroupLeaveParams) -> dict: ...
-    def prepare_group_title_change(self, params: GroupTitleChangeParams) -> dict: ...
-    def prepare_group_avatar_change(self, params: GroupAvatarChangeParams) -> dict: ...
-    def prepare_group_description_change(self, params: GroupDescriptionChangeParams) -> dict: ...
-    def prepare_group_admins_add(self, params: GroupAdminsAddParams) -> dict: ...
-    def prepare_group_admins_remove(self, params: GroupAdminsRemoveParams) -> dict: ...
-    def prepare_group_invite_enable(self, params: GroupInviteEnableParams) -> dict: ...
-    def prepare_group_invite_disable(self, params: GroupInviteDisableParams) -> dict: ...
-    def prepare_group_join_request(self, params: GroupJoinRequestParams) -> dict: ...
-    def prepare_group_join_reject(self, params: GroupJoinRejectParams) -> dict: ...
-    def prepare_message_ttl_change(self, params: MessageTtlChangeParams) -> dict: ...
-    def prepare_message_ttl_remove(self, params: MessageTtlRemoveParams) -> dict: ...
-    def prepare_screen_capture(self, params: ScreenCaptureParams) -> dict: ...
+    def prepare_conversation_key_change(self, params: ConversationKeyChangeParams) -> PreparedConversationChange: ...
+    def prepare_group_members_change(self, params: GroupMembersChangeParams) -> PreparedConversationChange: ...
+    def prepare_group_create(self, params: GroupCreateParams) -> PreparedConversationChange: ...
+    def prepare_message_delete(self, params: MessageDeleteParams) -> PreparedAction: ...
+    def prepare_mark_conversation_read(self, params: MarkConversationReadParams) -> PreparedAction: ...
+    def prepare_group_members_remove(self, params: GroupMembersRemoveParams) -> PreparedConversationChange: ...
+    def prepare_group_leave(self, params: GroupLeaveParams) -> PreparedAction: ...
+    def prepare_group_title_change(self, params: GroupTitleChangeParams) -> PreparedGroupMetadataChange: ...
+    def prepare_group_avatar_change(self, params: GroupAvatarChangeParams) -> PreparedAction: ...
+    def prepare_group_description_change(self, params: GroupDescriptionChangeParams) -> PreparedGroupMetadataChange: ...
+    def prepare_group_admins_add(self, params: GroupAdminsAddParams) -> PreparedAction: ...
+    def prepare_group_admins_remove(self, params: GroupAdminsRemoveParams) -> PreparedAction: ...
+    def prepare_group_invite_enable(self, params: GroupInviteEnableParams) -> PreparedAction: ...
+    def prepare_group_invite_disable(self, params: GroupInviteDisableParams) -> PreparedAction: ...
+    def prepare_group_join_request(self, params: GroupJoinRequestParams) -> PreparedAction: ...
+    def prepare_group_join_reject(self, params: GroupJoinRejectParams) -> PreparedAction: ...
+    def prepare_message_ttl_change(self, params: MessageTtlChangeParams) -> PreparedAction: ...
+    def prepare_message_ttl_remove(self, params: MessageTtlRemoveParams) -> PreparedAction: ...
+    def prepare_screen_capture(self, params: ScreenCaptureParams) -> PreparedAction: ...
 
     # Events
-    def extract_conversation_keys(self, events: list[str]) -> dict: ...
-    def decrypt_events(self, params: DecryptEventsParams) -> dict: ...
-    def decrypt_event(self, params: DecryptEventParams) -> dict: ...
+    def extract_conversation_keys(self, events: list[str]) -> ConversationKeyResult: ...
+    def decrypt_events(self, params: DecryptEventsParams) -> DecryptEventsResult: ...
+    def decrypt_event(self, params: DecryptEventParams) -> dict[str, Any]: ...
 
     # Message Encryption
     def encrypt_message(self, params: EncryptMessageParams) -> SendPayload: ...
