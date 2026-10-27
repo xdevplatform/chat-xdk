@@ -1331,10 +1331,10 @@ var version = result.ConversationKeys.LatestVersion;
 ### Leaving a group
 
 `PrepareGroupLeave` signs the sender's removal and does not rotate the
-conversation key. `ActionSignatures` are the removal, then a
-`GroupAdminAddChange` when `PromoteAdminId` is set, then a
-`ConversationDeleteEvent`. It returns a `PreparedAction`. Send it as a
-removal of your own id:
+conversation key. `ActionSignatures` are the removal, at signature version
+11 as a member removal's, then a `GroupAdminAddChange` when `PromoteAdminId`
+is set, then a `ConversationDeleteEvent`. It returns a `PreparedAction`.
+Send it as a removal of your own id:
 
 ```csharp
 // 0.5.x

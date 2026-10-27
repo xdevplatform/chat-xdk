@@ -1321,10 +1321,10 @@ let version = result.conversation_keys.latest_version;
 ### Leaving a group
 
 `prepare_group_leave` signs the sender's removal and does not rotate the
-conversation key. `action_signatures` are the removal, then a
-`GroupAdminAddChange` when `promote_admin_id` is set, then a
-`ConversationDeleteEvent`. It returns a `PreparedAction`. Send it as a
-removal of your own id:
+conversation key. `action_signatures` are the removal, at signature version
+11 as a member removal's, then a `GroupAdminAddChange` when
+`promote_admin_id` is set, then a `ConversationDeleteEvent`. It returns a
+`PreparedAction`. Send it as a removal of your own id:
 
 ```rust
 // 0.5.x
