@@ -30,7 +30,7 @@ change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -39,17 +39,17 @@ Each snippet shows the lines that change, first as 0.5.x code writes them
 and then as 0.6.0 code writes them. `chat` is a `Chat` with your keys
 loaded, and the other names stand for your own values: ids, versions, keys
 and events as the X API returns them, `keys` for the conversation key map
-`decrypt_events` returns, `payload` for a `SendPayload`, `prepared` for
-the dict a prepare method returns, and `key_change`, `message`, `deleted`,
+`decrypt_events` returns, `payload` for a `SendPayload`, `prepared` for the
+dict a prepare method returns, and `key_change`, `message`, `deleted`,
 `receipt` and `group_change` for a decrypted key change, message, deletion,
-read receipt and group change. `api.post(path, body)` stands for your
-HTTP client: it POSTs `body` as JSON to `https://api.x.com` + `path` with
-your user access token and returns the parsed JSON response.
+read receipt and group change. `api.post(path, body)` stands for your HTTP
+client: it POSTs `body` as JSON to `https://api.x.com` + `path` with your
+user access token and returns the parsed JSON response.
 `photo_attachment(media_hash_key)` stands for your code that builds a
-photo's attachment descriptor, and `show_edit`, `show_title` and
-`show_description` for your code that displays an edit or a group's title
-or description. Every class and function the snippets use imports from
-`chat_xdk`.
+photo's attachment descriptor, and `show_edit`, `show_title`,
+`show_description` and `show_avatar` for your code that displays an edit, or
+a group's title, description or avatar. Every class and function the
+snippets use imports from `chat_xdk`.
 
 ## Upgrade readers before v1 sends start
 
@@ -211,8 +211,10 @@ event = chat.decrypt_event(DecryptEventParams(event_b64, keys, signing_keys=sign
 ## Encrypt and prepare methods take params classes
 
 Each encrypt and prepare method takes one params object. Each class takes
-the arguments its method took, with the same names, order and defaults, and
-exposes every field as a read/write attribute:
+the arguments its method took, with the same names, order and defaults,
+except where [Group actions should be
+signed](#group-actions-should-be-signed) says otherwise, and exposes every
+field as a read/write attribute:
 
 | Method | Params class |
 |---|---|
@@ -486,8 +488,9 @@ seen_until = receipt["seen_until_sequence_id"]
 
 ## Deletes return a `PreparedAction`
 
-`prepare_message_delete` returns a dict with `action_signatures` holding
-one entry, shaped as the previous section shows. Read the action's
+`prepare_message_delete` returns a dict with `action_signatures` holding one
+entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's
 `message_id` from that entry, and send `action_signatures` as returned:
 
 ```python
@@ -518,18 +521,21 @@ those entries on the update's request.
 
 ### Creating a group
 
-`prepare_group_create` encrypts the group's title and avatar URL under the
-conversation key it creates, so pass them as plaintext. The result dict
-also carries them encrypted, as `encrypted_title` and
-`encrypted_avatar_url` (absent when unset): send those as the create
-request's `group_name` and `group_avatar_url`, next to its participant keys
-and signatures. The create signs the encrypted values, so a title or avatar
-URL may contain a comma.
+`prepare_group_create` encrypts the group's title under the conversation key
+it creates, so pass it as plaintext. The result dict also carries it
+encrypted, as `encrypted_title` (absent when unset): send that as the create
+request's `group_name`, next to its participant keys and signatures. The
+create signs the encrypted value, which is base64, so a title may contain a
+comma; a value signed as is, such as an avatar URL, can't. A create sets no
+avatar: set one afterwards with an [avatar change](#changing-the-avatar),
+with the image encrypted under the key the create returns.
 
 ```python
 # 0.5.x
-prepared = chat.prepare_group_create(public_keys, conversation_id, member_ids, admin_ids, title=title)
-body = {"group_name": title}
+prepared = chat.prepare_group_create(
+    public_keys, conversation_id, member_ids, admin_ids, title=title, avatar_url=avatar_url
+)
+body = {"group_name": title, "group_avatar_url": avatar_url}
 
 # 0.6.0
 prepared = chat.prepare_group_create(
@@ -538,10 +544,19 @@ prepared = chat.prepare_group_create(
 body = {"group_name": prepared["encrypted_title"]}
 ```
 
-`decrypt_event` returns a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: a `Created` change's `title` and `avatar_url` are
-plaintext.
+`decrypt_event` returns a received group create with its title decrypted
+with the key for the version the create names, from the call's key map or
+the key cache: a `Created` change's `title` is a `GroupText` dict (the
+`TypedDict` `chat_xdk` exports). `"kind": "Text"` holds the title in `text`.
+`"kind": "Unavailable"` holds, in `raw`, the value as the create carries it,
+when that key isn't there or the value doesn't decrypt under it, and the
+rest of the create still decrypts. 0.5.x signed a create's title as the app
+passed it, so a 0.5.x app's create with a plaintext title arrives as
+`Unavailable` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `Text`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`decrypt`.
 
 ```python
 # 0.5.x
@@ -552,8 +567,52 @@ if change["change_type"] == "Created" and change["title"]:
 # 0.6.0
 change = group_change["change"]
 if change["change_type"] == "Created" and change["title"]:
-    show_title(change["title"])
+    title = change["title"]
+    show_title(title["text"] if title["kind"] == "Text" else title["raw"])
 ```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`prepare_group_members_change` rotates the conversation key, so it
+re-encrypts the group's title and description under the key it generates:
+pass them as plaintext, as `current_title` and `current_description`, not as
+values your code encrypted. The result dict carries them encrypted, as
+`encrypted_title` and `encrypted_description` (absent when unset). Send
+`encrypted_title` as the add-members request's `encrypted_title`; the
+description travels in the signed member add.
+
+```python
+# 0.5.x
+prepared = chat.prepare_group_members_change(
+    public_keys, conversation_id, new_member_ids, member_ids, admin_ids, [], current_title=title
+)
+
+# 0.6.0
+prepared = chat.prepare_group_members_change(
+    GroupMembersChangeParams(
+        public_keys, conversation_id, new_member_ids, member_ids, admin_ids, [],
+        current_title=title, current_description=description,
+    )
+)
+body = {"encrypted_title": prepared["encrypted_title"]}
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `current_avatar_url` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
 
 ### Removing members
 
@@ -561,16 +620,23 @@ if change["change_type"] == "Created" and change["title"]:
 conversation key, so the members removed don't receive the key the group
 encrypts under next. `GroupMembersRemoveParams` takes the identity keys of
 the members who stay, the conversation id and the members to remove; a key
-for a member being removed raises `ValueError`. The group's title, avatar
-and description are encrypted under the conversation key: pass the ones the
-group has, as plaintext, as `title`, `avatar_url` and `description`, and
-the call encrypts each under the new key.
+for a member being removed raises `ValueError`. The group's title and
+description are encrypted under the conversation key: pass the ones the
+group has, as plaintext, as `title` and `description`, and the call encrypts
+each under the new key and signs it as a key-rotation re-encryption, which X
+clients don't show as a change. A rotation leaves the avatar alone: its
+image stays encrypted under the key it was uploaded with, which the members
+who stay hold.
 
-The result is a `PreparedConversationChange` dict: the new conversation
-key, `conversation_participant_keys` for the members who stay, and
-`action_signatures` in request order — the removal, a change for each
-title, avatar and description passed, then the conversation-key change.
+The result is a `PreparedConversationChange` dict: the new conversation key,
+`conversation_participant_keys` for the members who stay, and
+`action_signatures` in request order — the removal, a title change and a
+description change for the ones passed, then the conversation-key change.
 Store the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -627,9 +693,12 @@ encrypted_title = prepared["encrypted_value"]
 ```
 
 `decrypt_event` returns a received title change decrypted: the `new_title`
-of a `TitleChanged` change is the plaintext. It decrypts with the key
-version the change names, from the call's key map or the key cache, and
-raises without that key, as a message does.
+of a `TitleChanged` change is a `GroupText` dict, as a create's `title` is.
+It decrypts with the key for the version the change names, from the call's
+key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `Unavailable` with the value as carried, and the event still
+decrypts.
 
 ```python
 # 0.5.x
@@ -640,22 +709,39 @@ if change["change_type"] == "TitleChanged":
 # 0.6.0
 change = group_change["change"]
 if change["change_type"] == "TitleChanged":
-    show_title(change["new_title"])
+    new_title = change["new_title"]
+    show_title(new_title["text"] if new_title["kind"] == "Text" else new_title["raw"])
 ```
 
 ### Changing the avatar
 
-`prepare_group_avatar_change` takes the new avatar URL as plaintext and
-returns a `PreparedGroupMetadataChange` dict, as the title change does. A
-received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `prepare_group_avatar_change`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction` dict; send its `action_signatures` with the URL. A URL
+containing a comma is rejected, since signatures join their fields with
+commas.
 
 ```python
 # 0.5.x
 encrypted_avatar_url = chat.encrypt(avatar_url, keys[conversation_key_version])
 
 # 0.6.0
-prepared = chat.prepare_group_avatar_change(GroupAvatarChangeParams(conversation_id, avatar_url))
-encrypted_avatar_url = prepared["encrypted_value"]
+prepared = chat.prepare_group_avatar_change(
+    GroupAvatarChangeParams(conversation_id, avatar_url, conversation_key_version)
+)
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
+```python
+# 0.6.0
+change = group_change["change"]
+if change["change_type"] == "AvatarChanged":
+    show_avatar(change["new_avatar_url"], change["conversation_key_version"])
 ```
 
 ### Changing the description
@@ -674,14 +760,18 @@ prepared = chat.prepare_group_description_change(
 encrypted_description = prepared["encrypted_value"]
 ```
 
-A received description change is a `DescriptionChanged` change holding the
-decrypted `new_description`:
+A received description change is a `DescriptionChanged` change holding
+`new_description` as a `GroupText` dict; read it as a title change's
+`new_title`:
 
 ```python
 # 0.6.0
 change = group_change["change"]
 if change["change_type"] == "DescriptionChanged":
-    show_description(change["new_description"])
+    new_description = change["new_description"]
+    show_description(
+        new_description["text"] if new_description["kind"] == "Text" else new_description["raw"]
+    )
 ```
 
 ### Adding admins

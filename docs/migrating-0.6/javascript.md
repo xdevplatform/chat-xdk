@@ -29,7 +29,7 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -43,15 +43,14 @@ the conversation key map `decryptEvents` returns, `payload` for a
 `keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
 decrypted keyChange, message, messageDeleted, readReceipt and groupChange
 event. `api.post(path, body)` stands for your HTTP client: it POSTs `body`
-as JSON to `https://api.x.com` + `path` with your user access token,
-writing every key in snake_case as the X API takes them (the package
-returns camelCase), and resolves to the parsed JSON response.
+as JSON to `https://api.x.com` + `path` with your user access token, writing
+every key in snake_case as the X API takes them (the package returns
+camelCase), and resolves to the parsed JSON response.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-attachment descriptor, and `showEdit`, `showTitle` and `showDescription`
-for your code that displays an edit or a group's title or description.
-Functions
-such as `encryptedFileSize` and `bytesToBase64` import from
-`@xdevplatform/chat-xdk`.
+attachment descriptor, and `showEdit`, `showTitle`, `showDescription` and
+`showAvatar` for your code that displays an edit, or a group's title,
+description or avatar. Functions such as `encryptedFileSize` and
+`bytesToBase64` import from `@xdevplatform/chat-xdk`.
 
 ## Upgrade readers before v1 sends start
 
@@ -457,8 +456,9 @@ const seenUntil = receipt.seenUntilSequenceId;
 ## Deletes return a `PreparedAction`
 
 `prepareMessageDelete` returns a `PreparedAction` whose `actionSignatures`
-hold one entry, shaped as the previous section shows. Read the action's
-`messageId` from that entry, and send `actionSignatures` as returned:
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `messageId`
+from that entry, and send `actionSignatures` as returned:
 
 ```js
 // 0.5.x
@@ -507,28 +507,39 @@ those entries on the update's request, in snake_case, as this page's other
 
 ### Creating a group
 
-`prepareGroupCreate` encrypts the group's title and avatar URL under the
-conversation key it creates, so pass them as plaintext. The result is a
-`PreparedConversationChange` that also carries them encrypted, as
-`encryptedTitle` and `encryptedAvatarUrl` (absent when unset): send those
-as the create request's `group_name` and `group_avatar_url`, next to its
-participant keys and signatures. The create signs the encrypted values, so
-a title or avatar URL may contain a comma.
+`prepareGroupCreate` encrypts the group's title under the conversation key
+it creates, so pass it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`encryptedTitle` (absent when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
 
 ```js
 // 0.5.x
-const prepared = chat.prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title });
-const body = { group_name: title };
+const prepared = chat.prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title, avatarUrl });
+const body = { group_name: title, group_avatar_url: avatarUrl };
 
 // 0.6.0
 const prepared = chat.prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title });
 const body = { group_name: prepared.encryptedTitle };
 ```
 
-`decryptEvent` returns a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: a `created` change's `title` and `avatarUrl` are
-plaintext.
+`decryptEvent` returns a received group create with its title decrypted with
+the key for the version the create names, from the call's key map or the key
+cache: a `created` change's `title` is a `GroupText`, a type the package
+exports. `{ kind: 'text', text }` holds the title.
+`{ kind: 'unavailable', raw }` holds the value as the create carries it,
+when that key isn't there or the value doesn't decrypt under it, and the
+rest of the create still decrypts. 0.5.x signed a create's title as the app
+passed it, so a 0.5.x app's create with a plaintext title arrives as
+`unavailable` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `text`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`decrypt`.
 
 ```js
 // 0.5.x
@@ -537,26 +548,78 @@ if (groupChange.change.changeType === 'created' && groupChange.change.title) {
 }
 
 // 0.6.0
-if (groupChange.change.changeType === 'created' && groupChange.change.title) {
-  showTitle(groupChange.change.title);
+const change = groupChange.change;
+if (change.changeType === 'created' && change.title) {
+  showTitle(change.title.kind === 'text' ? change.title.text : change.title.raw);
 }
 ```
+
+A `created` change also carries the create's `conversationKeyVersion`, and
+the `avatarUrl` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`prepareGroupMembersChange` rotates the conversation key, so it re-encrypts
+the group's title and description under the key it generates: pass them as
+plaintext, as `currentTitle` and `currentDescription`, not as values your
+code encrypted. The result carries them encrypted, as `encryptedTitle` and
+`encryptedDescription` (absent when unset). Send `encryptedTitle` as the
+add-members request's `encrypted_title`; the description travels in the
+signed member add.
+
+```js
+// 0.5.x
+const prepared = chat.prepareGroupMembersChange({
+  publicKeys, conversationId, newMemberIds,
+  currentMemberIds: memberIds, currentAdminIds: adminIds, currentPendingMemberIds: [],
+  currentTitle: title,
+});
+
+// 0.6.0
+const prepared = chat.prepareGroupMembersChange({
+  publicKeys, conversationId, newMemberIds,
+  currentMemberIds: memberIds, currentAdminIds: adminIds, currentPendingMemberIds: [],
+  currentTitle: title, currentDescription: description,
+});
+const body = { encrypted_title: prepared.encryptedTitle };
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `currentAvatarUrl` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
 
 ### Removing members
 
 `prepareGroupMembersRemove` removes `userIds` and rotates the conversation
 key, so the members removed don't receive the key the group encrypts under
 next. `publicKeys` are the identity keys of the members who stay; a key for
-a member being removed throws. The group's title, avatar and description
-are encrypted under the conversation key: pass the ones the group has, as
-plaintext, as `title`, `avatarUrl` and `description`, and the call encrypts
-each under the new key.
+a member being removed throws. The group's title and description are
+encrypted under the conversation key: pass the ones the group has, as
+plaintext, as `title` and `description`, and the call encrypts each under
+the new key and signs it as a key-rotation re-encryption, which X clients
+don't show as a change. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
 The result is a `PreparedConversationChange`: the new `conversationKey`,
 `conversationParticipantKeys` for the members who stay, and
-`actionSignatures` in request order — the removal, a change for each
-title, avatar and description passed, then the conversation-key change.
+`actionSignatures` in request order — the removal, a title change and a
+description change for the ones passed, then the conversation-key change.
 Store the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -612,10 +675,12 @@ const prepared = chat.prepareGroupTitleChange({ conversationId, newTitle: title 
 const encryptedTitle = prepared.encryptedValue;
 ```
 
-`decryptEvent` returns a received title change decrypted: the `newTitle`
-of a `titleChanged` change is the plaintext. It decrypts with the key
-version the change names, from the call's key map or the key cache, and
-throws without that key, as a message does.
+`decryptEvent` returns a received title change decrypted: the `newTitle` of
+a `titleChanged` change is a `GroupText`, as a create's `title` is. It
+decrypts with the key for the version the change names, from the call's key
+map or the key cache. Without that key, or when the value isn't ciphertext
+under it, as for a plaintext title an app signed with a key version, it is
+`unavailable` with the value as carried, and the event still decrypts.
 
 ```js
 // 0.5.x
@@ -624,24 +689,42 @@ if (groupChange.change.changeType === 'titleChanged') {
 }
 
 // 0.6.0
-if (groupChange.change.changeType === 'titleChanged') {
-  showTitle(groupChange.change.newTitle);
+const { changeType, newTitle } = groupChange.change;
+if (changeType === 'titleChanged') {
+  showTitle(newTitle.kind === 'text' ? newTitle.text : newTitle.raw);
 }
 ```
 
 ### Changing the avatar
 
-`prepareGroupAvatarChange` takes the new avatar URL as plaintext and
-returns a `PreparedGroupMetadataChange`, as the title change does. A
-received `avatarChanged` change holds the decrypted `newAvatarUrl`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `prepareGroupAvatarChange`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction`; send its `actionSignatures` with the URL. A URL containing
+a comma is rejected, since signatures join their fields with commas.
 
 ```js
 // 0.5.x
 const encryptedAvatarUrl = chat.encrypt(avatarUrl, keys[conversationKeyVersion]);
 
 // 0.6.0
-const prepared = chat.prepareGroupAvatarChange({ conversationId, newAvatarUrl: avatarUrl });
-const encryptedAvatarUrl = prepared.encryptedValue;
+const prepared = chat.prepareGroupAvatarChange({
+  conversationId,
+  newAvatarUrl: avatarUrl,
+  conversationKeyVersion,
+});
+```
+
+A received `avatarChanged` change holds `newAvatarUrl` as sent and its
+`conversationKeyVersion`: download the image and decrypt it with the key for
+that version.
+
+```js
+// 0.6.0
+if (groupChange.change.changeType === 'avatarChanged') {
+  showAvatar(groupChange.change.newAvatarUrl, groupChange.change.conversationKeyVersion);
+}
 ```
 
 ### Changing the description
@@ -658,13 +741,14 @@ const prepared = chat.prepareGroupDescriptionChange({ conversationId, newDescrip
 const encryptedDescription = prepared.encryptedValue;
 ```
 
-A received description change is a `descriptionChanged` change holding the
-decrypted `newDescription`:
+A received description change is a `descriptionChanged` change holding
+`newDescription` as a `GroupText`; read it as a title change's `newTitle`:
 
 ```js
 // 0.6.0
-if (groupChange.change.changeType === 'descriptionChanged') {
-  showDescription(groupChange.change.newDescription);
+const { changeType, newDescription } = groupChange.change;
+if (changeType === 'descriptionChanged') {
+  showDescription(newDescription.kind === 'text' ? newDescription.text : newDescription.raw);
 }
 ```
 

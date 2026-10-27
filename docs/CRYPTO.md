@@ -188,7 +188,7 @@ output = K_1 || K_2 || ... truncated to key_length
 
 ## 5. Message Encryption — XSalsa20-Poly1305
 
-Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title, avatar URL and description are encrypted the same way under the conversation key: `prepare_group_create` (under the key it seeds), `prepare_group_title_change`, `prepare_group_avatar_change`, `prepare_group_description_change` and `prepare_group_members_remove` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received create or change, and `decrypt` opens the values the X API returns with a conversation.
+Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title and description are encrypted the same way under the conversation key: `prepare_group_create` (under the key it seeds), `prepare_group_members_change` and `prepare_group_members_remove` (under the key they rotate to), `prepare_group_title_change` and `prepare_group_description_change` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received create or change, and `decrypt` opens the values the X API returns with a conversation. A received value that names no key version is plaintext, and one that does not decrypt comes back unavailable, with the value as carried, rather than failing the event. A group's avatar URL is not encrypted: the app encrypts the image under the conversation key and uploads it, and the avatar change signs the media URL with the version of the key the image is encrypted under.
 
 ### Algorithm
 
@@ -514,20 +514,26 @@ comma-separated payloads (`signatures.rs`):
   ```
   "GroupChangeEvent.GroupCreate,{message_id},{sender_id},{conversation_key_version},{member_ids...},{is_legacy_group_upgrade},{title},{avatar_url}"
   ```
-  `title` and `avatar_url` are the group's title and avatar URL encrypted
-  under the conversation key the create seeds, as the event detail carries
-  them. The conversation id, admin ids, and TTL are carried in the event
-  detail but are **not** part of the signed payload; absent
-  `is_legacy_group_upgrade`, `title`, and `avatar_url` render as the literal
-  `null`.
-- **GroupMemberAdd** (from `prepare_group_members_change`, v7 field layout):
+  `title` is the group's title encrypted under the conversation key the
+  create seeds, as the event detail carries it; the SDK's creates set no
+  avatar, so `avatar_url` is `null`. The conversation id, admin ids, and TTL
+  are carried in the event detail but are **not** part of the signed
+  payload; absent `is_legacy_group_upgrade` and `title` render as the
+  literal `null`.
+- **GroupMemberAdd** (from `prepare_group_members_change`, v7 field layout,
+  v8 with a description):
   ```
-  "GroupChangeEvent.GroupMemberAddChange,{message_id},{sender_id},{conversation_id},{new_member_ids...},{current_member_ids...},{current_admin_ids...},{title},{avatar_url},{ttl_msec},{conversation_key_version},{screen_capture_blocking}"
+  "GroupChangeEvent.GroupMemberAddChange,{message_id},{sender_id},{conversation_id},{new_member_ids...},{current_member_ids...},{current_admin_ids...},{title},{avatar_url},{ttl_msec},{conversation_key_version},{screen_capture_blocking}[,{description}]"
   ```
-  Pending member ids are not signed at v7; absent `title`/`avatar_url`/`ttl_msec`
-  render as the literal `null`. The trailing screen-capture slot is the
+  `title` and `description` are the group's title and description encrypted
+  under the key the add rotates to, and `conversation_key_version` is that
+  key's version; `avatar_url` is the avatar's media URL as passed. Pending
+  member ids are not signed at v7; absent `title`/`avatar_url`/`ttl_msec`
+  render as the literal `null`. The screen-capture slot is the
   caller-supplied `current_screen_capture_blocking_enabled` flag — the group's
   current screen-capture-blocking state — and renders as `null` when unset.
+  An add that carries a description appends it and signs at v8, the first
+  version that covers it; any other add signs at v7.
 - **ConversationKeyChange** (from `prepare_conversation_key_change`, v6+):
   ```
   "ConversationKeyChangeEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{conversation_key_b64_no_pad}"
@@ -542,12 +548,14 @@ comma-separated payloads (`signatures.rs`):
   same value the event detail carries as `seen_at_millis`.
 
 Both `prepare_group_create` and `prepare_group_members_change` emit **two**
-action signatures — a `ConversationKeyChangeEvent` plus the group change — since
-the backend validates the pair together. `prepare_group_members_remove`
-always rotates the conversation key for the remaining members: it emits the
-removal at signature version 11, bound to the new key version; a title,
-avatar and description change for each one the caller passes, encrypted
-under the new key; then the `ConversationKeyChangeEvent`:
+action signatures — a `ConversationKeyChangeEvent` plus the group change —
+since the backend validates the pair together.
+`prepare_group_members_remove` always rotates the conversation key for the
+remaining members: it emits the removal at signature version 11, bound to
+the new key version; a title and a description change for each one the
+caller passes, encrypted under the new key, with `for_key_rotation` set on
+the event so X clients don't show the re-encryption as a change; then the
+`ConversationKeyChangeEvent`:
 
 ```
 "GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version},signature_version=11"
@@ -556,14 +564,14 @@ under the new key; then the `ConversationKeyChangeEvent`:
 `prepare_group_leave` signs that same removal of the sender, without
 rotating the key, so its key version is the one the caller passes or `null`;
 then a `GroupAdminAddChange` when a member is promoted, then
-`ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`. The other group and
-metadata prepares sign one version-7 payload: title
+`ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`. The
+other group and metadata prepares sign one version-7 payload: title
 (`GroupTitleChange`, key version then the encrypted title), avatar
-(`GroupAvatarUrlChange`, key version then the encrypted URL), description
-(`GroupDescriptionChange`, key version then the encrypted description), admin add
-and remove, invite enable (`url`, expiry or `null`, affiliate or `null`),
-invite disable, join request, join reject, message TTL
-(`MessageDurationChange` with the millisecond count, or
+(`GroupAvatarUrlChange`, the version of the key the image is encrypted under
+then the media URL), description (`GroupDescriptionChange`, key version then
+the encrypted description), admin add and remove, invite enable (`url`,
+expiry or `null`, affiliate or `null`), invite disable, join request, join
+reject, message TTL (`MessageDurationChange` with the millisecond count, or
 `MessageDurationRemove` with no further fields), and one screen-capture
 event (`EnableScreenCaptureBlocking`, `DisableScreenCaptureBlocking`,
 `EnableScreenCaptureDetection`, or `DisableScreenCaptureDetection`) with no
@@ -571,9 +579,10 @@ further fields.
 
 #### Verifying newer versions
 
-The action layouts above are the ones the SDK signs, at v7; messages are
-signed at v10 (v1 sends) or v7 (v0 sends). Verification rebuilds each payload
-in the layout of the version its signature carries, 2 through 11:
+The action layouts above are the ones the SDK signs, at v7 (v8 for a member
+add with a description, v11 for a removal); messages are signed at v10 (v1
+sends) or v7 (v0 sends). Verification rebuilds each payload in the layout of
+the version its signature carries, 2 through 11:
 
 - **v8**: the message payload's conversation-key-version component is the
   version parsed as an integer, `null` when missing or not an integer (v7 and
@@ -591,23 +600,25 @@ in the layout of the version its signature carries, 2 through 11:
 Unset optional components render as `null`, so a v10 message without a
 message key signs `null` where the SDK's messages sign `1`.
 
-These payloads are comma-joined with no escaping, and the verifier rejects any
-component containing a comma. String fields signed inline — a GroupMemberAdd's
-`title` and `avatar_url` — must therefore not contain a `,`, or the resulting
-signature is unverifiable. Encrypted values are base64, which has no comma, so
-any plaintext title, avatar URL or description can be encrypted and signed.
+These payloads are comma-joined with no escaping, and the verifier rejects
+any component containing a comma. String fields signed inline — an avatar
+URL, in a GroupMemberAdd or a GroupAvatarUrlChange — must therefore not
+contain a `,`, or the resulting signature is unverifiable. Encrypted values
+are base64, which has no comma, so any plaintext title or description can be
+encrypted and signed.
 
 ### Base64 Conventions
 
 Two base64 flavors appear on the wire, and both are frozen for interop with
-other X Chat clients. ECDSA signature values (`MessageEventSignature.signature`,
-also nested in each `ActionSignature`) and byte values embedded inside signed payloads
-(the ciphertext and plaintext conversation key components above) use standard
-base64 **without** padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
+other X Chat clients. ECDSA signature values
+(`MessageEventSignature.signature`, also nested in each `ActionSignature`)
+and byte values embedded inside signed payloads (the ciphertext and
+plaintext conversation key components above) use standard base64 **without**
+padding (`STANDARD_NO_PAD`). Encoded Thrift blobs —
 `encoded_message_create_event`, `encoded_message_event_signature`, and
-`ActionSignature.encoded_message_event_detail` — use standard base64 **with**
-padding (`base64_encode` in `protocol/serialization.rs`), and so does an
-encrypted group title, avatar URL or description, which its create or change
+`ActionSignature.encoded_message_event_detail` — use standard base64
+**with** padding (`base64_encode` in `protocol/serialization.rs`), and so
+does an encrypted group title or description, which its create or change
 event carries and its signature covers as the same string; decoding accepts
 either form (`DecodePaddingMode::Indifferent`), but producers must not swap
 conventions.

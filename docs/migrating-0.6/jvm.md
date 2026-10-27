@@ -32,7 +32,7 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -45,15 +45,14 @@ and events as the X API returns them, `keys` for the conversation key map
 for a `SendPayload`, `prepared` for a `PreparedConversationChange`, and
 `keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
 decrypted key change, message, deletion, read receipt and group change, as
-`JsonNode`s.
-`api.post(path, body)` stands for your HTTP client: it POSTs `body`,
-serialized with Jackson, to `https://api.x.com` + `path` with your user
-access token and returns the parsed JSON response as a `JsonNode`.
+`JsonNode`s. `api.post(path, body)` stands for your HTTP client: it POSTs
+`body`, serialized with Jackson, to `https://api.x.com` + `path` with your
+user access token and returns the parsed JSON response as a `JsonNode`.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-`AttachmentDescriptor`, and `showEdit`, `showTitle` and `showDescription`
-for your code that displays an edit or a group's title or description.
-The types import from `com.x.chatxdk`,
-`com.x.chatxdk.Types` and `java.util`.
+`AttachmentDescriptor`, and `showEdit`, `showTitle`, `showDescription` and
+`showAvatar` for your code that displays an edit, or a group's title,
+description or avatar. The types import from `com.x.chatxdk`,
+`com.x.chatxdk.Types`, `com.fasterxml.jackson.databind` and `java.util`.
 
 ## Upgrade readers before v1 sends start
 
@@ -459,8 +458,9 @@ String seenUntil = receipt.path("seen_until_sequence_id").asText();
 ## Deletes return a `PreparedAction`
 
 `prepareMessageDelete` returns a `PreparedAction` whose `actionSignatures`
-hold one entry, shaped as the previous section shows. Read the action's
-`messageId` from that entry, and send `actionSignatures` as returned:
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `messageId`
+from that entry, and send `actionSignatures` as returned:
 
 ```java
 // 0.5.x
@@ -513,20 +513,23 @@ those entries on the update's request.
 
 ### Creating a group
 
-`prepareGroupCreate` encrypts the group's title and avatar URL under the
-conversation key it creates, so set them as plaintext. The result is a
-`PreparedConversationChange` that also carries them encrypted, as
-`encryptedTitle` and `encryptedAvatarUrl` (null when unset): send those as
-the create request's `group_name` and `group_avatar_url`, next to its
-participant keys and signatures. The create signs the encrypted values, so
-a title or avatar URL may contain a comma.
+`prepareGroupCreate` encrypts the group's title under the conversation key
+it creates, so set it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`encryptedTitle` (null when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
 
 ```java
 // 0.5.x
 GroupCreateParams create = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
 create.title = title;
+create.avatarUrl = avatarUrl;
 PreparedConversationChange prepared = chat.prepareGroupCreate(create);
-Map<String, Object> body = Map.of("group_name", title);
+Map<String, Object> body = Map.of("group_name", title, "group_avatar_url", avatarUrl);
 
 // 0.6.0
 GroupCreateParams create = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
@@ -535,10 +538,19 @@ PreparedConversationChange prepared = chat.prepareGroupCreate(create);
 Map<String, Object> body = Map.of("group_name", prepared.encryptedTitle);
 ```
 
-`decryptEvent` returns a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: a `Created` change's `title` and `avatar_url` are
-plaintext.
+`decryptEvent` returns a received group create with its title decrypted with
+the key for the version the create names, from the call's key map or the key
+cache: a `Created` change's `title` converts to a `Types.GroupText` with
+Jackson's `treeToValue`. `kind` `"Text"` holds the title in `text`. `kind`
+`"Unavailable"` holds, in `raw`, the value as the create carries it, when
+that key isn't there or the value doesn't decrypt under it, and the rest of
+the create still decrypts. 0.5.x signed a create's title as the app passed
+it, so a 0.5.x app's create with a plaintext title arrives as
+`"Unavailable"` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `"Text"`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`decrypt`.
 
 ```java
 // 0.5.x
@@ -550,9 +562,53 @@ if (change.path("change_type").asText().equals("Created") && change.hasNonNull("
 // 0.6.0
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("Created") && change.hasNonNull("title")) {
-    showTitle(change.path("title").asText());
+    GroupText groupTitle = new ObjectMapper().treeToValue(change.path("title"), GroupText.class);
+    showTitle(groupTitle.kind.equals("Text") ? groupTitle.text : groupTitle.raw);
 }
 ```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`prepareGroupMembersChange` rotates the conversation key, so it re-encrypts
+the group's title and description under the key it generates: set them as
+plaintext, in `currentTitle` and `currentDescription`, not as values your
+code encrypted. The result carries them encrypted, as `encryptedTitle` and
+`encryptedDescription` (null when unset). Send `encryptedTitle` as the
+add-members request's `encrypted_title`; the description travels in the
+signed member add.
+
+```java
+// 0.5.x
+GroupMembersChangeParams add = new GroupMembersChangeParams(
+        publicKeys, conversationId, newMemberIds, memberIds, adminIds, List.of());
+add.currentTitle = title;
+PreparedConversationChange prepared = chat.prepareGroupMembersChange(add);
+
+// 0.6.0
+GroupMembersChangeParams add = new GroupMembersChangeParams(
+        publicKeys, conversationId, newMemberIds, memberIds, adminIds, List.of());
+add.currentTitle = title;
+add.currentDescription = description;
+PreparedConversationChange prepared = chat.prepareGroupMembersChange(add);
+Map<String, Object> body = Map.of("encrypted_title", prepared.encryptedTitle);
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `currentAvatarUrl` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
 
 ### Removing members
 
@@ -560,16 +616,23 @@ if (change.path("change_type").asText().equals("Created") && change.hasNonNull("
 key, so the members removed don't receive the key the group encrypts under
 next. `GroupMembersRemoveParams` takes the identity keys of the members who
 stay, the conversation id and the members to remove; a key for a member
-being removed throws `ChatXdkException`. The group's title, avatar and
-description are encrypted under the conversation key: set the ones the
-group has, as plaintext, in `title`, `avatarUrl` and `description`, and the
-call encrypts each under the new key.
+being removed throws `ChatXdkException`. The group's title and description
+are encrypted under the conversation key: set the ones the group has, as
+plaintext, in `title` and `description`, and the call encrypts each under
+the new key and signs it as a key-rotation re-encryption, which X clients
+don't show as a change. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
 The result is a `PreparedConversationChange`: the new `conversationKey`,
 `conversationParticipantKeys` for the members who stay, and
-`actionSignatures` in request order — the removal, a change for each
-title, avatar and description set, then the conversation-key change. Store
+`actionSignatures` in request order — the removal, a title change and a
+description change for the ones set, then the conversation-key change. Store
 the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -624,10 +687,13 @@ PreparedGroupMetadataChange prepared = chat.prepareGroupTitleChange(
 String encryptedTitle = prepared.encryptedValue;
 ```
 
-`decryptEvent` returns a received title change decrypted: the `new_title`
-of a `TitleChanged` change is the plaintext. It decrypts with the key
-version the change names, from the call's key map or the key cache, and
-throws without that key, as a message does.
+`decryptEvent` returns a received title change decrypted: the `new_title` of
+a `TitleChanged` change converts to a `GroupText`, as a create's `title`
+does. It decrypts with the key for the version the change names, from the
+call's key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `"Unavailable"` with the value as carried, and the event
+still decrypts.
 
 ```java
 // 0.5.x
@@ -639,24 +705,39 @@ if (change.path("change_type").asText().equals("TitleChanged")) {
 // 0.6.0
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("TitleChanged")) {
-    showTitle(change.path("new_title").asText());
+    GroupText newTitle = new ObjectMapper().treeToValue(change.path("new_title"), GroupText.class);
+    showTitle(newTitle.kind.equals("Text") ? newTitle.text : newTitle.raw);
 }
 ```
 
 ### Changing the avatar
 
-`prepareGroupAvatarChange` takes the new avatar URL as plaintext and
-returns a `PreparedGroupMetadataChange`, as the title change does. A
-received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `prepareGroupAvatarChange`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction`; send its `actionSignatures` with the URL. A URL containing
+a comma is rejected, since signatures join their fields with commas.
 
 ```java
 // 0.5.x
 String encryptedAvatarUrl = chat.encrypt(avatarUrl, keys.get(conversationKeyVersion));
 
 // 0.6.0
-PreparedGroupMetadataChange prepared = chat.prepareGroupAvatarChange(
-        new GroupAvatarChangeParams(conversationId, avatarUrl));
-String encryptedAvatarUrl = prepared.encryptedValue;
+PreparedAction prepared = chat.prepareGroupAvatarChange(
+        new GroupAvatarChangeParams(conversationId, avatarUrl, conversationKeyVersion));
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
+```java
+// 0.6.0
+JsonNode change = groupChange.path("change");
+if (change.path("change_type").asText().equals("AvatarChanged")) {
+    showAvatar(change.path("new_avatar_url").asText(), change.path("conversation_key_version").asText());
+}
 ```
 
 ### Changing the description
@@ -674,14 +755,17 @@ PreparedGroupMetadataChange prepared = chat.prepareGroupDescriptionChange(
 String encryptedDescription = prepared.encryptedValue;
 ```
 
-A received description change is a `DescriptionChanged` change holding the
-decrypted `new_description`:
+A received description change is a `DescriptionChanged` change holding
+`new_description`, which converts to a `GroupText`; read it as a title
+change's `new_title`:
 
 ```java
 // 0.6.0
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("DescriptionChanged")) {
-    showDescription(change.path("new_description").asText());
+    GroupText newDescription =
+            new ObjectMapper().treeToValue(change.path("new_description"), GroupText.class);
+    showDescription(newDescription.kind.equals("Text") ? newDescription.text : newDescription.raw);
 }
 ```
 

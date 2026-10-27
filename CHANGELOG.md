@@ -15,26 +15,33 @@ stay, the conversation id and the members to remove, and the result is a
 `PreparedConversationChange`: the new key, the remaining members'
 participant keys, and the request's signatures — the removal, signed at
 signature version 11 and bound to the new key version, then the key change.
-The group's title, avatar and description are encrypted under the
-conversation key, so the removal takes the ones the group has as plaintext
-(`title`, `avatar_url`, `description`), encrypts each under the new key, and
-signs each change between the removal and the key change. The result
-carries no ratchet tree and no rewrapped pin-key bundle.
+The group's title and description are encrypted under the conversation key,
+so the removal takes the ones the group has as plaintext (`title`,
+`description`), encrypts each under the new key, and signs each change
+between the removal and the key change, marked as a key-rotation
+re-encryption (`for_key_rotation`) so X clients don't show it as a change.
+The result carries no ratchet tree and no rewrapped pin-key bundle.
 
 `prepare_group_leave` signs leaving a group: a removal of the sender, an
 admin add when `promote_admin_id` names the member to promote, and a
 conversation delete. Leave does not rotate the conversation key.
 
-`prepare_group_title_change`, `prepare_group_avatar_change` and
-`prepare_group_description_change` take the new value as plaintext and
-encrypt it under the conversation key, which resolves as for
-`encrypt_message`: the params' key and version, or the key cache. Each
-returns a `PreparedGroupMetadataChange`: the `encrypted_value` the request
-sends, the `conversation_key_version` it is encrypted under, and its
-signature at signature version 7. `decrypt_event` and `decrypt_events`
-decrypt a received title, avatar or description change, and a description
-change decrypts to the new `GroupChange::DescriptionChanged`
-(`descriptionChanged` in JS) with its `new_description`.
+`prepare_group_title_change` and `prepare_group_description_change` take the
+new value as plaintext and encrypt it under the conversation key, which
+resolves as for `encrypt_message`: the params' key and version, or the key
+cache. Each returns a `PreparedGroupMetadataChange`: the `encrypted_value`
+the request sends, the `conversation_key_version` it is encrypted under, and
+its signature at signature version 7. `decrypt_event` and `decrypt_events`
+decrypt a received title or description change, and a description change
+decrypts to the new `GroupChange::DescriptionChanged` (`descriptionChanged`
+in JS) with its `new_description`.
+
+`prepare_group_avatar_change` signs a group avatar: the media URL of the
+image, as is, and the `conversation_key_version` of the key the image is
+encrypted under. An avatar URL is not encrypted; the app encrypts the image
+under the conversation key, uploads it to the group's media, and passes the
+URL. It returns a `PreparedAction`, and a received `AvatarChanged` change
+carries the URL with its `conversation_key_version`.
 
 Admin, invite, and join changes, message-TTL changes, and screen-capture
 setting changes each return a `PreparedAction` signed at signature version
@@ -550,15 +557,15 @@ prepared = chat.prepare_conversation_key_change(
 
 - Rust: `SendPayload` gains `event_b64` and `xdk_version`. Every public
   enum, params struct and result struct, `SendPayload` included, is
-  `#[non_exhaustive]`, as are the variants with named fields of the decrypted
-  `MessageContent`, `GroupChange` and `SettingsChange`, so a release can add
-  a variant or field without breaking callers. Code outside the SDK builds
-  params with `new()` and the `with_*` methods (or assigns their public
-  fields), builds `PublicKeyInput`, `SigningKeyEntry`, `EntityDescriptor` and
-  `UrlAttachmentImageDescriptor` with `new()` and the quick-reply options
-  with `new()` and `with_*`, reads result types by field, gives a `match` on
-  an SDK enum a wildcard arm, and ends a pattern on a variant with named
-  fields in `..`.
+  `#[non_exhaustive]`, as are the variants with named fields of the
+  decrypted `MessageContent`, `GroupChange`, `GroupText` and
+  `SettingsChange`, so a release can add a variant or field without breaking
+  callers. Code outside the SDK builds params with `new()` and the `with_*`
+  methods (or assigns their public fields), builds `PublicKeyInput`,
+  `SigningKeyEntry`, `EntityDescriptor` and `UrlAttachmentImageDescriptor`
+  with `new()` and the quick-reply options with `new()` and `with_*`, reads
+  result types by field, gives a `match` on an SDK enum a wildcard arm, and
+  ends a pattern on a variant with named fields in `..`.
 - `SendPayload`'s `encrypted_content` and `encoded_event_signature` are
   `encoded_message_create_event` and `encoded_message_event_signature`, the
   send request's field names, in every binding
@@ -590,21 +597,31 @@ prepared = chat.prepare_conversation_key_change(
   and `SeenUntilSequenceID` in Go). An edit's text is `updated_text`
   (`updatedText` in JS). Each binding's
   [migration guide](docs/migrating-0.6/README.md) shows the lines to change.
-- Group titles, avatars and descriptions are plaintext in the API, and the
-  SDK encrypts and decrypts them. `prepare_group_create` encrypts its title
-  and avatar URL under the conversation key it creates, signs the
-  ciphertext, and returns it on its `PreparedConversationChange` as
-  `encrypted_title` and `encrypted_avatar_url` (`encryptedTitle` and
-  `encryptedAvatarUrl` in JS, `EncryptedTitle` and `EncryptedAvatarURL` in
-  Go): the `group_name` and `group_avatar_url` the create request sends.
-  Since the create signs base64 ciphertext, its title and avatar URL may
-  contain a comma. The title, avatar and description prepare calls and a
-  member removal take the plaintext too. A decrypted `Created` change
-  carries the plaintext `title` and `avatar_url`, and a `TitleChanged` or
-  `AvatarChanged` change the plaintext `new_title` or `new_avatar_url`
-  (`newTitle` or `newAvatarUrl` in JS), decrypted with the conversation key
-  version the event names. `decrypt` opens the encrypted `group_name`,
-  `group_avatar_url` and `group_description` the X API returns with a
+- Group titles and descriptions are plaintext in the API, and the SDK
+  encrypts and decrypts them. `prepare_group_create` encrypts its title
+  under the conversation key it creates, signs the ciphertext, and returns
+  it on its `PreparedConversationChange` as `encrypted_title`
+  (`encryptedTitle` in JS, `EncryptedTitle` in Go): the `group_name` the
+  create request sends. `prepare_group_members_change` takes the group's
+  `current_title` and `current_description` as plaintext, encrypts each
+  under the key it rotates to, signs the ciphertext, and returns them as
+  `encrypted_title` and `encrypted_description`; an add that carries a
+  description signs at signature version 8. Titles and descriptions are
+  signed as base64 ciphertext, so they may contain a comma. The title and
+  description prepare calls and a member removal take the plaintext too. A
+  create sets no avatar: an avatar is an image the app encrypts and
+  uploads, and `prepare_group_avatar_change` signs its media URL, which no
+  call encrypts. A decrypted `Created` change carries its `title`, and a
+  `TitleChanged` or `DescriptionChanged` change its `new_title` or
+  `new_description` (`newTitle`, `newDescription` in JS), as a `GroupText`:
+  the text, decrypted with the conversation key the event names or as
+  carried when it names none, or unavailable with the raw value when that
+  key isn't there or the value doesn't decrypt. The event still decrypts
+  either way. 0.5.x apps sent titles as plaintext while naming a key
+  version, so show the raw value when a title isn't decryptable. A
+  `Created` or `AvatarChanged` change carries the avatar URL as is, with
+  its `conversation_key_version`. `decrypt` opens the encrypted
+  `group_name` and `group_description` the X API returns with a
   conversation.
 - Rust: every encrypt and prepare method takes its params by reference:
   `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,

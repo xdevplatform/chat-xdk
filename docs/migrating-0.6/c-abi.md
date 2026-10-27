@@ -29,7 +29,7 @@ header or library fails to link instead of misreading its arguments.
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -366,19 +366,24 @@ those entries on the update's request.
 
 ### Creating a group
 
-`chat_xdk_prepare_group_create` encrypts the group's title and avatar URL
-under the conversation key it creates, so pass them as plaintext. The
-result is a `PreparedConversationChange` that also carries them encrypted,
-as `encrypted_title` and `encrypted_avatar_url` (absent when unset): send
-those as the create request's `group_name` and `group_avatar_url`, next to
-its participant keys and signatures. The create signs the encrypted values,
-so a title or avatar URL may contain a comma.
+`chat_xdk_prepare_group_create` encrypts the group's title under the
+conversation key it creates, so pass it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`encrypted_title` (absent when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar,
+and its params document takes no avatar URL (the call ignores fields it
+doesn't take): set the avatar afterwards with an [avatar
+change](#changing-the-avatar), with the image encrypted under the key the
+create returns.
 
 ```c
 // 0.5.x
-// {"public_keys":[...],"conversation_id":"g1","member_ids":["111"],"admin_ids":["111"],"title":"Team"}
+// {"public_keys":[...],"conversation_id":"g1","member_ids":["111"],"admin_ids":["111"],"title":"Team",
+//  "avatar_url":"https://..."}
 char *prepared = take(chat_xdk_prepare_group_create(chat, create_json));
-// POST /2/chat/conversations/group {..., "group_name": "Team"}
+// POST /2/chat/conversations/group {..., "group_name": "Team", "group_avatar_url": "https://..."}
 
 // 0.6.0
 // {"public_keys":[...],"conversation_id":"g1","member_ids":["111"],"admin_ids":["111"],"title":"Team"}
@@ -387,10 +392,19 @@ char *prepared = take(chat_xdk_prepare_group_create(chat, create_json));
 // POST /2/chat/conversations/group {..., "group_name": <prepared.encrypted_title>}
 ```
 
-The decrypt calls return a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: a `Created` change's `title` and `avatar_url` are
-plaintext.
+The decrypt calls return a received group create with its title decrypted
+with the key for the version the create names, from the call's key map or
+the key cache: a `Created` change's `title` is a `GroupText` object.
+`{"kind":"Text","text":...}` holds the title.
+`{"kind":"Unavailable","raw":...}` holds the value as the create carries it,
+when that key isn't there or the value doesn't decrypt under it, and the
+rest of the create still decrypts. 0.5.x signed a create's title as the app
+passed it, so a 0.5.x app's create with a plaintext title arrives as
+`Unavailable` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `Text`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`chat_xdk_decrypt`.
 
 ```c
 // 0.5.x
@@ -399,26 +413,75 @@ char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_jso
 char *title = take(chat_xdk_decrypt(chat, created_title, conversation_key_b64));
 
 // 0.6.0
-// {"type":"GroupChange",...,"change":{"change_type":"Created",...,"title":"Team"}}
+// {"type":"GroupChange",...,"change":{"change_type":"Created",...,
+//  "title":{"kind":"Text","text":"Team"},"avatar_url":null,"conversation_key_version":"..."}}
 char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
 ```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`chat_xdk_prepare_group_members_change` rotates the conversation key, so it
+re-encrypts the group's title and description under the key it generates:
+pass them as plaintext, as `current_title` and `current_description`, not as
+values your code encrypted. The result carries them encrypted, as
+`encrypted_title` and `encrypted_description` (absent when unset). Send
+`encrypted_title` as the add-members request's `encrypted_title`; the
+description travels in the signed member add.
+
+```c
+// 0.5.x
+// {"public_keys":[...],"conversation_id":"g1","new_member_ids":["333"],"current_member_ids":["111"],
+//  "current_admin_ids":["111"],"current_pending_member_ids":[],"current_title":"Team"}
+char *prepared = take(chat_xdk_prepare_group_members_change(chat, add_json));
+
+// 0.6.0
+// {"public_keys":[...],"conversation_id":"g1","new_member_ids":["333"],"current_member_ids":["111"],
+//  "current_admin_ids":["111"],"current_pending_member_ids":[],"current_title":"Team",
+//  "current_description":"..."}
+char *prepared = take(chat_xdk_prepare_group_members_change(chat, add_json));
+// {..., "encrypted_title": "...", "encrypted_description": "..."}
+// POST /2/chat/conversations/g1/members {..., "encrypted_title": <prepared.encrypted_title>}
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `current_avatar_url` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
 
 ### Removing members
 
 `chat_xdk_prepare_group_members_remove` removes `user_ids` and rotates the
 conversation key, so the members removed don't receive the key the group
 encrypts under next. `public_keys` are the identity keys of the members who
-stay; a key for a member being removed is an error. The group's title,
-avatar and description are encrypted under the conversation key: pass the
-ones the group has, as plaintext, as `title`, `avatar_url` and
-`description`, and the call encrypts each under the new key.
+stay; a key for a member being removed is an error. The group's title and
+description are encrypted under the conversation key: pass the ones the
+group has, as plaintext, as `title` and `description`, and the call encrypts
+each under the new key and signs it as a key-rotation re-encryption, which X
+clients don't show as a change. A rotation leaves the avatar alone: its
+image stays encrypted under the key it was uploaded with, which the members
+who stay hold.
 
-The result is a `PreparedConversationChange`: the new
-`conversation_key` (base64), `conversation_participant_keys` for the
-members who stay, and `action_signatures` in request order — the removal, a
-change for each title, avatar and description passed, then the
-conversation-key change. Store the new key as you store the key a key
-change returns.
+The result is a `PreparedConversationChange`: the new `conversation_key`
+(base64), `conversation_participant_keys` for the members who stay, and
+`action_signatures` in request order — the removal, a title change and a
+description change for the ones passed, then the conversation-key change.
+Store the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -472,10 +535,13 @@ char *title = take(chat_xdk_prepare_group_title_change(chat, title_json));
 // {"encrypted_value":"...","conversation_key_version":"...","action_signatures":[...]}
 ```
 
-The decrypt calls return a received title change decrypted: the
-`new_title` of a `TitleChanged` change is the plaintext. They decrypt with
-the key version the change names, from the call's key map or the key
-cache, and fail without that key, as for a message.
+The decrypt calls return a received title change decrypted: the `new_title`
+of a `TitleChanged` change is a `GroupText` object, as a create's `title`
+is. They decrypt with the key for the version the change names, from the
+call's key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `Unavailable` with the value as carried, and the event still
+decrypts.
 
 ```c
 // 0.5.x
@@ -484,32 +550,43 @@ char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_jso
 char *title = take(chat_xdk_decrypt(chat, new_title, conversation_key_b64));
 
 // 0.6.0
-// {"type":"GroupChange",...,"change":{"change_type":"TitleChanged","new_title":"Team"}}
+// {"type":"GroupChange",...,"change":{"change_type":"TitleChanged","new_title":{"kind":"Text","text":"Team"}}}
 char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
 ```
 
 ### Changing the avatar
 
-`chat_xdk_prepare_group_avatar_change` takes the new avatar URL as
-plaintext and returns a `PreparedGroupMetadataChange`, as the title change
-does. A received `AvatarChanged` change holds the decrypted
-`new_avatar_url`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `chat_xdk_prepare_group_avatar_change` as `new_avatar_url`,
+with `conversation_key_version`, the version of the key the image is
+encrypted under. Unlike the title change, it takes no `conversation_key`:
+the image is encrypted before the call. The call signs both as they are and
+returns a `PreparedAction`; send its `action_signatures` with the URL. A URL
+containing a comma is rejected, since signatures join their fields with
+commas. A received `AvatarChanged` change holds `new_avatar_url` as sent and
+its `conversation_key_version`: download the image and decrypt it with the
+key for that version.
 
 ```c
 // 0.5.x
 char *encrypted_avatar_url = take(chat_xdk_encrypt(chat, avatar_url, conversation_key_b64));
 
 // 0.6.0
-// {"conversation_id":"g1","new_avatar_url":"https://..."}
+// {"conversation_id":"g1","new_avatar_url":"https://ton.x.com/...","conversation_key_version":"..."}
 char *avatar = take(chat_xdk_prepare_group_avatar_change(chat, avatar_json));
+// {"action_signatures":[...]}
+// A recipient's decrypt returns {"type":"GroupChange",...,"change":{"change_type":"AvatarChanged",
+//  "new_avatar_url":"https://ton.x.com/...","conversation_key_version":"..."}}
 ```
 
 ### Changing the description
 
 `chat_xdk_prepare_group_description_change` takes the new description as
 plaintext and returns a `PreparedGroupMetadataChange`, as the title change
-does. A received description change is a `DescriptionChanged` change
-holding the decrypted `new_description`.
+does. A received description change is a `DescriptionChanged` change holding
+`new_description` as a `GroupText` object; read it as a title change's
+`new_title`.
 
 ```c
 // 0.5.x
@@ -518,7 +595,9 @@ char *encrypted_description = take(chat_xdk_encrypt(chat, description, conversat
 // 0.6.0
 // {"conversation_id":"g1","new_description":"..."}
 char *description = take(chat_xdk_prepare_group_description_change(chat, description_json));
-// {"type":"GroupChange",...,"change":{"change_type":"DescriptionChanged","new_description":"..."}}
+// {"encrypted_value":"...","conversation_key_version":"...","action_signatures":[...]}
+// A recipient's decrypt returns {"type":"GroupChange",...,"change":{"change_type":"DescriptionChanged",
+//  "new_description":{"kind":"Text","text":"..."}}}
 ```
 
 ### Adding admins

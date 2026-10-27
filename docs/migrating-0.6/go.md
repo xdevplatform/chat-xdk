@@ -30,7 +30,7 @@ change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -39,19 +39,19 @@ Each snippet shows the lines that change, first as 0.5.x code writes them
 and then as 0.6.0 code writes them. `chat` is a `*chatxdk.Chat` with your
 keys loaded, and the other names stand for your own values: ids, versions,
 keys and events as the X API returns them, `keys` for the conversation key
-map `DecryptEvents` returns, `payload` for a `*SendPayload`, `prepared`
-for a `*PreparedConversationChange`, `keyChange`, `message`, `receipt`
-and `groupChange` for a decrypted `*KeyChangeEvent`, `*Message`,
+map `DecryptEvents` returns, `payload` for a `*SendPayload`, `prepared` for
+a `*PreparedConversationChange`, `keyChange`, `message`, `receipt` and
+`groupChange` for a decrypted `*KeyChangeEvent`, `*Message`,
 `ReadReceiptEvent` and `*GroupChangeEvent`, and `event` for a decrypted
-`*Event`. `must(err)` stands for your error handling. `api.Post(path,
-body)` stands for your HTTP client: it POSTs `body` as JSON to
-`https://api.x.com` + `path` with your user access token and returns the
-parsed JSON response as a `map[string]any`.
-`photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-`AttachmentDescriptor`, and `showReaction`, `showTitle` and
-`showDescription` for your code that displays a reaction or a group's
-title or description. `base64` (`encoding/base64`), `json`
-(`encoding/json`) and `strings` are the standard library's.
+`*Event`. `must(err)` stands for your error handling. `api.Post(path, body)`
+stands for your HTTP client: it POSTs `body` as JSON to `https://api.x.com`
++ `path` with your user access token and returns the parsed JSON response as
+a `map[string]any`. `photoAttachment(mediaHashKey)` stands for your code
+that builds a photo's `AttachmentDescriptor`, and `showReaction`,
+`showTitle`, `showDescription` and `showAvatar` for your code that displays
+a reaction, or a group's title, description or avatar. `base64`
+(`encoding/base64`), `json` (`encoding/json`) and `strings` are the standard
+library's.
 
 ## Upgrade readers before v1 sends start
 
@@ -512,8 +512,9 @@ must(json.Unmarshal(event.Raw(), &deleted))
 ## Deletes return a `PreparedAction`
 
 `PrepareMessageDelete` returns a `*PreparedAction` whose `ActionSignatures`
-hold one entry, shaped as the previous section shows. Read the action's
-`MessageID` from that entry, and send `ActionSignatures` as returned:
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `MessageID`
+from that entry, and send `ActionSignatures` as returned:
 
 ```go
 // 0.5.x
@@ -549,13 +550,15 @@ those entries on the update's request.
 
 ### Creating a group
 
-`PrepareGroupCreate` encrypts the group's title and avatar URL under the
-conversation key it creates, so set them as plaintext. The result is a
-`*PreparedConversationChange` that also carries them encrypted, as
-`EncryptedTitle` and `EncryptedAvatarURL` (nil when unset): send those as
-the create request's `group_name` and `group_avatar_url`, next to its
-participant keys and signatures. The create signs the encrypted values, so
-a title or avatar URL may contain a comma.
+`PrepareGroupCreate` encrypts the group's title under the conversation key
+it creates, so set it as plaintext. The result is a
+`*PreparedConversationChange` that also carries it encrypted, as
+`EncryptedTitle` (nil when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
 
 ```go
 // 0.5.x
@@ -565,9 +568,10 @@ prepared, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
 	MemberIDs:      memberIDs,
 	AdminIDs:       adminIDs,
 	Title:          title,
+	AvatarURL:      avatarURL,
 })
 must(err)
-body := map[string]any{"group_name": title}
+body := map[string]any{"group_name": title, "group_avatar_url": avatarURL}
 
 // 0.6.0
 prepared, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
@@ -581,10 +585,19 @@ must(err)
 body := map[string]any{"group_name": prepared.EncryptedTitle}
 ```
 
-`DecryptEvent` returns a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: a `Created` change's `title` and `avatar_url`, in the
-`Change` JSON, are plaintext.
+`DecryptEvent` returns a received group create with its title decrypted with
+the key for the version the create names, from the call's key map or the key
+cache: a `Created` change's `title`, in the `Change` JSON, decodes into a
+`chatxdk.GroupText`. `Kind` `"Text"` holds the title in `Text`. `Kind`
+`"Unavailable"` holds, in `Raw`, the value as the create carries it, when
+that key isn't there or the value doesn't decrypt under it, and the rest of
+the create still decrypts. 0.5.x signed a create's title as the app passed
+it, so a 0.5.x app's create with a plaintext title arrives as
+`"Unavailable"` with the title in `Raw`: show `Raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `"Text"`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`Decrypt`.
 
 ```go
 // 0.5.x
@@ -601,30 +614,94 @@ if created.ChangeType == "Created" && created.Title != "" {
 
 // 0.6.0
 var created struct {
-	ChangeType string `json:"change_type"`
-	Title      string `json:"title"`
+	ChangeType string             `json:"change_type"`
+	Title      *chatxdk.GroupText `json:"title"`
 }
 must(json.Unmarshal(groupChange.Change, &created))
-if created.ChangeType == "Created" && created.Title != "" {
-	showTitle(created.Title)
+if created.ChangeType == "Created" && created.Title != nil {
+	if created.Title.Kind == "Text" {
+		showTitle(created.Title.Text)
+	} else {
+		showTitle(created.Title.Raw)
+	}
 }
 ```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`PrepareGroupMembersChange` rotates the conversation key, so it re-encrypts
+the group's title and description under the key it generates: set them as
+plaintext, in `CurrentTitle` and `CurrentDescription`, not as values your
+code encrypted. The result carries them encrypted, as `EncryptedTitle` and
+`EncryptedDescription` (nil when unset). Send `EncryptedTitle` as the
+add-members request's `encrypted_title`; the description travels in the
+signed member add.
+
+```go
+// 0.5.x
+prepared, err := chat.PrepareGroupMembersChange(chatxdk.GroupMembersChangeParams{
+	PublicKeys:       publicKeys,
+	ConversationID:   conversationID,
+	NewMemberIDs:     newMemberIDs,
+	CurrentMemberIDs: memberIDs,
+	CurrentAdminIDs:  adminIDs,
+	CurrentTitle:     title,
+})
+must(err)
+
+// 0.6.0
+prepared, err := chat.PrepareGroupMembersChange(chatxdk.GroupMembersChangeParams{
+	PublicKeys:         publicKeys,
+	ConversationID:     conversationID,
+	NewMemberIDs:       newMemberIDs,
+	CurrentMemberIDs:   memberIDs,
+	CurrentAdminIDs:    adminIDs,
+	CurrentTitle:       title,
+	CurrentDescription: description,
+})
+must(err)
+body := map[string]any{"encrypted_title": prepared.EncryptedTitle}
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `CurrentAvatarURL` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
 
 ### Removing members
 
 `PrepareGroupMembersRemove` removes `UserIDs` and rotates the conversation
 key, so the members removed don't receive the key the group encrypts under
 next. `PublicKeys` are the identity keys of the members who stay; a key for
-a member being removed returns an error. The group's title, avatar and
-description are encrypted under the conversation key: set the ones the
-group has, as plaintext, in `Title`, `AvatarURL` and `Description`, and the
-call encrypts each under the new key.
+a member being removed returns an error. The group's title and description
+are encrypted under the conversation key: set the ones the group has, as
+plaintext, in `Title` and `Description`, and the call encrypts each under
+the new key and signs it as a key-rotation re-encryption, which X clients
+don't show as a change. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
 The result is a `*PreparedConversationChange`: the new `ConversationKey`,
 `ConversationParticipantKeys` for the members who stay, and
-`ActionSignatures` in request order — the removal, a change for each
-title, avatar and description set, then the conversation-key change. Store
+`ActionSignatures` in request order — the removal, a title change and a
+description change for the ones set, then the conversation-key change. Store
 the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -693,10 +770,13 @@ must(err)
 encryptedTitle := prepared.EncryptedValue
 ```
 
-`DecryptEvent` returns a received title change decrypted: the `new_title`
-of a `TitleChanged` change, in the `Change` JSON, is the plaintext. It
-decrypts with the key version the change names, from the call's key map or
-the key cache, and returns an error without that key, as a message does.
+`DecryptEvent` returns a received title change decrypted: the `new_title` of
+a `TitleChanged` change, in the `Change` JSON, decodes into a
+`chatxdk.GroupText`, as a create's `title` does. It decrypts with the key
+for the version the change names, from the call's key map or the key cache.
+Without that key, or when the value isn't ciphertext under it, as for a
+plaintext title an app signed with a key version, it is `"Unavailable"` with
+the value as carried, and the event still decrypts.
 
 ```go
 // 0.5.x
@@ -713,20 +793,28 @@ if change.ChangeType == "TitleChanged" {
 
 // 0.6.0
 var change struct {
-	ChangeType string `json:"change_type"`
-	NewTitle   string `json:"new_title"`
+	ChangeType string            `json:"change_type"`
+	NewTitle   chatxdk.GroupText `json:"new_title"`
 }
 must(json.Unmarshal(groupChange.Change, &change))
 if change.ChangeType == "TitleChanged" {
-	showTitle(change.NewTitle)
+	if change.NewTitle.Kind == "Text" {
+		showTitle(change.NewTitle.Text)
+	} else {
+		showTitle(change.NewTitle.Raw)
+	}
 }
 ```
 
 ### Changing the avatar
 
-`PrepareGroupAvatarChange` takes the new avatar URL as plaintext and
-returns a `*PreparedGroupMetadataChange`, as the title change does. A
-received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `PrepareGroupAvatarChange`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`*PreparedAction`; send its `ActionSignatures` with the URL. A URL
+containing a comma is rejected, since signatures join their fields with
+commas.
 
 ```go
 // 0.5.x
@@ -735,11 +823,28 @@ must(err)
 
 // 0.6.0
 prepared, err := chat.PrepareGroupAvatarChange(chatxdk.GroupAvatarChangeParams{
-	ConversationID: conversationID,
-	NewAvatarURL:   avatarURL,
+	ConversationID:         conversationID,
+	NewAvatarURL:           avatarURL,
+	ConversationKeyVersion: conversationKeyVersion,
 })
 must(err)
-encryptedAvatarURL := prepared.EncryptedValue
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
+```go
+// 0.6.0
+var change struct {
+	ChangeType             string `json:"change_type"`
+	NewAvatarURL           string `json:"new_avatar_url"`
+	ConversationKeyVersion string `json:"conversation_key_version"`
+}
+must(json.Unmarshal(groupChange.Change, &change))
+if change.ChangeType == "AvatarChanged" {
+	showAvatar(change.NewAvatarURL, change.ConversationKeyVersion)
+}
 ```
 
 ### Changing the description
@@ -761,18 +866,23 @@ must(err)
 encryptedDescription := prepared.EncryptedValue
 ```
 
-A received description change is a `DescriptionChanged` change holding the
-decrypted `new_description`:
+A received description change is a `DescriptionChanged` change holding
+`new_description` as a `chatxdk.GroupText`; read it as a title change's
+`new_title`:
 
 ```go
 // 0.6.0
 var change struct {
-	ChangeType     string `json:"change_type"`
-	NewDescription string `json:"new_description"`
+	ChangeType     string            `json:"change_type"`
+	NewDescription chatxdk.GroupText `json:"new_description"`
 }
 must(json.Unmarshal(groupChange.Change, &change))
 if change.ChangeType == "DescriptionChanged" {
-	showDescription(change.NewDescription)
+	if change.NewDescription.Kind == "Text" {
+		showDescription(change.NewDescription.Text)
+	} else {
+		showDescription(change.NewDescription.Raw)
+	}
 }
 ```
 

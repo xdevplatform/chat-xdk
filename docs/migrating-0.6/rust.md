@@ -30,7 +30,7 @@ change.
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
 - [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -45,15 +45,14 @@ returns, `payload` for a `SendPayload`, `prepared` for a
 `ConversationKeyChangeParams`, `received_key_change`, `message`, `deleted`,
 `receipt` and `group_change` for a decrypted `KeyChangeEvent`, `Message`,
 `MessageDeletedEvent`, `ReadReceiptEvent` and `GroupChangeEvent`, and `err`
-for an `SdkError`.
-`api.post(path, &body)` stands for your HTTP client: it POSTs `body`, a
-`serde_json::Value`, to `https://api.x.com` + `path` with your user access
-token and returns the parsed JSON response as a `serde_json::Value`.
-`photo_attachment(media_hash_key)` stands for your code that builds a
-photo's `AttachmentDescriptor`, and `show_edit`, `show_title` and
-`show_description` for your code that displays an edit or a group's title
-or description. Every type and module the snippets use
-imports from `chat_xdk_core`, except `SdkError`, which imports from
+for an `SdkError`. `api.post(path, &body)` stands for your HTTP client: it
+POSTs `body`, a `serde_json::Value`, to `https://api.x.com` + `path` with
+your user access token and returns the parsed JSON response as a
+`serde_json::Value`. `photo_attachment(media_hash_key)` stands for your code
+that builds a photo's `AttachmentDescriptor`, and `show_edit`, `show_title`,
+`show_description` and `show_avatar` for your code that displays an edit, or
+a group's title, description or avatar. Every type and module the snippets
+use imports from `chat_xdk_core`, except `SdkError`, which imports from
 `chat_xdk_core::error`.
 
 ## Upgrade readers before v1 sends start
@@ -210,10 +209,10 @@ let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_sig
 Every encrypt and prepare method takes its params by reference. Add `&` to
 `encrypt_message`, `encrypt_reply`, `prepare_conversation_key_change`,
 `prepare_group_create` and `prepare_group_members_change`, and to the
-`ChatCore` methods' `_with_version` forms. Calls to
-`encrypt_add_reaction`, `encrypt_remove_reaction`, `encrypt_edit` and
-`prepare_message_delete` stay as they are, and the file and read-receipt
-methods take `&params` too.
+`ChatCore` methods' `_with_version` forms. Calls to `encrypt_add_reaction`,
+`encrypt_remove_reaction`, `encrypt_edit` and `prepare_message_delete` stay
+as they are, and `encrypt_file`, `file_encryptor` and
+`prepare_mark_conversation_read` take `&params` too.
 
 ```rust
 // 0.5.x
@@ -544,9 +543,9 @@ let seen_until = receipt.seen_until_sequence_id.as_deref();
 ## Deletes return a `PreparedAction`
 
 `prepare_message_delete` returns a `PreparedAction` whose
-`action_signatures` hold one entry, shaped as the previous section shows.
-Read the action's `message_id` from that entry, and serialize
-`action_signatures` as returned:
+`action_signatures` hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's
+`message_id` from that entry, and serialize `action_signatures` as returned:
 
 ```rust
 // 0.5.x
@@ -585,20 +584,23 @@ those entries on the update's request.
 
 ### Creating a group
 
-`prepare_group_create` encrypts the group's title and avatar URL under the
-conversation key it creates, so pass them as plaintext. The result is a
-`PreparedConversationChange` that also carries them encrypted, as
-`encrypted_title` and `encrypted_avatar_url` (`None` when unset): send
-those as the create request's `group_name` and `group_avatar_url`, next to
-its participant keys and signatures. The create signs the encrypted values,
-so a title or avatar URL may contain a comma.
+`prepare_group_create` encrypts the group's title under the conversation key
+it creates, so pass it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`encrypted_title` (`None` when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
 
 ```rust
 // 0.5.x
 let mut create = GroupCreateParams::new(public_keys, conversation_id, member_ids, admin_ids);
 create.title = Some(title.to_string());
+create.avatar_url = Some(avatar_url.to_string());
 let prepared = chat.prepare_group_create(create)?;
-let body = serde_json::json!({ "group_name": title });
+let body = serde_json::json!({ "group_name": title, "group_avatar_url": avatar_url });
 
 // 0.6.0
 let create = GroupCreateParams::new(public_keys, conversation_id, member_ids, admin_ids).with_title(title);
@@ -606,10 +608,18 @@ let prepared = chat.prepare_group_create(&create)?;
 let body = serde_json::json!({ "group_name": prepared.encrypted_title });
 ```
 
-`decrypt_event` returns a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: `GroupChange::Created`'s `title` and `avatar_url` are
-plaintext.
+`decrypt_event` returns a received group create with its title decrypted
+with the key for the version the create names, from the call's key map or
+the key cache: `GroupChange::Created`'s `title` is a `GroupText`. `Text`
+holds the title. `Unavailable` holds the value as the create carries it,
+when that key isn't there or the value doesn't decrypt under it, and the
+rest of the create still decrypts. 0.5.x signed a create's title as the app
+passed it, so a 0.5.x app's create with a plaintext title arrives as
+`Unavailable` with the title in `raw`: show `raw` when a title isn't
+decryptable. A create that names no key version carries its title as
+plaintext, and arrives as `Text`. The encrypted `group_name` and
+`group_description` the X API returns with a conversation still open with
+`decrypt`.
 
 ```rust
 // 0.5.x
@@ -619,9 +629,55 @@ if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
 
 // 0.6.0
 if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
-    show_title(title);
+    match title {
+        GroupText::Text { text, .. } => show_title(text),
+        GroupText::Unavailable { raw, .. } => show_title(raw),
+        _ => {}
+    }
 }
 ```
+
+`Created` also carries the create's `conversation_key_version`, and the
+`avatar_url` a create from another client may set: a media URL whose image
+is encrypted under that key version.
+
+### Adding members
+
+`prepare_group_members_change` rotates the conversation key, so it
+re-encrypts the group's title and description under the key it generates:
+pass them as plaintext, with `with_current_title` and
+`with_current_description`, not as values your code encrypted. The result
+carries them encrypted, as `encrypted_title` and `encrypted_description`
+(`None` when unset). Send `encrypted_title` as the add-members request's
+`encrypted_title`; the description travels in the signed member add.
+
+```rust
+// 0.5.x
+let mut add = GroupMembersChangeParams::new(public_keys, conversation_id, new_member_ids, member_ids, admin_ids, vec![]);
+add.current_title = Some(title.to_string());
+let prepared = chat.prepare_group_members_change(add)?;
+
+// 0.6.0
+let add = GroupMembersChangeParams::new(public_keys, conversation_id, new_member_ids, member_ids, admin_ids, vec![])
+    .with_current_title(title)
+    .with_current_description(description);
+let prepared = chat.prepare_group_members_change(&add)?;
+let body = serde_json::json!({ "encrypted_title": prepared.encrypted_title });
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `with_current_avatar_url` takes its media
+URL, signed as is, and the image stays encrypted under the key it was
+uploaded with, which the new members never receive. To keep the avatar
+readable for them, encrypt the image under the key the add returns, upload
+it, and send an [avatar change](#changing-the-avatar) naming the new key
+version.
 
 ### Removing members
 
@@ -629,16 +685,23 @@ if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
 conversation key, so the members removed don't receive the key the group
 encrypts under next. `GroupMembersRemoveParams::new` takes the identity keys
 of the members who stay, the conversation id and the members to remove; a
-key for a member being removed is rejected. The group's title, avatar and
+key for a member being removed is rejected. The group's title and
 description are encrypted under the conversation key: pass the ones the
-group has, as plaintext, with `with_title`, `with_avatar_url` and
-`with_description`, and the call encrypts each under the new key.
+group has, as plaintext, with `with_title` and `with_description`, and the
+call encrypts each under the new key and signs it as a key-rotation
+re-encryption, which X clients don't show as a change. A rotation leaves the
+avatar alone: its image stays encrypted under the key it was uploaded with,
+which the members who stay hold.
 
 The result is a `PreparedConversationChange`: the new conversation key,
 `conversation_participant_keys` for the members who stay, and
-`action_signatures` in request order — the removal, a change for each
-title, avatar and description passed, then the conversation-key change.
+`action_signatures` in request order — the removal, a title change and a
+description change for the ones passed, then the conversation-key change.
 Store the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -695,9 +758,12 @@ let encrypted_title = prepared.encrypted_value;
 ```
 
 `decrypt_event` returns a received title change decrypted: the `new_title`
-of `GroupChange::TitleChanged` is the plaintext. It decrypts with the key
-version the change names, from the call's key map or the key cache, and
-fails without that key, as a message does.
+of `GroupChange::TitleChanged` is a `GroupText`, as a create's `title` is.
+It decrypts with the key for the version the change names, from the call's
+key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `Unavailable` with the value as carried, and the event still
+decrypts.
 
 ```rust
 // 0.5.x
@@ -707,23 +773,45 @@ if let GroupChange::TitleChanged { new_title } = &group_change.change {
 
 // 0.6.0
 if let GroupChange::TitleChanged { new_title, .. } = &group_change.change {
-    show_title(new_title);
+    match new_title {
+        GroupText::Text { text, .. } => show_title(text),
+        GroupText::Unavailable { raw, .. } => show_title(raw),
+        _ => {}
+    }
 }
 ```
 
 ### Changing the avatar
 
-`prepare_group_avatar_change` takes the new avatar URL as plaintext and
-returns a `PreparedGroupMetadataChange`, as the title change does. A received
-`GroupChange::AvatarChanged` holds the decrypted `new_avatar_url`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `prepare_group_avatar_change`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction`; send its `action_signatures` with the URL. A URL
+containing a comma is rejected, since signatures join their fields with
+commas.
 
 ```rust
 // 0.5.x
 let encrypted_avatar_url = chat.encrypt(avatar_url, &keys[conversation_key_version])?;
 
 // 0.6.0
-let prepared = chat.prepare_group_avatar_change(&GroupAvatarChangeParams::new(conversation_id, avatar_url))?;
-let encrypted_avatar_url = prepared.encrypted_value;
+let prepared = chat.prepare_group_avatar_change(&GroupAvatarChangeParams::new(
+    conversation_id,
+    avatar_url,
+    conversation_key_version,
+))?;
+```
+
+A received `GroupChange::AvatarChanged` holds `new_avatar_url` as sent and
+its `conversation_key_version`: download the image and decrypt it with the
+key for that version.
+
+```rust
+// 0.6.0
+if let GroupChange::AvatarChanged { new_avatar_url, conversation_key_version, .. } = &group_change.change {
+    show_avatar(new_avatar_url, conversation_key_version.as_deref());
+}
 ```
 
 ### Changing the description
@@ -743,13 +831,17 @@ let prepared = chat.prepare_group_description_change(&GroupDescriptionChangePara
 let encrypted_description = prepared.encrypted_value;
 ```
 
-A received description change is a `GroupChange::DescriptionChanged`
-holding the decrypted `new_description`:
+A received description change is a `GroupChange::DescriptionChanged` holding
+`new_description` as a `GroupText`; read it as a title change's `new_title`:
 
 ```rust
 // 0.6.0
 if let GroupChange::DescriptionChanged { new_description, .. } = &group_change.change {
-    show_description(new_description);
+    match new_description {
+        GroupText::Text { text, .. } => show_description(text),
+        GroupText::Unavailable { raw, .. } => show_description(raw),
+        _ => {}
+    }
 }
 ```
 

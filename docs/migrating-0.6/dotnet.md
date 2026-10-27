@@ -30,7 +30,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Check code that reads error messages](#invalid-input-errors)
 - [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles, avatars and descriptions as plaintext, and read them decrypted](#creating-a-group)
+- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
 
 ## About the snippets
@@ -43,15 +43,14 @@ and events as the X API returns them, `keys` for the conversation key map
 for a `SendPayload`, `prepared` for a `PreparedConversationChange`, and
 `keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
 decrypted key change, message, deletion, read receipt and group change, as
-`JsonElement`s.
-`api.Post(path, body)` stands for your HTTP client: it POSTs `body`,
-serialized with `System.Text.Json`'s default options, to
+`JsonElement`s. `api.Post(path, body)` stands for your HTTP client: it POSTs
+`body`, serialized with `System.Text.Json`'s default options, to
 `https://api.x.com` + `path` with your user access token and returns the
 parsed JSON response as a `JsonElement`. `PhotoAttachment(mediaHashKey)`
 stands for your code that builds a photo's `AttachmentDescriptor`, and
-`ShowEdit`, `ShowTitle` and `ShowDescription` for your code that displays
-an edit or a group's title or description. The types are in the `ChatXdk`
-namespace.
+`ShowEdit`, `ShowTitle`, `ShowDescription` and `ShowAvatar` for your code
+that displays an edit, or a group's title, description or avatar. The types
+are in the `ChatXdk` namespace.
 
 ## Upgrade readers before v1 sends start
 
@@ -470,8 +469,9 @@ var seenUntil = receipt.GetProperty("seen_until_sequence_id").GetString();
 ## Deletes return a `PreparedAction`
 
 `PrepareMessageDelete` returns a `PreparedAction` whose `ActionSignatures`
-hold one entry, shaped as the previous section shows. Read the action's
-`MessageId` from that entry, and send `ActionSignatures` as returned:
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `MessageId`
+from that entry, and send `ActionSignatures` as returned:
 
 ```csharp
 // 0.5.x
@@ -511,19 +511,21 @@ those entries on the update's request.
 
 ### Creating a group
 
-`PrepareGroupCreate` encrypts the group's title and avatar URL under the
-conversation key it creates, so set them as plaintext. The result is a
-`PreparedConversationChange` that also carries them encrypted, as
-`EncryptedTitle` and `EncryptedAvatarUrl` (null when unset): send those as
-the create request's `group_name` and `group_avatar_url`, next to its
-participant keys and signatures. The create signs the encrypted values, so
-a title or avatar URL may contain a comma.
+`PrepareGroupCreate` encrypts the group's title under the conversation key
+it creates, so set it as plaintext. The result is a
+`PreparedConversationChange` that also carries it encrypted, as
+`EncryptedTitle` (null when unset): send that as the create request's
+`group_name`, next to its participant keys and signatures. The create signs
+the encrypted value, which is base64, so a title may contain a comma; a
+value signed as is, such as an avatar URL, can't. A create sets no avatar:
+set one afterwards with an [avatar change](#changing-the-avatar), with the
+image encrypted under the key the create returns.
 
 ```csharp
 // 0.5.x
 var prepared = chat.PrepareGroupCreate(
-    new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title });
-var body = new { group_name = title };
+    new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title, AvatarUrl = avatarUrl });
+var body = new { group_name = title, group_avatar_url = avatarUrl };
 
 // 0.6.0
 var prepared = chat.PrepareGroupCreate(
@@ -531,10 +533,18 @@ var prepared = chat.PrepareGroupCreate(
 var body = new { group_name = prepared.EncryptedTitle };
 ```
 
-`DecryptEvent` returns a received group create with its title and avatar
-URL decrypted under the key version the create names, from the call's key
-map or the key cache: a `Created` change's `title` and `avatar_url` are
-plaintext.
+`DecryptEvent` returns a received group create with its title decrypted with
+the key for the version the create names, from the call's key map or the key
+cache: a `Created` change's `title` deserializes to a `GroupText`. `Kind`
+`"Text"` holds the title in `Text`. `Kind` `"Unavailable"` holds, in `Raw`,
+the value as the create carries it, when that key isn't there or the value
+doesn't decrypt under it, and the rest of the create still decrypts. 0.5.x
+signed a create's title as the app passed it, so a 0.5.x app's create with a
+plaintext title arrives as `"Unavailable"` with the title in `Raw`: show
+`Raw` when a title isn't decryptable. A create that names no key version
+carries its title as plaintext, and arrives as `"Text"`. The encrypted
+`group_name` and `group_description` the X API returns with a conversation
+still open with `Decrypt`.
 
 ```csharp
 // 0.5.x
@@ -548,11 +558,56 @@ if (change.GetProperty("change_type").GetString() == "Created"
 // 0.6.0
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "Created"
-    && change.GetProperty("title").GetString() is string groupTitle)
+    && change.GetProperty("title").Deserialize<GroupText>() is GroupText groupTitle)
 {
-    ShowTitle(groupTitle);
+    ShowTitle(groupTitle.Kind == "Text" ? groupTitle.Text! : groupTitle.Raw!);
 }
 ```
+
+A `Created` change also carries the create's `conversation_key_version`, and
+the `avatar_url` a create from another client may set: a media URL whose
+image is encrypted under that key version.
+
+### Adding members
+
+`PrepareGroupMembersChange` rotates the conversation key, so it re-encrypts
+the group's title and description under the key it generates: set them as
+plaintext, in `CurrentTitle` and `CurrentDescription`, not as values your
+code encrypted. The result carries them encrypted, as `EncryptedTitle` and
+`EncryptedDescription` (null when unset). Send `EncryptedTitle` as the
+add-members request's `encrypted_title`; the description travels in the
+signed member add.
+
+```csharp
+// 0.5.x
+var prepared = chat.PrepareGroupMembersChange(
+    new GroupMembersChangeParams(publicKeys, conversationId, newMemberIds, memberIds, adminIds, new List<string>())
+    {
+        CurrentTitle = title,
+    });
+
+// 0.6.0
+var prepared = chat.PrepareGroupMembersChange(
+    new GroupMembersChangeParams(publicKeys, conversationId, newMemberIds, memberIds, adminIds, new List<string>())
+    {
+        CurrentTitle = title,
+        CurrentDescription = description,
+    });
+var body = new { encrypted_title = prepared.EncryptedTitle };
+```
+
+Passing a description makes the add sign at signature version 8, the first
+version whose member-add payload covers one, and 0.5.x readers can't verify
+a version-8 add. Until every app that reads your groups runs 0.6.0, leave
+the description out, so the add signs at version 7 as in 0.5.x; the new
+members can read the description once a description change sets it under the
+new key.
+
+The avatar isn't re-encrypted: `CurrentAvatarUrl` takes its media URL,
+signed as is, and the image stays encrypted under the key it was uploaded
+with, which the new members never receive. To keep the avatar readable for
+them, encrypt the image under the key the add returns, upload it, and send
+an [avatar change](#changing-the-avatar) naming the new key version.
 
 ### Removing members
 
@@ -560,16 +615,23 @@ if (change.GetProperty("change_type").GetString() == "Created"
 key, so the members removed don't receive the key the group encrypts under
 next. `GroupMembersRemoveParams` takes the identity keys of the members who
 stay, the conversation id and the members to remove; a key for a member
-being removed throws `ChatXdkException`. The group's title, avatar and
-description are encrypted under the conversation key: set the ones the
-group has, as plaintext, in `Title`, `AvatarUrl` and `Description`, and the
-call encrypts each under the new key.
+being removed throws `ChatXdkException`. The group's title and description
+are encrypted under the conversation key: set the ones the group has, as
+plaintext, in `Title` and `Description`, and the call encrypts each under
+the new key and signs it as a key-rotation re-encryption, which X clients
+don't show as a change. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
 The result is a `PreparedConversationChange`: the new `ConversationKey`,
 `ConversationParticipantKeys` for the members who stay, and
-`ActionSignatures` in request order — the removal, a change for each
-title, avatar and description set, then the conversation-key change. Store
+`ActionSignatures` in request order — the removal, a title change and a
+description change for the ones set, then the conversation-key change. Store
 the new key as you store the key a key change returns.
+
+The removal signs at signature version 11, the first whose removal payload
+covers the key version, and 0.5.x readers can't verify it: upgrade every app
+that reads your groups before you remove members.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
 signatures, and `group_key_rotation_data` holding the new
@@ -627,10 +689,13 @@ var prepared = chat.PrepareGroupTitleChange(new GroupTitleChangeParams(conversat
 var encryptedTitle = prepared.EncryptedValue;
 ```
 
-`DecryptEvent` returns a received title change decrypted: the `new_title`
-of a `TitleChanged` change is the plaintext. It decrypts with the key
-version the change names, from the call's key map or the key cache, and
-throws without that key, as a message does.
+`DecryptEvent` returns a received title change decrypted: the `new_title` of
+a `TitleChanged` change deserializes to a `GroupText`, as a create's `title`
+does. It decrypts with the key for the version the change names, from the
+call's key map or the key cache. Without that key, or when the value isn't
+ciphertext under it, as for a plaintext title an app signed with a key
+version, it is `"Unavailable"` with the value as carried, and the event
+still decrypts.
 
 ```csharp
 // 0.5.x
@@ -644,23 +709,42 @@ if (change.GetProperty("change_type").GetString() == "TitleChanged")
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "TitleChanged")
 {
-    ShowTitle(change.GetProperty("new_title").GetString()!);
+    var newTitle = change.GetProperty("new_title").Deserialize<GroupText>()!;
+    ShowTitle(newTitle.Kind == "Text" ? newTitle.Text! : newTitle.Raw!);
 }
 ```
 
 ### Changing the avatar
 
-`PrepareGroupAvatarChange` takes the new avatar URL as plaintext and
-returns a `PreparedGroupMetadataChange`, as the title change does. A
-received `AvatarChanged` change holds the decrypted `new_avatar_url`.
+An avatar URL is not encrypted; the image is. Encrypt the image bytes under
+the conversation key, upload them to the group's media, and pass the image's
+media URL to `PrepareGroupAvatarChange`, with the version of the key the
+image is encrypted under. The call signs both as they are and returns a
+`PreparedAction`; send its `ActionSignatures` with the URL. A URL containing
+a comma is rejected, since signatures join their fields with commas.
 
 ```csharp
 // 0.5.x
 var encryptedAvatarUrl = chat.Encrypt(avatarUrl, keys[conversationKeyVersion]);
 
 // 0.6.0
-var prepared = chat.PrepareGroupAvatarChange(new GroupAvatarChangeParams(conversationId, avatarUrl));
-var encryptedAvatarUrl = prepared.EncryptedValue;
+var prepared = chat.PrepareGroupAvatarChange(
+    new GroupAvatarChangeParams(conversationId, avatarUrl, conversationKeyVersion));
+```
+
+A received `AvatarChanged` change holds `new_avatar_url` as sent and its
+`conversation_key_version`: download the image and decrypt it with the key
+for that version.
+
+```csharp
+// 0.6.0
+var change = groupChange.GetProperty("change");
+if (change.GetProperty("change_type").GetString() == "AvatarChanged")
+{
+    ShowAvatar(
+        change.GetProperty("new_avatar_url").GetString()!,
+        change.GetProperty("conversation_key_version").GetString());
+}
 ```
 
 ### Changing the description
@@ -678,15 +762,17 @@ var prepared = chat.PrepareGroupDescriptionChange(
 var encryptedDescription = prepared.EncryptedValue;
 ```
 
-A received description change is a `DescriptionChanged` change holding the
-decrypted `new_description`:
+A received description change is a `DescriptionChanged` change holding
+`new_description`, which deserializes to a `GroupText`; read it as a title
+change's `new_title`:
 
 ```csharp
 // 0.6.0
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "DescriptionChanged")
 {
-    ShowDescription(change.GetProperty("new_description").GetString()!);
+    var newDescription = change.GetProperty("new_description").Deserialize<GroupText>()!;
+    ShowDescription(newDescription.Kind == "Text" ? newDescription.Text! : newDescription.Raw!);
 }
 ```
 

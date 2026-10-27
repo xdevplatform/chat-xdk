@@ -218,14 +218,17 @@ edit, delete and read-receipt params take. An edit's text is
 ## Signatures verify at versions 8 through 11
 
 Each signature carries its version, and each version signs its own payload
-layout: version 8 signs key versions as integers, 9 appends the signature
-version, 10 covers `contents_encryption_version`, and 11 adds the key
-version to group member removals. 0.6.0 rebuilds each payload in the layout
-of the version its signature carries, so events signed at 8 through 11
-verify, including the v1 sends it signs at 10. Versions above 11 are
-rejected, since their layout is unknown
+layout: version 8 signs key versions as integers and adds a group's
+description to member adds, 9 appends the signature version, 10 covers
+`contents_encryption_version`, and 11 adds the key version to group member
+removals. 0.6.0 rebuilds each payload in the layout of the version its
+signature carries, so events signed at 8 through 11 verify, including the v1
+sends it signs at 10 and the member adds with a description it signs at 8.
+Versions above 11 are rejected, since their layout is unknown
 ([CRYPTO.md](../CRYPTO.md#verifying-newer-versions)). There's no code to
-change.
+change to read them. 0.5.x readers rebuild the layouts up to 7 only, so they
+can't verify v1 sends, member removals, or member adds with a description:
+each guide says to upgrade readers first.
 
 ## Read receipts should be signed
 
@@ -247,33 +250,52 @@ returns the receipt as a verified `ReadReceipt`:
 Apps should sign a group update with the signatures of the actions it
 performs. Removing members rotates the conversation key, so the members
 removed don't receive the key the group encrypts under next:
-`prepare_group_members_remove` takes the public keys of the members who
-stay and returns a `PreparedConversationChange` with the new key, and
+`prepare_group_members_remove` takes the public keys of the members who stay
+and returns a `PreparedConversationChange` with the new key, and
 `POST /2/chat/conversations/{id}/members/remove` sends
 `group_key_rotation_data` with its signatures. Leaving signs the sender's
 removal, then an admin add when `promote_admin_id` is set, then a
-conversation delete, and does not rotate the key.
-
-A group's title, avatar and description are encrypted under the
-conversation key, and the SDK encrypts them: a group create, the title,
-avatar and description changes, and a removal take the plaintext and return
-the encrypted values with their signatures, so an app never encrypts a value
-itself and no plaintext reaches the X API. A create encrypts its title and
-avatar under the key it creates, and returns them as the `group_name` and
-`group_avatar_url` its request sends. The changes resolve the key as
-`encrypt_message` does. A removal re-encrypts the ones the app passes under
-the new key and signs them between the removal and the key change, in the
-order the request takes them. `decrypt_event` decrypts a received create and
-a received title, avatar or description change. Admin, invite, and join
+conversation delete, and does not rotate the key. Admin, invite, and join
 changes, message-TTL changes, and screen-capture changes each return a
-`PreparedAction`:
+`PreparedAction`.
+
+A group's title and description are encrypted under the conversation key,
+and the SDK encrypts them: a group create, a member add, the title and
+description changes, and a removal take the plaintext and return the
+encrypted values with their signatures, so an app never encrypts a title
+itself and no plaintext title reaches the X API. A create encrypts its title
+under the key it creates and returns it for its request's `group_name`. The
+changes resolve the key as `encrypt_message` does. A member add and a
+removal rotate the key, so each re-encrypts the title and description the
+app passes under the new key. An add signs both in the member add, so the
+new members can read them, and returns the title for its request. A removal
+signs each between the removal and the key change, marked as a key-rotation
+re-encryption so X clients don't show it as a change; it leaves the avatar
+alone.
+
+An avatar is an image, and X clients encrypt the image, not its URL: the app
+encrypts the image under the conversation key and uploads it to the group's
+media, and the X API checks the URL against that media. So the avatar change
+signs the media URL as is, with the version of the key the image is
+encrypted under, and the decrypt calls return both for a received avatar
+change. A create sets no avatar, as X clients' creates normally don't; the
+app sets one with an avatar change.
+
+`decrypt_event` and `decrypt_events` decrypt a received create's title and a
+received title or description change into a `GroupText`. A value they can't
+decrypt, because its key is missing or it doesn't decrypt under it, comes
+back unavailable with the value as carried instead of failing the event, so
+the rest of the event, such as a create's members and admins, still reads.
+0.5.x apps signed titles as plaintext while naming a key version, so an app
+shows the raw value when a title isn't decryptable. Each guide shows the
+calls and how to read a `GroupText`:
 [Rust](rust.md#group-actions-should-be-signed),
 [Python](python.md#group-actions-should-be-signed),
 [JavaScript](javascript.md#group-actions-should-be-signed),
 [Go](go.md#group-actions-should-be-signed),
 [JVM](jvm.md#group-actions-should-be-signed),
-[.NET](dotnet.md#group-actions-should-be-signed),
-[C ABI](c-abi.md#group-actions-should-be-signed).
+[.NET](dotnet.md#group-actions-should-be-signed), [C
+ABI](c-abi.md#group-actions-should-be-signed).
 
 ## Invalid input has its own error
 

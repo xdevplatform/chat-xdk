@@ -145,7 +145,7 @@ wrapper's `reason=InvalidPin guesses_remaining=N` error form).
 | 49 | **prepare_group_members_remove** | `prepare_group_members_remove(&GroupMembersRemoveParams) → PreparedConversationChange` | `prepareGroupMembersRemove(params) → PreparedConversationChange` | `prepare_group_members_remove(GroupMembersRemoveParams) → dict` | `PrepareGroupMembersRemove(GroupMembersRemoveParams) (*PreparedConversationChange, error)` | `prepareGroupMembersRemove(GroupMembersRemoveParams)` | `PrepareGroupMembersRemove(GroupMembersRemoveParams)` |
 | 50 | **prepare_group_leave** | `prepare_group_leave(&GroupLeaveParams) → PreparedAction` | `prepareGroupLeave(params) → PreparedAction` | `prepare_group_leave(GroupLeaveParams) → dict` | `PrepareGroupLeave(GroupLeaveParams) (*PreparedAction, error)` | `prepareGroupLeave(GroupLeaveParams)` → `PreparedAction` | `PrepareGroupLeave(GroupLeaveParams)` → `PreparedAction` |
 | 51 | **prepare_group_title_change** | `prepare_group_title_change(&GroupTitleChangeParams) → PreparedGroupMetadataChange` | `prepareGroupTitleChange(params) → PreparedGroupMetadataChange` | `prepare_group_title_change(GroupTitleChangeParams) → dict` | `PrepareGroupTitleChange(GroupTitleChangeParams) (*PreparedGroupMetadataChange, error)` | `prepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedGroupMetadataChange` | `PrepareGroupTitleChange(GroupTitleChangeParams)` → `PreparedGroupMetadataChange` |
-| 52 | **prepare_group_avatar_change** | `prepare_group_avatar_change(&GroupAvatarChangeParams) → PreparedGroupMetadataChange` | `prepareGroupAvatarChange(params) → PreparedGroupMetadataChange` | `prepare_group_avatar_change(GroupAvatarChangeParams) → dict` | `PrepareGroupAvatarChange(GroupAvatarChangeParams) (*PreparedGroupMetadataChange, error)` | `prepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedGroupMetadataChange` | `PrepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedGroupMetadataChange` |
+| 52 | **prepare_group_avatar_change** | `prepare_group_avatar_change(&GroupAvatarChangeParams) → PreparedAction` | `prepareGroupAvatarChange(params) → PreparedAction` | `prepare_group_avatar_change(GroupAvatarChangeParams) → dict` | `PrepareGroupAvatarChange(GroupAvatarChangeParams) (*PreparedAction, error)` | `prepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedAction` | `PrepareGroupAvatarChange(GroupAvatarChangeParams)` → `PreparedAction` |
 | 53 | **prepare_group_description_change** | `prepare_group_description_change(&GroupDescriptionChangeParams) → PreparedGroupMetadataChange` | `prepareGroupDescriptionChange(params) → PreparedGroupMetadataChange` | `prepare_group_description_change(GroupDescriptionChangeParams) → dict` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams) (*PreparedGroupMetadataChange, error)` | `prepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedGroupMetadataChange` | `PrepareGroupDescriptionChange(GroupDescriptionChangeParams)` → `PreparedGroupMetadataChange` |
 | 54 | **prepare_group_admins_add** | `prepare_group_admins_add(&GroupAdminsAddParams) → PreparedAction` | `prepareGroupAdminsAdd(params) → PreparedAction` | `prepare_group_admins_add(GroupAdminsAddParams) → dict` | `PrepareGroupAdminsAdd(GroupAdminsAddParams) (*PreparedAction, error)` | `prepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` | `PrepareGroupAdminsAdd(GroupAdminsAddParams)` → `PreparedAction` |
 | 55 | **prepare_group_admins_remove** | `prepare_group_admins_remove(&GroupAdminsRemoveParams) → PreparedAction` | `prepareGroupAdminsRemove(params) → PreparedAction` | `prepare_group_admins_remove(GroupAdminsRemoveParams) → dict` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams) (*PreparedAction, error)` | `prepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` | `PrepareGroupAdminsRemove(GroupAdminsRemoveParams)` → `PreparedAction` |
@@ -191,8 +191,8 @@ unset or empty key fields and fall back to two opt-in session stores:
   default**). While enabled, `decrypt_events` caches, per conversation, the
   key whose key change carried a valid signature at the highest version seen;
   `decrypt_event` falls back to it when its params' `conversation_keys` map is
-  omitted or empty; and the `encrypt_*` methods and the group title, avatar
-  and description prepares resolve an omitted `conversation_key` /
+  omitted or empty; and the `encrypt_*` methods and the group title and
+  description prepares resolve an omitted `conversation_key` /
   `conversation_key_version` pair from it. Disabling
   clears the cache; the cached keys zeroize on drop.
 
@@ -239,13 +239,14 @@ lifecycle action they sign:
 | Remove members from a group | `prepareGroupMembersRemove` — pass the public keys of the members who stay | `/2/chat/conversations/{id}/members/remove` |
 
 The group methods are separate because they sign different events: a group
-create must carry a `GroupChangeEvent.GroupCreate` signature and a member add a
-`GroupChangeEvent.GroupMemberAddChange` signature — each **in addition to** the
-conversation-key change signature, so both return two `actionSignatures`.
-A member removal does the same, since it always rotates the key:
-`GroupChangeEvent.GroupMemberRemoveChange`, a title, avatar and description
-change for each one passed, then the conversation-key change. A key rotation
-signs only the key change, so `prepareConversationKeyChange` returns one.
+create must carry a `GroupChangeEvent.GroupCreate` signature and a member
+add a `GroupChangeEvent.GroupMemberAddChange` signature — each **in addition
+to** the conversation-key change signature, so both return two
+`actionSignatures`. A member removal does the same, since it always rotates
+the key: `GroupChangeEvent.GroupMemberRemoveChange`, a title and a
+description change for each one passed, re-encrypted under the new key, then
+the conversation-key change. A key rotation signs only the key change, so
+`prepareConversationKeyChange` returns one.
 
 A member removal posts its signatures on `/members/remove` together with
 `group_key_rotation_data`: the new `conversation_key_version` and the
@@ -267,14 +268,14 @@ Two hygiene notes:
   withholds it — the field is empty/omitted on that signature and must never be
   reconstructed and sent. Group-action signatures keep their payload (it
   contains only public fields).
-- **Optional group fields normalize in core.** An empty-string `title` or
-  `avatarUrl` and a negative `ttlMsec` are treated as "not set", so every
-  binding signs the same `null` whether it can express an absent value or
-  only the FFI encodings of one. A member add's `currentTitle` or
-  `currentAvatarUrl` containing a comma is rejected at signing time (the
-  signed payload is comma-joined with no escaping, so it could never
-  verify). A group create signs its title and avatar encrypted, as base64,
-  so a comma in them is fine.
+- **Optional group fields normalize in core.** An empty-string title,
+  description or avatar URL and a negative `ttlMsec` are treated as "not
+  set", so every binding signs the same `null` whether it can express an
+  absent value or only the FFI encodings of one. Titles and descriptions are
+  signed encrypted, as base64, so a comma in them is fine. An avatar URL is
+  signed as is: a member add's `currentAvatarUrl` or an avatar change's
+  `newAvatarUrl` containing a comma is rejected at signing time (the signed
+  payload is comma-joined with no escaping, so it could never verify).
 
 ---
 
@@ -356,8 +357,8 @@ For a group key rotation, set `conversationId` to the existing group's id.
 #### prepare_group_create
 
 Generate, encrypt, and sign a group **create**. Same return shape as
-`prepare_conversation_key_change`; additionally takes the initial `member_ids`
-and `admin_ids` lists and optional title, avatar, and TTL.
+`prepare_conversation_key_change`; additionally takes the initial
+`member_ids` and `admin_ids` lists and an optional title and TTL.
 
 The backend validates a group create as a pair of signed actions, so the
 returned `actionSignatures` array carries **two** entries: a conversation-key
@@ -365,13 +366,16 @@ change (`ConversationKeyChangeEvent`) and the group create
 (`GroupChangeEvent.GroupCreate`). Each signature's `encodedMessageEventDetail`
 carries the corresponding event, ready to POST.
 
-`title` and `avatar_url` are plaintext. The call encrypts each under the new
-conversation key with XSalsa20-Poly1305, as
+`title` is plaintext. The call encrypts it under the new conversation key
+with XSalsa20-Poly1305, as
 [`prepare_group_title_change`](#prepare_group_title_change) encrypts a
-title, and the create signs and carries the ciphertext. The result adds them
-encrypted, base64, as `encrypted_title` and `encrypted_avatar_url`
-(`encryptedTitle`, `encryptedAvatarUrl` in JS), absent when unset: send them
-as the request's `group_name` and `group_avatar_url`.
+title, and the create signs and carries the ciphertext. The result adds it
+encrypted, base64, as `encrypted_title` (`encryptedTitle` in JS), absent
+when unset: send it as the request's `group_name`.
+
+A create sets no avatar. Set one afterwards with
+[`prepare_group_avatar_change`](#prepare_group_avatar_change), with the
+image encrypted under the key the create returns.
 
 ```python
 prepared = chat.prepare_group_create(
@@ -388,18 +392,19 @@ api.post("/2/chat/conversations/group", {
 })
 ```
 
-A recipient's `decrypt_event` returns the create as `Created` with the
-plaintext `title` and `avatar_url`, decrypted with the conversation key
-version the create names (see [GroupChange](#groupchange)).
+A recipient's `decrypt_event` returns the create as `Created`, its `title` a
+[`GroupText`](#grouptext) decrypted with the key for the
+`conversation_key_version` the create names.
 
 ---
 
 #### prepare_group_members_change
 
-Generate, encrypt, and sign a group **member-add** change for the updated roster.
-Same return shape as `prepare_conversation_key_change`; additionally takes the
-new/current/admin/pending member id lists and optional title, avatar, TTL, and
-screen-capture-blocking state.
+Generate, encrypt, and sign a group **member-add** change for the updated
+roster. Same return shape as `prepare_conversation_key_change`; additionally
+takes the new/current/admin/pending member id lists and the group's current
+title, description, avatar, TTL, and screen-capture-blocking state, each
+optional.
 
 **Optional group-state fields (per binding):**
 
@@ -407,6 +412,7 @@ screen-capture-blocking state.
 |---|---|---|---|---|---|---|
 | current_title | `Option<String>` | `currentTitle?: string \| null` | `current_title=None` | `CurrentTitle string` (empty = unset) | `String currentTitle` (null = unset) | `string? CurrentTitle` |
 | current_avatar_url | `Option<String>` | `currentAvatarUrl?: string \| null` | `current_avatar_url=None` | `CurrentAvatarURL string` (empty = unset) | `String currentAvatarUrl` (null = unset) | `string? CurrentAvatarUrl` |
+| current_description | `Option<String>` | `currentDescription?: string \| null` | `current_description=None` | `CurrentDescription string` (empty = unset) | `String currentDescription` (null = unset) | `string? CurrentDescription` |
 | current_ttl_msec | `Option<i64>` | `currentTtlMsec?: number \| null` | `current_ttl_msec=None` | `CurrentTTLMsec *int64` (nil = unset) | `Long currentTtlMsec` (null = unset) | `long? CurrentTtlMsec` |
 | current_screen_capture_blocking_enabled | `Option<bool>` | `currentScreenCaptureBlockingEnabled?: boolean \| null` | `current_screen_capture_blocking_enabled=None` | `CurrentScreenCaptureBlockingEnabled *bool` (nil = unset) | `Boolean currentScreenCaptureBlockingEnabled` (null = unset) | `bool? CurrentScreenCaptureBlockingEnabled` |
 
@@ -419,8 +425,39 @@ sentinel, not `false`.
 Like `prepare_group_create`, this returns **two** `actionSignatures`: a
 conversation-key change (`ConversationKeyChangeEvent`) and the member add
 (`GroupChangeEvent.GroupMemberAddChange`), each with its
-`encodedMessageEventDetail` populated. The `current_title` and
-`current_avatar_url` fields must not contain a comma.
+`encodedMessageEventDetail` populated.
+
+The add rotates the conversation key, so the group's title and description
+move to the key it generates: `current_title` and `current_description` are
+plaintext, and the call encrypts each under the new key, signs the
+ciphertext in the member add, and returns it, base64, as `encrypted_title`
+and `encrypted_description` (`encryptedTitle`, `encryptedDescription` in
+JS), absent when unset. Send `encrypted_title` as the add-members request's
+`encrypted_title`; the description travels in the signed member add. An add
+that carries a description signs at signature version 8, the first whose
+member-add payload covers it; any other add signs at version 7.
+
+```python
+prepared = chat.prepare_group_members_change(
+    GroupMembersChangeParams(
+        public_keys, conversation_id, ["333"], member_ids, admin_ids, [],
+        current_title=title, current_description=description,
+    )
+)
+api.post(f"/2/chat/conversations/{conversation_id}/members", {
+    "user_ids": ["333"],
+    "encrypted_title": prepared["encrypted_title"],
+    "conversation_key_version": prepared["conversation_key_version"],
+    "conversation_participant_keys": prepared["conversation_participant_keys"],
+    "action_signatures": prepared["action_signatures"],
+})
+```
+
+`current_avatar_url` is the avatar's media URL, signed as is. The image
+stays encrypted under the key it was uploaded with, which the new members
+never receive: to keep the avatar readable for them, encrypt the image under
+the key the add returns, upload it, and send an [avatar
+change](#prepare_group_avatar_change) naming the new key version.
 
 ---
 
@@ -433,20 +470,24 @@ as `prepare_group_members_change`; `conversation_id`; and `user_ids`, the
 members being removed. A `public_keys` entry for someone being removed is
 rejected.
 
-The group's title, avatar and description are encrypted under the
-conversation key, so a rotation re-encrypts them: pass the ones the group
-has, as plaintext, in the optional `title`, `avatar_url` and `description`
-(Rust `with_title`, `with_avatar_url`, `with_description`), and the call
-encrypts each under the new key. An empty value is unset.
+The group's title and description are encrypted under the conversation key,
+so a rotation re-encrypts them: pass the ones the group has, as plaintext,
+in the optional `title` and `description` (Rust `with_title`,
+`with_description`), and the call encrypts each under the new key. An empty
+value is unset. A rotation leaves the avatar alone: its image stays
+encrypted under the key it was uploaded with, which the members who stay
+hold.
 
 The call generates a new conversation key, encrypts it for the members who
 stay, and returns a `PreparedConversationChange`: the new key and version,
 the participant keys, and `action_signatures` in request order — the
-removal, bound to the new key version; a title, avatar and description
-change for each one passed, signed as
-[`prepare_group_title_change`](#prepare_group_title_change) and its
-siblings sign them; then the conversation-key change. Store the new key as
-you store the key a key change returns.
+removal, bound to the new key version; a title and a description change for
+each one passed, signed as
+[`prepare_group_title_change`](#prepare_group_title_change) and
+[`prepare_group_description_change`](#prepare_group_description_change) sign
+them and marked as key-rotation re-encryptions (`for_key_rotation`), so X
+clients don't show them as changes; then the conversation-key change. Store
+the new key as you store the key a key change returns.
 
 Send that result as `POST /2/chat/conversations/{id}/members/remove`.
 `user_ids` are the members being removed. `action_signatures` are the
@@ -553,22 +594,37 @@ const prepared = chat.prepareGroupTitleChange({ conversationId, newTitle: "Team"
 // prepared.encryptedValue, prepared.actionSignatures
 ```
 
-A recipient's `decrypt_event` returns the change as `TitleChanged` with the
-plaintext `new_title`, decrypted with the conversation key version the
-change names (see [GroupChange](#groupchange)).
+A recipient's `decrypt_event` returns the change as `TitleChanged`, its
+`new_title` a [`GroupText`](#grouptext) decrypted with the key for the
+version the change names.
 
 ---
 
 #### prepare_group_avatar_change
 
-Encrypt a new group avatar URL and sign the change. Required:
-`conversation_id` and `new_avatar_url`, the URL as plaintext. The key
-resolves, and the result is shaped, as for
-[`prepare_group_title_change`](#prepare_group_title_change):
+Sign a group avatar change. An avatar URL is not encrypted; the image is.
+The app encrypts the image bytes under the conversation key, uploads them to
+the group's media, and passes the image's media URL. Required:
+`conversation_id`; `new_avatar_url`, that media URL, signed and sent as is;
+and `conversation_key_version`, the version of the key the image is
+encrypted under. The `sender_id` / `signing_key_version` overrides resolve
+from the session identity. Returns a `PreparedAction`: one signature, at
+version 7, over the key version and the URL.
 
 ```text
-GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{encrypted_value}
+GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{new_avatar_url}
 ```
+
+```python
+prepared = chat.prepare_group_avatar_change(
+    GroupAvatarChangeParams(conversation_id, avatar_url, conversation_key_version)
+)
+# prepared["action_signatures"]
+```
+
+A recipient's `decrypt_event` returns it as `AvatarChanged` with
+`new_avatar_url` and `conversation_key_version`: the image to download and
+the version of the key that decrypts it.
 
 ---
 
@@ -583,8 +639,9 @@ key resolves, and the result is shaped, as for
 GroupChangeEvent.GroupDescriptionChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{encrypted_value}
 ```
 
-A recipient's `decrypt_event` returns it as `DescriptionChanged` with the
-plaintext `new_description`.
+A recipient's `decrypt_event` returns it as `DescriptionChanged`, its
+`new_description` a [`GroupText`](#grouptext) like a title change's
+`new_title`.
 
 ---
 
@@ -1474,15 +1531,17 @@ The file calls raise an error that says what to pass instead when:
 |---|--------|------|-----|--------|-----|------|------|
 | 37 | **decrypt** | `(&str, &Key) → String` | `(string, Uint8Array) → string` | `(str, bytes) → str` | `Decrypt(ciphertextB64 string, conversationKey []byte) (string, error)` — UTF-8 plaintext | `decrypt(String, byte[])` → `String` | `Decrypt(string, byte[])` → `string` |
 
-The X API returns a group's title, avatar URL and description (`group_name`,
-`group_avatar_url` and `group_description` on a conversation) encrypted
-under the conversation key. `decrypt(ciphertext_b64, key)` decrypts one with
-XSalsa20-Poly1305 under the raw key of the version it was encrypted under,
-and returns the UTF-8 plaintext. Group creates and changes need no separate
-call: `prepare_group_create`, `prepare_group_title_change`,
-`prepare_group_avatar_change` and `prepare_group_description_change`
-encrypt the value, and `decrypt_event` decrypts a received create or
-change.
+The X API returns a group's title and description (`group_name` and
+`group_description` on a conversation) encrypted under the conversation key.
+`decrypt(ciphertext_b64, key)` decrypts one with XSalsa20-Poly1305 under the
+raw key of the version it was encrypted under, and returns the UTF-8
+plaintext. A title a 0.5.x app set is plaintext: when `decrypt` fails on a
+title, show the value as the API returns it. The avatar (`group_avatar_url`)
+is a media URL, not encrypted; the image it points to is. Group creates and
+changes need no separate call: `prepare_group_create`,
+`prepare_group_members_change`, `prepare_group_title_change` and
+`prepare_group_description_change` encrypt the value, and `decrypt_event`
+decrypts a received create or change.
 
 Wire format: `base64(nonce[24B] || poly1305_tag[16B] || ciphertext)` — same as message content encryption.
 
@@ -1663,7 +1722,7 @@ const reply = chat.encryptReply({
 });
 const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: webhookEventB64 });
 
-// ── Metadata (group name, avatar, description) ──
+// ── Metadata (group name, description) ──
 const groupName = chat.decrypt(conversation.groupName, convKey);
 
 // ── Files (whole file): the message's event, its key map, the media hash key ──
@@ -1750,7 +1809,7 @@ payload = chat.encrypt_message(EncryptMessageParams(event["conversation_id"], "h
 reply = chat.encrypt_reply(EncryptReplyParams(event["conversation_id"], "pong", event_b64))
 reaction = chat.encrypt_add_reaction(EncryptReactionParams(event_b64, "👍"))
 
-# ── Metadata (group name, avatar, description) ──
+# ── Metadata (group name, description) ──
 group_name = chat.decrypt(conversation["group_name"], conv_key)
 
 # ── Files: the message's event, its key map, the media hash key ──
@@ -1851,7 +1910,7 @@ func main() {
     // e.g. from DecryptConversationKey or result.ConversationKeys.Keys.
     convKey := result.ConversationKeys.Keys[keyVersion]
 
-    // ── Metadata (group name, avatar, description) ──
+    // ── Metadata (group name, description) ──
     groupName, err := chat.Decrypt(conversationGroupNameB64, convKey)
     _ = groupName
 
@@ -1935,7 +1994,7 @@ let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "
 let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
 let reaction = chat.encrypt_add_reaction(&EncryptReactionParams::new(event_b64, "👍"))?;
 
-// ── Metadata (group name, avatar, description) ──
+// ── Metadata (group name, description) ──
 let group_name = chat.decrypt(&conversation.group_name, &conv_key)?;
 
 // ── Files: the message's event, its key map, the media hash key ──
@@ -2567,10 +2626,10 @@ Payload when `type` is `"groupChange"` (JS) / `"GroupChange"` (Python).
 ```typescript
 // JS/WASM
 type GroupChange =
-  | { changeType: 'created'; memberIds: string[]; adminIds: string[]; title?: string; avatarUrl?: string }
-  | { changeType: 'titleChanged'; newTitle: string }
-  | { changeType: 'avatarChanged'; newAvatarUrl: string }
-  | { changeType: 'descriptionChanged'; newDescription: string }
+  | { changeType: 'created'; memberIds: string[]; adminIds: string[]; title?: GroupText | null; avatarUrl?: string | null; conversationKeyVersion?: string | null }
+  | { changeType: 'titleChanged'; newTitle: GroupText }
+  | { changeType: 'avatarChanged'; newAvatarUrl: string; conversationKeyVersion?: string | null }
+  | { changeType: 'descriptionChanged'; newDescription: GroupText }
   | { changeType: 'adminsAdded'; adminIds: string[] }
   | { changeType: 'adminsRemoved'; adminIds: string[] }
   | { changeType: 'membersAdded'; memberIds: string[]; currentMemberIds: string[]; currentAdminIds: string[] }
@@ -2582,16 +2641,54 @@ type GroupChange =
   | { changeType: 'unknown' };
 ```
 
-A group create carries its title and avatar encrypted under the
-conversation key, and so does a title, avatar or description change;
-`decrypt_event` / `decrypt_events` return them decrypted: a `created`
-change's `title` and `avatarUrl`, and `newTitle`, `newAvatarUrl` and
-`newDescription`, are plaintext. They decrypt with the key version the
-event names, from the call's key map or the key cache (`decrypt_events`
-reads a create's key from the key change in the same batch); without that
-key the event fails as a message does.
-Rust's `GroupChange` is `#[non_exhaustive]`, as is each variant with named
-fields.
+A group's title and description travel encrypted under the conversation key
+the event names, and `decrypt_event` / `decrypt_events` return a `created`
+change's `title`, a `titleChanged` change's `newTitle` and a
+`descriptionChanged` change's `newDescription` as a
+[`GroupText`](#grouptext). An avatar is a media URL, not encrypted: an
+`avatarChanged` change's `newAvatarUrl`, and the `avatarUrl` another
+client's create may carry, come back as the event carries them, with the
+`conversationKeyVersion` the image is encrypted under. Download the image
+and decrypt it with the key for that version. Rust's `GroupChange` is
+`#[non_exhaustive]`, as is each variant with named fields.
+
+### GroupText
+
+A group title or description as a received event carries it. `text` carries
+the value decrypted with the key for the event's version, from the call's
+key map or the key cache (`decrypt_events` reads a create's key from the key
+change in the same batch), or the plaintext an event that names no key
+version carries. `unavailable` carries `raw`, the value as the event carries
+it, when that key isn't there or the value doesn't decrypt under it; the
+rest of the event still decrypts, so a create without its key still returns
+its members and admins. 0.5.x apps sent titles as plaintext while naming a
+key version: their titles arrive as `unavailable` with the title in `raw`,
+so show `raw` when a title isn't decryptable.
+
+```typescript
+// JS/WASM
+type GroupText = { kind: 'text'; text: string } | { kind: 'unavailable'; raw: string };
+```
+
+| Binding | Shape | `kind` values |
+|---------|-------|---------------|
+| Rust | `GroupText::Text { text }` / `GroupText::Unavailable { raw }` enum, `#[non_exhaustive]` like each variant | — |
+| JS/WASM | `GroupText` union above | `'text'`, `'unavailable'` |
+| Python | `GroupText` `TypedDict` (`kind`, `text`, `raw`), exported from `chat_xdk`; the event `dict` holds it | `"Text"`, `"Unavailable"` |
+| Go | `chatxdk.GroupText` struct (`Kind`, `Text`, `Raw`); decode `GroupChangeEvent.Change` into a struct with `GroupText` fields | `"Text"`, `"Unavailable"` |
+| .NET | `GroupText` class (`Kind`, `Text`, `Raw`); decrypted JSON deserializes with `JsonSerializer.Deserialize<GroupText>` | `"Text"`, `"Unavailable"` |
+| JVM | `Types.GroupText` (`kind`, `text`, `raw`); decrypted JSON converts with `ObjectMapper.treeToValue(node, GroupText.class)` | `"Text"`, `"Unavailable"` |
+
+```rust
+match change {
+    GroupChange::TitleChanged { new_title, .. } => match new_title {
+        GroupText::Text { text, .. } => show_title(&text),
+        GroupText::Unavailable { raw, .. } => show_title(&raw),
+        _ => {}
+    },
+    _ => {}
+}
+```
 
 ### SettingsChange
 
