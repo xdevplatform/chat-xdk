@@ -78,6 +78,14 @@ async function main() {
   assert.equal(chat.verify(v.signing_public_b64, sigBytes, msgBytes), true);
   assert.equal(chat.verify(v.signing_public_b64, sigBytes, new TextEncoder().encode(v.message_utf8 + "!")), false);
 
+  // sign refuses data only the SDK signs: an event signature payload and a
+  // public key. Data that only resembles a payload is application data.
+  const keyChange = "ConversationKeyChangeEvent,mk1,1001,1001:1002,1800000000000,a2V5";
+  for (const data of [new TextEncoder().encode(keyChange), b64ToBytes(v.identity_public_b64)]) {
+    assert.throws(() => chat.sign(data), /only the SDK signs/);
+  }
+  assert.equal(chat.sign(new TextEncoder().encode(` ${keyChange}`)).length, 64);
+
   // conversation-key change ECIES roundtrip (ciphertext randomized, key retained locally)
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",

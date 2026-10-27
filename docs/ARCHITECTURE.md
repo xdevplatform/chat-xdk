@@ -208,7 +208,8 @@ HTTP stack (`fetch` in a browser), and hands the status and body back:
   is in flight share it. Until the answer arrives every switch reads off for
   the chat, so its first sends can be v0.
 - **What it sends:** a GET with no query parameters, no credentials and no
-  user data.
+  user data. It sends and stores no cookies and follows no redirect: a 3xx
+  answer is a status other than 200.
 - **Fail-closed:** a network error, a request that takes more than 2 s in
   all, a status other than 200, a body over 64 KiB, malformed JSON, or a
   missing or non-boolean key leaves every switch off for the chat's lifetime,
@@ -518,7 +519,8 @@ Developer                          SDK                           Juicebox
     │  payload                      │                               │
     │◀──────────────────────────────│                               │
     │                               │                               │
-    │  POST /2/chat/keys            │                               │
+    │  POST /2/users/{id}/          │                               │
+    │    public_keys                │                               │
     │  (developer calls X API)      │                               │
     │                               │                               │
     │  chat.update_config(config)   │                               │

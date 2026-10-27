@@ -30,7 +30,7 @@ cd crates/dotnet/dotnet/ChatXdk
 dotnet build -c Release
 ```
 
-Place the native library (`libchat_xdk_dotnet.dylib` / `.so` / `chat_xdk_dotnet.dll`) on the loader path next to your app. After changing FFI exports in `src/lib.rs`, regenerate `NativeMethods.g.cs` with your csbindgen workflow.
+The published `XDevPlatform.ChatXdk` package bundles the native library for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) under `runtimes/<rid>/native/`. With a wrapper you build yourself, place the native library (`libchat_xdk_dotnet.dylib` / `.so` / `chat_xdk_dotnet.dll`) on the loader path next to your app. `cargo build -p chat-xdk-dotnet` regenerates `NativeMethods.g.cs` from the FFI exports in `src/lib.rs`.
 
 ## Quick Start
 

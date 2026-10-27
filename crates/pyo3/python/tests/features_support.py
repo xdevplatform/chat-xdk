@@ -34,27 +34,51 @@ def wait_for(predicate, timeout=10.0):
 _server_ids = itertools.count(1)
 
 
+# The path of a FeatureServer that answers that v1_send is on.
+REDIRECT_TARGET = "/followed/2/chat/features"
+
+
 class FeatureServer:
-    """A local GET /2/chat/features that records each request's query string."""
+    """A local GET /2/chat/features that records each request's query string
+    and headers. Set ``location`` to answer with a redirect there; requests
+    that reach ``REDIRECT_TARGET`` are counted in ``followed``."""
 
     def __init__(self, body='{"features":{"v1_send":true}}'):
         self.status = 200
         self.body = body
         self.delay = 0.0
+        self.location = None
+        self.set_cookie = None
         self.queries = []
+        self.headers = []
+        self.followed = 0
         server = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if urllib.parse.urlparse(self.path).path == REDIRECT_TARGET:
+                    server.followed += 1
+                    answer = b'{"features":{"v1_send":true}}'
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(answer)))
+                    self.end_headers()
+                    self.wfile.write(answer)
+                    return
                 # The answer is fixed before the request is recorded, so a
                 # test that sees the request can change the next answer.
                 status, body, delay = server.status, server.body.encode("utf-8"), server.delay
+                location, set_cookie = server.location, server.set_cookie
                 server.queries.append(urllib.parse.urlparse(self.path).query)
+                server.headers.append(dict(self.headers))
                 if delay:
                     time.sleep(delay)
                 try:
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json")
+                    if location:
+                        self.send_header("Location", location)
+                    if set_cookie:
+                        self.send_header("Set-Cookie", set_cookie)
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
@@ -66,7 +90,8 @@ class FeatureServer:
 
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.httpd.daemon_threads = True
-        self.url = "http://127.0.0.1:%d/%d/2/chat/features" % (self.httpd.server_address[1], next(_server_ids))
+        self.origin = "http://127.0.0.1:%d" % self.httpd.server_address[1]
+        self.url = "%s/%d/2/chat/features" % (self.origin, next(_server_ids))
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def close(self):

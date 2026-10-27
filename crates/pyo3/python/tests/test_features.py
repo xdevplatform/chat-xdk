@@ -158,6 +158,28 @@ class TestFeatureSwitches(unittest.TestCase):
                 self.assertEqual(self._send(chat), "7")
                 self.assertEqual(len(self.server.queries), 1, "a failure is not retried")
 
+    def test_the_read_sends_no_cookies_or_credentials(self):
+        self.server.set_cookie = "session=from-the-first-answer; Path=/"
+        first = self._chat()
+        self.assertTrue(self._wait_for(lambda: self._send(first) == "10"))
+        second = self._chat()
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2))
+        self.assertTrue(self._wait_for(lambda: self._send(second) == "10"))
+        for headers in self.server.headers:
+            names = {name.lower() for name in headers}
+            self.assertNotIn("cookie", names, "the read sends no cookie")
+            self.assertNotIn("authorization", names, "the read sends no credentials")
+
+    def test_a_redirect_is_not_followed(self):
+        from features_support import REDIRECT_TARGET
+
+        self.server.status, self.server.location = 302, self.server.origin + REDIRECT_TARGET
+        chat = self._chat(timeout=0.5)
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1))
+        time.sleep(0.7)
+        self.assertEqual(self._send(chat), "7", "a redirect is a failed read")
+        self.assertEqual(self.server.followed, 0, "the redirect is not followed")
+
     def test_an_unreachable_endpoint_leaves_sends_on_v0(self):
         url = self.server.url
         self.server.close()

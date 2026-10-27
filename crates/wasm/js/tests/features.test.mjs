@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 
 import init, { Chat, __featureSetDefaultEndpoint } from "../pkg/chat_xdk_wasm.js";
 import * as pkg from "../index.js";
-import { featureServer, keepOffline, sleep, waitFor } from "./feature_server.mjs";
+import { REDIRECT_TARGET, featureServer, keepOffline, sleep, waitFor } from "./feature_server.mjs";
 
 const { ChatWithJuicebox, createChat } = pkg;
 
@@ -220,6 +220,61 @@ async function aReadInFlightNeverKeepsNodeRunning(server) {
   assert.ok(elapsed < limitMs, `the process exited after ${elapsed} ms`);
 }
 
+/**
+ * Run `body` with each way the wrapper performs the GET in Node: its http
+ * module, and fetch() as where that module is out of reach.
+ */
+async function withEachGetPath(body) {
+  await body("node:http");
+  const getBuiltinModule = process.getBuiltinModule;
+  process.getBuiltinModule = undefined;
+  try {
+    assert.equal(process.getBuiltinModule, undefined, "the read goes through fetch()");
+    await body("fetch");
+  } finally {
+    process.getBuiltinModule = getBuiltinModule;
+  }
+}
+
+async function theReadSendsNoCookiesOrCredentials(v) {
+  await withEachGetPath(async (path) => {
+    const server = await featureServer();
+    server.setCookie = "session=from-the-first-answer; Path=/";
+    try {
+      const first = newChat(v, server.endpoint);
+      await waitFor(`the first answer (${path})`, () => send(first, v) === "10");
+      first.free();
+      const second = newChat(v, server.endpoint);
+      await waitFor(`the second request (${path})`, () => server.queries.length === 2);
+      await waitFor(`the second answer (${path})`, () => send(second, v) === "10");
+      second.free();
+      for (const headers of server.headers) {
+        assert.equal(headers.cookie, undefined, `the read sends no cookie (${path})`);
+        assert.equal(headers.authorization, undefined, `the read sends no credentials (${path})`);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+}
+
+async function aRedirectIsNotFollowed(v) {
+  await withEachGetPath(async (path) => {
+    const server = await featureServer();
+    Object.assign(server, { status: 302, location: server.origin + REDIRECT_TARGET });
+    try {
+      const chat = newChat(v, server.endpoint, { timeoutMs: 500 });
+      await waitFor(`the request (${path})`, () => server.queries.length === 1);
+      await sleep(700);
+      assert.equal(send(chat, v), "7", `a redirect is a failed read (${path})`);
+      assert.equal(server.followed, 0, `the redirect is not followed (${path})`);
+      chat.free();
+    } finally {
+      await server.close();
+    }
+  });
+}
+
 async function main() {
   const wasmUrl = new URL("../pkg/chat_xdk_wasm_bg.wasm", import.meta.url);
   await init({ module_or_path: await fs.readFile(wasmUrl) });
@@ -238,6 +293,8 @@ async function main() {
     (server) => aRequestStillOpenAtItsTimeoutFails(v, server),
     (server) => aRequestEndsSafelyForAFreedChat(v, server),
     (server) => aReadInFlightNeverKeepsNodeRunning(server),
+    () => theReadSendsNoCookiesOrCredentials(v),
+    () => aRedirectIsNotFollowed(v),
   ];
   for (const test of tests) {
     const server = await featureServer();

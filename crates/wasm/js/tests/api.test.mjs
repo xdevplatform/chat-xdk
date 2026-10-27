@@ -697,6 +697,46 @@ async function main() {
     /Invalid screen capture change: 'nope'/,
   );
 
+  // 4c3b. The group and conversation-metadata actions each sign one action at
+  // signature version 7: its payload names the event and ends with the signed
+  // fields, and its signature verifies with the signer's signing key.
+  {
+    const signingKey = chat.getPublicKeys().signing;
+    const ident = { senderId: "111", signingKeyVersion: "1", conversationId: "g100" };
+    const cases = [
+      ["GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
+        () => chat.prepareGroupAvatarChange({ ...ident, conversationKeyVersion: "4", customAvatarUrl: "https://img/a.png" })],
+      ["GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
+        () => chat.prepareGroupDescriptionChange({ ...ident, conversationKeyVersion: "4", customDescription: "enc-desc" })],
+      ["GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+        () => chat.prepareGroupAdminsAdd({ ...ident, userIds: ["910008", "910009"] })],
+      ["GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+        () => chat.prepareGroupAdminsRemove({ ...ident, userIds: ["910008"] })],
+      ["GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null",
+        () => chat.prepareGroupInviteEnable({ ...ident, inviteUrl: "https://x.com/i/invite/abc" })],
+      ["GroupChangeEvent.GroupInviteDisable", ",g100,111", () => chat.prepareGroupInviteDisable({ ...ident })],
+      ["GroupChangeEvent.GroupJoinRequest", ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
+      ["GroupChangeEvent.GroupJoinReject", ",g100,910010",
+        () => chat.prepareGroupJoinReject({ ...ident, userIds: ["910010"] })],
+      ["ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000",
+        () => chat.prepareMessageTtlChange({ ...ident, ttlMsec: 86400000 })],
+      ["ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+        () => chat.prepareMessageTtlRemove({ ...ident })],
+    ];
+    for (const [event, suffix, prepare] of cases) {
+      const action = onlyAction(prepare());
+      assert.ok(action.signaturePayload.startsWith(`${event},`), action.signaturePayload);
+      assert.ok(action.signaturePayload.endsWith(suffix), action.signaturePayload);
+      const sig = action.messageEventSignature;
+      assert.equal(sig.signatureVersion, "7", event);
+      assert.equal(sig.signingPublicKey, signingKey, event);
+      assert.ok(
+        chat.verify(signingKey, b64ToBytes(sig.signature), new TextEncoder().encode(action.signaturePayload)),
+        event,
+      );
+    }
+  }
+
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.
   const readSig = onlyAction(chat.prepareMarkConversationRead({
@@ -756,6 +796,43 @@ async function main() {
       }),
     /seen_until_sequence_id is empty/,
   );
+
+  // A millisecond field takes a finite number within the safe integer range:
+  // NaN, an infinity or a number past that range names no instant or
+  // duration and is rejected. A fraction is truncated toward zero.
+  const identity = { senderId: "111", signingKeyVersion: "1" };
+  const invalidMsec = /a millisecond value must be a finite number within the safe integer range/;
+  for (const bad of [NaN, Infinity, -Infinity, 2 ** 53, -(2 ** 60)]) {
+    assert.throws(
+      () => chat.prepareMarkConversationRead({ ...identity, conversationId: "g999", seenUntilSequenceId: "seq-1", seenAtMsec: bad }),
+      invalidMsec,
+    );
+    assert.throws(() => chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: bad }), invalidMsec);
+    assert.throws(
+      () =>
+        chat.encryptMessage({
+          ...identity,
+          conversationId: "111:222",
+          text: "hi",
+          ttlMsec: bad,
+          conversationKey: b64ToBytes(v.conversation_key_b64),
+          conversationKeyVersion: "1",
+        }),
+      invalidMsec,
+    );
+    assert.throws(
+      () => chat.prepareGroupInviteEnable({ ...identity, conversationId: "g999", inviteUrl: "https://x.com/i/chat/i", expiresAtMsec: bad }),
+      invalidMsec,
+    );
+  }
+  assert.throws(
+    () => chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: -Infinity }),
+    /got -Infinity$/,
+  );
+  const fractionalTtl = onlyAction(chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: 86400000.9 }));
+  assert.ok(fractionalTtl.signaturePayload.endsWith(",g999,86400000"));
+  const largestTtl = onlyAction(chat.prepareMessageTtlChange({ ...identity, conversationId: "g999", ttlMsec: 2 ** 53 - 1 }));
+  assert.ok(largestTtl.signaturePayload.endsWith(`,g999,${2 ** 53 - 1}`));
 
   // 4d. prepareGroupMembersChange emits two action signatures (CKCE + member
   // add) with populated encoded event details and a fresh raw key.
