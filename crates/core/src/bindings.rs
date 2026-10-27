@@ -32,10 +32,13 @@ pub fn error_document(error: &SdkError) -> String {
 }
 
 /// A conversation key map from raw key bytes, as the bindings receive it.
-/// An entry that is not a 32-byte key is an error naming its version.
+/// An entry that is not a 32-byte key is an error naming its version, the
+/// first such version in sort order.
 pub fn conversation_keys(
     entries: HashMap<String, Vec<u8>>,
 ) -> Result<HashMap<String, XChatConversationKey>, SdkError> {
+    let mut entries: Vec<(String, Vec<u8>)> = entries.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
         .into_iter()
         .map(|(version, bytes)| {
@@ -202,6 +205,12 @@ mod tests {
             conversation_keys(HashMap::from([("8".to_string(), vec![1u8; 3])])).unwrap_err();
         assert_eq!(short.kind(), crate::error::ErrorKind::InvalidInput);
         assert!(short.to_string().contains("version '8'"));
+        let versions = ["9", "10", "keys", "latestVersion", "2"];
+        for _ in 0..8 {
+            let bad = versions.iter().map(|v| (v.to_string(), vec![1u8; 3]));
+            let err = conversation_keys(bad.collect()).unwrap_err();
+            assert!(err.to_string().contains("version '10'"), "{err}");
+        }
         assert_eq!(
             conversation_key(&[0u8; 5]).unwrap_err().to_string(),
             "Invalid conversation key (expected 32 bytes)"
