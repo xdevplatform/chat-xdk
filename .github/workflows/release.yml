@@ -238,61 +238,16 @@ jobs:
 
   # ---------------------------------------------------------------------------
   python:
-    name: Build Python wheel (${{ matrix.target }})
+    name: Build Python wheels
     needs: [prepare, tag]
     # `tag` is skipped on dry runs, so success is only required on real ones.
     if: ${{ !cancelled() && needs.prepare.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["python","all"]'), inputs.binding) }}
-    runs-on: ${{ matrix.runs_on }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runs_on: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            manylinux: "auto"
-          - runs_on: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            manylinux: "auto"
-          - runs_on: macos-latest
-            target: aarch64-apple-darwin
-            manylinux: "off"
-          - runs_on: macos-15-intel
-            target: x86_64-apple-darwin
-            manylinux: "off"
-          - runs_on: windows-latest
-            target: x86_64-pc-windows-msvc
-            manylinux: "off"
-    steps:
-      # Real run builds at the release tag; a dry-run builds at the triggering
-      # ref, since the tag only exists after a non-dry-run prepare.
-      - name: Checkout chat-xdk
-        uses: actions/checkout@v4
-        with:
-          path: chat-xdk
-          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
-      - name: Checkout juicebox-sdk (sibling path dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: juicebox-systems/juicebox-sdk
-          ref: "0.3.4"
-          path: juicebox-sdk
-          submodules: false
-      # No working-directory: maturin-action mounts the whole workspace, so the
-      # chat-xdk and juicebox-sdk siblings are both visible and ../juicebox-sdk
-      # resolves inside the manylinux container.
-      - name: Build wheel (maturin, abi3)
-        uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}
-          args: --release --manifest-path chat-xdk/crates/pyo3/Cargo.toml --out wheels
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheel-${{ matrix.target }}
-          path: wheels/*.whl
-          if-no-files-found: error
+    # The wheel matrix lives in python-wheels.yml, which pull requests run too.
+    # Real run builds at the release tag; a dry-run builds at the triggering
+    # ref, since the tag only exists after a non-dry-run prepare.
+    uses: ./.github/workflows/python-wheels.yml
+    with:
+      ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
 
   python-publish:
     name: Publish Python (PyPI)

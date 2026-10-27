@@ -1,0 +1,98 @@
+# Build the chatxdk wheel for every target the release publishes to PyPI.
+#
+# The release workflow calls this workflow to build the wheels it uploads, and
+# pull requests that touch the build run it on their own, so a wheel that can't
+# build fails on the pull request rather than at release time.
+
+name: Python wheels
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build (empty: the triggering commit)"
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/python-wheels.yml"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: Build Python wheel (${{ matrix.target }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: "auto"
+          - runs_on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "auto"
+          - runs_on: macos-latest
+            target: aarch64-apple-darwin
+            manylinux: "off"
+          - runs_on: macos-15-intel
+            target: x86_64-apple-darwin
+            manylinux: "off"
+          - runs_on: windows-latest
+            target: x86_64-pc-windows-msvc
+            manylinux: "off"
+    steps:
+      - name: Checkout chat-xdk
+        uses: actions/checkout@v4
+        with:
+          path: chat-xdk
+          ref: ${{ inputs.ref }}
+      - name: Checkout juicebox-sdk (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: juicebox-systems/juicebox-sdk
+          ref: "0.3.4"
+          path: juicebox-sdk
+          submodules: false
+      # No working-directory: maturin-action mounts the whole workspace, so the
+      # chat-xdk and juicebox-sdk siblings are both visible and ../juicebox-sdk
+      # resolves inside the manylinux container. Cargo therefore runs outside
+      # chat-xdk/ and never reads chat-xdk/.cargo/config.toml, which sets
+      # CHAT_XDK_BINDINGS for the repository's other builds; chat-xdk-core's
+      # internal `bindings` feature compiles only with it (crates/core/build.rs).
+      # The step sets it, and docker-options passes it into the manylinux
+      # container, which receives only the variables maturin-action forwards.
+      - name: Build wheel (maturin, abi3)
+        uses: PyO3/maturin-action@v1
+        env:
+          CHAT_XDK_BINDINGS: "1"
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          docker-options: -e CHAT_XDK_BINDINGS
+          args: --release --manifest-path chat-xdk/crates/pyo3/Cargo.toml --out wheels
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The wheel installs and imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-index --find-links wheels chatxdk
+          python -c "import chat_xdk; print('chatxdk', chat_xdk.__version__, 'imports on ${{ matrix.target }}')"
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.target }}
+          path: wheels/*.whl
+          if-no-files-found: error

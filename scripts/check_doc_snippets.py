@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Compile the 0.6.0 snippets of the migration guides against this tree.
+"""Compile the current-release snippets of the migration guides against this tree.
 
 Usage: scripts/check_doc_snippets.py LANG FILE...
 
 LANG is rust, python, ts, go, java, csharp or c. Each fenced block of the
-language splits at its `0.5.x` and `0.6.0` marker comments, and a block
-without markers is 0.6.0. Every 0.6.0 half becomes one function over the
-stand-in names the guides' "About the snippets" sections define, and the
-binding's compiler checks the result: cargo (Rust), tsc (against
-index.d.ts), go vet, javac, dotnet build and gcc (against chat_xdk.h).
-Python runs each half with the real params classes and a `chat` whose
-methods are mocked, so a wrong argument raises. The C check also passes
-every params document a 0.6.0 half shows, in the comment above a call or
-inline, to that call in the native library, and fails on one the library
-can't parse. A snippet that drifts from the API fails the run.
+language splits at its version marker comments: a release line such as
+`0.5.x` marks code for the release a guide migrates from, and a release
+such as `0.7.0` marks code for the release it migrates to, as does a block
+without markers. Every half for the release migrated to becomes one
+function over the stand-in names the guides' "About the snippets" sections
+define, and the binding's compiler checks the result: cargo (Rust), tsc
+(against index.d.ts), go vet, javac, dotnet build and gcc (against
+chat_xdk.h). Python runs each half with the real params classes and a
+`chat` whose methods are mocked, so a wrong argument raises. The C check
+also passes every params document such a half shows, in the comment above
+a call or inline, to that call in the native library, and fails on one the
+library can't parse. A snippet that drifts from the API fails the run.
 
 Tools come from PATH, or from TSC (tsc), JAVA_CLASSPATH (the JVM binding's
 dependency classpath), DOTNET_BUILD_ARGS (extra `dotnet build` arguments)
@@ -43,9 +45,10 @@ FENCES = {
 
 
 def halves(block, comment):
-    """Split a block into (version, code) halves at its version markers."""
-    marker = re.compile(rf"\s*{re.escape(comment)}\s*(0\.5\.x|0\.6\.0)\s*$")
-    parts, version, lines = [], "0.6.0", []
+    """Split a block into (version, code) halves at its version markers. A
+    marker ending in `.x` names the release line a guide migrates from."""
+    marker = re.compile(rf"\s*{re.escape(comment)}\s*(\d+\.\d+\.(?:x|\d+))\s*$")
+    parts, version, lines = [], "", []
     for line in block.splitlines():
         m = marker.match(line)
         if m:
@@ -60,7 +63,8 @@ def halves(block, comment):
 
 
 def snippets(lang, paths):
-    """Yield (path, line, code) for every 0.6.0 half of LANG in PATHS."""
+    """Yield (path, line, code) for every half of LANG in PATHS that is code
+    for the release a guide migrates to."""
     comment = "#" if lang == "python" else "//"
     fences = "|".join(FENCES[lang])
     for path in paths:
@@ -68,7 +72,7 @@ def snippets(lang, paths):
         for m in re.finditer(rf"```(?:{fences})\n(.*?)```", text, re.S):
             line = text[: m.start()].count("\n") + 1
             for version, code in halves(m.group(1), comment):
-                if version == "0.6.0":
+                if not version.endswith(".x"):
                     yield path, line, code
 
 
@@ -796,7 +800,7 @@ int main(void) {
 
 
 def c_documents(path, line, code):
-    """(where, call) for each call a 0.6.0 half passes a params document:
+    """(where, call) for each call a checked half passes a params document:
     a `*_json` variable whose document is the JSON in the comment block
     directly above the call, or a document written inline. A comment block
     above such a call that isn't JSON is an error."""
