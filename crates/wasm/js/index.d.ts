@@ -1396,11 +1396,11 @@ declare class Chat implements ChatCrypto {
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   /**
-   * Import private keys from raw bytes. When `version` is given it also
-   * records the public key version the keys were registered under. The
-   * input bytes are zeroized after import.
+   * Import private keys from `keys` (32 or 64 bytes). When
+   * `signingKeyVersion` is given it also records the public key version the
+   * keys were registered under.
    */
-  importKeys(keys: Uint8Array, version?: string): void;
+  importKeys(params: { keys: Uint8Array; signingKeyVersion?: string | null }): void;
   /** Export private keys as raw bytes. */
   exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;

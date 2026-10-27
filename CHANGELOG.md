@@ -23,6 +23,11 @@ follows no redirect. A cookie the endpoint sets never reaches a later chat's
 request, and a redirect counts as an answer other than 200, so the chat's
 sends stay v0.
 
+The Python type stub names the byte parameter of `bytes_to_base64`,
+`bytes_to_hex`, `detect_mime_type` and `detect_image_dimensions` `bytes`, as
+the functions take it, so a type checker accepts exactly the keyword the call
+accepts.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.

@@ -892,7 +892,7 @@ impl Chat {
     /// `encrypted`, which is fed to the decryptor.
     #[wasm_bindgen(js_name = fileDecryptor)]
     pub fn file_decryptor(&self, params: JsValue) -> Result<FileDecryptor, JsError> {
-        let p: JsFileParams = from_js_params("fileDecryptor", params)?;
+        let p: JsFileDecryptorParams = from_js_params("fileDecryptor", params)?;
         let core_params = chat_xdk_core::FileDecryptorParams::new(
             p.event_b64,
             js_to_conv_keys("fileDecryptor", p.conversation_keys)?,
@@ -1897,7 +1897,7 @@ struct JsDecryptFileParams {
 /// The params of `fileDecryptor`.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JsFileParams {
+struct JsFileDecryptorParams {
     event_b64: String,
     #[serde(with = "serde_wasm_bindgen::preserve")]
     conversation_keys: JsValue,
