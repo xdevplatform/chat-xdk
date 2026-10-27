@@ -276,7 +276,7 @@ pub mod prelude {
     };
 
     // Errors
-    pub use crate::error::{CryptoError, SdkError, SdkResult};
+    pub use crate::error::{CryptoError, ErrorKind, SdkError, SdkResult};
 
     // Juicebox types (always available for configuration)
     pub use crate::keys::juicebox::JuiceboxConfig;

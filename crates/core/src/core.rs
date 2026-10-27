@@ -58,7 +58,7 @@ const CKEY_SIG_V6_ENFORCE_AFTER_SEQ: i64 = 2070276095283454002;
 /// WASM `Chat` wrap this struct.
 pub struct ChatCore {
     keypair_manager: KeypairManager,
-    reject_unverified: bool,
+    reject_unverified: std::sync::atomic::AtomicBool,
     conversation_key_high_water: std::sync::RwLock<HashMap<String, u64>>,
     /// User id of this instance's owner, set by [`Self::set_identity`] and
     /// used as the default `sender_id` for signed actions.
@@ -104,7 +104,7 @@ impl ChatCore {
     pub fn new() -> Self {
         Self {
             keypair_manager: KeypairManager::new(),
-            reject_unverified: true,
+            reject_unverified: std::sync::atomic::AtomicBool::new(true),
             conversation_key_high_water: std::sync::RwLock::new(HashMap::new()),
             owner_user_id: std::sync::RwLock::new(None),
             cache_keys: std::sync::atomic::AtomicBool::new(false),
@@ -121,8 +121,9 @@ impl ChatCore {
     /// verifiable signature). When disabled, such events are returned with
     /// `verified: false` instead. Event types that never carry a signature
     /// (typing, failure, member-account-delete) are unaffected either way.
-    pub fn set_reject_unverified(&mut self, reject: bool) {
-        self.reject_unverified = reject;
+    pub fn set_reject_unverified(&self, reject: bool) {
+        self.reject_unverified
+            .store(reject, std::sync::atomic::Ordering::Relaxed);
     }
 
     // Key Management
@@ -374,9 +375,7 @@ impl ChatCore {
             crate::pipeline::validate_key_version("signing_key_version", version)?;
         }
         let private_keys = XChatPrivateKeys::from_bytes(&params.keys).ok_or_else(|| {
-            SdkError::Crypto(CryptoError::DecryptionFailed(
-                "Invalid key format: expected 32 or 64 bytes".into(),
-            ))
+            SdkError::InvalidInput("Invalid key format: expected 32 or 64 bytes".into())
         })?;
         self.keypair_manager
             .load_from_private_keys(&private_keys)
@@ -424,11 +423,14 @@ impl ChatCore {
         signing_public_key_b64: &str,
         identity_public_key_signature_b64: &str,
     ) -> Result<bool, SdkError> {
-        let sig_bytes = base64_decode(identity_public_key_signature_b64)?;
+        let sig_bytes = decode_input(
+            "identity_public_key_signature",
+            identity_public_key_signature_b64,
+        )?;
         // The signing key signs the identity key's bytes exactly as they
         // appear on the wire (SPKI). Verify with the signing key over those
         // same bytes — the signature is raw r||s.
-        let identity_bytes = base64_decode(identity_public_key_b64)?;
+        let identity_bytes = decode_input("identity_public_key", identity_public_key_b64)?;
         self.verify(signing_public_key_b64, &sig_bytes, &identity_bytes)
     }
 
@@ -448,7 +450,7 @@ impl ChatCore {
     /// base64. A structurally different key returns `Ok(false)`.
     pub fn matches_registered_key(&self, public_key_b64: &str) -> Result<bool, SdkError> {
         let identity = self.keypair_manager.get_identity_keypair()?;
-        let candidate = base64_decode(public_key_b64)?;
+        let candidate = decode_input("public key", public_key_b64)?;
         if candidate == identity.public.encoded() {
             return Ok(true);
         }
@@ -576,7 +578,9 @@ impl ChatCore {
         public_keys: &[PublicKeyInput],
     ) -> Result<(XChatConversationKey, Vec<ConversationParticipantKey>), SdkError> {
         if public_keys.is_empty() {
-            return Err(SdkError::Parse("public_keys must not be empty".to_string()));
+            return Err(SdkError::InvalidInput(
+                "public_keys must not be empty".to_string(),
+            ));
         }
         for pk in public_keys {
             crate::pipeline::validate_user_id("public_keys user_id", &pk.user_id)?;
@@ -635,7 +639,7 @@ impl ChatCore {
             }
         }
         if ids.len() != 2 {
-            return Err(SdkError::Parse(format!(
+            return Err(SdkError::InvalidInput(format!(
                 "cannot derive a one-to-one conversation id from {} distinct user(s); \
                  pass conversation_id explicitly for group conversations",
                 ids.len()
@@ -1977,9 +1981,12 @@ impl ChatCore {
     // Message Encryption
 
     /// Parse a raw conversation key supplied in a params struct.
-    fn conversation_key_from_bytes(bytes: &[u8]) -> Result<XChatConversationKey, SdkError> {
-        XChatConversationKey::from_bytes(bytes.to_vec())
-            .ok_or_else(|| SdkError::Parse("Invalid conversation key (expected 32 bytes)".into()))
+    pub(crate) fn conversation_key_from_bytes(
+        bytes: &[u8],
+    ) -> Result<XChatConversationKey, SdkError> {
+        XChatConversationKey::from_bytes(bytes.to_vec()).ok_or_else(|| {
+            SdkError::InvalidInput("Invalid conversation key (expected 32 bytes)".into())
+        })
     }
 
     /// Encrypt a text message.
@@ -2777,7 +2784,9 @@ impl ChatCore {
 
         let sequence_id = explicit_sequence_id
             .or_else(|| raw.sequence_id.clone())
-            .ok_or_else(|| SdkError::Parse("reply_to_event carries no sequence_id".into()))?;
+            .ok_or_else(|| {
+                SdkError::InvalidInput("reply_to_event carries no sequence_id".into())
+            })?;
         let sender_id = explicit_sender_id
             .or_else(|| raw.sender_id.as_deref().and_then(|s| s.parse::<i64>().ok()));
         let message_text = params.reply_to_text.clone().or_else(|| match &edited {
@@ -3151,20 +3160,33 @@ impl ChatCore {
         Ok(signature)
     }
 
-    /// Verify a signature.
+    /// Verify a raw r||s signature over `data` with a base64 P-256 public
+    /// key (SEC1 or SPKI). Needs no loaded keys.
     pub fn verify(
         &self,
         public_key_b64: &str,
         signature: &[u8],
         data: &[u8],
     ) -> Result<bool, SdkError> {
-        let pk_bytes = base64_decode(public_key_b64)?;
+        let invalid_key = || {
+            SdkError::InvalidInput(
+                "Invalid public key: pass a base64 P-256 public key (SEC1 or SPKI)".into(),
+            )
+        };
+        let pk_bytes = base64_decode(public_key_b64).map_err(|_| invalid_key())?;
         let raw_pk = if pk_bytes.len() == 91 {
             &pk_bytes[26..]
         } else {
             &pk_bytes
         };
-        let public_key = KeyFactory::reconstruct_public_key(raw_pk, KeypairPurpose::Signing)?;
+        let public_key = KeyFactory::reconstruct_public_key(raw_pk, KeypairPurpose::Signing)
+            .map_err(|_| invalid_key())?;
+        if signature.len() != 64 {
+            return Err(SdkError::InvalidInput(format!(
+                "Invalid signature: expected the 64-byte raw r||s signature, got {} bytes",
+                signature.len()
+            )));
+        }
         Ok(KeyFactory::verify(&public_key, signature, data)?)
     }
 
@@ -3277,7 +3299,10 @@ impl ChatCore {
         sig_result: &Result<bool, String>,
         event_label: &str,
     ) -> Result<(), SdkError> {
-        if !self.reject_unverified {
+        if !self
+            .reject_unverified
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
         match sig_result {
@@ -3396,6 +3421,11 @@ impl Default for ChatCore {
 
 fn base64_decode_or_empty(s: &str) -> Vec<u8> {
     base64_decode(s).unwrap_or_default()
+}
+
+/// Decode a caller's base64 argument, naming it in the error.
+fn decode_input(name: &str, b64: &str) -> Result<Vec<u8>, SdkError> {
+    base64_decode(b64).map_err(|e| SdkError::InvalidInput(format!("Invalid {name}: {e}")))
 }
 
 /// Current time as a millisecond-timestamp string, used for key versions.
@@ -5129,7 +5159,7 @@ mod tests {
         );
 
         // Relaxed policy still must not report the forgery as verified.
-        let mut lenient = ChatCore::new();
+        let lenient = ChatCore::new();
         lenient.set_reject_unverified(false);
         match lenient
             .decrypt_event_with(&event_b64, &conv_keys, &signing_keys)
@@ -5255,7 +5285,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_unencrypted_mce_with_none_key_returns_message() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         // generate_keypairs loads keys into the manager so verify works
         core.generate_keypairs().unwrap();
         // Unencrypted messages have no signature; allow them through.
@@ -5289,7 +5319,7 @@ mod tests {
     fn decrypt_event_unencrypted_mce_with_key_still_works() {
         // Even if the caller passes a conversation key, the SDK should
         // recognise the MCE is unencrypted and skip decryption.
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(false);
 
@@ -5344,7 +5374,7 @@ mod tests {
 
         // With reject_unverified=false, the signature check passes and
         // we get the missing conversation key error instead.
-        let mut core2 = ChatCore::new();
+        let core2 = ChatCore::new();
         core2.generate_keypairs().unwrap();
         core2.set_reject_unverified(false);
 
@@ -5407,7 +5437,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_unencrypted_mce_preserves_metadata() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(false);
 
@@ -5433,7 +5463,7 @@ mod tests {
     fn decrypt_event_encrypted_mce_roundtrip() {
         // Verify the normal encrypted path still works end-to-end.
         // Disable reject_unverified since we don't supply signing keys.
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5490,7 +5520,7 @@ mod tests {
     fn reject_unverified_rejects_group_title_change_without_signing_keys() {
         // GroupTitleChange with no signing keys — reject_unverified=true
         // must reject it (not silently pass it through).
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
 
@@ -5526,7 +5556,7 @@ mod tests {
 
     #[test]
     fn reject_unverified_rejects_group_member_add_without_signing_keys() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
 
@@ -5560,7 +5590,7 @@ mod tests {
 
     #[test]
     fn reject_unverified_rejects_message_delete_without_signing_keys() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
 
@@ -5577,7 +5607,7 @@ mod tests {
 
     #[test]
     fn reject_unverified_rejects_group_change_with_no_inner_change() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         core.set_reject_unverified(true);
 
@@ -5686,7 +5716,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_typing_event() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5708,7 +5738,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_mark_conversation_read() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5731,7 +5761,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_mark_conversation_unread() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5752,7 +5782,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_message_delete_for_self() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5778,7 +5808,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_message_delete_for_all() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5803,7 +5833,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_conversation_delete_with_clear_all() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5830,7 +5860,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_conversation_delete_without_clear_all() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5853,7 +5883,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_internal_error() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5878,7 +5908,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_rate_limit_tier() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -5901,7 +5931,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_contents_too_large() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -5924,7 +5954,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_too_many_messages() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -5944,7 +5974,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_invalid_sender_signature() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -5964,7 +5994,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_non_latest_ckey_version() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -5984,7 +6014,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_recipient_not_trusted() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -6004,7 +6034,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_recipient_key_changed() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -6024,7 +6054,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_empty_detail() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(
@@ -6044,7 +6074,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_failure_none_type_returns_unknown() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let failure = ThriftMFE::new(None::<ThriftFailureType>, None::<ThriftRateLimitTier>);
@@ -6061,7 +6091,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_member_account_delete() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -6082,7 +6112,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_member_account_delete_no_member_id() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let member_del = ThriftMADE::new(None::<String>, None);
@@ -6133,7 +6163,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_group_create() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
@@ -6185,7 +6215,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_titles_without_ciphertext_read_as_carried() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let keys = HashMap::from([("1".to_string(), key)]);
@@ -6211,7 +6241,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_avatar_changed() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6240,7 +6270,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_admins_added() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6267,7 +6297,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_admins_removed() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6294,7 +6324,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_members_added() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6343,7 +6373,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_members_removed() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6370,7 +6400,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_invite_enabled() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6405,7 +6435,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_invite_disabled() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6432,7 +6462,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_join_requested() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6459,7 +6489,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_group_change_join_rejected() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let gc = ThriftGCE::new(
@@ -6491,7 +6521,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_message_duration() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change = ConversationMetadataChange::MessageDurationChange(MessageDurationChange::new(
@@ -6521,7 +6551,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_message_duration_removed() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change = ConversationMetadataChange::MessageDurationRemove(MessageDurationRemove::new(
@@ -6543,7 +6573,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_muted() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change =
@@ -6566,7 +6596,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_unmuted() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change =
@@ -6589,7 +6619,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_screen_capture_detection_enabled() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change = ConversationMetadataChange::EnableScreenCaptureDetection(
@@ -6614,7 +6644,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_screen_capture_detection_disabled() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change = ConversationMetadataChange::DisableScreenCaptureDetection(
@@ -6639,7 +6669,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_screen_capture_blocking_enabled() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change = ConversationMetadataChange::EnableScreenCaptureBlocking(
@@ -6664,7 +6694,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_screen_capture_blocking_disabled() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let change = ConversationMetadataChange::DisableScreenCaptureBlocking(
@@ -6689,7 +6719,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_settings_change_none_returns_unknown() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let cmce = ThriftCMCE::new(None::<ConversationMetadataChange>);
@@ -6710,7 +6740,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_no_detail_returns_unknown() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         // Build event with no detail (detail = None)
@@ -6746,7 +6776,7 @@ mod tests {
     #[test]
     fn decrypt_event_grok_search_response_returns_unknown() {
         // GrokSearchResponseEvent is handled by the catch-all `_` branch
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let grok = ThriftGSRE::new(Some("search-1".to_string()));
@@ -6770,7 +6800,7 @@ mod tests {
 
     #[test]
     fn decrypt_event_key_change() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -6907,7 +6937,7 @@ mod tests {
 
     #[test]
     fn decrypt_events_mixed_event_types() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         core.generate_keypairs().unwrap();
 
@@ -6936,7 +6966,7 @@ mod tests {
 
     #[test]
     fn decrypt_events_with_errors_for_invalid_b64() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let typing = ThriftMTE::new(None::<String>, None, None, None, None);
@@ -6951,7 +6981,7 @@ mod tests {
 
     #[test]
     fn decrypt_events_preserves_original_b64() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
 
         let typing = ThriftMTE::new(None::<String>, None, None, None, None);
@@ -7123,6 +7153,60 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("Invalid key format"));
+    }
+
+    #[test]
+    fn caller_input_errors_are_invalid_input() {
+        use crate::error::ErrorKind;
+        let core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+        core.set_identity(&SetIdentityParams::new("111", "1"))
+            .unwrap();
+        let signature = core.sign(b"data").unwrap();
+        let signing_key = &reg.public_key.signing_public_key;
+
+        let kinds = [
+            core.import_keys(&ImportKeysParams::new(vec![0u8; 16]))
+                .unwrap_err()
+                .kind(),
+            core.encrypt_message(
+                &crate::EncryptMessageParams::new("111:222", "hi")
+                    .with_conversation_key(vec![0u8; 3], "1"),
+            )
+            .unwrap_err()
+            .kind(),
+            core.prepare_conversation_key_change(&ConversationKeyChangeParams::new(vec![]))
+                .unwrap_err()
+                .kind(),
+            core.verify("not base64!", &signature, b"data")
+                .unwrap_err()
+                .kind(),
+            core.verify(signing_key, &signature[..10], b"data")
+                .unwrap_err()
+                .kind(),
+            core.verify_key_binding("not base64!", signing_key, "AAAA")
+                .unwrap_err()
+                .kind(),
+            core.matches_registered_key("not base64!")
+                .unwrap_err()
+                .kind(),
+            core.prepare_message_delete(&MessageDeleteParams::new("1,2", vec!["5".into()], true))
+                .unwrap_err()
+                .kind(),
+        ];
+        for kind in kinds {
+            assert_eq!(kind, ErrorKind::InvalidInput);
+        }
+        assert!(core.verify(signing_key, &signature, b"data").unwrap());
+
+        core.lock();
+        let locked = core
+            .encrypt_message(
+                &crate::EncryptMessageParams::new("111:222", "hi")
+                    .with_conversation_key(vec![0u8; 32], "1"),
+            )
+            .unwrap_err();
+        assert_eq!(locked.kind(), ErrorKind::InvalidState);
     }
 
     #[test]
@@ -8044,7 +8128,7 @@ mod tests {
         // The avatar URL is signed as passed.
         let result = core
             .prepare_group_members_change(&params.with_current_avatar_url("https://ton.x.com/a,b"));
-        assert!(matches!(result, Err(SdkError::Parse(_))));
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
     }
 
     #[test]
@@ -8531,7 +8615,7 @@ mod tests {
 
     #[test]
     fn decrypt_events_drops_key_with_invalid_binding() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         // We supply unsigned KeyChange events; allow unverified through so
         // the conversation key is still extracted and the message decodes.
         core.set_reject_unverified(false);
@@ -8882,7 +8966,7 @@ mod tests {
     #[test]
     fn decrypt_events_opt_out_preserves_unsigned_keychange_adoption() {
         // With reject_unverified disabled, any decryptable key is adopted.
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         let reg = core.generate_keypairs().unwrap();
 
@@ -9120,7 +9204,7 @@ mod tests {
 
     #[test]
     fn signature_version_below_floor_never_verifies_in_permissive_mode() {
-        let mut core = ChatCore::new();
+        let core = ChatCore::new();
         core.set_reject_unverified(false);
         let reg = core.generate_keypairs().unwrap();
         let (event_b64, ckey_b64) = build_message_event_with_sig_version(&core, "0");

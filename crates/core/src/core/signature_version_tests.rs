@@ -175,7 +175,7 @@ fn a_version_above_eleven_is_rejected() {
     .unwrap_err();
     assert!(err.to_string().contains("maximum: 11"), "{}", err);
 
-    let mut lenient = ChatCore::new();
+    let lenient = ChatCore::new();
     lenient.set_reject_unverified(false);
     let message = decrypt_message(
         &lenient,
@@ -289,7 +289,7 @@ fn group_change_event(
 }
 
 fn group_change_verified(event: &ThriftEvent, signer: &Party) -> bool {
-    let mut core = ChatCore::new();
+    let core = ChatCore::new();
     core.set_reject_unverified(false);
     match core
         .decrypt_event_with(
@@ -505,7 +505,7 @@ fn key_change_event(
 }
 
 fn key_change_verified(event: &ThriftEvent, signer: &Party, ckey: &XChatConversationKey) -> bool {
-    let mut core = ChatCore::new();
+    let core = ChatCore::new();
     core.set_reject_unverified(false);
     match core
         .decrypt_event_with(

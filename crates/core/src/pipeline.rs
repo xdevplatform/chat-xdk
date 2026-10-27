@@ -268,7 +268,7 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
     };
     let payload =
         crate::core::build_event_signature_payload(&outgoing, &detail, None).ok_or_else(|| {
-            SdkError::Parse("Signature payload contains comma-separated component".into())
+            SdkError::InvalidInput("Signature payload contains comma-separated component".into())
         })?;
 
     let signature = KeyFactory::sign(params.signing_key, &payload)?;

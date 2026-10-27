@@ -39,6 +39,96 @@ pub enum SdkError {
     InvalidInput(String),
 }
 
+/// What kind of failure an [`SdkError`] is. Every binding reports the same
+/// kind for the same failure: Python as the exception class, Go, JS, .NET
+/// and the JVM as the error's kind, and the C ABI as the `kind` of its error
+/// document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// A parameter is missing or invalid; the message names it.
+    InvalidInput,
+    /// A value was neither passed nor available from the chat's state: no
+    /// keys loaded, no session identity, no cached conversation key.
+    InvalidState,
+    /// Event or other wire data is malformed.
+    Parse,
+    /// Ciphertext did not decrypt, or no key for it was available.
+    Decryption,
+    /// A signature did not verify, or could not be verified while unverified
+    /// events are rejected.
+    Verification,
+    /// Juicebox rejected the PIN; [`SdkError::guesses_remaining`] holds the
+    /// attempts left when Juicebox reports them.
+    InvalidPin,
+    /// Another Juicebox key-storage failure.
+    Juicebox,
+    /// A failure inside the SDK, such as a cryptographic primitive failing.
+    Internal,
+}
+
+impl ErrorKind {
+    /// The kind's name as the C ABI and the bindings carry it, in
+    /// snake_case: `invalid_input`, `invalid_state`, `parse`, `decryption`,
+    /// `verification`, `invalid_pin`, `juicebox` or `internal`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorKind::InvalidInput => "invalid_input",
+            ErrorKind::InvalidState => "invalid_state",
+            ErrorKind::Parse => "parse",
+            ErrorKind::Decryption => "decryption",
+            ErrorKind::Verification => "verification",
+            ErrorKind::InvalidPin => "invalid_pin",
+            ErrorKind::Juicebox => "juicebox",
+            ErrorKind::Internal => "internal",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl SdkError {
+    /// What kind of failure this is.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            SdkError::InvalidInput(_) => ErrorKind::InvalidInput,
+            SdkError::InvalidState(_) => ErrorKind::InvalidState,
+            SdkError::Parse(_) | SdkError::Serialization(_) => ErrorKind::Parse,
+            SdkError::Crypto(e) => match e {
+                CryptoError::DecryptionFailed(_) => ErrorKind::Decryption,
+                CryptoError::VerificationFailed(_) => ErrorKind::Verification,
+                CryptoError::InvalidKey(_) | CryptoError::InvalidInput(_) => {
+                    ErrorKind::InvalidInput
+                }
+                _ => ErrorKind::Internal,
+            },
+            SdkError::Key(e) => match e {
+                KeyError::NotUnlocked | KeyError::NotFound(_) => ErrorKind::InvalidState,
+                KeyError::WeakPin(_) => ErrorKind::InvalidInput,
+                KeyError::ReconstructionFailed(_) => ErrorKind::Juicebox,
+            },
+            SdkError::Juicebox(JuiceboxError::InvalidPin { .. }) => ErrorKind::InvalidPin,
+            SdkError::Juicebox(_) => ErrorKind::Juicebox,
+        }
+    }
+
+    /// The PIN attempts left after an invalid-PIN failure, when Juicebox
+    /// reports them: `0` means the guess budget is exhausted and the stored
+    /// keys are locked. `None` for every other failure.
+    pub fn guesses_remaining(&self) -> Option<u16> {
+        match self {
+            SdkError::Juicebox(JuiceboxError::InvalidPin { guesses_remaining }) => {
+                *guesses_remaining
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Errors related to cryptographic operations.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -103,9 +193,7 @@ pub enum KeyError {
 pub enum JuiceboxError {
     /// Wrong PIN provided. `guesses_remaining` is the attempt budget Juicebox
     /// reports after the failure (0 = exhausted, keys locked); `None` when the
-    /// count is unavailable. The `guesses_remaining=N` message token is stable
-    /// — bindings parse it out of the error string, so the format must not
-    /// change (the bare `Invalid PIN` prefix likewise stays as-is).
+    /// count is unavailable. Read it with [`SdkError::guesses_remaining`].
     #[error("Invalid PIN{}", .guesses_remaining.map(|n| format!(": guesses_remaining={n}")).unwrap_or_default())]
     InvalidPin {
         /// Remaining PIN attempts reported by Juicebox, if known.
@@ -337,6 +425,71 @@ mod tests {
         assert!(JuiceboxError::Other("custom".into())
             .to_string()
             .contains("custom"));
+    }
+
+    #[test]
+    fn every_error_has_a_kind() {
+        let cases = [
+            (SdkError::InvalidInput("x".into()), ErrorKind::InvalidInput),
+            (SdkError::InvalidState("x".into()), ErrorKind::InvalidState),
+            (SdkError::Parse("x".into()), ErrorKind::Parse),
+            (
+                SerializationError::Base64("x".into()).into(),
+                ErrorKind::Parse,
+            ),
+            (
+                CryptoError::DecryptionFailed("x".into()).into(),
+                ErrorKind::Decryption,
+            ),
+            (
+                CryptoError::VerificationFailed("x".into()).into(),
+                ErrorKind::Verification,
+            ),
+            (
+                CryptoError::InvalidKey("x".into()).into(),
+                ErrorKind::InvalidInput,
+            ),
+            (
+                CryptoError::SigningFailed("x".into()).into(),
+                ErrorKind::Internal,
+            ),
+            (KeyError::NotUnlocked.into(), ErrorKind::InvalidState),
+            (
+                KeyError::WeakPin("x".into()).into(),
+                ErrorKind::InvalidInput,
+            ),
+            (
+                JuiceboxError::InvalidPin {
+                    guesses_remaining: Some(2),
+                }
+                .into(),
+                ErrorKind::InvalidPin,
+            ),
+            (JuiceboxError::NotRegistered.into(), ErrorKind::Juicebox),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(error.kind(), kind, "{error}");
+        }
+        assert_eq!(ErrorKind::InvalidPin.as_str(), "invalid_pin");
+        assert_eq!(ErrorKind::InvalidInput.to_string(), "invalid_input");
+    }
+
+    #[test]
+    fn guesses_remaining_is_structured() {
+        let wrong_pin: SdkError = JuiceboxError::InvalidPin {
+            guesses_remaining: Some(0),
+        }
+        .into();
+        assert_eq!(wrong_pin.guesses_remaining(), Some(0));
+        let no_count: SdkError = JuiceboxError::InvalidPin {
+            guesses_remaining: None,
+        }
+        .into();
+        assert_eq!(no_count.guesses_remaining(), None);
+        assert_eq!(
+            SdkError::InvalidInput("guesses_remaining=3".into()).guesses_remaining(),
+            None
+        );
     }
 
     #[test]

@@ -127,42 +127,8 @@ use zeroize::Zeroize;
 pub struct Chat {
     /// The platform-agnostic encryption core.
     pub(crate) inner: crate::core::ChatCore,
-    config: JuiceboxConfig,
+    config: std::sync::RwLock<JuiceboxConfig>,
     juicebox: Arc<dyn JuiceboxApi>,
-}
-
-/// Minimum PIN length in bytes accepted for new registrations.
-#[cfg(feature = "juicebox")]
-pub(crate) const MIN_PIN_LENGTH: usize = 4;
-
-/// Validate PIN strength for new registrations.
-///
-/// Rejects PINs that are shorter than [`MIN_PIN_LENGTH`], use a single
-/// repeated character (`0000`), or are an ascending/descending run of
-/// digits (`1234`, `9876`). Applied by [`Chat::setup`] and
-/// [`Chat::change_pin`]; never applied on unlock, so existing
-/// registrations stay recoverable.
-#[cfg(feature = "juicebox")]
-pub(crate) fn validate_pin_strength(pin: &[u8]) -> Result<(), SdkError> {
-    if pin.len() < MIN_PIN_LENGTH {
-        return Err(SdkError::Key(KeyError::WeakPin(format!(
-            "PIN must be at least {} characters",
-            MIN_PIN_LENGTH
-        ))));
-    }
-    if pin.iter().all(|&b| b == pin[0]) {
-        return Err(SdkError::Key(KeyError::WeakPin(
-            "PIN must not be a single repeated character".into(),
-        )));
-    }
-    let ascending = pin.windows(2).all(|w| w[1] == w[0].wrapping_add(1));
-    let descending = pin.windows(2).all(|w| w[1] == w[0].wrapping_sub(1));
-    if pin.iter().all(u8::is_ascii_digit) && (ascending || descending) {
-        return Err(SdkError::Key(KeyError::WeakPin(
-            "PIN must not be a sequential run of digits".into(),
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(feature = "juicebox")]
@@ -172,18 +138,14 @@ impl Chat {
     /// # Arguments
     /// * `config` - Juicebox configuration from the X API
     pub fn new(config: JuiceboxConfig) -> Self {
-        Self {
-            inner: crate::core::ChatCore::new(),
-            config,
-            juicebox: Arc::new(JuiceboxClient::new()),
-        }
+        Self::with_juicebox(config, Arc::new(JuiceboxClient::new()))
     }
 
     /// Create with a custom Juicebox implementation
     pub fn with_juicebox(config: JuiceboxConfig, juicebox: Arc<dyn JuiceboxApi>) -> Self {
         Self {
             inner: crate::core::ChatCore::new(),
-            config,
+            config: std::sync::RwLock::new(config),
             juicebox,
         }
     }
@@ -192,7 +154,7 @@ impl Chat {
     /// signed event whose signature cannot be verified (invalid, missing, or
     /// no matching signing key) instead of returning it with
     /// `verified: false`.
-    pub fn set_reject_unverified(&mut self, reject: bool) {
+    pub fn set_reject_unverified(&self, reject: bool) {
         self.inner.set_reject_unverified(reject);
     }
     /// Set the session identity: the owner's user id and signing-key version,
@@ -219,9 +181,20 @@ impl Chat {
     pub(crate) fn core(&self) -> &crate::core::ChatCore {
         &self.inner
     }
-    /// Replace the Juicebox configuration.
-    pub fn update_config(&mut self, config: JuiceboxConfig) {
-        self.config = config;
+    /// Replace the Juicebox configuration, for example to refresh its auth
+    /// tokens. Operations already under way keep the configuration they
+    /// started with.
+    pub fn update_config(&self, config: JuiceboxConfig) {
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = config;
+    }
+
+    /// The current Juicebox configuration, copied so no lock is held across
+    /// a Juicebox round trip.
+    fn config(&self) -> JuiceboxConfig {
+        self.config
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     // Juicebox key storage
@@ -241,11 +214,11 @@ impl Chat {
     /// single repeated character or a sequential digit run). It is passed as
     /// bytes so callers can zeroize their own buffer after the call.
     pub async fn setup(&self, pin: &[u8]) -> Result<PublicKeys, SdkError> {
-        validate_pin_strength(pin)?;
+        crate::keys::juicebox::validate_pin_strength(pin)?;
         let mut secret = self.inner.export_keys()?;
         let result = self
             .juicebox
-            .register_private_key(pin, &self.config, &secret)
+            .register_private_key(pin, &self.config(), &secret)
             .await;
         secret.zeroize();
         match result {
@@ -260,7 +233,7 @@ impl Chat {
     /// recoverable regardless of current PIN policy.
     pub async fn unlock(&self, pin: &[u8]) -> Result<(), SdkError> {
         use crate::keys::juicebox::RecoverResult;
-        match self.juicebox.recover_private_key(pin, &self.config).await {
+        match self.juicebox.recover_private_key(pin, &self.config()).await {
             RecoverResult::Success(secret) => {
                 self.inner
                     .import_keys(&ImportKeysParams::new(secret.to_vec()))?;
@@ -285,7 +258,7 @@ impl Chat {
     /// Delete the stored keys from Juicebox and clear them from memory.
     pub async fn delete(&self) -> Result<(), SdkError> {
         use crate::keys::juicebox::DeleteResult;
-        match self.juicebox.delete_keys(&self.config).await {
+        match self.juicebox.delete_keys(&self.config()).await {
             DeleteResult::Success => {
                 self.inner.lock();
                 Ok(())
@@ -300,12 +273,12 @@ impl Chat {
     ///
     /// The new PIN must meet the same strength requirements as [`Chat::setup`].
     pub async fn change_pin(&self, old_pin: &[u8], new_pin: &[u8]) -> Result<(), SdkError> {
-        validate_pin_strength(new_pin)?;
+        crate::keys::juicebox::validate_pin_strength(new_pin)?;
         self.unlock(old_pin).await?;
         let mut secret = self.inner.export_keys()?;
         let result = self
             .juicebox
-            .register_private_key(new_pin, &self.config, &secret)
+            .register_private_key(new_pin, &self.config(), &secret)
             .await;
         secret.zeroize();
         match result {
@@ -1268,19 +1241,19 @@ mod tests {
     #[test]
     fn test_validate_pin_strength() {
         // Too short
-        assert!(validate_pin_strength(b"123").is_err());
-        assert!(validate_pin_strength(b"").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"123").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"").is_err());
         // Single repeated character
-        assert!(validate_pin_strength(b"0000").is_err());
-        assert!(validate_pin_strength(b"aaaaaa").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"0000").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"aaaaaa").is_err());
         // Sequential digit runs
-        assert!(validate_pin_strength(b"1234").is_err());
-        assert!(validate_pin_strength(b"0123456").is_err());
-        assert!(validate_pin_strength(b"9876").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"1234").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"0123456").is_err());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"9876").is_err());
         // Acceptable
-        assert!(validate_pin_strength(b"2580").is_ok());
-        assert!(validate_pin_strength(b"1357").is_ok());
-        assert!(validate_pin_strength(b"correct horse").is_ok());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"2580").is_ok());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"1357").is_ok());
+        assert!(crate::keys::juicebox::validate_pin_strength(b"correct horse").is_ok());
     }
 
     #[tokio::test]
@@ -1307,7 +1280,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_reject_unverified() {
-        let mut chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
+        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
         chat.generate_keypairs().unwrap();
         chat.setup(b"2580").await.unwrap();
         chat.set_reject_unverified(true);
@@ -1355,7 +1328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_config() {
-        let mut chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
+        let chat = Chat::with_juicebox(test_config(), Arc::new(MockJuiceboxApi::new()));
         let new_config = JuiceboxConfig::from_json(r#"{"realms": []}"#.to_string());
         chat.update_config(new_config);
         // Doesn't panic — config is updated

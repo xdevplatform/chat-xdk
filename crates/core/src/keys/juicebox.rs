@@ -37,6 +37,51 @@ pub struct JuiceboxConfig {
     pub config_json: String,
 }
 
+/// Where a Juicebox client takes the realms' auth tokens from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+enum TokenSource {
+    /// The X API config carries them.
+    Config,
+    /// A callback supplies them.
+    Callback,
+}
+
+/// Minimum PIN length in bytes accepted for new registrations.
+#[cfg_attr(not(any(feature = "juicebox", feature = "bindings")), allow(dead_code))]
+pub(crate) const MIN_PIN_LENGTH: usize = 4;
+
+/// Validate PIN strength for new registrations.
+///
+/// Rejects PINs that are shorter than [`MIN_PIN_LENGTH`], use a single
+/// repeated character (`0000`), or are an ascending/descending run of
+/// digits (`1234`, `9876`). Applied when keys are registered and when the
+/// PIN changes; never on unlock, so existing registrations stay
+/// recoverable.
+#[cfg_attr(not(any(feature = "juicebox", feature = "bindings")), allow(dead_code))]
+pub(crate) fn validate_pin_strength(pin: &[u8]) -> Result<(), crate::error::SdkError> {
+    use crate::error::{KeyError, SdkError};
+    if pin.len() < MIN_PIN_LENGTH {
+        return Err(SdkError::Key(KeyError::WeakPin(format!(
+            "PIN must be at least {} characters",
+            MIN_PIN_LENGTH
+        ))));
+    }
+    if pin.iter().all(|&b| b == pin[0]) {
+        return Err(SdkError::Key(KeyError::WeakPin(
+            "PIN must not be a single repeated character".into(),
+        )));
+    }
+    let ascending = pin.windows(2).all(|w| w[1] == w[0].wrapping_add(1));
+    let descending = pin.windows(2).all(|w| w[1] == w[0].wrapping_sub(1));
+    if pin.iter().all(u8::is_ascii_digit) && (ascending || descending) {
+        return Err(SdkError::Key(KeyError::WeakPin(
+            "PIN must not be a sequential run of digits".into(),
+        )));
+    }
+    Ok(())
+}
+
 impl JuiceboxConfig {
     /// Create a new JuiceboxConfig from the X API response.
     ///
@@ -80,33 +125,51 @@ impl JuiceboxConfig {
     ///
     /// `max_guess_count` defaults to 20 for the direct SDK config and
     /// `key_store_token_map_json` shapes and 5 for the bare `token_map` shape
-    /// when the field is absent.
+    /// when the field is absent or not a count.
     ///
     /// Returns an error describing the first missing or malformed field.
     pub fn from_x_api_json(config_json: &str) -> Result<Self, String> {
+        Self::parse_x_api_json(config_json, TokenSource::Config)
+    }
+
+    /// Like [`Self::from_x_api_json`], for a client that takes the realms'
+    /// auth tokens from a callback: the config need carry none, and a raw
+    /// Juicebox SDK config (an object with `realms`) is used verbatim.
+    #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
+    pub(crate) fn from_x_api_json_without_tokens(config_json: &str) -> Result<Self, String> {
+        Self::parse_x_api_json(config_json, TokenSource::Callback)
+    }
+
+    fn parse_x_api_json(config_json: &str, token_source: TokenSource) -> Result<Self, String> {
         let parsed: serde_json::Value =
             serde_json::from_str(config_json).map_err(|e| format!("Invalid JSON: {}", e))?;
+        let tokens_required = token_source == TokenSource::Config;
+        let max_guess_count = |default: u16| {
+            parsed
+                .get("max_guess_count")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u16::try_from(n).ok())
+                .unwrap_or(default)
+        };
 
         // Direct SDK config shape.
         if let Some(sdk_config_str) = parsed.get("sdk_config").and_then(|v| v.as_str()) {
-            let tokens_obj = parsed
-                .get("tokens")
-                .and_then(|v| v.as_object())
-                .ok_or_else(|| "Missing tokens object".to_string())?;
             let mut tokens = HashMap::new();
-            for (k, v) in tokens_obj {
-                if let Some(token) = v.as_str() {
-                    tokens.insert(k.clone(), token.to_string());
+            match parsed.get("tokens").and_then(|v| v.as_object()) {
+                Some(tokens_obj) => {
+                    for (k, v) in tokens_obj {
+                        if let Some(token) = v.as_str() {
+                            tokens.insert(k.clone(), token.to_string());
+                        }
+                    }
                 }
+                None if tokens_required => return Err("Missing tokens object".to_string()),
+                None => {}
             }
-            let max_guess_count = parsed
-                .get("max_guess_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(20) as u16;
             return Ok(Self::new(
                 sdk_config_str.to_string(),
                 tokens,
-                max_guess_count,
+                max_guess_count(20),
             ));
         }
 
@@ -125,27 +188,32 @@ impl JuiceboxConfig {
             if !embedded.is_object() {
                 return Err("Invalid key_store_token_map_json: not a JSON object".to_string());
             }
-            let token_map = parsed
-                .get("token_map")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| "Missing token_map".to_string())?;
-            let tokens = Self::tokens_from_token_map(token_map)?;
-            let max_guess_count = parsed
-                .get("max_guess_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(20) as u16;
+            let tokens = if tokens_required {
+                let token_map = parsed
+                    .get("token_map")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| "Missing token_map".to_string())?;
+                Self::tokens_from_token_map(token_map)?
+            } else {
+                HashMap::new()
+            };
             return Ok(Self::new(
                 sdk_config_str.to_string(),
                 tokens,
-                max_guess_count,
+                max_guess_count(20),
+            ));
+        }
+
+        // A raw SDK config, for a client whose tokens come from elsewhere.
+        if !tokens_required && parsed.get("realms").is_some() {
+            return Ok(Self::new(
+                config_json.to_string(),
+                HashMap::new(),
+                max_guess_count(5),
             ));
         }
 
         // Bare token_map shape.
-        let max_guess_count = parsed
-            .get("max_guess_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5) as u16;
         let token_map = parsed
             .get("token_map")
             .and_then(|v| v.as_array())
@@ -165,12 +233,14 @@ impl JuiceboxConfig {
                 .get("address")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing address".to_string())?;
-            let token = value
-                .get("token")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "Missing token".to_string())?;
             realms.push(serde_json::json!({"id": realm_id, "address": address}));
-            tokens.insert(realm_id.to_string(), token.to_string());
+            if tokens_required {
+                let token = value
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "Missing token".to_string())?;
+                tokens.insert(realm_id.to_string(), token.to_string());
+            }
         }
 
         let sdk_config = serde_json::json!({
@@ -180,7 +250,11 @@ impl JuiceboxConfig {
             "pin_hashing_mode": "Standard2019"
         });
 
-        Ok(Self::new(sdk_config.to_string(), tokens, max_guess_count))
+        Ok(Self::new(
+            sdk_config.to_string(),
+            tokens,
+            max_guess_count(5),
+        ))
     }
 
     /// Extract the realm id -> auth token map from an X API `token_map`
@@ -803,6 +877,39 @@ mod tests {
         // Majority recover threshold: (3 / 2) + 1 == 2.
         assert_eq!(sdk["recover_threshold"], 2);
         assert_eq!(sdk["pin_hashing_mode"], "Standard2019");
+    }
+
+    #[test]
+    fn a_client_with_callback_tokens_needs_none_in_the_config() {
+        let sdk_config =
+            JuiceboxConfig::from_x_api_json_without_tokens(r#"{"sdk_config": "{}"}"#).unwrap();
+        assert_eq!(sdk_config.config_json, "{}");
+        assert_eq!(sdk_config.max_guess_count, 20);
+        assert!(JuiceboxConfig::from_x_api_json(r#"{"sdk_config": "{}"}"#).is_err());
+
+        let token_map = JuiceboxConfig::from_x_api_json_without_tokens(
+            r#"{"token_map": [{"key": "r1", "value": {"address": "https://r1.example"}}], "max_guess_count": 0}"#,
+        )
+        .unwrap();
+        assert!(token_map.tokens.is_empty());
+        assert_eq!(token_map.max_guess_count, 0);
+        let sdk: serde_json::Value = serde_json::from_str(&token_map.config_json).unwrap();
+        assert_eq!(sdk["realms"][0]["address"], "https://r1.example");
+
+        let raw = r#"{"realms": [], "register_threshold": 1, "recover_threshold": 1}"#;
+        let realms = JuiceboxConfig::from_x_api_json_without_tokens(raw).unwrap();
+        assert_eq!(realms.config_json, raw);
+        assert_eq!(realms.max_guess_count, 5);
+
+        assert_eq!(
+            JuiceboxConfig::from_x_api_json_without_tokens("{}").unwrap_err(),
+            "Missing token_map or sdk_config"
+        );
+        let huge = JuiceboxConfig::from_x_api_json_without_tokens(
+            r#"{"sdk_config": "{}", "max_guess_count": 70000}"#,
+        )
+        .unwrap();
+        assert_eq!(huge.max_guess_count, 20);
     }
 
     /// The X API `juicebox_config` object shape, as returned by

@@ -329,7 +329,7 @@ pub fn build_ckey_change_signature(
     .iter()
     .any(|c| c.contains(','))
     {
-        return Err(SdkError::Parse(
+        return Err(SdkError::InvalidInput(
             "Signature payload contains comma-separated component".into(),
         ));
     }
@@ -460,7 +460,7 @@ pub(crate) fn sign_action(
     components: &[&str],
 ) -> Result<ActionSignature, SdkError> {
     if components.iter().any(|c| c.contains(',')) {
-        return Err(SdkError::Parse(
+        return Err(SdkError::InvalidInput(
             "Signature payload contains comma-separated component".into(),
         ));
     }
