@@ -252,7 +252,7 @@ public class E2ELiveTests
             key,
             kv,
             replyToEvent: lastInboundEventB64,
-            entities: new[] { new EntityDescriptor { Start = 0, End = 5, EntityType = "mention" } },
+            entities: new[] { new EntityDescriptor(0, 5, "mention") },
             ttlMsec: 24L * 60 * 60 * 1000,
             replyToCkces: ckces);
         await api.SendMessageAsync(canonicalConv, body);

@@ -461,24 +461,75 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
-        public void EncryptMessage_MediaAttachment_MissingRequiredField_Throws()
+        public void Descriptors_TakeTheirRequiredValuesInConstructors()
+        {
+            Assert.Empty(typeof(AttachmentDescriptor).GetConstructors());
+            foreach (var (type, required) in new[]
+            {
+                (typeof(EntityDescriptor), new[] { "Start", "End", "EntityType" }),
+                (typeof(UrlAttachmentImageDescriptor), new[] { "MediaHashKey", "FilesizeBytes", "Filename" }),
+            })
+            {
+                var constructor = Assert.Single(type.GetConstructors());
+                Assert.Equal(
+                    required.Select(name => name.ToLowerInvariant()),
+                    constructor.GetParameters().Select(p => p.Name!.ToLowerInvariant()));
+                Assert.All(required, name => Assert.Null(type.GetProperty(name)!.GetSetMethod()));
+            }
+            Assert.All(typeof(AttachmentDescriptor).GetProperties(), p => Assert.Null(p.GetSetMethod()));
+        }
+
+        [Fact]
+        public void EncryptMessage_FileWithoutANameOrASize_FailsWithInvalidInput()
         {
             using var chat = CreateUnlocked();
             var ckey = NewConvKey(chat);
-
-            // Core requires the media fields; an attachment missing one is
-            // rejected rather than silently defaulted.
-            Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "bad attachment")
+            const string noName = "has an empty filename: pass the file's original name";
+            const string noSize = "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives";
+            var cases = new (AttachmentDescriptor Attachment, string Message)[]
             {
-                SenderId = "1001",
-                SigningKeyVersion = "66",
-                ConversationKey = ckey,
-                ConversationKeyVersion = "1",
-                Attachments = new List<AttachmentDescriptor>
+                (AttachmentDescriptor.Media("photo", 100, 100, 1000, ""), $"media_hash_key 'photo' {noName}"),
+                (AttachmentDescriptor.Media("photo", 100, 100, 0, "photo.jpg"), $"media_hash_key 'photo' {noSize}"),
+                (AttachmentDescriptor.UrlCard("https://example.com", "Example",
+                    bannerImage: new UrlAttachmentImageDescriptor("banner", 1000, "")), $"media_hash_key 'banner' {noName}"),
+                (AttachmentDescriptor.UrlCard("https://example.com", "Example",
+                    faviconImage: new UrlAttachmentImageDescriptor("favicon", 0, "favicon.png")), $"media_hash_key 'favicon' {noSize}"),
+            };
+            foreach (var (attachment, message) in cases)
+            {
+                var e = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "a file")
                 {
-                    new AttachmentDescriptor { AttachmentType = "media", MediaHashKey = "h" },
-                },
-            }));
+                    SenderId = "1001",
+                    SigningKeyVersion = "66",
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "1",
+                    Attachments = new[] { attachment },
+                }));
+                Assert.Equal(ChatXdkErrorKind.InvalidInput, e.Kind);
+                Assert.Equal(message, e.Message);
+            }
+        }
+
+        [Fact]
+        public void EncryptMessage_UnknownOrEmptyEntityType_FailsWithInvalidInput()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+            foreach (var entityType in new[] { "bogus", "" })
+            {
+                var e = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(new EncryptMessageParams("conv-1", "hi @bob")
+                {
+                    SenderId = "1001",
+                    SigningKeyVersion = "66",
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "1",
+                    Entities = new[] { new EntityDescriptor(3, 7, entityType) },
+                }));
+                Assert.Equal(ChatXdkErrorKind.InvalidInput, e.Kind);
+                Assert.Equal(
+                    $"Invalid entity_type '{entityType}': pass url, mention, hashtag, cashtag, email, address or phone_number",
+                    e.Message);
+            }
         }
 
         [Fact]
@@ -581,8 +632,8 @@ namespace ChatXdk.Tests
                 ConversationKeyVersion = "1",
                 Entities = new List<EntityDescriptor>
                 {
-                    new() { Start = 6, End = 12, EntityType = "mention" },
-                    new() { Start = 13, End = 26, EntityType = "url" },
+                    new(6, 12, "mention"),
+                    new(13, 26, "url"),
                 },
             });
 
@@ -618,20 +669,12 @@ namespace ChatXdk.Tests
             var attachment = AttachmentDescriptor.UrlCard(
                 "https://example.com/product",
                 "Example Product",
-                bannerImage: new UrlAttachmentImageDescriptor
+                bannerImage: new UrlAttachmentImageDescriptor("banner-hash", 24_000, "banner.jpg")
                 {
-                    MediaHashKey = "banner-hash",
-                    FilesizeBytes = 24_000,
-                    Filename = "banner.jpg",
                     Width = 1200,
                     Height = 630,
                 },
-                faviconImage: new UrlAttachmentImageDescriptor
-                {
-                    MediaHashKey = "favicon-hash",
-                    FilesizeBytes = 1_200,
-                    Filename = "favicon.ico",
-                });
+                faviconImage: new UrlAttachmentImageDescriptor("favicon-hash", 1_200, "favicon.ico"));
 
             // The [JsonPropertyName] attributes are what carry the banner to
             // core across the FFI; serialize the descriptor and confirm the
@@ -760,7 +803,7 @@ namespace ChatXdk.Tests
             {
                 ConversationId = "conv-1",
                 TargetMessageSequenceId = "seq-99",
-                Entities = new[] { new EntityDescriptor { Start = 4, End = 23, EntityType = "url" } },
+                Entities = new[] { new EntityDescriptor(4, 23, "url") },
                 SenderId = "1001",
                 SigningKeyVersion = "66",
                 ConversationKey = ckey,
@@ -1143,8 +1186,8 @@ namespace ChatXdk.Tests
             using var chat = QuickReplyChat(v, v1: true);
             var payload = SendFiles(chat, v, "a link", AttachmentDescriptor.UrlCard(
                 "https://example.com",
-                bannerImage: new UrlAttachmentImageDescriptor { MediaHashKey = "banner", FilesizeBytes = 12, Filename = "banner.png" },
-                faviconImage: new UrlAttachmentImageDescriptor { MediaHashKey = "favicon", FilesizeBytes = 13, Filename = "favicon.png" }));
+                bannerImage: new UrlAttachmentImageDescriptor("banner", 12, "banner.png"),
+                faviconImage: new UrlAttachmentImageDescriptor("favicon", 13, "favicon.png")));
             foreach (var name in new[] { "banner", "favicon" })
             {
                 var encrypted = chat.EncryptFile(EncryptFileParamsFor(v, System.Text.Encoding.UTF8.GetBytes(name + " bytes"), payload.EventB64, name));

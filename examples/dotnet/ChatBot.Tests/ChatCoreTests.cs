@@ -321,7 +321,7 @@ public class ChatCoreTests
             convKey,
             v.EventConversationKeyVersion,
             replyToEvent: v.EventMessageB64,
-            entities: new[] { new EntityDescriptor { Start = 0, End = 5, EntityType = "mention" } },
+            entities: new[] { new EntityDescriptor(0, 5, "mention") },
             ttlMsec: 60_000);
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageCreateEvent));
     }

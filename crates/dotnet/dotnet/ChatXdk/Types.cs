@@ -394,96 +394,118 @@ namespace ChatXdk
     /// </summary>
     public sealed class EntityDescriptor
     {
+        /// <summary>
+        /// Describe an entity of <paramref name="entityType"/> spanning bytes
+        /// <paramref name="start"/> to <paramref name="end"/> of the message text.
+        /// </summary>
+        public EntityDescriptor(int start, int end, string entityType)
+        {
+            ArgumentNullException.ThrowIfNull(entityType);
+            Start = start;
+            End = end;
+            EntityType = entityType;
+        }
+
         /// <summary>Byte offset into the message text where the entity begins.</summary>
-        public int Start { get; init; }
+        public int Start { get; }
         /// <summary>Byte offset into the message text where the entity ends (exclusive).</summary>
-        public int End { get; init; }
-        /// <summary>One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".</summary>
-        public string EntityType { get; init; } = "";
+        public int End { get; }
+        /// <summary>
+        /// One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".
+        /// Any other value, an empty one included, fails the call with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        public string EntityType { get; }
     }
 
     /// <summary>
-    /// Attachment descriptor. Use the factory methods to create well-formed instances.
+    /// Attachment descriptor, created by <see cref="Media"/>, <see cref="UrlCard"/> or
+    /// <see cref="Post"/>.
     /// </summary>
     public sealed class AttachmentDescriptor
     {
+        private AttachmentDescriptor(string attachmentType) => AttachmentType = attachmentType;
+
         /// <summary>Attachment kind: one of "media", "url", or "post".</summary>
         [JsonPropertyName("attachment_type")]
-        public string AttachmentType { get; init; } = "";
+        public string AttachmentType { get; }
 
-        // Media fields — always present for "media" attachments, null for other types.
-        // Do NOT use WhenWritingDefault on numeric fields: a value of 0 is valid and
-        // must be transmitted so the Rust side doesn't silently default-to-zero.
+        // Media fields: set on "media" attachments, null on the others. Nullable so that a
+        // media attachment's width, height and size are sent even when 0.
         /// <summary>Hash key identifying the uploaded media blob.</summary>
         [JsonPropertyName("media_hash_key")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? MediaHashKey { get; init; }
+        public string? MediaHashKey { get; private init; }
 
         /// <summary>Media width in pixels.</summary>
         [JsonPropertyName("width")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? Width { get; init; }
+        public long? Width { get; private init; }
 
         /// <summary>Media height in pixels.</summary>
         [JsonPropertyName("height")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? Height { get; init; }
+        public long? Height { get; private init; }
 
-        /// <summary>Size of the media file in bytes.</summary>
+        /// <summary>Size of the encrypted media file in bytes: <c>EncryptedFileSize</c> of its size.</summary>
         [JsonPropertyName("filesize_bytes")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? FilesizeBytes { get; init; }
+        public long? FilesizeBytes { get; private init; }
 
         /// <summary>Original filename of the media.</summary>
         [JsonPropertyName("filename")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Filename { get; init; }
+        public string? Filename { get; private init; }
 
         /// <summary>1=image, 2=gif, 3=video, 4=audio, 5=file, 6=svg.</summary>
         [JsonPropertyName("media_type")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public int? MediaType { get; init; }
+        public int? MediaType { get; private init; }
 
         /// <summary>Duration of audio/video media in milliseconds.</summary>
         [JsonPropertyName("duration_millis")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public long? DurationMillis { get; init; }
+        public long? DurationMillis { get; private init; }
 
         // URL fields
         /// <summary>Target URL for a "url" card attachment.</summary>
         [JsonPropertyName("url")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Url { get; init; }
+        public string? Url { get; private init; }
 
         /// <summary>Display title shown for the URL card.</summary>
         [JsonPropertyName("display_title")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? DisplayTitle { get; init; }
+        public string? DisplayTitle { get; private init; }
 
         /// <summary>Encrypted banner (preview) image for the URL card.</summary>
         [JsonPropertyName("banner_image")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public UrlAttachmentImageDescriptor? BannerImage { get; init; }
+        public UrlAttachmentImageDescriptor? BannerImage { get; private init; }
 
         /// <summary>Encrypted favicon image for the URL card.</summary>
         [JsonPropertyName("favicon_image")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public UrlAttachmentImageDescriptor? FaviconImage { get; init; }
+        public UrlAttachmentImageDescriptor? FaviconImage { get; private init; }
 
         // Post fields
         /// <summary>Numeric rest ID of the referenced post/tweet.</summary>
         [JsonPropertyName("rest_id")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? RestId { get; init; }
+        public string? RestId { get; private init; }
 
         /// <summary>Canonical URL of the referenced post/tweet.</summary>
         [JsonPropertyName("post_url")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? PostUrl { get; init; }
+        public string? PostUrl { get; private init; }
 
         // Factory methods
 
-        /// <summary>Create a media attachment.</summary>
+        /// <summary>
+        /// Create a media attachment. An empty <paramref name="filename"/> or a
+        /// <paramref name="filesizeBytes"/> of 0 or less fails the send with a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
         public static AttachmentDescriptor Media(
             string mediaHashKey,
             long width,
@@ -491,19 +513,21 @@ namespace ChatXdk
             long filesizeBytes,
             string filename,
             int? mediaType = null,
-            long? durationMillis = null) => new()
+            long? durationMillis = null)
         {
-            AttachmentType = "media",
-            MediaHashKey = mediaHashKey,
-            // Store as nullable so the JSON serializer always emits the field
-            // (even when the value is 0) rather than omitting it.
-            Width = width,
-            Height = height,
-            FilesizeBytes = filesizeBytes,
-            Filename = filename,
-            MediaType = mediaType,
-            DurationMillis = durationMillis,
-        };
+            ArgumentNullException.ThrowIfNull(mediaHashKey);
+            ArgumentNullException.ThrowIfNull(filename);
+            return new("media")
+            {
+                MediaHashKey = mediaHashKey,
+                Width = width,
+                Height = height,
+                FilesizeBytes = filesizeBytes,
+                Filename = filename,
+                MediaType = mediaType,
+                DurationMillis = durationMillis,
+            };
+        }
 
         /// <summary>
         /// Create a URL card attachment. Supplying <paramref name="displayTitle"/> and
@@ -517,19 +541,21 @@ namespace ChatXdk
             string url,
             string? displayTitle = null,
             UrlAttachmentImageDescriptor? bannerImage = null,
-            UrlAttachmentImageDescriptor? faviconImage = null) => new()
+            UrlAttachmentImageDescriptor? faviconImage = null)
         {
-            AttachmentType = "url",
-            Url = url,
-            DisplayTitle = displayTitle,
-            BannerImage = bannerImage,
-            FaviconImage = faviconImage,
-        };
+            ArgumentNullException.ThrowIfNull(url);
+            return new("url")
+            {
+                Url = url,
+                DisplayTitle = displayTitle,
+                BannerImage = bannerImage,
+                FaviconImage = faviconImage,
+            };
+        }
 
         /// <summary>Create a post/tweet attachment.</summary>
-        public static AttachmentDescriptor Post(string? restId = null, string? postUrl = null) => new()
+        public static AttachmentDescriptor Post(string? restId = null, string? postUrl = null) => new("post")
         {
-            AttachmentType = "post",
             RestId = restId,
             PostUrl = postUrl,
         };
@@ -539,27 +565,40 @@ namespace ChatXdk
     /// An encrypted preview image (banner or favicon) referenced by a URL card
     /// attachment via its media hash key.
     /// <para>
-    /// <see cref="FilesizeBytes"/> and <see cref="Filename"/> are required
-    /// alongside <see cref="MediaHashKey"/>: receiving clients' shared ingest
-    /// silently discards the whole preview image when either is missing on
-    /// the wire.
+    /// Receiving clients' shared ingest discards the whole preview image when its
+    /// <see cref="FilesizeBytes"/> or <see cref="Filename"/> is missing on the wire, so a
+    /// send fails with a <see cref="ChatXdkException"/> of kind
+    /// <see cref="ChatXdkErrorKind.InvalidInput"/> when either is empty or not above 0.
     /// </para>
     /// </summary>
     public sealed class UrlAttachmentImageDescriptor
     {
+        /// <summary>
+        /// Describe the image whose upload started with <paramref name="mediaHashKey"/>:
+        /// <paramref name="filesizeBytes"/> is the encrypted image's size,
+        /// <c>EncryptedFileSize</c> of the image's size, and <paramref name="filename"/> its
+        /// original name.
+        /// </summary>
+        public UrlAttachmentImageDescriptor(string mediaHashKey, long filesizeBytes, string filename)
+        {
+            ArgumentNullException.ThrowIfNull(mediaHashKey);
+            ArgumentNullException.ThrowIfNull(filename);
+            MediaHashKey = mediaHashKey;
+            FilesizeBytes = filesizeBytes;
+            Filename = filename;
+        }
+
         /// <summary>Media hash key the image's upload started with.</summary>
         [JsonPropertyName("media_hash_key")]
-        public string MediaHashKey { get; init; } = "";
+        public string MediaHashKey { get; }
 
-        /// <summary>
-        /// Size of the encrypted image in bytes: <c>EncryptedFileSize</c> of the image's size. Required.
-        /// </summary>
+        /// <summary>Size of the encrypted image in bytes: <c>EncryptedFileSize</c> of the image's size.</summary>
         [JsonPropertyName("filesize_bytes")]
-        public long FilesizeBytes { get; init; }
+        public long FilesizeBytes { get; }
 
-        /// <summary>Original filename of the image. Required.</summary>
+        /// <summary>Original filename of the image.</summary>
         [JsonPropertyName("filename")]
-        public string Filename { get; init; } = "";
+        public string Filename { get; }
 
         /// <summary>Image width in pixels.</summary>
         [JsonPropertyName("width")]
