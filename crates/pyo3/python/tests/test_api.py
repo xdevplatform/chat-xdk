@@ -470,31 +470,44 @@ class TestApiShapes(unittest.TestCase):
             chat.update_config(bad_config)
         self.assertIn("Invalid key_store_token_map_json", str(ctx.exception))
 
-    def test_guesses_remaining_parses_invalid_pin_message(self):
-        from chat_xdk import guesses_remaining
-
-        # The core's invalid-PIN unlock error carries the stable
-        # "guesses_remaining=N" token in the message; 0 means exhausted.
-        self.assertEqual(
-            guesses_remaining(ValueError("Juicebox error: Invalid PIN: guesses_remaining=3")),
-            3,
+    def test_errors_are_typed_by_kind(self):
+        from chat_xdk import (
+            Chat,
+            ChatXdkError,
+            DecryptEventParams,
+            InvalidInputError,
+            InvalidStateError,
+            ParseError,
         )
-        self.assertEqual(
-            guesses_remaining(ValueError("Juicebox error: Invalid PIN: guesses_remaining=0")),
-            0,
-        )
-        self.assertIsNone(guesses_remaining(ValueError("Juicebox error: Invalid PIN")))
-        # The count is read only from the invalid-PIN form, not from unrelated
-        # messages that happen to contain the token.
-        self.assertIsNone(guesses_remaining(ValueError("Delete failed: guesses_remaining=7")))
-
-    def test_guesses_remaining_none_on_non_pin_errors(self):
-        from chat_xdk import Chat, guesses_remaining
 
         chat = Chat()
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(InvalidInputError) as ctx:
             chat.update_config("not json")
-        self.assertIsNone(guesses_remaining(ctx.exception))
+        self.assertEqual(ctx.exception.kind, "invalid_input")
+        self.assertIsNone(ctx.exception.guesses_remaining)
+        self.assertIsInstance(ctx.exception, ChatXdkError)
+        self.assertIsInstance(ctx.exception, ValueError)
+        with self.assertRaises(InvalidInputError):
+            chat.setup("123")
+        with self.assertRaises(ParseError) as ctx:
+            chat.decrypt_event(DecryptEventParams("not base64!"))
+        self.assertEqual(ctx.exception.kind, "parse")
+        with self.assertRaises(InvalidStateError) as ctx:
+            chat.sign(b"data")
+        self.assertEqual(ctx.exception.kind, "invalid_state")
+        with self.assertRaises(InvalidStateError):
+            chat.export_keys()
+
+    def test_async_variants_run_the_same_calls(self):
+        import asyncio
+
+        from chat_xdk import Chat, InvalidInputError
+
+        chat = Chat()
+        with self.assertRaises(InvalidInputError):
+            asyncio.run(chat.setup_async("123"))
+        with self.assertRaises(InvalidInputError):
+            asyncio.run(chat.change_pin_async("2580", "1111"))
 
     def test_pin_accepts_str_bytes_and_bytearray(self):
         from chat_xdk import Chat
@@ -1366,8 +1379,8 @@ class TestApiShapes(unittest.TestCase):
 
         chat.lock()
         self.assertFalse(chat.is_unlocked())
-        # Locked: export returns None instead of raising.
-        self.assertIsNone(chat.export_keys())
+        with self.assertRaises(ValueError):
+            chat.export_keys()
 
         chat.import_keys(ImportKeysParams(bytes(exported)))
         self.assertTrue(chat.is_unlocked())

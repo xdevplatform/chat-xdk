@@ -25,9 +25,9 @@ Quick Start:
     # payload.message_id, payload.encoded_message_create_event, payload.signature, etc.
 """
 
+import asyncio as _asyncio
 import atexit as _atexit
 import http.client as _http_client
-import re as _re
 import socket as _socket
 import threading as _threading
 import time as _time
@@ -38,7 +38,7 @@ from typing import Literal, Optional, TypedDict
 from chat_xdk import _native
 from chat_xdk._native import __version__
 from chat_xdk._native import (
-    Chat,
+    ChatXdkError,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -48,6 +48,7 @@ from chat_xdk._native import (
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
+    DecryptionError,
     FileDecryptor,
     FileDecryptorParams,
     FileEncryptor,
@@ -65,6 +66,10 @@ from chat_xdk._native import (
     GroupMembersChangeParams,
     GroupMembersRemoveParams,
     GroupTitleChangeParams,
+    InvalidInputError,
+    InvalidPinError,
+    InvalidStateError,
+    JuiceboxError,
     MarkConversationReadParams,
     MessageTtlChangeParams,
     MessageTtlRemoveParams,
@@ -72,11 +77,13 @@ from chat_xdk._native import (
     SetIdentityParams,
     ImportKeysParams,
     MessageDeleteParams,
+    ParseError,
     PublicKeyRegistration,
     PublicKeyRegistrationPayload,
     PublicKeys,
     SendPayload,
     SignatureInfo,
+    VerificationError,
     base64_to_bytes,
     bytes_to_base64,
     bytes_to_hex,
@@ -271,29 +278,41 @@ class GroupText(TypedDict, total=False):
     text: str
     raw: str
 
-# Stable invalid-PIN message form the core emits
-# ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a count
-# embedded in an unrelated pass-through message is not misread.
-_GUESSES_REMAINING = _re.compile(r"\bInvalid PIN: guesses_remaining=(\d+)")
 
+class Chat(_native.Chat):
+    """The X Chat encryption SDK.
 
-def guesses_remaining(exc):
-    """Remaining PIN attempts from an invalid-PIN unlock failure, or None.
-
-    Present only on the exception raised by ``Chat.unlock`` /
-    ``Chat.change_pin`` for a wrong PIN; 0 means the guess budget is
-    exhausted and the stored keys are locked.
+    ``Chat(config_json)`` keeps the keys in Juicebox with the Juicebox
+    configuration the X API returns; ``Chat()`` manages them with
+    ``import_keys`` and ``generate_keypairs`` alone. The ``_async`` methods
+    run the Juicebox round trips on a worker thread, for an ``asyncio`` loop.
     """
-    match = _GUESSES_REMAINING.search(str(exc))
-    return int(match.group(1)) if match else None
+
+    async def setup_async(self, pin):
+        """``setup`` on a worker thread."""
+        return await _asyncio.to_thread(self.setup, pin)
+
+    async def unlock_async(self, pin):
+        """``unlock`` on a worker thread."""
+        return await _asyncio.to_thread(self.unlock, pin)
+
+    async def change_pin_async(self, old_pin, new_pin):
+        """``change_pin`` on a worker thread."""
+        return await _asyncio.to_thread(self.change_pin, old_pin, new_pin)
+
+    async def delete_async(self):
+        """``delete`` on a worker thread."""
+        return await _asyncio.to_thread(self.delete)
 
 
 __all__ = [
     "Chat",
+    "ChatXdkError",
     "ConversationKeyChangeParams",
     "DecryptEventParams",
     "DecryptEventsParams",
     "DecryptFileParams",
+    "DecryptionError",
     "EncryptEditParams",
     "EncryptFileParams",
     "EncryptMessageParams",
@@ -317,10 +336,15 @@ __all__ = [
     "GroupMembersRemoveParams",
     "GroupText",
     "GroupTitleChangeParams",
+    "InvalidInputError",
+    "InvalidPinError",
+    "InvalidStateError",
+    "JuiceboxError",
     "MarkConversationReadParams",
     "MessageDeleteParams",
     "MessageTtlChangeParams",
     "MessageTtlRemoveParams",
+    "ParseError",
     "ScreenCaptureChange",
     "ScreenCaptureParams",
     "SetIdentityParams",
@@ -336,12 +360,12 @@ __all__ = [
     "QuickReplyResponse",
     "SendPayload",
     "SignatureInfo",
+    "VerificationError",
     "base64_to_bytes",
     "bytes_to_base64",
     "bytes_to_hex",
     "detect_image_dimensions",
     "detect_mime_type",
     "encrypted_file_size",
-    "guesses_remaining",
     "hex_to_bytes",
 ]

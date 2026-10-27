@@ -8,6 +8,43 @@ __version__: str
 def encrypted_file_size(plaintext_size: int) -> int: ...
 
 # ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+class ChatXdkError(ValueError):
+    """Raised when the SDK fails. ``kind`` names the failure the same way in
+    every binding: ``invalid_input``, ``invalid_state``, ``parse``,
+    ``decryption``, ``verification``, ``invalid_pin``, ``juicebox`` or
+    ``internal``."""
+
+    kind: str
+    guesses_remaining: Optional[int]
+
+class InvalidInputError(ChatXdkError):
+    """A parameter is missing or invalid; the message names it."""
+
+class InvalidStateError(ChatXdkError):
+    """A value was neither passed nor available from the chat's state, such as
+    no keys loaded."""
+
+class ParseError(ChatXdkError):
+    """Event or other wire data is malformed."""
+
+class DecryptionError(ChatXdkError):
+    """Ciphertext did not decrypt, or no key for it was available."""
+
+class VerificationError(ChatXdkError):
+    """A signature did not verify, or could not be verified while unverified
+    events are rejected."""
+
+class InvalidPinError(ChatXdkError):
+    """Juicebox rejected the PIN. ``guesses_remaining`` holds the attempts
+    left when Juicebox reports them; 0 means the stored keys are locked."""
+
+class JuiceboxError(ChatXdkError):
+    """Another Juicebox key-storage failure."""
+
+# ---------------------------------------------------------------------------
 # Classes
 # ---------------------------------------------------------------------------
 
@@ -649,6 +686,14 @@ class Chat:
         new_pin: Union[str, bytes, bytearray],
     ) -> None: ...
     def delete(self) -> None: ...
+    async def setup_async(self, pin: Union[str, bytes, bytearray]) -> PublicKeys: ...
+    async def unlock_async(self, pin: Union[str, bytes, bytearray]) -> None: ...
+    async def change_pin_async(
+        self,
+        old_pin: Union[str, bytes, bytearray],
+        new_pin: Union[str, bytes, bytearray],
+    ) -> None: ...
+    async def delete_async(self) -> None: ...
     def lock(self) -> None: ...
     def is_unlocked(self) -> bool: ...
     def has_identity_key(self) -> bool: ...
@@ -657,7 +702,7 @@ class Chat:
     def generate_keypairs(self) -> PublicKeyRegistrationPayload: ...
     def get_public_keys(self) -> PublicKeys: ...
     def get_public_key_fingerprint(self) -> str: ...
-    def export_keys(self) -> Optional[bytearray]: ...
+    def export_keys(self) -> bytearray: ...
     def import_keys(self, params: ImportKeysParams) -> None: ...
     def verify_key_binding(
         self,
@@ -743,4 +788,3 @@ def bytes_to_hex(data: bytes) -> str: ...
 def hex_to_bytes(hex: str) -> Optional[bytes]: ...
 def detect_mime_type(data: bytes) -> Optional[str]: ...
 def detect_image_dimensions(data: bytes) -> Optional[tuple[int, int]]: ...
-def guesses_remaining(exc: BaseException) -> Optional[int]: ...

@@ -37,13 +37,96 @@ use std::sync::Arc;
 
 use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
+use chat_xdk_core::error::{ErrorKind, SdkError};
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, QuickReply, SigningKeyEntry};
+
+pyo3::create_exception!(
+    chat_xdk,
+    ChatXdkError,
+    pyo3::exceptions::PyValueError,
+    "Raised when the SDK fails. ``kind`` names the failure the same way in every binding; ``guesses_remaining`` is set on an ``InvalidPinError``."
+);
+pyo3::create_exception!(
+    chat_xdk,
+    InvalidInputError,
+    ChatXdkError,
+    "A parameter is missing or invalid; the message names it."
+);
+pyo3::create_exception!(
+    chat_xdk,
+    InvalidStateError,
+    ChatXdkError,
+    "A value was neither passed nor available from the chat's state, such as no keys loaded."
+);
+pyo3::create_exception!(
+    chat_xdk,
+    ParseError,
+    ChatXdkError,
+    "Event or other wire data is malformed."
+);
+pyo3::create_exception!(
+    chat_xdk,
+    DecryptionError,
+    ChatXdkError,
+    "Ciphertext did not decrypt, or no key for it was available."
+);
+pyo3::create_exception!(
+    chat_xdk,
+    VerificationError,
+    ChatXdkError,
+    "A signature did not verify, or could not be verified while unverified events are rejected."
+);
+pyo3::create_exception!(chat_xdk, InvalidPinError, ChatXdkError, "Juicebox rejected the PIN; ``guesses_remaining`` holds the attempts left when Juicebox reports them.");
+pyo3::create_exception!(
+    chat_xdk,
+    JuiceboxError,
+    ChatXdkError,
+    "Another Juicebox key-storage failure."
+);
+
+/// The exception for a failure of `kind`, its `kind` and
+/// `guesses_remaining` attributes set.
+fn typed_err(kind: ErrorKind, message: String, guesses_remaining: Option<u16>) -> PyErr {
+    let err = match kind {
+        ErrorKind::InvalidInput => InvalidInputError::new_err(message),
+        ErrorKind::InvalidState => InvalidStateError::new_err(message),
+        ErrorKind::Parse => ParseError::new_err(message),
+        ErrorKind::Decryption => DecryptionError::new_err(message),
+        ErrorKind::Verification => VerificationError::new_err(message),
+        ErrorKind::InvalidPin => InvalidPinError::new_err(message),
+        ErrorKind::Juicebox => JuiceboxError::new_err(message),
+        _ => ChatXdkError::new_err(message),
+    };
+    Python::attach(|py| {
+        let value = err.value(py);
+        // Setting attributes on a fresh exception instance cannot fail.
+        let _ = value.setattr("kind", kind.as_str());
+        let _ = value.setattr("guesses_remaining", guesses_remaining);
+    });
+    err
+}
+
+/// The exception for an SDK failure.
+fn to_py_err(e: impl Into<SdkError>) -> PyErr {
+    let e = e.into();
+    typed_err(e.kind(), e.to_string(), e.guesses_remaining())
+}
+
+/// An invalid argument rejected in this layer.
+fn invalid_input(message: impl Into<String>) -> PyErr {
+    typed_err(ErrorKind::InvalidInput, message.into(), None)
+}
+
+/// A result that failed to convert.
+fn internal_err(e: impl std::fmt::Display) -> PyErr {
+    typed_err(ErrorKind::Internal, e.to_string(), None)
+}
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
 fn parse_juicebox_config(config_json: &str) -> PyResult<JuiceboxConfig> {
     JuiceboxConfig::from_x_api_json(config_json)
-        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        .map_err(|e| invalid_input(format!("Invalid Juicebox config: {e}")))
 }
 
 /// Extract a PIN from `str`, `bytes`, or `bytearray` into a buffer that is
@@ -61,7 +144,7 @@ fn extract_pin(pin: &Bound<'_, PyAny>) -> PyResult<zeroize::Zeroizing<Vec<u8>>> 
     if let Ok(b) = pin.cast::<PyByteArray>() {
         return Ok(zeroize::Zeroizing::new(b.to_vec()));
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+    Err(pyo3::exceptions::PyTypeError::new_err(
         "pin must be str, bytes, or bytearray",
     ))
 }
@@ -104,14 +187,12 @@ fn json_field<T: serde::de::DeserializeOwned>(
         .call_method1("dumps", (value.bind(py),))
         .and_then(|json| json.extract())
         .map_err(|err| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            invalid_input(format!(
                 "{field} is not JSON-serializable: {}",
                 err.value(py)
             ))
         })?;
-    serde_json::from_str(&json).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid {field}: {e}"))
-    })
+    serde_json::from_str(&json).map_err(|e| invalid_input(format!("Invalid {field}: {e}")))
 }
 
 /// Convert entity tuples `(start, end, type)` into [`EntityDescriptor`]s.
@@ -159,43 +240,16 @@ fn quick_reply_field(py: Python<'_>, value: &Option<Py<PyAny>>) -> PyResult<Opti
         .transpose()
 }
 
-/// Convert a signing-key dict into a core `SigningKeyEntry`, surfacing a
-/// `ValueError` if a required field is missing instead of silently dropping
-/// the entry (which would weaken signature verification).
-fn parse_signing_key_entry(mut m: HashMap<String, String>) -> PyResult<SigningKeyEntry> {
-    let require = |m: &mut HashMap<String, String>, field: &str| {
-        m.remove(field).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "signing key missing required field '{}'",
-                field
-            ))
-        })
-    };
-    Ok(SigningKeyEntry::new(
-        require(&mut m, "user_id")?,
-        require(&mut m, "public_key_version")?,
-        require(&mut m, "public_key")?,
-        require(&mut m, "identity_public_key")?,
-        require(&mut m, "identity_public_key_signature")?,
-    ))
-}
-
-fn parse_signing_key_entries(
-    signing_keys: Vec<HashMap<String, String>>,
-) -> PyResult<Vec<SigningKeyEntry>> {
-    signing_keys
-        .into_iter()
-        .map(parse_signing_key_entry)
-        .collect()
-}
-
-/// Convert an optional list of signing-key dicts.
+/// Convert an optional list of signing-key dicts through the core type, so
+/// an entry missing a field is an error rather than dropped (which would
+/// weaken signature verification).
 fn signing_keys_field(
     py: Python<'_>,
     value: &Option<Py<PyAny>>,
 ) -> PyResult<Option<Vec<SigningKeyEntry>>> {
-    extract_optional_field::<Vec<HashMap<String, String>>>(py, value, "signing_keys")?
-        .map(parse_signing_key_entries)
+    value
+        .as_ref()
+        .map(|value| json_field(py, value, "signing_keys"))
         .transpose()
 }
 
@@ -205,42 +259,21 @@ fn conversation_keys_field(
     py: Python<'_>,
     value: &Py<PyAny>,
 ) -> PyResult<HashMap<String, XChatConversationKey>> {
-    extract_field::<HashMap<String, Vec<u8>>>(py, value, "conversation_keys")?
-        .into_iter()
-        .map(|(version, bytes)| {
-            let key = XChatConversationKey::from_bytes(bytes).ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "the key for version '{}' in the conversation key map is not 32 bytes: \
-                     pass the raw 32-byte conversation keys",
-                    version
-                ))
-            })?;
-            Ok((version, key))
-        })
-        .collect()
+    bindings::conversation_keys(extract_field::<HashMap<String, Vec<u8>>>(
+        py,
+        value,
+        "conversation_keys",
+    )?)
+    .map_err(to_py_err)
 }
 
 /// Convert a list of ``{user_id, identity_public_key, public_key_version}``
-/// dicts into core inputs.
+/// dicts through the core type.
 fn public_keys_field(
     py: Python<'_>,
     value: &Py<PyAny>,
 ) -> PyResult<Vec<chat_xdk_core::PublicKeyInput>> {
-    extract_field::<Vec<HashMap<String, String>>>(py, value, "public_keys")?
-        .into_iter()
-        .map(|mut r| {
-            let mut take = |key: &str| {
-                r.remove(key).ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("missing '{key}'"))
-                })
-            };
-            Ok(chat_xdk_core::PublicKeyInput::new(
-                take("user_id")?,
-                take("identity_public_key")?,
-                take("public_key_version")?,
-            ))
-        })
-        .collect()
+    json_field(py, value, "public_keys")
 }
 
 /// A required argument that follows an optional positional one, as
@@ -250,17 +283,6 @@ fn required<T>(value: Option<T>, name: &str) -> PyResult<T> {
     value.ok_or_else(|| {
         pyo3::exceptions::PyTypeError::new_err(format!("missing required argument: '{name}'"))
     })
-}
-
-fn to_py_err(e: impl std::error::Error) -> PyErr {
-    let mut msg = e.to_string();
-    let mut source = e.source();
-    while let Some(err) = source {
-        msg.push_str("\ncaused by: ");
-        msg.push_str(&err.to_string());
-        source = err.source();
-    }
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(msg)
 }
 
 /// Build the Python dict for a prepared key change.
@@ -2236,7 +2258,7 @@ impl Chat {
     }
 
     /// Update the Juicebox configuration (e.g. to refresh auth tokens).
-    fn update_config(&mut self, config_json: &str) -> PyResult<()> {
+    fn update_config(&self, config_json: &str) -> PyResult<()> {
         let config = parse_juicebox_config(config_json)?;
         self.inner.update_config(config);
         Ok(())
@@ -2255,7 +2277,7 @@ impl Chat {
     /// When enabled — the default — `decrypt_event` raises for any signed
     /// event whose signature cannot be verified (invalid, missing, or no
     /// matching signing key) instead of returning it with `verified: false`.
-    fn set_reject_unverified(&mut self, reject: bool) {
+    fn set_reject_unverified(&self, reject: bool) {
         self.inner.set_reject_unverified(reject);
     }
 
@@ -2291,9 +2313,9 @@ impl Chat {
     ///     signing_keys: Same list of dicts ``DecryptEventsParams`` takes.
     ///         Each call replaces the previous set; only this call populates
     ///         the store — keys carried inside events are never trusted.
-    fn set_signing_keys(&self, signing_keys: Vec<HashMap<String, String>>) -> PyResult<()> {
-        self.inner
-            .set_signing_keys(&parse_signing_key_entries(signing_keys)?);
+    fn set_signing_keys(&self, py: Python<'_>, signing_keys: Py<PyAny>) -> PyResult<()> {
+        let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
+        self.inner.set_signing_keys(&entries);
         Ok(())
     }
 
@@ -2305,12 +2327,11 @@ impl Chat {
     /// Delete keys from Juicebox and clear from memory.
     ///
     /// Warning: This is irreversible. The user will lose access to their encrypted messages.
-    fn delete(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn delete(&self, py: Python<'_>) -> PyResult<()> {
         // Release the GIL for the Juicebox round trips so other Python
         // threads keep running; no Python objects cross into the closure.
-        let inner = &mut self.inner;
-        let runtime = &self.runtime;
-        py.detach(|| runtime.block_on(async { inner.delete().await.map_err(to_py_err) }))
+        py.detach(|| self.runtime.block_on(self.inner.delete()))
+            .map_err(to_py_err)
     }
 
     /// Register existing keys with Juicebox.
@@ -2321,14 +2342,13 @@ impl Chat {
     ///
     /// Returns:
     ///     PublicKeys with identity and signing keys.
-    fn setup(&mut self, py: Python<'_>, pin: &Bound<'_, PyAny>) -> PyResult<PublicKeys> {
+    fn setup(&self, py: Python<'_>, pin: &Bound<'_, PyAny>) -> PyResult<PublicKeys> {
         let pin = extract_pin(pin)?;
         // Release the GIL for the Juicebox round trips so other Python
         // threads keep running; no Python objects cross into the closure.
-        let inner = &mut self.inner;
-        let runtime = &self.runtime;
-        let keys =
-            py.detach(|| runtime.block_on(async { inner.setup(&pin).await.map_err(to_py_err) }))?;
+        let keys = py
+            .detach(|| self.runtime.block_on(self.inner.setup(&pin)))
+            .map_err(to_py_err)?;
 
         Ok(PublicKeys {
             identity: keys.identity,
@@ -2341,13 +2361,12 @@ impl Chat {
     /// Args:
     ///     pin: The user's PIN (str, bytes, or bytearray; a bytearray can be
     ///         zeroed by the caller afterwards).
-    fn unlock(&mut self, py: Python<'_>, pin: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn unlock(&self, py: Python<'_>, pin: &Bound<'_, PyAny>) -> PyResult<()> {
         let pin = extract_pin(pin)?;
         // Release the GIL for the Juicebox round trips so other Python
         // threads keep running; no Python objects cross into the closure.
-        let inner = &mut self.inner;
-        let runtime = &self.runtime;
-        py.detach(|| runtime.block_on(async { inner.unlock(&pin).await.map_err(to_py_err) }))
+        py.detach(|| self.runtime.block_on(self.inner.unlock(&pin)))
+            .map_err(to_py_err)
     }
 
     /// Re-register keys with a new PIN.
@@ -2356,7 +2375,7 @@ impl Chat {
     ///     old_pin: The current PIN (str, bytes, or bytearray).
     ///     new_pin: The new PIN to set (str, bytes, or bytearray).
     fn change_pin(
-        &mut self,
+        &self,
         py: Python<'_>,
         old_pin: &Bound<'_, PyAny>,
         new_pin: &Bound<'_, PyAny>,
@@ -2365,16 +2384,11 @@ impl Chat {
         let new_pin = extract_pin(new_pin)?;
         // Release the GIL for the Juicebox round trips so other Python
         // threads keep running; no Python objects cross into the closure.
-        let inner = &mut self.inner;
-        let runtime = &self.runtime;
         py.detach(|| {
-            runtime.block_on(async {
-                inner
-                    .change_pin(&old_pin, &new_pin)
-                    .await
-                    .map_err(to_py_err)
-            })
+            self.runtime
+                .block_on(self.inner.change_pin(&old_pin, &new_pin))
         })
+        .map_err(to_py_err)
     }
 
     /// Generate new keypairs and return the registration payload.
@@ -2485,7 +2499,7 @@ impl Chat {
         let json_module = py.import("json")?;
         for decrypted in result.events {
             let entry = pyo3::types::PyDict::new(py);
-            let event_json = serde_json::to_string(&decrypted.event).map_err(to_py_err)?;
+            let event_json = serde_json::to_string(&decrypted.event).map_err(internal_err)?;
             let event_dict = json_module.call_method1("loads", (event_json,))?;
             entry.set_item("event", event_dict)?;
             if let Some(b64) = decrypted.original_b64 {
@@ -2539,7 +2553,7 @@ impl Chat {
             .inner
             .decrypt_event(&params.to_core(py)?)
             .map_err(to_py_err)?;
-        let json_str = serde_json::to_string(&event).map_err(to_py_err)?;
+        let json_str = serde_json::to_string(&event).map_err(internal_err)?;
         let dict = py.import("json")?.call_method1("loads", (json_str,))?;
         Ok(dict.into())
     }
@@ -2771,12 +2785,7 @@ impl Chat {
     /// Returns:
     ///     Decrypted UTF-8 string (``str``).
     fn decrypt(&self, ciphertext_b64: &str, conversation_key: &[u8]) -> PyResult<String> {
-        let ckey =
-            XChatConversationKey::from_bytes(conversation_key.to_vec()).ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid conversation key (expected 32 bytes)",
-                )
-            })?;
+        let ckey = bindings::conversation_key(conversation_key).map_err(to_py_err)?;
         self.inner.decrypt(ciphertext_b64, &ckey).map_err(to_py_err)
     }
 
@@ -3137,19 +3146,16 @@ impl Chat {
     /// object could linger in memory until garbage collection.
     ///
     /// Returns:
-    ///     Raw key bytes (32 or 64 bytes) as bytearray, or None if no
-    ///     identity key is loaded.
-    fn export_keys<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyByteArray>>> {
-        // Mirror core's export requirement: identity key present (signing
-        // key optional, giving a 32-byte export).
-        if !self.inner.has_identity_key() {
-            return Ok(None);
-        }
+    ///     Raw key bytes (32 or 64 bytes) as bytearray.
+    ///
+    /// Raises:
+    ///     InvalidStateError: no identity key is loaded.
+    fn export_keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyByteArray>> {
         use zeroize::Zeroize;
         let mut key_bytes = self.inner.export_keys().map_err(to_py_err)?;
         let out = PyByteArray::new(py, &key_bytes);
         key_bytes.zeroize();
-        Ok(Some(out))
+        Ok(out)
     }
 
     /// Import private keys from the bytes ``export_keys()`` returned: 32
@@ -3414,6 +3420,15 @@ fn feature_set_default_endpoint(endpoint: Option<&str>) {
 #[pymodule]
 fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    let py = m.py();
+    m.add("ChatXdkError", py.get_type::<ChatXdkError>())?;
+    m.add("InvalidInputError", py.get_type::<InvalidInputError>())?;
+    m.add("InvalidStateError", py.get_type::<InvalidStateError>())?;
+    m.add("ParseError", py.get_type::<ParseError>())?;
+    m.add("DecryptionError", py.get_type::<DecryptionError>())?;
+    m.add("VerificationError", py.get_type::<VerificationError>())?;
+    m.add("InvalidPinError", py.get_type::<InvalidPinError>())?;
+    m.add("JuiceboxError", py.get_type::<JuiceboxError>())?;
     m.add_class::<Chat>()?;
     m.add_class::<FileEncryptor>()?;
     m.add_class::<FileDecryptor>()?;
