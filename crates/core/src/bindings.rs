@@ -72,6 +72,13 @@ pub fn juicebox_client_config(config_json: &str) -> Result<(String, u16), SdkErr
     Ok((config.config_json, config.max_guess_count))
 }
 
+/// The error a Juicebox call fails with on a chat that has no Juicebox
+/// config, for a binding that runs the Juicebox client itself (the JS
+/// binding): the error `Chat` returns in that state.
+pub fn no_juicebox_config() -> SdkError {
+    crate::keys::juicebox::no_config_error()
+}
+
 /// The error a Juicebox `operation` (`register`, `recover` or `delete`) of
 /// a binding that runs the Juicebox client itself reports, from the
 /// client's failure `reason` and guess count, so it carries the kind and

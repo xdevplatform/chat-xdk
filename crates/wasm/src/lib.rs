@@ -241,6 +241,12 @@ pub fn juicebox_client_config(config_json: &str) -> Result<JsValue, JsValue> {
     Ok(result.into())
 }
 
+/// The error a Juicebox call throws on a chat without a Juicebox config.
+#[wasm_bindgen(js_name = __noJuiceboxConfig, skip_typescript)]
+pub fn no_juicebox_config() -> JsValue {
+    sdk_error(bindings::no_juicebox_config())
+}
+
 /// The error a Juicebox `operation` (`register`, `recover` or `delete`)
 /// that failed for `reason` throws.
 #[wasm_bindgen(js_name = __juiceboxError, skip_typescript)]

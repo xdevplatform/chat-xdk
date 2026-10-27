@@ -34,19 +34,16 @@ impl Chat {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        let config = match config_json {
-            // An empty JSON object means manual key management, same as None.
-            // Anything else (including unparseable JSON) goes through the X
-            // API config parser, which reports the malformed field.
+        // An empty JSON object means no Juicebox config, same as None.
+        // Anything else (including unparseable JSON) goes through the X API
+        // config parser, which reports the malformed field.
+        let inner = match config_json {
             Some(json) => match serde_json::from_str::<serde_json::Value>(json) {
-                Ok(serde_json::Value::Object(m)) if m.is_empty() => {
-                    JuiceboxConfig::from_json("{}".to_string())
-                }
-                _ => parse_juicebox_config(json)?,
+                Ok(serde_json::Value::Object(m)) if m.is_empty() => chat_xdk_core::Chat::default(),
+                _ => chat_xdk_core::Chat::new(parse_juicebox_config(json)?),
             },
-            None => JuiceboxConfig::from_json("{}".to_string()),
+            None => chat_xdk_core::Chat::default(),
         };
-        let inner = chat_xdk_core::Chat::with_juicebox(config, Arc::new(JuiceboxClient::new()));
 
         Ok(Self { inner, runtime })
     }

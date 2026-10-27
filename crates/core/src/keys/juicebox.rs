@@ -82,6 +82,17 @@ pub(crate) fn validate_pin_strength(pin: &[u8]) -> Result<(), crate::error::SdkE
     Ok(())
 }
 
+/// The error a Juicebox call fails with on a chat that has no Juicebox
+/// config, before `update_config` gives it one.
+#[cfg_attr(not(any(feature = "juicebox", feature = "bindings")), allow(dead_code))]
+pub(crate) fn no_config_error() -> crate::error::SdkError {
+    crate::error::SdkError::InvalidState(
+        "no Juicebox config: pass the juicebox_config the X API returns when you create the \
+         chat, or call update_config() first"
+            .into(),
+    )
+}
+
 impl JuiceboxConfig {
     /// Create a new JuiceboxConfig from the X API response.
     ///

@@ -15,16 +15,13 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-#[cfg(feature = "juicebox")]
-use std::sync::Arc;
-
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::{ErrorKind, SdkError};
 #[cfg(feature = "juicebox")]
-use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
+use chat_xdk_core::keys::juicebox::JuiceboxConfig;
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
     DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
@@ -302,8 +299,11 @@ pub extern "C" fn chat_xdk_detect_image_dimensions(data: *const u8, data_len: us
 /// `juicebox_config_json` is the Juicebox configuration JSON the X API
 /// returns, which `chat_xdk_setup`, `chat_xdk_unlock`,
 /// `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL or an empty string
-/// for a chat that manages its keys with `chat_xdk_import_keys` alone. On
-/// failure `out_chat` is set to NULL. Free the handle with [`chat_xdk_free`].
+/// for a chat without one, which manages its keys with
+/// `chat_xdk_import_keys` or takes its config later with
+/// `chat_xdk_update_config`. Until then those four calls fail with an
+/// `invalid_state` error. On failure `out_chat` is set to NULL. Free the
+/// handle with [`chat_xdk_free`].
 #[no_mangle]
 pub extern "C" fn chat_xdk_new(
     juicebox_config_json: *const c_char,
@@ -317,11 +317,11 @@ pub extern "C" fn chat_xdk_new(
         let config_json = try_str!(juicebox_config_json);
         #[cfg(feature = "juicebox")]
         let handle = {
-            let config = if config_json.is_empty() {
-                JuiceboxConfig::from_json("{}".to_string())
+            let inner = if config_json.is_empty() {
+                chat_xdk_core::Chat::default()
             } else {
                 match parse_juicebox_config(config_json) {
-                    Ok(c) => c,
+                    Ok(config) => chat_xdk_core::Chat::new(config),
                     Err(e) => return e,
                 }
             };
@@ -329,7 +329,6 @@ pub extern "C" fn chat_xdk_new(
                 Ok(rt) => rt,
                 Err(e) => return internal_error(e),
             };
-            let inner = chat_xdk_core::Chat::with_juicebox(config, Arc::new(JuiceboxClient::new()));
             ChatHandle { inner, runtime }
         };
         #[cfg(not(feature = "juicebox"))]
@@ -836,6 +835,8 @@ mod files;
 mod params;
 mod prepare;
 mod signing;
+#[cfg(test)]
+mod tests;
 
 use conversation::*;
 use encrypt::*;

@@ -33,12 +33,11 @@ use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes};
 use pyo3::Py;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::{ErrorKind, SdkError};
-use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
+use chat_xdk_core::keys::juicebox::JuiceboxConfig;
 use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, QuickReply, SigningKeyEntry};
 
 mod chat;

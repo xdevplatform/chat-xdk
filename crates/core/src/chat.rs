@@ -127,7 +127,7 @@ use zeroize::Zeroize;
 pub struct Chat {
     /// The platform-agnostic encryption core.
     pub(crate) inner: crate::core::ChatCore,
-    config: std::sync::RwLock<JuiceboxConfig>,
+    config: std::sync::RwLock<Option<JuiceboxConfig>>,
     juicebox: Arc<dyn JuiceboxApi>,
 }
 
@@ -143,6 +143,10 @@ impl Chat {
 
     /// Create with a custom Juicebox implementation
     pub fn with_juicebox(config: JuiceboxConfig, juicebox: Arc<dyn JuiceboxApi>) -> Self {
+        Self::from_parts(Some(config), juicebox)
+    }
+
+    fn from_parts(config: Option<JuiceboxConfig>, juicebox: Arc<dyn JuiceboxApi>) -> Self {
         Self {
             inner: crate::core::ChatCore::new(),
             config: std::sync::RwLock::new(config),
@@ -186,20 +190,21 @@ impl Chat {
     pub(crate) fn core(&self) -> &crate::core::ChatCore {
         &self.inner
     }
-    /// Replace the Juicebox configuration, for example to refresh its auth
-    /// tokens. Operations already under way keep the configuration they
-    /// started with.
+    /// Set or replace the Juicebox configuration: on first boot, for a chat
+    /// created without one, or to refresh its auth tokens. Operations
+    /// already under way keep the configuration they started with.
     pub fn update_config(&self, config: JuiceboxConfig) {
-        *self.config.write().unwrap_or_else(|e| e.into_inner()) = config;
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(config);
     }
 
     /// The current Juicebox configuration, copied so no lock is held across
     /// a Juicebox round trip.
-    fn config(&self) -> JuiceboxConfig {
+    fn config(&self) -> Result<JuiceboxConfig, SdkError> {
         self.config
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+            .ok_or_else(crate::keys::juicebox::no_config_error)
     }
 
     // Juicebox key storage
@@ -220,10 +225,11 @@ impl Chat {
     /// bytes so callers can zeroize their own buffer after the call.
     pub async fn setup(&self, pin: &[u8]) -> Result<PublicKeys, SdkError> {
         crate::keys::juicebox::validate_pin_strength(pin)?;
+        let config = self.config()?;
         let mut secret = self.inner.export_keys()?;
         let result = self
             .juicebox
-            .register_private_key(pin, &self.config(), &secret)
+            .register_private_key(pin, &config, &secret)
             .await;
         secret.zeroize();
         match result {
@@ -238,7 +244,8 @@ impl Chat {
     /// recoverable regardless of current PIN policy.
     pub async fn unlock(&self, pin: &[u8]) -> Result<(), SdkError> {
         use crate::keys::juicebox::RecoverResult;
-        match self.juicebox.recover_private_key(pin, &self.config()).await {
+        let config = self.config()?;
+        match self.juicebox.recover_private_key(pin, &config).await {
             RecoverResult::Success(secret) => {
                 self.inner
                     .import_keys(&ImportKeysParams::new(secret.to_vec()))?;
@@ -263,7 +270,8 @@ impl Chat {
     /// Delete the stored keys from Juicebox and clear them from memory.
     pub async fn delete(&self) -> Result<(), SdkError> {
         use crate::keys::juicebox::DeleteResult;
-        match self.juicebox.delete_keys(&self.config()).await {
+        let config = self.config()?;
+        match self.juicebox.delete_keys(&config).await {
             DeleteResult::Success => {
                 self.inner.lock();
                 Ok(())
@@ -280,10 +288,11 @@ impl Chat {
     pub async fn change_pin(&self, old_pin: &[u8], new_pin: &[u8]) -> Result<(), SdkError> {
         crate::keys::juicebox::validate_pin_strength(new_pin)?;
         self.unlock(old_pin).await?;
+        let config = self.config()?;
         let mut secret = self.inner.export_keys()?;
         let result = self
             .juicebox
-            .register_private_key(new_pin, &self.config(), &secret)
+            .register_private_key(new_pin, &config, &secret)
             .await;
         secret.zeroize();
         match result {
@@ -613,6 +622,18 @@ impl Chat {
 }
 
 #[cfg(feature = "juicebox")]
+impl Default for Chat {
+    /// A chat without a Juicebox config, for first boot, when the account has
+    /// none yet: every crypto call works, and `setup`, `unlock`,
+    /// `change_pin` and `delete` fail with an [`SdkError::InvalidState`] until
+    /// [`Chat::update_config`] gives it one. A chat that keeps its keys with
+    /// [`Chat::import_keys`] alone never needs one.
+    fn default() -> Self {
+        Self::from_parts(None, Arc::new(JuiceboxClient::new()))
+    }
+}
+
+#[cfg(feature = "juicebox")]
 impl std::fmt::Debug for Chat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Chat")
@@ -634,6 +655,34 @@ mod tests {
 
     fn test_config() -> JuiceboxConfig {
         JuiceboxConfig::from_json(r#"{"realms": []}"#.to_string())
+    }
+
+    #[tokio::test]
+    async fn a_chat_without_a_juicebox_config_says_so_until_it_gets_one() {
+        let chat = Chat::from_parts(None, Arc::new(MockJuiceboxApi::new()));
+        chat.generate_keypairs().unwrap();
+        let expected = "Invalid state: no Juicebox config: pass the juicebox_config the X API \
+                        returns when you create the chat, or call update_config() first";
+        let failures = [
+            chat.setup(b"2580").await.unwrap_err(),
+            chat.unlock(b"2580").await.unwrap_err(),
+            chat.change_pin(b"2580", b"1359").await.unwrap_err(),
+            chat.delete().await.unwrap_err(),
+        ];
+        for err in failures {
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidState);
+            assert_eq!(err.to_string(), expected);
+        }
+        assert!(chat.is_unlocked(), "the keys stay loaded");
+
+        chat.update_config(test_config());
+        chat.setup(b"2580").await.unwrap();
+        chat.unlock(b"2580").await.unwrap();
+
+        assert_eq!(
+            Chat::default().delete().await.unwrap_err().to_string(),
+            expected
+        );
     }
 
     #[tokio::test]

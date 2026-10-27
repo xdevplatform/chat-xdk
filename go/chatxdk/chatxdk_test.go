@@ -2454,6 +2454,34 @@ func TestErrorsCarryTheirKind(t *testing.T) {
 	}
 }
 
+// TestJuiceboxCallsWithoutAConfig checks that a chat created without a
+// Juicebox config fails every Juicebox call with the core's invalid-state
+// error, the same kind and message in every binding.
+func TestJuiceboxCallsWithoutAConfig(t *testing.T) {
+	chat := New()
+	defer chat.Close()
+	if _, err := chat.GenerateKeypairs(); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Invalid state: no Juicebox config: pass the juicebox_config the X API returns " +
+		"when you create the chat, or call update_config() first"
+	setupErr := func() error { _, err := chat.Setup([]byte("2580")); return err }
+	for name, err := range map[string]error{
+		"Setup":     setupErr(),
+		"Unlock":    chat.Unlock([]byte("2580")),
+		"ChangePin": chat.ChangePin([]byte("2580"), []byte("1359")),
+		"Delete":    chat.Delete(),
+	} {
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidState || chatErr.Message != want {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if !chat.IsUnlocked() {
+		t.Error("the keys stay loaded")
+	}
+}
+
 func TestUpdateConfigXAPIJuiceboxConfigShape(t *testing.T) {
 	chat := New()
 	defer chat.Close()

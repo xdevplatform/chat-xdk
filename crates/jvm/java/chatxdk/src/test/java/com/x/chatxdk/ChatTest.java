@@ -234,6 +234,31 @@ class ChatTest {
     }
 
     @Test
+    void juiceboxCallsWithoutAConfigFailWithTheCoresInvalidStateError() throws Exception {
+        try (Chat chat = new Chat()) {
+            chat.generateKeypairs();
+            String want = "Invalid state: no Juicebox config: pass the juicebox_config the X API "
+                    + "returns when you create the chat, or call update_config() first";
+            byte[] pin = "2580".getBytes(StandardCharsets.UTF_8);
+            byte[] newPin = "1359".getBytes(StandardCharsets.UTF_8);
+            Throwable async = assertThrows(java.util.concurrent.CompletionException.class,
+                    () -> chat.unlockAsync(pin).join()).getCause();
+            for (Throwable e : new Throwable[] {
+                assertThrows(ChatXdkException.class, () -> chat.setup(pin)),
+                assertThrows(ChatXdkException.class, () -> chat.unlock(pin)),
+                assertThrows(ChatXdkException.class, () -> chat.changePin(pin, newPin)),
+                assertThrows(ChatXdkException.class, chat::delete),
+                async,
+            }) {
+                ChatXdkException error = assertInstanceOf(ChatXdkException.class, e);
+                assertEquals(ChatXdkException.Kind.INVALID_STATE, error.getKind());
+                assertEquals(want, error.getMessage());
+            }
+            assertTrue(chat.isUnlocked());
+        }
+    }
+
+    @Test
     void errorsReadTheInvalidPinCount() {
         ChatXdkException wrongPin = ChatXdkException.fromDocument(
                 "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN: guesses_remaining=3\","

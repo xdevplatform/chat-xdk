@@ -498,6 +498,30 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaises(InvalidStateError):
             chat.export_keys()
 
+    def test_juicebox_calls_without_a_config_fail_with_the_cores_invalid_state_error(self):
+        import asyncio
+
+        from chat_xdk import Chat, InvalidStateError
+
+        want = (
+            "Invalid state: no Juicebox config: pass the juicebox_config the X API returns "
+            "when you create the chat, or call update_config() first"
+        )
+        for chat in (Chat(), Chat("{}")):
+            chat.generate_keypairs()
+            for call in (
+                lambda: chat.setup("2580"),
+                lambda: chat.unlock("2580"),
+                lambda: chat.change_pin("2580", "1359"),
+                lambda: chat.delete(),
+                lambda: asyncio.run(chat.unlock_async("2580")),
+            ):
+                with self.assertRaises(InvalidStateError) as ctx:
+                    call()
+                self.assertEqual(ctx.exception.kind, "invalid_state")
+                self.assertEqual(str(ctx.exception), want)
+            self.assertTrue(chat.is_unlocked())
+
     def test_async_variants_run_the_same_calls(self):
         import asyncio
 

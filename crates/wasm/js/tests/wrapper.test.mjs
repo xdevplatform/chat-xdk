@@ -39,6 +39,11 @@ function b64ToBytes(b64) {
   return Uint8Array.from(Buffer.from(b64, "base64"));
 }
 
+/** The error every binding reports for a Juicebox call on a chat without a config. */
+const NO_JUICEBOX_CONFIG =
+  "Invalid state: no Juicebox config: pass the juicebox_config the X API returns when " +
+  "you create the chat, or call update_config() first";
+
 /** The config a stub client's Juicebox Configuration was built from. */
 function configOf(client) {
   return JSON.parse(client.configuration.value);
@@ -664,7 +669,11 @@ async function firstBootTests() {
     () => chat.changePin("2580", "1359"),
     () => chat.delete(),
   ]) {
-    await assert.rejects(op, chatXdkError("invalidState", /No Juicebox config/));
+    await assert.rejects(op, (err) => {
+      chatXdkError("invalidState", /./)(err);
+      assert.equal(err.message, NO_JUICEBOX_CONFIG);
+      return true;
+    });
   }
   assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
 

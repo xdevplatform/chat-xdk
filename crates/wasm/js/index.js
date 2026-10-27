@@ -19,6 +19,7 @@ import {
   __featureComplete,
   __juiceboxClientConfig,
   __juiceboxError,
+  __noJuiceboxConfig,
   __setErrorClass,
   __validateNewPin,
 } from './pkg/chat_xdk_wasm.js';
@@ -247,12 +248,7 @@ export class ChatWithJuicebox {
   #requireJuiceboxClient() {
     this.#requireJuicebox();
     if (!this.#juiceboxClient) {
-      throw new ChatXdkError(
-        "invalidState",
-        "No Juicebox config: pass juiceboxConfig to createChat() or call " +
-          "updateConfig() with the juicebox_config from the X API before " +
-          "setup/unlock/changePin/delete.",
-      );
+      throw __noJuiceboxConfig();
     }
     return this.#juiceboxClient;
   }

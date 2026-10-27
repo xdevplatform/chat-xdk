@@ -280,6 +280,31 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public async Task JuiceboxCalls_WithoutAConfig_FailWithTheCoresInvalidStateError()
+        {
+            using var chat = new Chat();
+            chat.GenerateKeypairs();
+            const string want = "Invalid state: no Juicebox config: pass the juicebox_config the X API "
+                + "returns when you create the chat, or call update_config() first";
+            var pin = System.Text.Encoding.UTF8.GetBytes("2580");
+            var newPin = System.Text.Encoding.UTF8.GetBytes("1359");
+            var failures = new[]
+            {
+                Assert.Throws<ChatXdkException>(() => chat.Setup(pin)),
+                Assert.Throws<ChatXdkException>(() => chat.Unlock(pin)),
+                Assert.Throws<ChatXdkException>(() => chat.ChangePin(pin, newPin)),
+                Assert.Throws<ChatXdkException>(() => chat.Delete()),
+                await Assert.ThrowsAsync<ChatXdkException>(() => chat.UnlockAsync(pin)),
+            };
+            foreach (var e in failures)
+            {
+                Assert.Equal(ChatXdkErrorKind.InvalidState, e.Kind);
+                Assert.Equal(want, e.Message);
+            }
+            Assert.True(chat.IsUnlocked);
+        }
+
+        [Fact]
         public void Errors_ReadTheInvalidPinCount()
         {
             var wrongPin = ChatXdkException.FromDocument(
