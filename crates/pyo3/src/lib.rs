@@ -297,14 +297,14 @@ fn prepared_change_to_pydict(
     if let Some(encrypted_title) = &result.encrypted_title {
         outer.set_item("encrypted_title", encrypted_title)?;
     }
-    if let Some(encrypted_avatar_url) = &result.encrypted_avatar_url {
-        outer.set_item("encrypted_avatar_url", encrypted_avatar_url)?;
+    if let Some(encrypted_description) = &result.encrypted_description {
+        outer.set_item("encrypted_description", encrypted_description)?;
     }
 
     Ok(outer.into())
 }
 
-/// Build the Python dict for a prepared title, avatar or description change.
+/// Build the Python dict for a prepared title or description change.
 fn prepared_metadata_change_to_pydict(
     py: Python<'_>,
     prepared: &chat_xdk_core::PreparedGroupMetadataChange,
@@ -929,6 +929,10 @@ impl ConversationKeyChangeParams {
 }
 
 /// Parameters for ``Chat.prepare_group_members_change``.
+///
+/// ``current_title`` and ``current_description`` are plaintext: the call
+/// encrypts each under the new conversation key it generates.
+/// ``current_avatar_url`` is the avatar's media URL, signed as is.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersChangeParams {
     /// ``{"user_id", "public_key", "key_version"}`` dicts for the updated
@@ -949,10 +953,13 @@ pub struct GroupMembersChangeParams {
     /// Your registered signing public key version; defaults to the
     /// ``set_identity`` value.
     signing_key_version: Option<String>,
-    /// Current group title, if set.
+    /// Current group title, as plaintext, if set; the call encrypts it.
     current_title: Option<String>,
-    /// Current group avatar URL, if set.
+    /// Current group avatar media URL, if set.
     current_avatar_url: Option<String>,
+    /// Current group description, as plaintext, if set; the call encrypts
+    /// it.
+    current_description: Option<String>,
     /// Current disappearing-message TTL in milliseconds, if set.
     current_ttl_msec: Option<i64>,
     /// Current screen-capture-blocking state; ``None`` when unset.
@@ -963,7 +970,7 @@ pub struct GroupMembersChangeParams {
 impl GroupMembersChangeParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (public_keys, conversation_id, new_member_ids, current_member_ids, current_admin_ids, current_pending_member_ids, *, sender_id=None, signing_key_version=None, current_title=None, current_avatar_url=None, current_ttl_msec=None, current_screen_capture_blocking_enabled=None))]
+    #[pyo3(signature = (public_keys, conversation_id, new_member_ids, current_member_ids, current_admin_ids, current_pending_member_ids, *, sender_id=None, signing_key_version=None, current_title=None, current_avatar_url=None, current_description=None, current_ttl_msec=None, current_screen_capture_blocking_enabled=None))]
     fn new(
         public_keys: Py<PyAny>,
         conversation_id: String,
@@ -975,6 +982,7 @@ impl GroupMembersChangeParams {
         signing_key_version: Option<String>,
         current_title: Option<String>,
         current_avatar_url: Option<String>,
+        current_description: Option<String>,
         current_ttl_msec: Option<i64>,
         current_screen_capture_blocking_enabled: Option<bool>,
     ) -> Self {
@@ -989,6 +997,7 @@ impl GroupMembersChangeParams {
             signing_key_version,
             current_title,
             current_avatar_url,
+            current_description,
             current_ttl_msec,
             current_screen_capture_blocking_enabled,
         }
@@ -1013,6 +1022,7 @@ impl GroupMembersChangeParams {
         params.signing_key_version = self.signing_key_version.clone();
         params.current_title = self.current_title.clone();
         params.current_avatar_url = self.current_avatar_url.clone();
+        params.current_description = self.current_description.clone();
         params.current_ttl_msec = self.current_ttl_msec;
         params.current_screen_capture_blocking_enabled =
             self.current_screen_capture_blocking_enabled;
@@ -1038,8 +1048,6 @@ pub struct GroupCreateParams {
     signing_key_version: Option<String>,
     /// Group title, as plaintext, if set; the create encrypts it.
     title: Option<String>,
-    /// Group avatar URL, as plaintext, if set; the create encrypts it.
-    avatar_url: Option<String>,
     /// Disappearing-message TTL in milliseconds, if set.
     ttl_msec: Option<i64>,
 }
@@ -1048,7 +1056,7 @@ pub struct GroupCreateParams {
 impl GroupCreateParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (public_keys, conversation_id, member_ids, admin_ids, *, sender_id=None, signing_key_version=None, title=None, avatar_url=None, ttl_msec=None))]
+    #[pyo3(signature = (public_keys, conversation_id, member_ids, admin_ids, *, sender_id=None, signing_key_version=None, title=None, ttl_msec=None))]
     fn new(
         public_keys: Py<PyAny>,
         conversation_id: String,
@@ -1057,7 +1065,6 @@ impl GroupCreateParams {
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         title: Option<String>,
-        avatar_url: Option<String>,
         ttl_msec: Option<i64>,
     ) -> Self {
         Self {
@@ -1068,7 +1075,6 @@ impl GroupCreateParams {
             sender_id,
             signing_key_version,
             title,
-            avatar_url,
             ttl_msec,
         }
     }
@@ -1085,7 +1091,6 @@ impl GroupCreateParams {
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
         params.title = self.title.clone();
-        params.avatar_url = self.avatar_url.clone();
         params.ttl_msec = self.ttl_msec;
         Ok(params)
     }
@@ -1158,16 +1163,15 @@ fn apply_identity(
 /// Parameters for ``Chat.prepare_group_members_remove``.
 ///
 /// ``public_keys`` are the identity keys of the members who stay: the call
-/// rotates the conversation key for them. ``title``, ``avatar_url`` and
-/// ``description`` are the group's plaintext metadata; each one set is
-/// encrypted under the new key and signed with the removal.
+/// rotates the conversation key for them. ``title`` and ``description`` are
+/// the group's plaintext metadata; each one set is encrypted under the new
+/// key and signed with the removal as a key-rotation re-encryption.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersRemoveParams {
     public_keys: Py<PyAny>,
     conversation_id: String,
     user_ids: Py<PyAny>,
     title: Option<String>,
-    avatar_url: Option<String>,
     description: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
@@ -1176,14 +1180,13 @@ pub struct GroupMembersRemoveParams {
 #[pymethods]
 impl GroupMembersRemoveParams {
     #[new]
-    #[pyo3(signature = (public_keys, conversation_id, user_ids, *, title=None, avatar_url=None, description=None, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (public_keys, conversation_id, user_ids, *, title=None, description=None, sender_id=None, signing_key_version=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         public_keys: Py<PyAny>,
         conversation_id: String,
         user_ids: Py<PyAny>,
         title: Option<String>,
-        avatar_url: Option<String>,
         description: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
@@ -1193,7 +1196,6 @@ impl GroupMembersRemoveParams {
             conversation_id,
             user_ids,
             title,
-            avatar_url,
             description,
             sender_id,
             signing_key_version,
@@ -1209,7 +1211,6 @@ impl GroupMembersRemoveParams {
             extract_field(py, &self.user_ids, "user_ids")?,
         );
         params.title = self.title.clone();
-        params.avatar_url = self.avatar_url.clone();
         params.description = self.description.clone();
         apply_identity(
             &mut params.sender_id,
@@ -1320,38 +1321,36 @@ impl GroupTitleChangeParams {
 
 /// Parameters for ``Chat.prepare_group_avatar_change``.
 ///
-/// ``new_avatar_url`` is plaintext: the call encrypts it under the conversation
-/// key, the explicit ``conversation_key`` / ``conversation_key_version``
-/// pair or, both ``None``, the opt-in key cache.
+/// A group's avatar URL is not encrypted. ``new_avatar_url`` is the media
+/// URL of the avatar image, which the app encrypts under the conversation
+/// key and uploads first; ``conversation_key_version`` is the version of the
+/// key the image is encrypted under.
 #[pyclass(get_all, set_all)]
 pub struct GroupAvatarChangeParams {
     conversation_id: String,
     new_avatar_url: String,
+    conversation_key_version: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
-    conversation_key: Option<Vec<u8>>,
-    conversation_key_version: Option<String>,
 }
 
 #[pymethods]
 impl GroupAvatarChangeParams {
     #[new]
-    #[pyo3(signature = (conversation_id, new_avatar_url, *, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (conversation_id, new_avatar_url, conversation_key_version, *, sender_id=None, signing_key_version=None))]
     fn new(
         conversation_id: String,
         new_avatar_url: String,
+        conversation_key_version: String,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
-        conversation_key: Option<Vec<u8>>,
-        conversation_key_version: Option<String>,
     ) -> Self {
         Self {
             conversation_id,
             new_avatar_url,
+            conversation_key_version,
             sender_id,
             signing_key_version,
-            conversation_key,
-            conversation_key_version,
         }
     }
 }
@@ -1361,11 +1360,10 @@ impl GroupAvatarChangeParams {
         let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
             self.conversation_id.as_str(),
             self.new_avatar_url.as_str(),
+            self.conversation_key_version.as_str(),
         );
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
-        params.conversation_key = self.conversation_key.clone();
-        params.conversation_key_version = self.conversation_key_version.clone();
         params
     }
 }
@@ -2769,9 +2767,9 @@ impl Chat {
         Ok(FileDecryptor { inner: Some(inner) })
     }
 
-    /// Decrypt a group title, avatar URL, or description the X API returns
-    /// for a conversation. Group changes in events need no call of their
-    /// own: ``decrypt_event`` returns them decrypted.
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation. Group changes in events need no call of their own:
+    /// ``decrypt_event`` returns them decrypted.
     ///
     /// Args:
     ///     ciphertext_b64: Base64-encoded ciphertext (``str``).
@@ -2828,10 +2826,15 @@ impl Chat {
     /// Args:
     ///     params: A ``GroupMembersChangeParams``.
     ///
+    /// ``current_title`` and ``current_description`` are plaintext: the call
+    /// encrypts each under the new conversation key and signs the
+    /// ciphertext. ``current_avatar_url`` is signed as is.
+    ///
     /// Returns:
     ///     The same dict shape as ``prepare_conversation_key_change``, with
-    ///     two action signatures: the conversation-key change and the
-    ///     member add.
+    ///     two action signatures (the conversation-key change and the
+    ///     member add) and, for a title or description the params set,
+    ///     ``encrypted_title`` and ``encrypted_description``.
     fn prepare_group_members_change(
         &self,
         py: Python<'_>,
@@ -2854,15 +2857,15 @@ impl Chat {
     /// Args:
     ///     params: A ``GroupCreateParams``.
     ///
-    /// ``title`` and ``avatar_url`` are plaintext: the call encrypts each
-    /// under the new conversation key and signs the ciphertext.
+    /// ``title`` is plaintext: the call encrypts it under the new
+    /// conversation key and signs the ciphertext. A create sets no avatar;
+    /// set it afterwards with ``prepare_group_avatar_change``.
     ///
     /// Returns:
     ///     The same dict shape as ``prepare_conversation_key_change``, with
     ///     two action signatures (the conversation-key change and the group
-    ///     create) and, for a title or avatar URL the params set,
-    ///     ``encrypted_title`` and ``encrypted_avatar_url``: the
-    ///     ``group_name`` and ``group_avatar_url`` the create request sends.
+    ///     create) and, when the params set a title, ``encrypted_title``:
+    ///     the ``group_name`` the create request sends.
     fn prepare_group_create(
         &self,
         py: Python<'_>,
@@ -2933,8 +2936,9 @@ impl Chat {
     /// members who stay.
     ///
     /// The result carries the new key, the remaining members' participant
-    /// keys, and two action signatures: the removal (bound to the new key
-    /// version) and the key change.
+    /// keys, and the action signatures: the removal (bound to the new key
+    /// version), a title and a description change for each one the params
+    /// set, re-encrypted under the new key, and the key change.
     fn prepare_group_members_remove(
         &self,
         py: Python<'_>,
@@ -2981,11 +2985,10 @@ impl Chat {
         prepared_metadata_change_to_pydict(py, &prepared)
     }
 
-    /// Encrypt a new group avatar URL under the conversation key and sign the
-    /// change.
+    /// Sign a group avatar change: the avatar image's media URL, as is, and
+    /// the version of the key the image is encrypted under.
     ///
-    /// Returns a dict: ``encrypted_value`` (the base64 ciphertext the request
-    /// sends), ``conversation_key_version``, and ``action_signatures``.
+    /// Returns a dict with ``action_signatures``, one entry.
     fn prepare_group_avatar_change(
         &self,
         py: Python<'_>,
@@ -2995,7 +2998,7 @@ impl Chat {
             .inner
             .prepare_group_avatar_change(&params.to_core())
             .map_err(to_py_err)?;
-        prepared_metadata_change_to_pydict(py, &prepared)
+        prepared_action_to_pydict(py, &prepared)
     }
 
     /// Encrypt a new group description under the conversation key and sign the

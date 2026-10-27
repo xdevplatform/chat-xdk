@@ -286,7 +286,7 @@ public sealed class ChatCore : IDisposable
             ConversationKeyVersion = conversationKeyVersion,
         });
 
-    /// <summary>Decrypt a group title, avatar URL, or description the X API returns.</summary>
+    /// <summary>Decrypt a group title or description the X API returns.</summary>
     public string Decrypt(string ciphertextB64, byte[] conversationKey) => _chat.Decrypt(ciphertextB64, conversationKey);
 
     public void Dispose() => _chat.Dispose();

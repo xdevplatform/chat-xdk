@@ -861,6 +861,31 @@ pub struct GroupChangeEvent {
     pub change: GroupChange,
 }
 
+/// A group's title or description as a received event carries it.
+///
+/// Titles and descriptions travel encrypted under the conversation key the
+/// event names. `Text` is the value decrypted, or the value an event that
+/// names no key version carries as plaintext. `Unavailable` is a value the
+/// SDK could not decrypt, because the key for its version is neither in the
+/// key map nor cached or the value isn't ciphertext under it; `raw` is the
+/// value as the event carries it. 0.5.x apps sent titles as plaintext while
+/// naming a key version, so those arrive as `Unavailable` with the title in
+/// `raw`: show `raw` when a title isn't decryptable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[serde(tag = "kind")]
+#[non_exhaustive]
+pub enum GroupText {
+    /// The decrypted text, or plaintext an event carries without a key
+    /// version.
+    #[non_exhaustive]
+    Text { text: String },
+
+    /// A value that did not decrypt, as the event carries it.
+    #[non_exhaustive]
+    Unavailable { raw: String },
+}
+
 /// The type of group change.
 ///
 /// Maps to `GroupChange` union in Thrift.
@@ -869,28 +894,42 @@ pub struct GroupChangeEvent {
 #[serde(tag = "change_type")]
 #[non_exhaustive]
 pub enum GroupChange {
-    /// Group was created. `title` and `avatar_url` are the decrypted title
-    /// and avatar URL, when the create set them.
+    /// Group was created. `title` is the group's title, when the create set
+    /// one; `avatar_url` is an avatar media URL a create carries, whose image
+    /// is encrypted under `conversation_key_version`, the key the create
+    /// seeds.
     #[non_exhaustive]
     Created {
         member_ids: Vec<String>,
         admin_ids: Vec<String>,
-        title: Option<String>,
+        #[cfg_attr(feature = "js", js_camel(wrap))]
+        title: Option<GroupText>,
         avatar_url: Option<String>,
+        conversation_key_version: Option<String>,
     },
 
-    /// Group title changed. `new_title` is the decrypted title.
+    /// Group title changed.
     #[non_exhaustive]
-    TitleChanged { new_title: String },
+    TitleChanged {
+        #[cfg_attr(feature = "js", js_camel(wrap))]
+        new_title: GroupText,
+    },
 
-    /// Group avatar changed. `new_avatar_url` is the decrypted avatar URL.
+    /// Group avatar changed. `new_avatar_url` is the media URL of the new
+    /// avatar image, whose bytes are encrypted under the conversation key
+    /// for `conversation_key_version`.
     #[non_exhaustive]
-    AvatarChanged { new_avatar_url: String },
+    AvatarChanged {
+        new_avatar_url: String,
+        conversation_key_version: Option<String>,
+    },
 
-    /// Group description changed. `new_description` is the decrypted
-    /// description.
+    /// Group description changed.
     #[non_exhaustive]
-    DescriptionChanged { new_description: String },
+    DescriptionChanged {
+        #[cfg_attr(feature = "js", js_camel(wrap))]
+        new_description: GroupText,
+    },
 
     /// Admins were added.
     #[non_exhaustive]
@@ -1676,31 +1715,31 @@ pub struct PreparedConversationChange {
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub action_signatures: Vec<ActionSignature>,
 
-    /// The group's title encrypted under the new conversation key, base64:
-    /// the `group_name` a group create's request sends. Set by
-    /// `prepare_group_create` when its params carry a title.
+    /// The group's title encrypted under the new conversation key, base64.
+    /// Set by `prepare_group_create` (the request's `group_name`) and
+    /// `prepare_group_members_change` (the request's `encrypted_title`) when
+    /// their params carry a title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encrypted_title: Option<String>,
 
-    /// The group's avatar URL encrypted under the new conversation key,
-    /// base64: the `group_avatar_url` a group create's request sends. Set by
-    /// `prepare_group_create` when its params carry an avatar URL.
+    /// The group's description encrypted under the new conversation key,
+    /// base64, as the signed member add carries it. Set by
+    /// `prepare_group_members_change` when its params carry a description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub encrypted_avatar_url: Option<String>,
+    pub encrypted_description: Option<String>,
 }
 
-/// A signed group title, avatar, or description change, ready to send to
-/// the X API.
+/// A signed group title or description change, ready to send to the X API.
 ///
-/// Returned by `prepare_group_title_change`, `prepare_group_avatar_change`,
-/// and `prepare_group_description_change`, which encrypt the plaintext
-/// value under the conversation key before signing it.
+/// Returned by `prepare_group_title_change` and
+/// `prepare_group_description_change`, which encrypt the plaintext value
+/// under the conversation key before signing it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[non_exhaustive]
 pub struct PreparedGroupMetadataChange {
-    /// The value encrypted under the conversation key, base64: the title,
-    /// avatar URL, or description the request sends.
+    /// The value encrypted under the conversation key, base64: the title or
+    /// description the request sends.
     pub encrypted_value: String,
 
     /// Version of the conversation key the value is encrypted under.
@@ -1715,7 +1754,7 @@ pub struct PreparedGroupMetadataChange {
 ///
 /// Returned by `prepare_message_delete`, `prepare_mark_conversation_read`,
 /// and the group-action prepares other than `prepare_group_members_remove`
-/// and the title, avatar and description changes.
+/// and the title and description changes.
 /// `prepare_group_leave` returns one entry per signed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
@@ -1977,12 +2016,30 @@ mod tests {
             meta: EventMeta::default(),
             verified: true,
             change: GroupChange::TitleChanged {
-                new_title: "New Name".to_string(),
+                new_title: GroupText::Text {
+                    text: "New Name".to_string(),
+                },
             },
         });
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("TitleChanged"));
-        assert!(json.contains("New Name"));
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["change"]["change_type"], "TitleChanged");
+        assert_eq!(
+            json["change"]["new_title"],
+            serde_json::json!({ "kind": "Text", "text": "New Name" })
+        );
+
+        let unavailable = GroupText::Unavailable {
+            raw: "Old Name".to_string(),
+        };
+        let json = serde_json::to_value(&unavailable).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "kind": "Unavailable", "raw": "Old Name" })
+        );
+        assert_eq!(
+            serde_json::from_value::<GroupText>(json).unwrap(),
+            unavailable
+        );
     }
 
     #[test]
@@ -2086,11 +2143,31 @@ mod tests {
         assert_eq!(json["updatedText"], "fixed");
 
         let change = GroupChange::TitleChanged {
-            new_title: "New Name".to_string(),
+            new_title: GroupText::Text {
+                text: "New Name".to_string(),
+            },
         };
         let json = serde_json::to_value(JsGroupChange::from(change)).unwrap();
         assert_eq!(json["changeType"], "titleChanged");
-        assert_eq!(json["newTitle"], "New Name");
+        assert_eq!(
+            json["newTitle"],
+            serde_json::json!({ "kind": "text", "text": "New Name" })
+        );
+        let change = GroupChange::Created {
+            member_ids: vec!["1".to_string()],
+            admin_ids: vec!["1".to_string()],
+            title: Some(GroupText::Unavailable {
+                raw: "Old Name".to_string(),
+            }),
+            avatar_url: None,
+            conversation_key_version: Some("3".to_string()),
+        };
+        let json = serde_json::to_value(JsGroupChange::from(change)).unwrap();
+        assert_eq!(
+            json["title"],
+            serde_json::json!({ "kind": "unavailable", "raw": "Old Name" })
+        );
+        assert_eq!(json["conversationKeyVersion"], "3");
 
         let setting = SettingsChange::MessageDuration {
             ttl_msec: 30000,
@@ -2119,7 +2196,7 @@ mod tests {
             }],
             action_signatures: vec![],
             encrypted_title: None,
-            encrypted_avatar_url: None,
+            encrypted_description: None,
         }
     }
 
@@ -2136,14 +2213,17 @@ mod tests {
         );
         assert_eq!(json["conversation_key_version"], "5");
         assert!(json.get("encrypted_title").is_none());
-        assert!(json.get("encrypted_avatar_url").is_none());
+        assert!(json.get("encrypted_description").is_none());
 
-        let mut created = prepared_change();
-        created.encrypted_title = Some("ZW5jcnlwdGVkIHRpdGxl".to_string());
-        created.encrypted_avatar_url = Some("ZW5jcnlwdGVkIGF2YXRhcg==".to_string());
-        let json = serde_json::to_value(created).unwrap();
+        let mut added = prepared_change();
+        added.encrypted_title = Some("ZW5jcnlwdGVkIHRpdGxl".to_string());
+        added.encrypted_description = Some("ZW5jcnlwdGVkIGRlc2NyaXB0aW9u".to_string());
+        let json = serde_json::to_value(added).unwrap();
         assert_eq!(json["encrypted_title"], "ZW5jcnlwdGVkIHRpdGxl");
-        assert_eq!(json["encrypted_avatar_url"], "ZW5jcnlwdGVkIGF2YXRhcg==");
+        assert_eq!(
+            json["encrypted_description"],
+            "ZW5jcnlwdGVkIGRlc2NyaXB0aW9u"
+        );
     }
 
     #[cfg(feature = "js")]

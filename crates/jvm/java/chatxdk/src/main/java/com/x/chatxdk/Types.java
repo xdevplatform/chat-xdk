@@ -196,10 +196,10 @@ public final class Types {
     }
 
     /**
-     * A signed group title, avatar, or description change: the value encrypted
-     * under the conversation key and the {@code action_signatures} a request
-     * carries. Returned by {@link Chat#prepareGroupTitleChange},
-     * {@link Chat#prepareGroupAvatarChange}, and {@link Chat#prepareGroupDescriptionChange}.
+     * A signed group title or description change: the value encrypted under the
+     * conversation key and the {@code action_signatures} a request carries.
+     * Returned by {@link Chat#prepareGroupTitleChange} and
+     * {@link Chat#prepareGroupDescriptionChange}.
      */
     public static final class PreparedGroupMetadataChange {
         /** The value encrypted under the conversation key, base64: what the request sends. */
@@ -286,22 +286,24 @@ public final class Types {
         public List<ActionSignature> actionSignatures = Collections.emptyList();
 
         /**
-         * Set by {@link Chat#prepareGroupCreate} when the params carry a title: the
+         * Set by {@link Chat#prepareGroupCreate} and
+         * {@link Chat#prepareGroupMembersChange} when the params carry a title: the
          * title encrypted under the new conversation key, base64, the
-         * {@code group_name} the create request sends; otherwise {@code null}.
+         * {@code group_name} a create request sends and the {@code encrypted_title}
+         * an add-members request sends; otherwise {@code null}.
          */
         @JsonProperty("encrypted_title")
         @JsonInclude(JsonInclude.Include.NON_NULL)
         public String encryptedTitle;
 
         /**
-         * Set by {@link Chat#prepareGroupCreate} when the params carry an avatar URL:
-         * the avatar URL encrypted under the new conversation key, base64, the
-         * {@code group_avatar_url} the create request sends; otherwise {@code null}.
+         * Set by {@link Chat#prepareGroupMembersChange} when the params carry a
+         * description: the description encrypted under the new conversation key,
+         * base64, as the signed member add carries it; otherwise {@code null}.
          */
-        @JsonProperty("encrypted_avatar_url")
+        @JsonProperty("encrypted_description")
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        public String encryptedAvatarUrl;
+        public String encryptedDescription;
     }
 
     /**
@@ -348,6 +350,33 @@ public final class Types {
 
         /** String indices into the input batch for events that failed to decrypt. */
         public Map<String, String> errors = Collections.emptyMap();
+    }
+
+    /**
+     * A group title or description as a received group change carries it: the
+     * {@code title} of a {@code Created} change, the {@code new_title} of a
+     * {@code TitleChanged} one and the {@code new_description} of a
+     * {@code DescriptionChanged} one. A value converts from the decrypted event JSON with
+     * {@code new ObjectMapper().treeToValue(node, GroupText.class)}. {@code kind}
+     * {@code "Text"} carries {@link #text}: the value decrypted, or the plaintext an event
+     * that names no key version carries. {@code kind} {@code "Unavailable"} carries
+     * {@link #raw}: a value the SDK could not decrypt, as the event carries it. 0.5.x apps
+     * sent titles as plaintext while naming a key version, so show {@link #raw} when a title
+     * isn't decryptable.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static final class GroupText {
+        /** {@code "Text"} or {@code "Unavailable"}. */
+        @JsonProperty("kind")
+        public String kind;
+
+        /** The decrypted or plaintext value, for {@code "Text"}. */
+        @JsonProperty("text")
+        public String text;
+
+        /** The value as the event carries it, for {@code "Unavailable"}. */
+        @JsonProperty("raw")
+        public String raw;
     }
 
     /**
@@ -926,7 +955,12 @@ public final class Types {
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupMembersChange}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupMembersChange}. {@link #currentTitle} and
+     * {@link #currentDescription} are plaintext: the call encrypts each under the new
+     * conversation key it generates. {@link #currentAvatarUrl} is the avatar's media URL,
+     * signed as is.
+     */
     public static final class GroupMembersChangeParams {
         /** Public keys for the updated roster. */
         public final List<PublicKeyInput> publicKeys;
@@ -952,11 +986,14 @@ public final class Types {
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
-        /** Current conversation title, if any. */
+        /** Current conversation title, as plaintext, if any; the call encrypts it. */
         public String currentTitle;
 
-        /** Current conversation avatar URL, if any. */
+        /** Current conversation avatar media URL, if any. */
         public String currentAvatarUrl;
+
+        /** Current conversation description, as plaintext, if any; the call encrypts it. */
+        public String currentDescription;
 
         /** Current disappearing-message TTL in milliseconds, if any. */
         public Long currentTtlMsec;
@@ -990,7 +1027,10 @@ public final class Types {
         }
     }
 
-    /** Parameters for {@link Chat#prepareGroupCreate}. */
+    /**
+     * Parameters for {@link Chat#prepareGroupCreate}. A create sets no avatar; set it
+     * afterwards with {@link Chat#prepareGroupAvatarChange}.
+     */
     public static final class GroupCreateParams {
         /** Public keys for the new roster. */
         public final List<PublicKeyInput> publicKeys;
@@ -1012,9 +1052,6 @@ public final class Types {
 
         /** Group title, as plaintext, if any; the create encrypts it. */
         public String title;
-
-        /** Group avatar URL, as plaintext, if any; the create encrypts it. */
-        public String avatarUrl;
 
         /** Disappearing-message TTL in milliseconds, if any. */
         public Long ttlMsec;
@@ -1393,8 +1430,6 @@ public final class Types {
         public final List<String> userIds;
         /** The group's title, re-encrypted under the new conversation key; null leaves it out. */
         public String title;
-        /** The group's avatar URL, re-encrypted under the new conversation key; null leaves it out. */
-        public String avatarUrl;
         /** The group's description, re-encrypted under the new conversation key; null leaves it out. */
         public String description;
         /** User ID of the sender; resolves from the session identity when null. */
@@ -1451,27 +1486,27 @@ public final class Types {
     }
 
     /**
-     * Parameters for {@link Chat#prepareGroupAvatarChange}. {@code newAvatarUrl} is plaintext: the
-     * call encrypts it under the conversation key, {@link #conversationKey} /
-     * {@link #conversationKeyVersion} or, both null, the key cache.
+     * Parameters for {@link Chat#prepareGroupAvatarChange}. A group's avatar URL is not
+     * encrypted: {@code newAvatarUrl} is the media URL of the avatar image, which the app
+     * encrypts under the conversation key and uploads first.
      */
     public static final class GroupAvatarChangeParams {
         /** ID of the group conversation. */
         public final String conversationId;
-        /** The group's new avatar URL, as plaintext. */
+        /** The media URL of the group's new avatar image, signed and sent as is. */
         public final String newAvatarUrl;
+        /** Version of the conversation key the avatar image is encrypted under. */
+        public final String conversationKeyVersion;
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
-        /** Raw 32-byte conversation key; resolves from the key cache when null. */
-        public byte[] conversationKey;
-        /** Version of the conversation key; resolves from the key cache when null. */
-        public String conversationKeyVersion;
 
-        public GroupAvatarChangeParams(String conversationId, String newAvatarUrl) {
+        public GroupAvatarChangeParams(
+                String conversationId, String newAvatarUrl, String conversationKeyVersion) {
             this.conversationId = conversationId;
             this.newAvatarUrl = newAvatarUrl;
+            this.conversationKeyVersion = conversationKeyVersion;
         }
     }
 

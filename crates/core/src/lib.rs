@@ -205,6 +205,7 @@ pub mod js {
         JsFailureType,
         JsGroupChange,
         JsGroupChangeEvent,
+        JsGroupText,
         JsKeyChangeEvent,
         JsMarkedUnreadEvent,
         JsMediaAttachmentInfo,

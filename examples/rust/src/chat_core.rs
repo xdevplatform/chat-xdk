@@ -419,8 +419,8 @@ impl ChatCore {
         )
     }
 
-    /// Decrypt a group title, avatar URL, or description the X API returns
-    /// for a conversation.
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation.
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,

@@ -782,6 +782,48 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(add["encoded_message_event_detail"])
         # Unset screen-capture blocking signs as the trailing null sentinel.
         self.assertTrue(add["signature_payload"].endswith(",null"))
+        # The title goes out encrypted under the new key, the value the
+        # request sends as encrypted_title; the signature covers the ciphertext.
+        encrypted_title = result["encrypted_title"]
+        self.assertNotIn("Team", add["signature_payload"])
+        self.assertIn(encrypted_title, add["signature_payload"])
+        self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
+        self.assertNotIn("encrypted_description", result)
+        self.assertEqual(add["message_event_signature"]["signature_version"], "7")
+
+    def test_prepare_group_members_change_encrypts_the_description(self):
+        from chat_xdk import GroupMembersChangeParams
+
+        chat, v = self._unlocked_chat()
+        public_keys = [
+            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+        ]
+        avatar_url = "https://ton.x.com/xchat_media/g123/avatar"
+        result = chat.prepare_group_members_change(
+            GroupMembersChangeParams(
+                public_keys,
+                "g123",
+                ["910009"],
+                ["910002"],
+                ["910002"],
+                [],
+                sender_id="910002",
+                signing_key_version="1",
+                current_title="Team",
+                current_description="Ships the app",
+                current_avatar_url=avatar_url,
+            )
+        )
+        add = result["action_signatures"][1]
+        encrypted_description = result["encrypted_description"]
+        self.assertEqual(
+            chat.decrypt(encrypted_description, result["conversation_key"]), "Ships the app"
+        )
+        # The description is signed at version 8, after the screen-capture
+        # slot; the avatar URL is signed as passed.
+        self.assertEqual(add["message_event_signature"]["signature_version"], "8")
+        self.assertTrue(add["signature_payload"].endswith(f",null,{encrypted_description}"))
+        self.assertIn(f",{avatar_url},", add["signature_payload"])
 
     def test_prepare_group_members_change_screen_capture_blocking(self):
         from chat_xdk import GroupMembersChangeParams
@@ -853,7 +895,7 @@ class TestApiShapes(unittest.TestCase):
         self.assertNotIn("Team", create["signature_payload"])
         self.assertIn(encrypted_title, create["signature_payload"])
         self.assertEqual(chat.decrypt(encrypted_title, result["conversation_key"]), "Team")
-        self.assertNotIn("encrypted_avatar_url", result)
+        self.assertNotIn("encrypted_description", result)
 
     def test_prepare_group_create_encrypts_a_title_with_a_comma(self):
         from chat_xdk import GroupCreateParams
@@ -871,14 +913,10 @@ class TestApiShapes(unittest.TestCase):
                 sender_id="910002",
                 signing_key_version="1",
                 title="Team, the sequel",
-                avatar_url="https://img.example/a.png",
             )
         )
         key = result["conversation_key"]
         self.assertEqual(chat.decrypt(result["encrypted_title"], key), "Team, the sequel")
-        self.assertEqual(
-            chat.decrypt(result["encrypted_avatar_url"], key), "https://img.example/a.png"
-        )
 
     def test_prepare_group_create_empty_title_signs_as_omitted(self):
         from chat_xdk import GroupCreateParams
@@ -899,7 +937,6 @@ class TestApiShapes(unittest.TestCase):
                 sender_id="910002",
                 signing_key_version="1",
                 title="",
-                avatar_url="",
             )
         )
         omitted = chat.prepare_group_create(
@@ -916,10 +953,9 @@ class TestApiShapes(unittest.TestCase):
             payload = result["action_signatures"][1]["signature_payload"]
             self.assertTrue(
                 payload.endswith(",null,null,null"),
-                f"title/avatar must sign as the null sentinel, got: {payload}",
+                f"the title and avatar must sign as the null sentinel, got: {payload}",
             )
             self.assertNotIn("encrypted_title", result)
-            self.assertNotIn("encrypted_avatar_url", result)
 
     def test_group_actions_sign_the_verifier_payloads(self):
         from chat_xdk import (
@@ -1002,13 +1038,6 @@ class TestApiShapes(unittest.TestCase):
                 "Board: layoffs, Q3",
             ),
             (
-                chat.prepare_group_avatar_change(
-                    GroupAvatarChangeParams("g100", "https://img/a.png", **key, **ident)
-                ),
-                "GroupChangeEvent.GroupAvatarUrlChange,",
-                "https://img/a.png",
-            ),
-            (
                 chat.prepare_group_description_change(
                     GroupDescriptionChangeParams("g100", "Rules: be kind", **key, **ident)
                 ),
@@ -1026,6 +1055,14 @@ class TestApiShapes(unittest.TestCase):
             self.assertTrue(payload.endswith(f",4,{prepared['encrypted_value']}"), payload)
             self.assertNotIn(plaintext, payload)
             self.assertEqual(chat.decrypt(prepared["encrypted_value"], conv_key), plaintext)
+        avatar_url = "https://ton.x.com/xchat_media/g100/avatar"
+        avatar = chat.prepare_group_avatar_change(
+            GroupAvatarChangeParams("g100", avatar_url, "4", **ident)
+        )
+        self.assertEqual(set(avatar), {"action_signatures"})
+        payload = avatar["action_signatures"][0]["signature_payload"]
+        self.assertTrue(payload.startswith("GroupChangeEvent.GroupAvatarUrlChange,"), payload)
+        self.assertTrue(payload.endswith(f",4,{avatar_url}"), payload)
         with self.assertRaises(ValueError) as raised:
             chat.prepare_group_title_change(GroupTitleChangeParams("g100", "Board", **ident))
         self.assertIn("no cached conversation key for 'g100'", str(raised.exception))

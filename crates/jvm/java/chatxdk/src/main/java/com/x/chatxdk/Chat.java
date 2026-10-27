@@ -542,6 +542,10 @@ public final class Chat implements AutoCloseable {
      * {@link #prepareConversationKeyChange}.
      *
      * <p>Emits two action signatures: a conversation-key change and the member add.
+     * The current title and description are plaintext: the call encrypts each under the
+     * new conversation key, signs the ciphertext, and returns it as
+     * {@code encryptedTitle} and {@code encryptedDescription}. The current avatar URL is
+     * signed as is.
      */
     public PreparedConversationChange prepareGroupMembersChange(GroupMembersChangeParams parameters)
             throws Exception {
@@ -560,10 +564,10 @@ public final class Chat implements AutoCloseable {
      * {@link #prepareGroupMembersChange}.
      *
      * <p>Emits two action signatures: a conversation-key change and the group create.
-     * The title and avatar URL are plaintext: the call encrypts each under the new
-     * conversation key, signs the ciphertext, and returns it as
-     * {@code encryptedTitle} and {@code encryptedAvatarUrl}, the {@code group_name}
-     * and {@code group_avatar_url} the create request sends.
+     * The title is plaintext: the call encrypts it under the new conversation key,
+     * signs the ciphertext, and returns it as {@code encryptedTitle}, the
+     * {@code group_name} the create request sends. A create sets no avatar; set it
+     * afterwards with {@link #prepareGroupAvatarChange}.
      */
     public PreparedConversationChange prepareGroupCreate(GroupCreateParams parameters)
             throws Exception {
@@ -615,8 +619,9 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Sign a group member removal and rotate the conversation key for the members
-     * who stay ({@code publicKeys}). The result carries the new key and two action
-     * signatures: the removal and the conversation-key change.
+     * who stay ({@code publicKeys}). The result carries the new key and the action
+     * signatures: the removal, a title and a description change for each one the
+     * params set, re-encrypted under the new key, and the conversation-key change.
      */
     public PreparedConversationChange prepareGroupMembersRemove(GroupMembersRemoveParams parameters)
             throws Exception {
@@ -642,11 +647,14 @@ public final class Chat implements AutoCloseable {
                 ChatNative.INSTANCE::chat_xdk_prepare_group_title_change);
     }
 
-    /** Encrypt a new group avatar URL under the conversation key and sign the change. */
-    public PreparedGroupMetadataChange prepareGroupAvatarChange(GroupAvatarChangeParams parameters)
+    /**
+     * Sign a group avatar change: the avatar image's media URL, as is, and the version of
+     * the key the image is encrypted under.
+     */
+    public PreparedAction prepareGroupAvatarChange(GroupAvatarChangeParams parameters)
             throws Exception {
         throwIfDisposed();
-        return callMetadataChange(
+        return callAction(
                 buildPrepareGroupAvatarChangeJson(parameters),
                 ChatNative.INSTANCE::chat_xdk_prepare_group_avatar_change);
     }
@@ -761,10 +769,9 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Decrypt a group title, avatar URL, or description the X API returns for a
-     * conversation (base64 ciphertext) with the raw 32-byte conversation key. Group
-     * changes in events need no call of their own: {@link #decryptEvent} returns them
-     * decrypted.
+     * Decrypt a group title or description the X API returns for a conversation
+     * (base64 ciphertext) with the raw 32-byte conversation key. Group changes in
+     * events need no call of their own: {@link #decryptEvent} returns them decrypted.
      */
     public String decrypt(String ciphertextB64, byte[] conversationKey) {
         throwIfDisposed();
@@ -1260,9 +1267,6 @@ public final class Chat implements AutoCloseable {
         if (p.title != null) {
             n.put("title", p.title);
         }
-        if (p.avatarUrl != null) {
-            n.put("avatar_url", p.avatarUrl);
-        }
         if (p.description != null) {
             n.put("description", p.description);
         }
@@ -1295,7 +1299,8 @@ public final class Chat implements AutoCloseable {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
         n.put("new_avatar_url", p.newAvatarUrl);
-        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        n.put("conversation_key_version", p.conversationKeyVersion);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 
@@ -1432,6 +1437,9 @@ public final class Chat implements AutoCloseable {
         if (p.currentAvatarUrl != null) {
             n.put("current_avatar_url", p.currentAvatarUrl);
         }
+        if (p.currentDescription != null) {
+            n.put("current_description", p.currentDescription);
+        }
         if (p.currentTtlMsec != null) {
             n.put("current_ttl_msec", p.currentTtlMsec);
         }
@@ -1452,9 +1460,6 @@ public final class Chat implements AutoCloseable {
         n.set("admin_ids", ChatJson.MAPPER.valueToTree(p.adminIds == null ? List.of() : p.adminIds));
         if (p.title != null) {
             n.put("title", p.title);
-        }
-        if (p.avatarUrl != null) {
-            n.put("avatar_url", p.avatarUrl);
         }
         if (p.ttlMsec != null) {
             n.put("ttl_msec", p.ttlMsec);

@@ -613,6 +613,11 @@ namespace ChatXdk
         /// <see cref="PrepareGroupCreate"/>; a key rotation without a roster change is
         /// <see cref="PrepareConversationKeyChange"/>.
         /// Emits two action signatures: a conversation-key change and the member add.
+        /// The current title and description are plaintext: the call encrypts each under the
+        /// new conversation key, signs the ciphertext, and returns it as
+        /// <see cref="PreparedConversationChange.EncryptedTitle"/> and
+        /// <see cref="PreparedConversationChange.EncryptedDescription"/>. The current avatar URL
+        /// is signed as is.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersChange(GroupMembersChangeParams parameters)
         {
@@ -629,11 +634,10 @@ namespace ChatXdk
         /// <see cref="PrepareConversationKeyChange"/>; roster additions use
         /// <see cref="PrepareGroupMembersChange"/>.
         /// Emits two action signatures: a conversation-key change and the group create.
-        /// The title and avatar URL are plaintext: the call encrypts each under the new
-        /// conversation key, signs the ciphertext, and returns it as
-        /// <see cref="PreparedConversationChange.EncryptedTitle"/> and
-        /// <see cref="PreparedConversationChange.EncryptedAvatarUrl"/>, the <c>group_name</c>
-        /// and <c>group_avatar_url</c> the create request sends.
+        /// The title is plaintext: the call encrypts it under the new conversation key, signs
+        /// the ciphertext, and returns it as <see cref="PreparedConversationChange.EncryptedTitle"/>,
+        /// the <c>group_name</c> the create request sends. A create sets no avatar; set it
+        /// afterwards with <see cref="PrepareGroupAvatarChange"/>.
         /// </summary>
         public PreparedConversationChange PrepareGroupCreate(GroupCreateParams parameters)
         {
@@ -682,8 +686,9 @@ namespace ChatXdk
 
         /// <summary>
         /// Sign a group member removal and rotate the conversation key for the members who
-        /// stay (<c>PublicKeys</c>). The result carries the new key and two action
-        /// signatures: the removal and the conversation-key change.
+        /// stay (<c>PublicKeys</c>). The result carries the new key and the action signatures:
+        /// the removal, a title and a description change for each one the params set,
+        /// re-encrypted under the new key, and the conversation-key change.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersRemove(GroupMembersRemoveParams parameters)
         {
@@ -701,9 +706,12 @@ namespace ChatXdk
         public PreparedGroupMetadataChange PrepareGroupTitleChange(GroupTitleChangeParams parameters)
             => CallMetadataChange(BuildPrepareGroupTitleChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_title_change);
 
-        /// <summary>Encrypt a new group avatar URL under the conversation key and sign the change.</summary>
-        public PreparedGroupMetadataChange PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
-            => CallMetadataChange(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
+        /// <summary>
+        /// Sign a group avatar change: the avatar image's media URL, as is, and the version of
+        /// the key the image is encrypted under.
+        /// </summary>
+        public PreparedAction PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
+            => CallAction(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
 
         /// <summary>Encrypt a new group description under the conversation key and sign the change.</summary>
         public PreparedGroupMetadataChange PrepareGroupDescriptionChange(GroupDescriptionChangeParams parameters)
@@ -780,9 +788,9 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Decrypt a group title, avatar URL, or description the X API returns for a conversation
-        /// (base64 ciphertext) with the raw 32-byte conversation key. Group changes in events need
-        /// no call of their own: <see cref="DecryptEvent"/> returns them decrypted.
+        /// Decrypt a group title or description the X API returns for a conversation (base64
+        /// ciphertext) with the raw 32-byte conversation key. Group changes in events need no
+        /// call of their own: <see cref="DecryptEvent"/> returns them decrypted.
         /// </summary>
         public string Decrypt(string ciphertextB64, byte[] conversationKey)
         {
@@ -1234,7 +1242,6 @@ namespace ChatXdk
                 ["conversation_id"] = p.ConversationId,
                 ["user_ids"] = p.UserIds,
                 ["title"] = p.Title,
-                ["avatar_url"] = p.AvatarUrl,
                 ["description"] = p.Description,
             }, p.SenderId, p.SigningKeyVersion);
         }
@@ -1266,7 +1273,6 @@ namespace ChatXdk
             {
                 ["conversation_id"] = p.ConversationId,
                 ["new_avatar_url"] = p.NewAvatarUrl,
-                ["conversation_key"] = p.ConversationKey is null ? null : Convert.ToBase64String(p.ConversationKey),
                 ["conversation_key_version"] = p.ConversationKeyVersion,
             }, p.SenderId, p.SigningKeyVersion);
         }
@@ -1403,6 +1409,7 @@ namespace ChatXdk
                 ["current_pending_member_ids"] = p.CurrentPendingMemberIds,
                 ["current_title"] = p.CurrentTitle,
                 ["current_avatar_url"] = p.CurrentAvatarUrl,
+                ["current_description"] = p.CurrentDescription,
                 ["current_ttl_msec"] = p.CurrentTtlMsec,
                 // An unset value serializes as JSON null (WhenWritingNull does
                 // not apply to dictionary entries), which the FFI reads as
@@ -1423,7 +1430,6 @@ namespace ChatXdk
                 ["member_ids"] = p.MemberIds,
                 ["admin_ids"] = p.AdminIds,
                 ["title"] = p.Title,
-                ["avatar_url"] = p.AvatarUrl,
                 ["ttl_msec"] = p.TtlMsec,
             };
             return JsonSerializer.Serialize(dict, JsonOpts);

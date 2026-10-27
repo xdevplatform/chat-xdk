@@ -701,8 +701,10 @@ impl Chat {
     /// members who stay.
     ///
     /// `publicKeys` are the identity keys of the members who stay. The
-    /// result carries the new key and two action signatures: the removal,
-    /// bound to the new key version, and the key change.
+    /// result carries the new key and the action signatures: the removal,
+    /// bound to the new key version, a title and a description change for
+    /// each one the params set, re-encrypted under the new key, and the key
+    /// change.
     #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
     pub fn prepare_group_members_remove(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupMembersRemoveParams = from_js_params("prepareGroupMembersRemove", params)?;
@@ -732,12 +734,13 @@ impl Chat {
         self.prepare_metadata_change(self.inner.prepare_group_title_change(&p.into_core()))
     }
 
-    /// Encrypt a new group avatar URL under the conversation key and sign
-    /// the change; shaped as `prepareGroupTitleChange`.
+    /// Sign a group avatar change: `newAvatarUrl`, the avatar image's media
+    /// URL, as is, and `conversationKeyVersion`, the version of the key the
+    /// image is encrypted under. Returns `{ actionSignatures }`.
     #[wasm_bindgen(js_name = prepareGroupAvatarChange)]
     pub fn prepare_group_avatar_change(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupAvatarChangeParams = from_js_params("prepareGroupAvatarChange", params)?;
-        self.prepare_metadata_change(self.inner.prepare_group_avatar_change(&p.into_core()))
+        self.prepare_action(self.inner.prepare_group_avatar_change(&p.into_core()))
     }
 
     /// Encrypt a new group description under the conversation key and sign
@@ -920,9 +923,9 @@ impl Chat {
         Ok(FileDecryptor { inner })
     }
 
-    /// Decrypt a group title, avatar URL, or description the X API returns
-    /// for a conversation. Group changes in events need no call of their
-    /// own: `decryptEvent` returns them decrypted.
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation. Group changes in events need no call of their own:
+    /// `decryptEvent` returns them decrypted.
     #[wasm_bindgen(js_name = decrypt)]
     pub fn decrypt(
         &self,
@@ -972,9 +975,13 @@ impl Chat {
     /// the updated roster), `conversationId`, `newMemberIds`,
     /// `currentMemberIds`, `currentAdminIds`, `currentPendingMemberIds`,
     /// plus optional `senderId` / `signingKeyVersion` (resolved from the
-    /// session identity when omitted), `currentTitle`, `currentAvatarUrl`,
+    /// session identity when omitted), `currentTitle` and
+    /// `currentDescription` (plaintext, encrypted under the new conversation
+    /// key), `currentAvatarUrl` (the avatar's media URL, signed as is),
     /// `currentTtlMsec`, and `currentScreenCaptureBlockingEnabled`. Returns
-    /// the same shape as [`Chat::prepare_conversation_key_change`].
+    /// the same shape as [`Chat::prepare_conversation_key_change`], plus
+    /// `encryptedTitle` and `encryptedDescription` for a title and
+    /// description the params set.
     #[wasm_bindgen(js_name = prepareGroupMembersChange)]
     pub fn prepare_group_members_change(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupMembersChangeParams = from_js_params("prepareGroupMembersChange", params)?;
@@ -990,6 +997,7 @@ impl Chat {
         core_params.signing_key_version = p.signing_key_version;
         core_params.current_title = p.current_title;
         core_params.current_avatar_url = p.current_avatar_url;
+        core_params.current_description = p.current_description;
         core_params.current_ttl_msec = p.current_ttl_msec.map(|t| t as i64);
         core_params.current_screen_capture_blocking_enabled =
             p.current_screen_capture_blocking_enabled;
@@ -1007,12 +1015,12 @@ impl Chat {
     /// Takes a single params object with camelCase keys: `publicKeys` (for
     /// the new roster), `conversationId`, `memberIds`, `adminIds`, plus
     /// optional `senderId` / `signingKeyVersion` (resolved from the session
-    /// identity when omitted), `title` and `avatarUrl` (plaintext, encrypted
-    /// under the new conversation key), and `ttlMsec`. Emits two action
-    /// signatures (a conversation-key change and the group create). Returns
-    /// the same shape as [`Chat::prepare_conversation_key_change`], plus
-    /// `encryptedTitle` and `encryptedAvatarUrl` for a title and avatar URL
-    /// the params set.
+    /// identity when omitted), `title` (plaintext, encrypted under the new
+    /// conversation key), and `ttlMsec`. Emits two action signatures (a
+    /// conversation-key change and the group create). Returns the same
+    /// shape as [`Chat::prepare_conversation_key_change`], plus
+    /// `encryptedTitle` for a title the params set. A create sets no avatar;
+    /// set it afterwards with `prepareGroupAvatarChange`.
     #[wasm_bindgen(js_name = prepareGroupCreate)]
     pub fn prepare_group_create(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsGroupCreateParams = from_js_params("prepareGroupCreate", params)?;
@@ -1025,7 +1033,6 @@ impl Chat {
         core_params.sender_id = p.sender_id;
         core_params.signing_key_version = p.signing_key_version;
         core_params.title = p.title;
-        core_params.avatar_url = p.avatar_url;
         core_params.ttl_msec = p.ttl_msec.map(|t| t as i64);
 
         let result = self
@@ -1113,7 +1120,7 @@ fn prepared_change_to_js(
     .map_err(|_| JsError::new("Failed to set conversationKeyVersion"))?;
     for (name, value) in [
         ("encryptedTitle", &result.encrypted_title),
-        ("encryptedAvatarUrl", &result.encrypted_avatar_url),
+        ("encryptedDescription", &result.encrypted_description),
     ] {
         if let Some(value) = value {
             js_sys::Reflect::set(&obj, &name.into(), &JsValue::from_str(value))
@@ -1486,7 +1493,6 @@ struct JsGroupMembersRemoveParams {
     conversation_id: String,
     user_ids: Vec<String>,
     title: Option<String>,
-    avatar_url: Option<String>,
     description: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
@@ -1500,7 +1506,6 @@ impl JsGroupMembersRemoveParams {
             self.user_ids,
         );
         params.title = self.title;
-        params.avatar_url = self.avatar_url;
         params.description = self.description;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
@@ -1557,20 +1562,20 @@ impl JsGroupTitleChangeParams {
 struct JsGroupAvatarChangeParams {
     conversation_id: String,
     new_avatar_url: String,
+    conversation_key_version: String,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
-    conversation_key: Option<Vec<u8>>,
-    conversation_key_version: Option<String>,
 }
 
 impl JsGroupAvatarChangeParams {
     fn into_core(self) -> chat_xdk_core::GroupAvatarChangeParams {
-        let mut params =
-            chat_xdk_core::GroupAvatarChangeParams::new(self.conversation_id, self.new_avatar_url);
+        let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
+            self.conversation_id,
+            self.new_avatar_url,
+            self.conversation_key_version,
+        );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
-        params.conversation_key = self.conversation_key;
-        params.conversation_key_version = self.conversation_key_version;
         params
     }
 }
@@ -1799,6 +1804,7 @@ struct JsGroupMembersChangeParams {
     signing_key_version: Option<String>,
     current_title: Option<String>,
     current_avatar_url: Option<String>,
+    current_description: Option<String>,
     current_ttl_msec: Option<f64>,
     current_screen_capture_blocking_enabled: Option<bool>,
 }
@@ -1813,7 +1819,6 @@ struct JsGroupCreateParams {
     sender_id: Option<String>,
     signing_key_version: Option<String>,
     title: Option<String>,
-    avatar_url: Option<String>,
     ttl_msec: Option<f64>,
 }
 

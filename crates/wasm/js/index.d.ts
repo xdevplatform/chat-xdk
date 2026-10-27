@@ -110,8 +110,8 @@ export interface PreparedAction {
 }
 
 /**
- * A signed group title, avatar, or description change: the value encrypted
- * under the conversation key and the `actionSignatures` a request carries.
+ * A signed group title or description change: the value encrypted under the
+ * conversation key and the `actionSignatures` a request carries.
  */
 export interface PreparedGroupMetadataChange {
   /** The value encrypted under the conversation key, base64: what the request sends. */
@@ -232,17 +232,18 @@ export interface PreparedConversationChange {
   /** Action signatures authenticating the change, ready to POST to the API. */
   actionSignatures: ActionSignature[];
   /**
-   * prepareGroupCreate only, when the params set a title: the title encrypted
-   * under the new conversation key, base64 — the `group_name` the create
-   * request sends.
+   * prepareGroupCreate and prepareGroupMembersChange, when the params set a
+   * title: the title encrypted under the new conversation key, base64 — the
+   * `group_name` a create request sends, and the `encrypted_title` an
+   * add-members request sends.
    */
   encryptedTitle?: string;
   /**
-   * prepareGroupCreate only, when the params set an avatar URL: the avatar URL
-   * encrypted under the new conversation key, base64 — the `group_avatar_url`
-   * the create request sends.
+   * prepareGroupMembersChange only, when the params set a description: the
+   * description encrypted under the new conversation key, base64, as the
+   * signed member add carries it.
    */
-  encryptedAvatarUrl?: string;
+  encryptedDescription?: string;
 }
 
 /**
@@ -532,8 +533,6 @@ export interface GroupMembersRemoveParams {
   userIds: string[];
   /** The group's title, re-encrypted under the new conversation key and signed with the removal. */
   title?: string | null;
-  /** The group's avatar URL, re-encrypted under the new conversation key and signed with the removal. */
-  avatarUrl?: string | null;
   /** The group's description, re-encrypted under the new conversation key and signed with the removal. */
   description?: string | null;
   /** User ID of the sender; resolves from the session identity when omitted. */
@@ -577,23 +576,21 @@ export interface GroupTitleChangeParams {
 }
 
 /**
- * Parameters for prepareGroupAvatarChange. `newAvatarUrl` is plaintext: the SDK encrypts it under
- * the conversation key — `conversationKey` / `conversationKeyVersion`, or
- * the key cache when both are omitted.
+ * Parameters for prepareGroupAvatarChange. A group's avatar URL is not
+ * encrypted: `newAvatarUrl` is the media URL of the avatar image, which the
+ * app encrypts under the conversation key and uploads first.
  */
 export interface GroupAvatarChangeParams {
   /** ID of the group conversation. */
   conversationId: string;
-  /** The group's new avatar URL, as plaintext. */
+  /** The media URL of the group's new avatar image, signed and sent as is. */
   newAvatarUrl: string;
+  /** Version of the conversation key the avatar image is encrypted under. */
+  conversationKeyVersion: string;
   /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
   /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
-  /** Raw 32-byte conversation key; resolves from the key cache when omitted. */
-  conversationKey?: Uint8Array | null;
-  /** Version of the conversation key; resolves from the key cache when omitted. */
-  conversationKeyVersion?: string | null;
 }
 
 /**
@@ -717,8 +714,10 @@ export interface ConversationKeyChangeParams {
  * Parameters for prepareGroupMembersChange.
  *
  * The current* fields snapshot the group state the change is made against.
- * An unset optional signs the null sentinel, so every binding produces
- * identical signed bytes.
+ * `currentTitle` and `currentDescription` are plaintext: the call encrypts
+ * each under the new conversation key it generates and signs the
+ * ciphertext. An unset optional signs the null sentinel, so every binding
+ * produces identical signed bytes.
  */
 export interface GroupMembersChangeParams {
   /** Identity public keys for every participant of the updated roster. */
@@ -737,10 +736,12 @@ export interface GroupMembersChangeParams {
   senderId?: string | null;
   /** Version of the signing key used to sign the change; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
-  /** The group's current title, if set. */
+  /** The group's current title, as plaintext, if set. */
   currentTitle?: string | null;
-  /** The group's current avatar URL, if set. */
+  /** The group's current avatar media URL, if set; signed as is. */
   currentAvatarUrl?: string | null;
+  /** The group's current description, as plaintext, if set. */
+  currentDescription?: string | null;
   /** The group's current message TTL in milliseconds, if set. */
   currentTtlMsec?: number | null;
   /** The group's current screen-capture-blocking state; omit when unset. */
@@ -750,9 +751,10 @@ export interface GroupMembersChangeParams {
 /**
  * Parameters for prepareGroupCreate.
  *
- * `title` and `avatarUrl` are plaintext: the create encrypts each under the
- * new conversation key and signs the ciphertext. An unset optional signs the
- * null sentinel, so every binding produces identical signed bytes.
+ * `title` is plaintext: the create encrypts it under the new conversation
+ * key and signs the ciphertext. A create sets no avatar; set it afterwards
+ * with prepareGroupAvatarChange. An unset optional signs the null sentinel,
+ * so every binding produces identical signed bytes.
  */
 export interface GroupCreateParams {
   /** Identity public keys for every participant of the new group. */
@@ -769,8 +771,6 @@ export interface GroupCreateParams {
   signingKeyVersion?: string | null;
   /** The group's title, as plaintext, if set. */
   title?: string | null;
-  /** The group's avatar URL, as plaintext, if set. */
-  avatarUrl?: string | null;
   /** The group's message TTL in milliseconds, if set. */
   ttlMsec?: number | null;
 }
@@ -1003,6 +1003,17 @@ export interface Event {
   /** Index signature for additional event-specific fields. */
   [key: string]: any;
 }
+
+/**
+ * A group title or description as a received groupChange event carries it:
+ * the `title` of a 'created' change, the `newTitle` of a 'titleChanged' one
+ * and the `newDescription` of a 'descriptionChanged' one. 'text' carries the
+ * value decrypted, or the plaintext an event that names no key version
+ * carries. 'unavailable' carries `raw`, a value the SDK could not decrypt, as
+ * the event carries it. 0.5.x apps sent titles as plaintext while naming a
+ * key version, so show `raw` when a title isn't decryptable.
+ */
+export type GroupText = { kind: 'text'; text: string } | { kind: 'unavailable'; raw: string };
 
 /**
  * Decrypted message content. Permissive convenience shape: `contentType`
@@ -1347,8 +1358,8 @@ interface ChatCrypto {
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
 
   /**
-   * Decrypt a group title, avatar URL, or description the X API returns for
-   * a conversation. Group changes in events need no call of their own:
+   * Decrypt a group title or description the X API returns for a
+   * conversation. Group changes in events need no call of their own:
    * decryptEvent returns them decrypted.
    */
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
@@ -1377,8 +1388,12 @@ interface ChatCrypto {
    * prepareGroupCreate; a key rotation without a roster change is
    * prepareConversationKeyChange.
    *
-   * @returns PreparedConversationChange with two action signatures: the
-   * conversation-key change and the member add
+   * `currentTitle` and `currentDescription` are plaintext: the call encrypts
+   * each under the new conversation key and signs the ciphertext.
+   *
+   * @returns PreparedConversationChange with two action signatures (the
+   * conversation-key change and the member add), and `encryptedTitle` and
+   * `encryptedDescription` for a title and description the params set
    */
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
 
@@ -1390,13 +1405,13 @@ interface ChatCrypto {
    * prepareConversationKeyChange; roster additions use
    * prepareGroupMembersChange.
    *
-   * `title` and `avatarUrl` are plaintext: the call encrypts each under the
-   * new conversation key and signs the ciphertext.
+   * `title` is plaintext: the call encrypts it under the new conversation key
+   * and signs the ciphertext. A create sets no avatar; set it afterwards with
+   * prepareGroupAvatarChange.
    *
    * @returns PreparedConversationChange with two action signatures (the
-   * conversation-key change and the group create), and `encryptedTitle` and
-   * `encryptedAvatarUrl` for a title and avatar URL the params set: the
-   * `group_name` and `group_avatar_url` the create request sends
+   * conversation-key change and the group create), and `encryptedTitle` for a
+   * title the params set: the `group_name` the create request sends
    */
   prepareGroupCreate(params: GroupCreateParams): PreparedConversationChange;
 
@@ -1404,8 +1419,10 @@ interface ChatCrypto {
    * Sign a group member removal and rotate the conversation key for the
    * members who stay (`publicKeys`).
    *
-   * @returns PreparedConversationChange with the new key and two action
-   * signatures: the removal and the conversation-key change
+   * @returns PreparedConversationChange with the new key and the action
+   * signatures: the removal, a title and a description change for each one
+   * the params set, re-encrypted under the new key, and the conversation-key
+   * change
    */
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
 
@@ -1415,8 +1432,11 @@ interface ChatCrypto {
   /** Encrypt a new group title under the conversation key and sign the change. */
   prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
 
-  /** Encrypt a new group avatar URL under the conversation key and sign the change. */
-  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedGroupMetadataChange;
+  /**
+   * Sign a group avatar change: the avatar image's media URL, as is, and the
+   * version of the key the image is encrypted under.
+   */
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
 
   /** Encrypt a new group description under the conversation key and sign the change. */
   prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
@@ -1497,7 +1517,7 @@ declare class Chat implements ChatCrypto {
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
   prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
-  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedGroupMetadataChange;
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
   prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
   prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;
@@ -1579,7 +1599,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareGroupMembersRemove(params: GroupMembersRemoveParams): PreparedConversationChange;
   prepareGroupLeave(params: GroupLeaveParams): PreparedAction;
   prepareGroupTitleChange(params: GroupTitleChangeParams): PreparedGroupMetadataChange;
-  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedGroupMetadataChange;
+  prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
   prepareGroupDescriptionChange(params: GroupDescriptionChangeParams): PreparedGroupMetadataChange;
   prepareGroupAdminsAdd(params: GroupAdminsAddParams): PreparedAction;
   prepareGroupAdminsRemove(params: GroupAdminsRemoveParams): PreparedAction;

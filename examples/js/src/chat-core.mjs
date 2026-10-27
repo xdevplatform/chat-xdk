@@ -383,7 +383,7 @@ export class ChatCore {
     });
   }
 
-  /** Decrypt a group title, avatar URL, or description the X API returns. */
+  /** Decrypt a group title or description the X API returns. */
   decrypt(ciphertextB64, conversationKey) {
     return this.#chat.decrypt(ciphertextB64, conversationKey);
   }

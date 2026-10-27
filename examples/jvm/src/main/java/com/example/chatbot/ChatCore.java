@@ -347,7 +347,7 @@ public final class ChatCore implements AutoCloseable {
         return chat.prepareGroupTitleChange(params);
     }
 
-    /** Decrypt a group title, avatar URL, or description the X API returns. */
+    /** Decrypt a group title or description the X API returns. */
     public String decrypt(String ciphertextB64, byte[] conversationKey) {
         return chat.decrypt(ciphertextB64, conversationKey);
     }

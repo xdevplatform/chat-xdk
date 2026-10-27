@@ -663,15 +663,17 @@ class ChatTest {
             assertFalse(titlePayload.contains("Board: layoffs, Q3"), titlePayload);
             assertEquals("Board: layoffs, Q3", chat.decrypt(title.encryptedValue, rotated.conversationKey));
 
-            GroupAvatarChangeParams avatarParams = new GroupAvatarChangeParams("g100", "https://img/a.png");
+            String avatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
+            GroupAvatarChangeParams avatarParams =
+                    new GroupAvatarChangeParams("g100", avatarUrl, rotated.conversationKeyVersion);
             avatarParams.senderId = "111";
             avatarParams.signingKeyVersion = "1";
-            avatarParams.conversationKey = rotated.conversationKey;
-            avatarParams.conversationKeyVersion = rotated.conversationKeyVersion;
-            PreparedGroupMetadataChange avatar = chat.prepareGroupAvatarChange(avatarParams);
-            assertTrue(avatar.actionSignatures.get(0).signaturePayload.startsWith(
-                    "GroupChangeEvent.GroupAvatarUrlChange,"));
-            assertEquals("https://img/a.png", chat.decrypt(avatar.encryptedValue, rotated.conversationKey));
+            PreparedAction avatar = chat.prepareGroupAvatarChange(avatarParams);
+            assertEquals(1, avatar.actionSignatures.size());
+            String avatarPayload = avatar.actionSignatures.get(0).signaturePayload;
+            assertTrue(avatarPayload.startsWith("GroupChangeEvent.GroupAvatarUrlChange,"), avatarPayload);
+            assertTrue(avatarPayload.endsWith(
+                    "," + rotated.conversationKeyVersion + "," + avatarUrl), avatarPayload);
 
             GroupDescriptionChangeParams descriptionParams =
                     new GroupDescriptionChangeParams("g100", "Rules: be kind");
@@ -887,7 +889,43 @@ class ChatTest {
                     "GroupChangeEvent.GroupMemberAddChange,"));
             assertFalse(prepared.actionSignatures.get(1).encodedMessageEventDetail.isEmpty());
             // Unset screen-capture blocking signs as the trailing null sentinel.
-            assertTrue(prepared.actionSignatures.get(1).signaturePayload.endsWith(",null"));
+            String payload = prepared.actionSignatures.get(1).signaturePayload;
+            assertTrue(payload.endsWith(",null"));
+            // The title goes out encrypted under the new key, the value the request
+            // sends as encrypted_title; the signature covers the ciphertext.
+            assertTrue(payload.contains(prepared.encryptedTitle), payload);
+            assertFalse(payload.contains("Test Group"), payload);
+            assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
+            assertNull(prepared.encryptedDescription);
+            assertEquals("7", prepared.actionSignatures.get(1).messageEventSignature.signatureVersion);
+        }
+    }
+
+    @Test
+    void prepareGroupMembersChangeEncryptsTheDescription() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            PublicKeys keys = chat.getPublicKeys();
+            PublicKeyInput input = new PublicKeyInput();
+            input.userId = "910002";
+            input.publicKey = keys.identity;
+            input.keyVersion = "1";
+            String avatarUrl = "https://ton.x.com/xchat_media/g123/avatar";
+            GroupMembersChangeParams p = new GroupMembersChangeParams(
+                    List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
+            p.senderId = "910002";
+            p.signingKeyVersion = "1";
+            p.currentTitle = "Test Group";
+            p.currentDescription = "Ships the app";
+            p.currentAvatarUrl = avatarUrl;
+            PreparedConversationChange prepared = chat.prepareGroupMembersChange(p);
+            assertEquals("Ships the app", chat.decrypt(prepared.encryptedDescription, prepared.conversationKey));
+            // The description is signed at version 8, after the screen-capture slot;
+            // the avatar URL is signed as passed.
+            ActionSignature add = prepared.actionSignatures.get(1);
+            assertEquals("8", add.messageEventSignature.signatureVersion);
+            assertTrue(add.signaturePayload.endsWith(",null," + prepared.encryptedDescription),
+                    add.signaturePayload);
+            assertTrue(add.signaturePayload.contains("," + avatarUrl + ","), add.signaturePayload);
         }
     }
 
@@ -941,7 +979,7 @@ class ChatTest {
             assertTrue(payload.contains(prepared.encryptedTitle), payload);
             assertFalse(payload.contains("Test Group"), payload);
             assertEquals("Test Group", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
-            assertNull(prepared.encryptedAvatarUrl);
+            assertNull(prepared.encryptedDescription);
         }
     }
 
@@ -1184,22 +1222,46 @@ class ChatTest {
             assertTrue(event.path("verified").asBoolean());
             assertEquals(v.get("event_group_id").asText(), event.path("conversation_id").asText());
             assertEquals("DescriptionChanged", event.path("change").path("change_type").asText());
-            assertEquals(
-                    v.get("event_group_description").asText(),
-                    event.path("change").path("new_description").asText());
+            ObjectMapper mapper = new ObjectMapper();
+            GroupText description =
+                    mapper.treeToValue(event.path("change").path("new_description"), GroupText.class);
+            assertEquals("Text", description.kind);
+            assertEquals(v.get("event_group_description").asText(), description.text);
 
             // Without the key the description was encrypted under, the change
-            // does not decrypt: it never comes back as ciphertext.
+            // still decrypts, with the description unavailable.
             DecryptEventParams keyless =
                     new DecryptEventParams(v.get("event_group_description_b64").asText(), Map.of());
             keyless.signingKeys = eventSigningKeys(v);
-            ChatXdkException err = assertThrows(ChatXdkException.class, () -> chat.decryptEvent(keyless));
-            assertTrue(err.getMessage().contains("Group description encrypted with key version"), err.getMessage());
+            GroupText unavailable = mapper.treeToValue(
+                    chat.decryptEvent(keyless).path("change").path("new_description"), GroupText.class);
+            assertEquals("Unavailable", unavailable.kind);
+            assertFalse(unavailable.raw.isEmpty());
+            assertNotEquals(v.get("event_group_description").asText(), unavailable.raw);
         }
     }
 
     @Test
-    void vectorsGroupCreateDecryptsItsTitleAndAvatarOnReceive() throws Exception {
+    void vectorsGroupAvatarChangeCarriesTheMediaUrl() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            // The avatar URL is not encrypted, so the change reads without any key.
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_group_avatar_change_b64").asText(), Map.of());
+            params.signingKeys = eventSigningKeys(v);
+            JsonNode event = chat.decryptEvent(params);
+            assertTrue(event.path("verified").asBoolean());
+            JsonNode change = event.path("change");
+            assertEquals("AvatarChanged", change.path("change_type").asText());
+            assertEquals(v.get("event_group_avatar_url").asText(), change.path("new_avatar_url").asText());
+            assertEquals(
+                    v.get("event_conversation_key_version").asText(),
+                    change.path("conversation_key_version").asText());
+        }
+    }
+
+    @Test
+    void vectorsGroupCreateDecryptsItsTitleOnReceive() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {
             Map<String, byte[]> createKeys = Map.of(
@@ -1213,15 +1275,35 @@ class ChatTest {
             assertTrue(event.path("verified").asBoolean());
             JsonNode change = event.path("change");
             assertEquals("Created", change.path("change_type").asText());
-            assertEquals(v.get("event_group_title").asText(), change.path("title").asText());
-            assertEquals(v.get("event_group_avatar_url").asText(), change.path("avatar_url").asText());
+            ObjectMapper mapper = new ObjectMapper();
+            GroupText title = mapper.treeToValue(change.path("title"), GroupText.class);
+            assertEquals("Text", title.kind);
+            assertEquals(v.get("event_group_title").asText(), title.text);
+            assertTrue(change.path("avatar_url").isNull());
+            assertEquals(
+                    v.get("event_group_create_conversation_key_version").asText(),
+                    change.path("conversation_key_version").asText());
 
-            // Without the key the create seeded, its title does not decrypt.
+            // Without the key the create seeded, the create still decrypts, on both
+            // paths, with its title unavailable as the ciphertext it carries.
+            String ciphertext = v.get("event_group_create_encrypted_title").asText();
             DecryptEventParams keyless =
                     new DecryptEventParams(v.get("event_group_create_b64").asText(), Map.of());
             keyless.signingKeys = eventSigningKeys(v);
-            ChatXdkException err = assertThrows(ChatXdkException.class, () -> chat.decryptEvent(keyless));
-            assertTrue(err.getMessage().contains("Group title encrypted with key version"), err.getMessage());
+            JsonNode keylessChange = chat.decryptEvent(keyless).path("change");
+            assertEquals(v.get("event_sender_id").asText(), keylessChange.path("member_ids").path(0).asText());
+            GroupText unavailable = mapper.treeToValue(keylessChange.path("title"), GroupText.class);
+            assertEquals("Unavailable", unavailable.kind);
+            assertEquals(ciphertext, unavailable.raw);
+            DecryptEventsParams batch =
+                    new DecryptEventsParams(List.of(v.get("event_group_create_b64").asText()));
+            batch.signingKeys = eventSigningKeys(v);
+            DecryptEventsResult result = chat.decryptEvents(batch);
+            assertTrue(result.errors.isEmpty(), result.errors.toString());
+            GroupText batched = mapper.treeToValue(
+                    result.messages.get(0).event.path("change").path("title"), GroupText.class);
+            assertEquals("Unavailable", batched.kind);
+            assertEquals(ciphertext, batched.raw);
         }
     }
 
@@ -1889,8 +1971,8 @@ class ChatTest {
         }
     }
 
-    // Absent-value normalization: an empty title/avatar is "not set" and
-    // signs the null sentinel, exactly like leaving the field null.
+    // Absent-value normalization: an empty title is "not set" and signs the
+    // null sentinel, exactly like leaving the field null.
     @Test
     void prepareGroupCreateEmptyTitleSignsNullSentinel() throws Exception {
         try (Chat chat = createUnlocked()) {
@@ -1905,20 +1987,19 @@ class ChatTest {
                 p.senderId = "910002";
                 p.signingKeyVersion = "1";
                 p.title = title;
-                p.avatarUrl = title;
                 PreparedConversationChange prepared = chat.prepareGroupCreate(p);
                 String payload = prepared.actionSignatures.get(1).signaturePayload;
-                // Trailing slots: title, avatar_url, ttl — all unset → null sentinels.
+                // Trailing slots: legacy upgrade, title, avatar_url — all unset → null
+                // sentinels.
                 assertTrue(payload.endsWith(",null,null,null"),
-                        "title/avatar must sign as the null sentinel, got: " + payload);
+                        "the title and avatar must sign as the null sentinel, got: " + payload);
                 assertNull(prepared.encryptedTitle);
-                assertNull(prepared.encryptedAvatarUrl);
             }
         }
     }
 
     // The plaintext never enters the comma-joined signature payload, only its
-    // base64 ciphertext does, so a title or avatar URL with a comma encrypts.
+    // base64 ciphertext does, so a title with a comma encrypts.
     @Test
     void prepareGroupCreateEncryptsACommaTitle() throws Exception {
         try (Chat chat = createUnlocked()) {
@@ -1932,12 +2013,8 @@ class ChatTest {
             p.senderId = "910002";
             p.signingKeyVersion = "1";
             p.title = "Team, the sequel";
-            p.avatarUrl = "https://img.example/a.png";
             PreparedConversationChange prepared = chat.prepareGroupCreate(p);
             assertEquals("Team, the sequel", chat.decrypt(prepared.encryptedTitle, prepared.conversationKey));
-            assertEquals(
-                    "https://img.example/a.png",
-                    chat.decrypt(prepared.encryptedAvatarUrl, prepared.conversationKey));
         }
     }
 

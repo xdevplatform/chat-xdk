@@ -2,9 +2,10 @@
 //!
 //! Each prepare builds one request's `action_signatures`. A member remove
 //! also rotates the conversation key for the members who stay, reusing the
-//! key-change signer, and returns that key. The title, avatar and
-//! description changes encrypt their plaintext under the conversation key
-//! before signing it. The other prepares do not rotate.
+//! key-change signer, and returns that key. The title and description
+//! changes encrypt their plaintext under the conversation key before
+//! signing it; the avatar change signs the avatar's media URL as is. The
+//! other prepares do not rotate.
 
 use crate::crypto::keys::XChatConversationKey;
 use crate::error::SdkError;
@@ -38,7 +39,7 @@ struct ActionCtx {
     signing_key: crate::crypto::keys::XChatPrivateKey,
 }
 
-/// The inputs of a title, avatar or description change.
+/// The inputs of a title or description change.
 struct MetadataChange<'a> {
     conversation_id: &'a str,
     sender_id: Option<&'a str>,
@@ -54,7 +55,6 @@ struct MetadataChange<'a> {
 #[derive(Clone, Copy)]
 enum GroupMetadata {
     Title,
-    AvatarUrl,
     Description,
 }
 
@@ -62,28 +62,34 @@ impl GroupMetadata {
     fn event_name(self) -> &'static str {
         match self {
             Self::Title => "GroupChangeEvent.GroupTitleChange",
-            Self::AvatarUrl => "GroupChangeEvent.GroupAvatarUrlChange",
             Self::Description => "GroupChangeEvent.GroupDescriptionChange",
         }
     }
 
-    fn detail(self, encrypted: &str, key_version: &str) -> Result<String, SdkError> {
+    /// The change event for `encrypted` under `key_version`. A change that
+    /// only re-encrypts the value for a key rotation is marked
+    /// `for_key_rotation`, so X clients don't show it as a change.
+    fn detail(
+        self,
+        encrypted: &str,
+        key_version: &str,
+        for_key_rotation: bool,
+    ) -> Result<String, SdkError> {
         let encrypted = Some(encrypted.to_string());
         let conversation_key_version = Some(key_version.to_string());
-        group_detail(match self {
-            Self::Title => GroupChange::GroupTitleChange(GroupTitleChange {
-                custom_title: encrypted,
-                conversation_key_version,
-            }),
-            Self::AvatarUrl => GroupChange::GroupAvatarChange(GroupAvatarUrlChange {
-                custom_avatar_url: encrypted,
-                conversation_key_version,
-            }),
-            Self::Description => GroupChange::GroupDescriptionChange(GroupDescriptionChange {
-                custom_description: encrypted,
-                conversation_key_version,
-            }),
-        })
+        group_event_detail(
+            match self {
+                Self::Title => GroupChange::GroupTitleChange(GroupTitleChange {
+                    custom_title: encrypted,
+                    conversation_key_version,
+                }),
+                Self::Description => GroupChange::GroupDescriptionChange(GroupDescriptionChange {
+                    custom_description: encrypted,
+                    conversation_key_version,
+                }),
+            },
+            for_key_rotation,
+        )
     }
 }
 
@@ -94,9 +100,9 @@ impl ChatCore {
     /// `public_keys` are the identity keys of the members who stay. The
     /// result is a [`PreparedConversationChange`]: the new conversation key,
     /// its participant keys, and `action_signatures` in request order — the
-    /// removal (bound to the new key version); a title, avatar and
-    /// description change for each of `title`, `avatar_url` and
-    /// `description` that is set, encrypted under the new key; then the
+    /// removal (bound to the new key version); a title and a description
+    /// change for each of `title` and `description` that is set, encrypted
+    /// under the new key and marked as key-rotation re-encryptions; then the
     /// conversation-key change.
     ///
     /// The removal is signed at signature version 11 so the key version is
@@ -156,12 +162,11 @@ impl ChatCore {
         )?];
         for (field, value) in [
             (GroupMetadata::Title, &params.title),
-            (GroupMetadata::AvatarUrl, &params.avatar_url),
             (GroupMetadata::Description, &params.description),
         ] {
             if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
                 let (_, signature) =
-                    sign_metadata(&ctx, field, value, &ckey, conversation_key_version)?;
+                    sign_metadata(&ctx, field, value, &ckey, conversation_key_version, true)?;
                 action_signatures.push(signature);
             }
         }
@@ -185,7 +190,7 @@ impl ChatCore {
             conversation_participant_keys: participant_keys,
             action_signatures,
             encrypted_title: None,
-            encrypted_avatar_url: None,
+            encrypted_description: None,
         })
     }
 
@@ -273,25 +278,36 @@ impl ChatCore {
         )
     }
 
-    /// Encrypt a new group avatar URL under the conversation key and sign
-    /// the change, under `GroupChangeEvent.GroupAvatarUrlChange`. The key
-    /// resolves as in [`Self::prepare_group_title_change`].
+    /// Sign a group avatar change, under
+    /// `GroupChangeEvent.GroupAvatarUrlChange`.
+    ///
+    /// The avatar URL is not encrypted: it is the media URL of the image,
+    /// which the app encrypts under the conversation key and uploads to the
+    /// group's media first. The signature covers the version of the key the
+    /// image is encrypted under and the URL as is.
     pub fn prepare_group_avatar_change(
         &self,
         params: &GroupAvatarChangeParams,
-    ) -> Result<PreparedGroupMetadataChange, SdkError> {
-        self.prepare_metadata_change(
-            MetadataChange {
-                conversation_id: &params.conversation_id,
-                sender_id: params.sender_id.as_deref(),
-                signing_key_version: params.signing_key_version.as_deref(),
-                conversation_key: params.conversation_key.as_deref(),
-                conversation_key_version: params.conversation_key_version.as_deref(),
-                param: "new_avatar_url",
-                value: &params.new_avatar_url,
-            },
-            GroupMetadata::AvatarUrl,
-        )
+    ) -> Result<PreparedAction, SdkError> {
+        let ctx = self.action_ctx(
+            &params.conversation_id,
+            params.sender_id.as_deref(),
+            params.signing_key_version.as_deref(),
+        )?;
+        let avatar_url = require_text("new_avatar_url", &params.new_avatar_url)?;
+        let key_version = params.conversation_key_version.as_str();
+        crate::pipeline::validate_key_version("conversation_key_version", key_version)?;
+        let signature = sign_named(
+            &ctx,
+            "GroupChangeEvent.GroupAvatarUrlChange",
+            &[key_version, avatar_url],
+            CURRENT_SIGNATURE_VERSION,
+            group_detail(GroupChange::GroupAvatarChange(GroupAvatarUrlChange {
+                custom_avatar_url: Some(avatar_url.to_string()),
+                conversation_key_version: Some(key_version.to_string()),
+            }))?,
+        )?;
+        Ok(one_action(signature))
     }
 
     /// Encrypt a new group description under the conversation key and sign
@@ -597,7 +613,8 @@ impl ChatCore {
             &ctx.sender_id,
         )?;
         crate::pipeline::validate_key_version("conversation_key_version", &key_version)?;
-        let (encrypted_value, signature) = sign_metadata(&ctx, field, value, &key, &key_version)?;
+        let (encrypted_value, signature) =
+            sign_metadata(&ctx, field, value, &key, &key_version, false)?;
         Ok(PreparedGroupMetadataChange {
             encrypted_value,
             conversation_key_version: key_version,
@@ -677,9 +694,7 @@ fn nullable_i64(value: Option<i64>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
-/// Encrypt `value` under `key` and sign it as a `field` change bound to
-/// `key_version`. Returns the base64 ciphertext and the signature.
-/// Encrypt a group title, avatar URL or description under `key`: the base64
+/// Encrypt a group title or description under `key`: the base64
 /// XSalsa20-Poly1305 ciphertext a group event carries and its signature
 /// covers.
 pub(super) fn encrypt_group_metadata(
@@ -692,12 +707,15 @@ pub(super) fn encrypt_group_metadata(
     )?))
 }
 
+/// Encrypt `value` under `key` and sign it as a `field` change bound to
+/// `key_version`. Returns the base64 ciphertext and the signature.
 fn sign_metadata(
     ctx: &ActionCtx,
     field: GroupMetadata,
     value: &str,
     key: &XChatConversationKey,
     key_version: &str,
+    for_key_rotation: bool,
 ) -> Result<(String, ActionSignature), SdkError> {
     let encrypted = encrypt_group_metadata(key, value)?;
     let signature = sign_named(
@@ -705,7 +723,7 @@ fn sign_metadata(
         field.event_name(),
         &[key_version, &encrypted],
         CURRENT_SIGNATURE_VERSION,
-        field.detail(&encrypted, key_version)?,
+        field.detail(&encrypted, key_version, for_key_rotation)?,
     )?;
     Ok((encrypted, signature))
 }
@@ -756,9 +774,13 @@ fn sign_named(
 }
 
 fn group_detail(change: GroupChange) -> Result<String, SdkError> {
+    group_event_detail(change, false)
+}
+
+fn group_event_detail(change: GroupChange, for_key_rotation: bool) -> Result<String, SdkError> {
     encode_detail(MessageEventDetail::GroupChangeEvent(GroupChangeEvent {
         group_change: Some(change),
-        for_key_rotation: Some(false),
+        for_key_rotation: Some(for_key_rotation),
     }))
 }
 
@@ -809,7 +831,8 @@ mod tests {
     use crate::protocol::safe_reader::BoundedProtocol;
     use crate::protocol::serialization::base64_decode;
     use crate::types::{
-        Event, GroupChange as Change, PublicKeyInput, ScreenCaptureChange, SigningKeyEntry,
+        Event, GroupChange as Change, GroupText, PublicKeyInput, ScreenCaptureChange,
+        SigningKeyEntry,
     };
     use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
     use std::collections::HashMap;
@@ -838,6 +861,21 @@ mod tests {
 
     fn identity() -> (String, String) {
         ("910004".to_string(), "1".to_string())
+    }
+
+    fn text(value: &str) -> GroupText {
+        GroupText::Text {
+            text: value.to_string(),
+        }
+    }
+
+    /// Whether a signed group action's event is marked as a key-rotation
+    /// re-encryption.
+    fn for_key_rotation(signature: &ActionSignature) -> Option<bool> {
+        match decode_detail(&signature.encoded_message_event_detail) {
+            MessageEventDetail::GroupChangeEvent(event) => event.for_key_rotation,
+            other => panic!("expected a group change event, got {other:?}"),
+        }
     }
 
     fn decode_detail(b64: &str) -> MessageEventDetail {
@@ -959,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn group_create_encrypts_the_title_and_avatar_it_signs() {
+    fn group_create_encrypts_the_title_it_signs() {
         let (core, signing_keys) = ready_core_and_signing_keys();
         let (sender, version) = identity();
         // The plaintext never enters the comma-joined payload, so a comma in
@@ -971,14 +1009,14 @@ mod tests {
             vec![sender.clone()],
         )
         .with_identity(&sender, &version)
-        .with_title("Team, the sequel")
-        .with_avatar_url("https://img.example/a.png?size=1,2");
+        .with_title("Team, the sequel");
         let created = core.prepare_group_create(&params).unwrap();
         let encrypted_title = created.encrypted_title.clone().unwrap();
-        let encrypted_avatar_url = created.encrypted_avatar_url.clone().unwrap();
         let create = &created.action_signatures[1];
-        assert!(create.signature_payload.contains(&encrypted_title));
-        assert!(create.signature_payload.contains(&encrypted_avatar_url));
+        // A create sets no avatar: the title slot is followed by `null`.
+        assert!(create
+            .signature_payload
+            .ends_with(&format!(",{encrypted_title},null")));
         assert!(!create.signature_payload.contains("Team"));
 
         let event_b64 = signed_event_b64(create, &sender, "g100");
@@ -991,28 +1029,40 @@ mod tests {
                 .unwrap(),
         ) {
             Change::Created {
-                title, avatar_url, ..
+                title,
+                avatar_url,
+                conversation_key_version,
+                ..
             } => {
-                assert_eq!(title.as_deref(), Some("Team, the sequel"));
+                assert_eq!(title, Some(text("Team, the sequel")));
+                assert_eq!(avatar_url, None);
                 assert_eq!(
-                    avatar_url.as_deref(),
-                    Some("https://img.example/a.png?size=1,2")
+                    conversation_key_version,
+                    Some(created.conversation_key_version.clone())
                 );
             }
             other => panic!("expected Created, got {other:?}"),
         }
 
-        // Without the new key the create does not decrypt.
-        let err = core
-            .decrypt_event_with(&event_b64, &HashMap::new(), &signing_keys)
-            .unwrap_err();
-        assert!(
-            err.to_string().contains(&format!(
-                "Group title encrypted with key version '{}'",
-                created.conversation_key_version
-            )),
-            "got: {err}"
-        );
+        // Without the new key the title is unavailable, and the rest of the
+        // create still decrypts.
+        match decrypted_change(
+            core.decrypt_event_with(&event_b64, &HashMap::new(), &signing_keys)
+                .unwrap(),
+        ) {
+            Change::Created {
+                member_ids, title, ..
+            } => {
+                assert_eq!(member_ids, std::slice::from_ref(&sender));
+                assert_eq!(
+                    title,
+                    Some(GroupText::Unavailable {
+                        raw: encrypted_title
+                    })
+                );
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1040,7 +1090,7 @@ mod tests {
         let batch =
             core.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys));
         assert!(batch.errors.is_empty(), "{:?}", batch.errors);
-        let titles: Vec<String> = batch
+        let titles: Vec<GroupText> = batch
             .messages
             .into_iter()
             .filter_map(|message| match message.event {
@@ -1051,11 +1101,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(titles, ["Board"]);
+        assert_eq!(titles, [text("Board")]);
     }
 
     #[test]
-    fn group_create_without_a_title_or_avatar_encrypts_nothing() {
+    fn group_create_without_a_title_encrypts_nothing() {
         let core = ready_core();
         let (sender, version) = identity();
         let created = core
@@ -1070,7 +1120,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(created.encrypted_title, None);
-        assert_eq!(created.encrypted_avatar_url, None);
+        assert_eq!(created.encrypted_description, None);
         assert!(created.action_signatures[1]
             .signature_payload
             .ends_with(",null,null,null"));
@@ -1273,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_changes_sign_ciphertext_that_decrypts_on_receive() {
+    fn title_and_description_changes_sign_ciphertext_that_decrypts_on_receive() {
         let (core, signing_keys) = ready_core_and_signing_keys();
         let (sender, version) = identity();
         let key = KeyFactory::generate_conversation_key().unwrap();
@@ -1281,13 +1331,6 @@ mod tests {
         let title = core
             .prepare_group_title_change(
                 &GroupTitleChangeParams::new("g100", "Board: layoffs, Q3")
-                    .with_identity(&sender, &version)
-                    .with_conversation_key(key.to_bytes(), "7"),
-            )
-            .unwrap();
-        let avatar = core
-            .prepare_group_avatar_change(
-                &GroupAvatarChangeParams::new("g100", "https://img/a.png")
                     .with_identity(&sender, &version)
                     .with_conversation_key(key.to_bytes(), "7"),
             )
@@ -1304,11 +1347,6 @@ mod tests {
                 title,
                 "GroupChangeEvent.GroupTitleChange,",
                 "Board: layoffs, Q3",
-            ),
-            (
-                avatar,
-                "GroupChangeEvent.GroupAvatarUrlChange,",
-                "https://img/a.png",
             ),
             (
                 description,
@@ -1328,6 +1366,7 @@ mod tests {
             );
             assert!(!payload.contains(plaintext), "{payload}");
             assert_eq!(signature.message_event_signature.signature_version, "7");
+            assert_eq!(for_key_rotation(signature), Some(false));
             let detail = base64_decode(&signature.encoded_message_event_detail).unwrap();
             assert!(!String::from_utf8_lossy(&detail).contains(plaintext));
             assert_actions(&core, &prepared.action_signatures, &sender, "g100", None);
@@ -1344,11 +1383,54 @@ mod tests {
             );
             let decrypted = match change {
                 Change::TitleChanged { new_title } => new_title,
-                Change::AvatarChanged { new_avatar_url } => new_avatar_url,
                 Change::DescriptionChanged { new_description } => new_description,
-                other => panic!("expected a metadata change, got {other:?}"),
+                other => panic!("expected a title or description change, got {other:?}"),
             };
-            assert_eq!(decrypted, plaintext);
+            assert_eq!(decrypted, text(plaintext));
+        }
+    }
+
+    #[test]
+    fn avatar_change_signs_the_media_url_as_is() {
+        let (core, signing_keys) = ready_core_and_signing_keys();
+        let (sender, version) = identity();
+        let url = "https://ton.x.com/xchat_media/g100/avatar";
+        let prepared = core
+            .prepare_group_avatar_change(
+                &GroupAvatarChangeParams::new("g100", url, "7").with_identity(&sender, &version),
+            )
+            .unwrap();
+        assert_eq!(prepared.action_signatures.len(), 1);
+        let signature = &prepared.action_signatures[0];
+        let payload = &signature.signature_payload;
+        assert!(
+            payload.starts_with("GroupChangeEvent.GroupAvatarUrlChange,"),
+            "{payload}"
+        );
+        assert!(payload.ends_with(&format!(",7,{url}")), "{payload}");
+        assert_actions(&core, &prepared.action_signatures, &sender, "g100", None);
+
+        // Recipients read the URL and the version of the key the image is
+        // encrypted under, whether or not they hold that key.
+        let change = decrypted_change(
+            core.decrypt_event(
+                DecryptEventParams::new(
+                    signed_event_b64(signature, &sender, "g100"),
+                    HashMap::new(),
+                )
+                .with_signing_keys(signing_keys),
+            )
+            .unwrap(),
+        );
+        match change {
+            Change::AvatarChanged {
+                new_avatar_url,
+                conversation_key_version,
+            } => {
+                assert_eq!(new_avatar_url, url);
+                assert_eq!(conversation_key_version.as_deref(), Some("7"));
+            }
+            other => panic!("expected AvatarChanged, got {other:?}"),
         }
     }
 
@@ -1392,11 +1474,13 @@ mod tests {
             )
             .unwrap(),
         );
-        assert!(matches!(change, Change::TitleChanged { ref new_title } if new_title == "Cached"));
+        assert!(
+            matches!(change, Change::TitleChanged { ref new_title } if *new_title == text("Cached"))
+        );
     }
 
     #[test]
-    fn metadata_change_without_its_key_fails_on_receive() {
+    fn metadata_change_without_its_key_is_unavailable_on_receive() {
         let (core, signing_keys) = ready_core_and_signing_keys();
         let (sender, version) = identity();
         let key = KeyFactory::generate_conversation_key().unwrap();
@@ -1407,20 +1491,25 @@ mod tests {
                     .with_conversation_key(key.to_bytes(), "7"),
             )
             .unwrap();
-        let err = core
-            .decrypt_event(
+        let change = decrypted_change(
+            core.decrypt_event(
                 DecryptEventParams::new(
                     signed_event_b64(&description.action_signatures[0], &sender, "g100"),
                     HashMap::new(),
                 )
                 .with_signing_keys(signing_keys),
             )
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Group description encrypted with key version '7' but no matching key"),
-            "got: {err}"
+            .unwrap(),
         );
+        match change {
+            Change::DescriptionChanged { new_description } => assert_eq!(
+                new_description,
+                GroupText::Unavailable {
+                    raw: description.encrypted_value
+                }
+            ),
+            other => panic!("expected DescriptionChanged, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1434,7 +1523,6 @@ mod tests {
         )
         .with_identity(&sender, &version)
         .with_title("Board")
-        .with_avatar_url("")
         .with_description("Rules: be kind");
         let prepared = core
             .prepare_group_members_remove_with_version(&params, "42")
@@ -1453,6 +1541,13 @@ mod tests {
             "the key change withholds its payload"
         );
         assert!(payloads[1].contains(",42,"), "{}", payloads[1]);
+        // The re-encryptions are marked as such, so recipients don't show
+        // them as changes; the removal itself is not.
+        let rotation: Vec<Option<bool>> = prepared.action_signatures[..3]
+            .iter()
+            .map(for_key_rotation)
+            .collect();
+        assert_eq!(rotation, [Some(false), Some(true), Some(true)]);
 
         let keys = HashMap::from([("42".to_string(), prepared.conversation_key.clone().unwrap())]);
         let decrypt = |index: usize| {
@@ -1468,11 +1563,12 @@ mod tests {
             )
         };
         assert!(
-            matches!(decrypt(1), Change::TitleChanged { ref new_title } if new_title == "Board")
+            matches!(decrypt(1), Change::TitleChanged { ref new_title } if *new_title == text("Board"))
         );
         assert!(matches!(
             decrypt(2),
-            Change::DescriptionChanged { ref new_description } if new_description == "Rules: be kind"
+            Change::DescriptionChanged { ref new_description }
+                if *new_description == text("Rules: be kind")
         ));
         let ckey_b64 =
             STANDARD_NO_PAD.encode(prepared.conversation_key.as_ref().unwrap().encoded());
@@ -1592,13 +1688,27 @@ mod tests {
             "new_title is empty: pass the value this action signs"
         );
 
-        let mut half_key = GroupAvatarChangeParams::new("g100", "https://img/a.png")
-            .with_identity(&sender, &version);
-        half_key.conversation_key = Some(key.to_bytes());
-        let err = core.prepare_group_avatar_change(&half_key).unwrap_err();
+        let avatar_change = |url: &str, key_version: &str| {
+            core.prepare_group_avatar_change(
+                &GroupAvatarChangeParams::new("g100", url, key_version)
+                    .with_identity(&sender, &version),
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        assert_eq!(
+            avatar_change("", "4"),
+            "new_avatar_url is empty: pass the value this action signs"
+        );
         assert!(
-            err.to_string().contains("must be passed together"),
-            "got: {err}"
+            avatar_change("https://img/a.png", "v4").contains("conversation_key_version 'v4'"),
+            "got: {}",
+            avatar_change("https://img/a.png", "v4")
+        );
+        assert!(
+            avatar_change("https://img/a,b.png", "4").contains("comma"),
+            "got: {}",
+            avatar_change("https://img/a,b.png", "4")
         );
 
         let err = ScreenCaptureChange::parse("nope").unwrap_err();

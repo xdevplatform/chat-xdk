@@ -753,7 +753,7 @@ impl ChatCore {
             conversation_participant_keys: participant_keys,
             action_signatures: vec![signature],
             encrypted_title: None,
-            encrypted_avatar_url: None,
+            encrypted_description: None,
         })
     }
 
@@ -787,15 +787,13 @@ impl ChatCore {
     /// Serialize the `GroupCreate` event the API persists and relays.
     ///
     /// Encoded as a base64 `MessageEventDetail` carrying the full group roster,
-    /// the encrypted title and avatar, and the conversation-key version. The
-    /// backend matches on `member_ids`, `admin_ids`, `title`, `avatar_url`,
-    /// and `conversation_key_version`, so all of them are populated.
-    #[allow(clippy::too_many_arguments)]
+    /// the encrypted title, and the conversation-key version. The backend
+    /// matches on `member_ids`, `admin_ids`, `title`, `avatar_url` and
+    /// `conversation_key_version`; a create sets no avatar.
     fn encode_group_create_detail(
         member_ids: &[String],
         admin_ids: &[String],
         title: Option<&str>,
-        avatar_url: Option<&str>,
         conversation_key_version: &str,
         ttl_msec: Option<i64>,
         is_legacy_group_upgrade: Option<bool>,
@@ -804,7 +802,7 @@ impl ChatCore {
             member_ids: Some(member_ids.to_vec()),
             admin_ids: Some(admin_ids.to_vec()),
             title: title.map(|s| s.to_string()),
-            avatar_url: avatar_url.map(|s| s.to_string()),
+            avatar_url: None,
             conversation_key_version: Some(conversation_key_version.to_string()),
             is_legacy_group_upgrade,
             ttl_msec,
@@ -822,7 +820,8 @@ impl ChatCore {
     /// Serialize the `GroupMemberAddChange` event the API persists and relays.
     ///
     /// Encoded as a base64 `MessageEventDetail` carrying the new members plus
-    /// the current roster snapshot the backend matches against.
+    /// the current roster snapshot the backend matches against, its title and
+    /// description encrypted under the new key.
     #[allow(clippy::too_many_arguments)]
     fn encode_group_member_add_detail(
         new_member_ids: &[String],
@@ -831,6 +830,7 @@ impl ChatCore {
         current_pending_member_ids: &[String],
         current_title: Option<&str>,
         current_avatar_url: Option<&str>,
+        current_description: Option<&str>,
         current_ttl_msec: Option<i64>,
         current_screen_capture_blocking_enabled: Option<bool>,
         conversation_key_version: &str,
@@ -850,7 +850,7 @@ impl ChatCore {
             current_pmk_bundle: None,
             group_created_by_user_id: None,
             rotated_pmk_bundle: None,
-            current_description: None,
+            current_description: current_description.map(str::to_string),
         };
         let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
@@ -873,11 +873,11 @@ impl ChatCore {
     /// requires: a conversation-key change and the group-create itself. The
     /// returned `conversation_key` is the raw key to store locally.
     ///
-    /// `title` and `avatar_url` are plaintext. The call encrypts each under
-    /// the new conversation key, as [`Self::prepare_group_title_change`]
-    /// encrypts a title, signs the ciphertext, and returns it as
-    /// `encrypted_title` and `encrypted_avatar_url`: the `group_name` and
-    /// `group_avatar_url` the create request sends.
+    /// `title` is plaintext. The call encrypts it under the new conversation
+    /// key, as [`Self::prepare_group_title_change`] encrypts a title, signs
+    /// the ciphertext, and returns it as `encrypted_title`: the `group_name`
+    /// the create request sends. A create sets no avatar; set it afterwards
+    /// with [`Self::prepare_group_avatar_change`].
     pub fn prepare_group_create(
         &self,
         params: &GroupCreateParams,
@@ -903,7 +903,6 @@ impl ChatCore {
         // bytes: FFI layers cannot express Option and pass "" / a negative
         // TTL for "not set".
         let title = params.title.as_deref().filter(|t| !t.is_empty());
-        let avatar_url = params.avatar_url.as_deref().filter(|a| !a.is_empty());
         let ttl_msec = params.ttl_msec.filter(|t| *t >= 0);
 
         crate::pipeline::validate_user_ids("member_ids", &params.member_ids)?;
@@ -911,9 +910,6 @@ impl ChatCore {
         let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
         let encrypted_title = title
             .map(|title| group_actions::encrypt_group_metadata(&ckey, title))
-            .transpose()?;
-        let encrypted_avatar_url = avatar_url
-            .map(|avatar_url| group_actions::encrypt_group_metadata(&ckey, avatar_url))
             .transpose()?;
 
         // A group create needs two signed actions: the conversation-key change
@@ -937,7 +933,6 @@ impl ChatCore {
             &sender_id,
             &params.member_ids,
             encrypted_title.as_deref(),
-            encrypted_avatar_url.as_deref(),
             conversation_key_version,
             None,
         )?;
@@ -945,7 +940,6 @@ impl ChatCore {
             &params.member_ids,
             &params.admin_ids,
             encrypted_title.as_deref(),
-            encrypted_avatar_url.as_deref(),
             conversation_key_version,
             ttl_msec,
             None,
@@ -958,7 +952,7 @@ impl ChatCore {
             conversation_participant_keys: participant_keys,
             action_signatures: vec![ckce_sig, create_sig],
             encrypted_title,
-            encrypted_avatar_url,
+            encrypted_description: None,
         })
     }
 
@@ -973,6 +967,12 @@ impl ChatCore {
     /// signatures the backend requires: a conversation-key change and the
     /// member add itself. The returned `conversation_key` is the raw key to
     /// store locally.
+    ///
+    /// `current_title` and `current_description` are plaintext. The call
+    /// encrypts each under the new key, signs the ciphertext, and returns it
+    /// as `encrypted_title` and `encrypted_description`. A member add that
+    /// carries a description signs at version 8, the first that covers it.
+    /// `current_avatar_url` is the avatar's media URL, signed as is.
     pub fn prepare_group_members_change(
         &self,
         params: &GroupMembersChangeParams,
@@ -1002,6 +1002,10 @@ impl ChatCore {
             .current_avatar_url
             .as_deref()
             .filter(|a| !a.is_empty());
+        let current_description = params
+            .current_description
+            .as_deref()
+            .filter(|d| !d.is_empty());
         let current_ttl_msec = params.current_ttl_msec.filter(|t| *t >= 0);
 
         crate::pipeline::validate_user_ids("new_member_ids", &params.new_member_ids)?;
@@ -1012,6 +1016,12 @@ impl ChatCore {
             &params.current_pending_member_ids,
         )?;
         let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
+        let encrypted_title = current_title
+            .map(|title| group_actions::encrypt_group_metadata(&ckey, title))
+            .transpose()?;
+        let encrypted_description = current_description
+            .map(|description| group_actions::encrypt_group_metadata(&ckey, description))
+            .transpose()?;
 
         // A member add needs two signed actions: the conversation-key change
         // that rotates the group's key, and the member-add action itself.
@@ -1037,8 +1047,9 @@ impl ChatCore {
             &params.current_member_ids,
             &params.current_admin_ids,
             conversation_key_version,
-            current_title,
+            encrypted_title.as_deref(),
             current_avatar_url,
+            encrypted_description.as_deref(),
             current_ttl_msec,
             params.current_screen_capture_blocking_enabled,
         )?;
@@ -1047,8 +1058,9 @@ impl ChatCore {
             &params.current_member_ids,
             &params.current_admin_ids,
             &params.current_pending_member_ids,
-            current_title,
+            encrypted_title.as_deref(),
             current_avatar_url,
+            encrypted_description.as_deref(),
             current_ttl_msec,
             params.current_screen_capture_blocking_enabled,
             conversation_key_version,
@@ -1060,8 +1072,8 @@ impl ChatCore {
             conversation_key_version: conversation_key_version.to_string(),
             conversation_participant_keys: participant_keys,
             action_signatures: vec![ckce_sig, member_add_sig],
-            encrypted_title: None,
-            encrypted_avatar_url: None,
+            encrypted_title,
+            encrypted_description,
         })
     }
 
@@ -1746,7 +1758,7 @@ impl ChatCore {
                     parsed.conversation_id.as_deref(),
                     group_change.group_change.as_ref(),
                     conversation_keys,
-                )?;
+                );
                 Event::GroupChange(GroupChangeEvent {
                     meta,
                     verified,
@@ -1858,55 +1870,44 @@ impl ChatCore {
         Ok(event)
     }
 
-    /// The group change an event carries, its title, avatar URL, or
-    /// description decrypted under the conversation key for the change's
-    /// key version.
+    /// The group change an event carries, its title and description
+    /// decrypted under the conversation key for the change's key version.
     fn group_change(
         &self,
         conversation_id: Option<&str>,
         change: Option<&crate::thrift::event::GroupChange>,
         conversation_keys: &HashMap<String, XChatConversationKey>,
-    ) -> Result<GroupChange, SdkError> {
+    ) -> GroupChange {
         use crate::thrift::event::GroupChange as GenGC;
-        let decrypt = |field: &str, version: &Option<String>, value: &Option<String>| {
-            self.decrypt_group_metadata(
+        let text = |version: &Option<String>, value: &Option<String>| {
+            self.group_text(
                 conversation_id,
                 conversation_keys,
-                field,
                 version.as_deref(),
-                value.as_deref(),
+                value.as_deref().unwrap_or_default(),
             )
         };
-        let decrypt_set = |field: &str, version: &Option<String>, value: &Option<String>| {
-            value
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .map(|_| decrypt(field, version, value))
-                .transpose()
-        };
-        Ok(match change {
+        match change {
             Some(GenGC::GroupCreate(c)) => GroupChange::Created {
                 member_ids: c.member_ids.clone().unwrap_or_default(),
                 admin_ids: c.admin_ids.clone().unwrap_or_default(),
-                title: decrypt_set("title", &c.conversation_key_version, &c.title)?,
-                avatar_url: decrypt_set("avatar URL", &c.conversation_key_version, &c.avatar_url)?,
+                title: c
+                    .title
+                    .as_deref()
+                    .filter(|title| !title.is_empty())
+                    .map(|_| text(&c.conversation_key_version, &c.title)),
+                avatar_url: c.avatar_url.clone(),
+                conversation_key_version: c.conversation_key_version.clone(),
             },
             Some(GenGC::GroupTitleChange(c)) => GroupChange::TitleChanged {
-                new_title: decrypt("title", &c.conversation_key_version, &c.custom_title)?,
+                new_title: text(&c.conversation_key_version, &c.custom_title),
             },
             Some(GenGC::GroupAvatarChange(c)) => GroupChange::AvatarChanged {
-                new_avatar_url: decrypt(
-                    "avatar URL",
-                    &c.conversation_key_version,
-                    &c.custom_avatar_url,
-                )?,
+                new_avatar_url: c.custom_avatar_url.clone().unwrap_or_default(),
+                conversation_key_version: c.conversation_key_version.clone(),
             },
             Some(GenGC::GroupDescriptionChange(c)) => GroupChange::DescriptionChanged {
-                new_description: decrypt(
-                    "description",
-                    &c.conversation_key_version,
-                    &c.custom_description,
-                )?,
+                new_description: text(&c.conversation_key_version, &c.custom_description),
             },
             Some(GenGC::GroupAdminAdd(c)) => GroupChange::AdminsAdded {
                 admin_ids: c.admin_ids.clone().unwrap_or_default(),
@@ -1936,47 +1937,44 @@ impl ChatCore {
                 user_ids: c.rejected_user_ids.clone().unwrap_or_default(),
             },
             Some(GenGC::GroupAdminSettingsChange(_)) | None => GroupChange::Unknown,
-        })
+        }
     }
 
-    /// Decrypt a group title, avatar URL, or description: base64 ciphertext
-    /// under the conversation key for `conversation_key_version`, from the
-    /// caller's key map or the opt-in key cache. An absent or empty value
-    /// is an empty string.
-    fn decrypt_group_metadata(
+    /// A group title or description as an event carries it: base64
+    /// ciphertext under the conversation key for `conversation_key_version`,
+    /// from the caller's key map or the opt-in key cache. A value an event
+    /// carries without a key version is plaintext. A value whose key isn't
+    /// available, or that doesn't decrypt under it, is `Unavailable` with the
+    /// value as carried, and the rest of the event still decrypts.
+    fn group_text(
         &self,
         conversation_id: Option<&str>,
         conversation_keys: &HashMap<String, XChatConversationKey>,
-        field: &str,
         conversation_key_version: Option<&str>,
-        encrypted: Option<&str>,
-    ) -> Result<String, SdkError> {
-        let Some(encrypted) = encrypted.filter(|value| !value.is_empty()) else {
-            return Ok(String::new());
+        value: &str,
+    ) -> GroupText {
+        let version = match conversation_key_version.filter(|version| !version.is_empty()) {
+            Some(version) if !value.is_empty() => version,
+            _ => {
+                return GroupText::Text {
+                    text: value.to_string(),
+                }
+            }
         };
-        let version = conversation_key_version.unwrap_or_default();
-        let key = match conversation_keys.get(version) {
-            Some(key) => key.clone(),
-            None => conversation_id
-                .and_then(|cid| self.cached_key_for(cid, version))
-                .ok_or_else(|| {
-                    let available = conversation_keys
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    SdkError::Crypto(CryptoError::DecryptionFailed(format!(
-                        "Group {field} encrypted with key version '{version}' but no matching \
-                         key found. Available versions: [{available}]. Include the \
-                         conversation's KeyChange events in the batch passed to \
-                         decrypt_events(), or pass the matching key map to decrypt_event()."
-                    )))
-                })?,
-        };
-        let plaintext = decrypt_message_bytes(&key, &base64_decode(encrypted)?)?;
-        String::from_utf8(plaintext).map_err(|e| {
-            SdkError::Parse(format!("Decrypted group {field} is not valid UTF-8: {e}"))
-        })
+        let key = conversation_keys
+            .get(version)
+            .cloned()
+            .or_else(|| conversation_id.and_then(|cid| self.cached_key_for(cid, version)));
+        let text = key.and_then(|key| {
+            let ciphertext = base64_decode(value).ok()?;
+            String::from_utf8(decrypt_message_bytes(&key, &ciphertext).ok()?).ok()
+        });
+        match text {
+            Some(text) => GroupText::Text { text },
+            None => GroupText::Unavailable {
+                raw: value.to_string(),
+            },
+        }
     }
 
     // Message Encryption
@@ -3128,8 +3126,8 @@ impl ChatCore {
         Ok(FileDecryptor::for_media(&key, &params.media_hash_key)?)
     }
 
-    /// Decrypt a group title, avatar URL, or description the X API returns
-    /// for a conversation: base64 XSalsa20-Poly1305 ciphertext under the
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation: base64 XSalsa20-Poly1305 ciphertext under the
     /// conversation key, decrypted to its UTF-8 plaintext.
     ///
     /// Group changes in events need no call of their own:
@@ -3187,11 +3185,12 @@ impl ChatCore {
         conversation_key_version: &str,
         current_title: Option<&str>,
         current_avatar_url: Option<&str>,
+        current_description: Option<&str>,
         current_ttl_msec: Option<i64>,
         current_screen_capture_blocking_enabled: Option<bool>,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         let signing_key = self.get_signing_private_key()?;
-        crate::signatures::build_group_member_add_signature(
+        crate::signatures::sign_group_member_add(
             &signing_key,
             public_key_version,
             message_id,
@@ -3205,10 +3204,11 @@ impl ChatCore {
             current_ttl_msec,
             current_screen_capture_blocking_enabled,
             conversation_key_version,
+            current_description,
         )
     }
 
-    /// Build and sign a GroupCreate action signature.
+    /// Build and sign a GroupCreate action signature, which sets no avatar.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sign_group_create(
         &self,
@@ -3217,7 +3217,6 @@ impl ChatCore {
         sender_id: &str,
         member_ids: &[String],
         title: Option<&str>,
-        avatar_url: Option<&str>,
         conversation_key_version: &str,
         is_legacy_group_upgrade: Option<bool>,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
@@ -3229,7 +3228,7 @@ impl ChatCore {
             sender_id,
             member_ids,
             title,
-            avatar_url,
+            None,
             conversation_key_version,
             is_legacy_group_upgrade,
         )
@@ -5521,7 +5520,7 @@ mod tests {
             Event::GroupChange(gc) => {
                 assert!(!gc.verified);
                 assert!(
-                    matches!(gc.change, GroupChange::TitleChanged { ref new_title } if new_title == "New Title")
+                    matches!(gc.change, GroupChange::TitleChanged { ref new_title } if *new_title == text("New Title"))
                 );
             }
             other => panic!("Expected Event::GroupChange, got {:?}", other),
@@ -5647,9 +5646,15 @@ mod tests {
     }
 
     /// Base64 ciphertext of `value` under `key`, as a group change carries
-    /// a title, avatar URL, or description.
+    /// a title or description.
     fn encrypted_metadata(key: &XChatConversationKey, value: &str) -> String {
         base64_encode(&crate::crypto::encryption::encrypt_message(key, value.as_bytes()).unwrap())
+    }
+
+    fn text(value: &str) -> GroupText {
+        GroupText::Text {
+            text: value.to_string(),
+        }
     }
 
     #[test]
@@ -6099,20 +6104,15 @@ mod tests {
 
     // GroupChange sub-variants
 
-    #[test]
-    fn decrypt_event_group_change_group_create() {
-        let mut core = ChatCore::new();
-        core.set_reject_unverified(false);
-
-        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+    fn group_create_event(title: &str, conversation_key_version: Option<&str>) -> String {
         let gc = ThriftGCE::new(
             Some(crate::thrift::event::GroupChange::GroupCreate(
                 GroupCreate::new(
                     Some(vec!["m1".to_string(), "m2".to_string()]),
                     Some(vec!["a1".to_string()]),
-                    Some(encrypted_metadata(&key, "Test Group")),
-                    Some(encrypted_metadata(&key, "https://avatar.url")),
-                    Some("1".to_string()),
+                    Some(title.to_string()),
+                    Some("https://ton.x.com/xchat_media/g1/avatar".to_string()),
+                    conversation_key_version.map(str::to_string),
                     None::<bool>,
                     None::<i64>,
                     None,
@@ -6120,38 +6120,96 @@ mod tests {
             )),
             None,
         );
-        let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
+        build_test_event(ThriftDetail::GroupChangeEvent(gc))
+    }
 
-        // Without the key the create was encrypted under, it does not decrypt.
-        let err = core
-            .decrypt_event_with(&event_b64, &Default::default(), &[])
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Group title encrypted with key version '1'"),
-            "got: {err}"
-        );
-
-        let event = core
-            .decrypt_event_with(&event_b64, &HashMap::from([("1".to_string(), key)]), &[])
-            .unwrap();
-        match event {
-            Event::GroupChange(gc) => match gc.change {
-                GroupChange::Created {
-                    ref member_ids,
-                    ref admin_ids,
-                    ref title,
-                    ref avatar_url,
-                } => {
-                    assert_eq!(member_ids, &["m1", "m2"]);
-                    assert_eq!(admin_ids, &["a1"]);
-                    assert_eq!(title.as_deref(), Some("Test Group"));
-                    assert_eq!(avatar_url.as_deref(), Some("https://avatar.url"));
-                }
-                other => panic!("Expected GroupChange::Created, got {:?}", other),
-            },
+    fn received_group_change(
+        core: &ChatCore,
+        event_b64: &str,
+        keys: &HashMap<String, XChatConversationKey>,
+    ) -> GroupChange {
+        match core.decrypt_event_with(event_b64, keys, &[]).unwrap() {
+            Event::GroupChange(gc) => gc.change,
             other => panic!("Expected Event::GroupChange, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn decrypt_event_group_change_group_create() {
+        let mut core = ChatCore::new();
+        core.set_reject_unverified(false);
+
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        let encrypted_title = encrypted_metadata(&key, "Test Group");
+        let event_b64 = group_create_event(&encrypted_title, Some("1"));
+        let created = |keys: &HashMap<String, XChatConversationKey>| match received_group_change(
+            &core, &event_b64, keys,
+        ) {
+            GroupChange::Created {
+                member_ids,
+                admin_ids,
+                title,
+                avatar_url,
+                conversation_key_version,
+            } => (
+                member_ids,
+                admin_ids,
+                title,
+                avatar_url,
+                conversation_key_version,
+            ),
+            other => panic!("Expected GroupChange::Created, got {:?}", other),
+        };
+
+        // Without the key the create names, the title is unavailable and the
+        // rest of the create still reads.
+        let (member_ids, admin_ids, title, avatar_url, version) = created(&HashMap::new());
+        assert_eq!(member_ids, ["m1", "m2"]);
+        assert_eq!(admin_ids, ["a1"]);
+        assert_eq!(
+            title,
+            Some(GroupText::Unavailable {
+                raw: encrypted_title
+            })
+        );
+        assert_eq!(
+            avatar_url.as_deref(),
+            Some("https://ton.x.com/xchat_media/g1/avatar")
+        );
+        assert_eq!(version.as_deref(), Some("1"));
+
+        let (_, _, title, avatar_url, _) = created(&HashMap::from([("1".to_string(), key)]));
+        assert_eq!(title, Some(text("Test Group")));
+        assert_eq!(
+            avatar_url.as_deref(),
+            Some("https://ton.x.com/xchat_media/g1/avatar")
+        );
+    }
+
+    #[test]
+    fn decrypt_event_group_titles_without_ciphertext_read_as_carried() {
+        let mut core = ChatCore::new();
+        core.set_reject_unverified(false);
+        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
+        let keys = HashMap::from([("1".to_string(), key)]);
+        let title = |event_b64: &str| match received_group_change(&core, event_b64, &keys) {
+            GroupChange::Created { title, .. } => title,
+            other => panic!("Expected GroupChange::Created, got {:?}", other),
+        };
+
+        // A create that names no key version carries its title as plaintext.
+        assert_eq!(
+            title(&group_create_event("Plain Group", None)),
+            Some(text("Plain Group"))
+        );
+        // A plaintext title that names a key version, as 0.5.x apps sent it,
+        // doesn't decrypt even with the key; the event carries it in `raw`.
+        assert_eq!(
+            title(&group_create_event("Plain Group", Some("1"))),
+            Some(GroupText::Unavailable {
+                raw: "Plain Group".to_string()
+            })
+        );
     }
 
     #[test]
@@ -6159,11 +6217,10 @@ mod tests {
         let mut core = ChatCore::new();
         core.set_reject_unverified(false);
 
-        let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         let gc = ThriftGCE::new(
             Some(crate::thrift::event::GroupChange::GroupAvatarChange(
                 GroupAvatarUrlChange::new(
-                    Some(encrypted_metadata(&key, "https://new-avatar.png")),
+                    Some("https://ton.x.com/xchat_media/g1/avatar".to_string()),
                     Some("2".to_string()),
                 ),
             )),
@@ -6171,17 +6228,16 @@ mod tests {
         );
         let event_b64 = build_test_event(ThriftDetail::GroupChangeEvent(gc));
 
-        let event = core
-            .decrypt_event_with(&event_b64, &HashMap::from([("2".to_string(), key)]), &[])
-            .unwrap();
-        match event {
-            Event::GroupChange(gc) => match gc.change {
-                GroupChange::AvatarChanged { ref new_avatar_url } => {
-                    assert_eq!(new_avatar_url, "https://new-avatar.png");
-                }
-                other => panic!("Expected AvatarChanged, got {:?}", other),
-            },
-            other => panic!("Expected Event::GroupChange, got {:?}", other),
+        // The URL is not encrypted, so it reads without any conversation key.
+        match received_group_change(&core, &event_b64, &HashMap::new()) {
+            GroupChange::AvatarChanged {
+                new_avatar_url,
+                conversation_key_version,
+            } => {
+                assert_eq!(new_avatar_url, "https://ton.x.com/xchat_media/g1/avatar");
+                assert_eq!(conversation_key_version.as_deref(), Some("2"));
+            }
+            other => panic!("Expected AvatarChanged, got {:?}", other),
         }
     }
 
@@ -7356,7 +7412,6 @@ mod tests {
         )
         .with_identity("910004", "1")
         .with_title("Squad")
-        .with_avatar_url("https://img/a.png")
         .with_ttl_msec(86400000);
         let result = core.prepare_group_create(&params).unwrap();
 
@@ -7388,19 +7443,15 @@ mod tests {
                         gc.admin_ids.as_deref(),
                         Some(["910004".to_string()].as_slice())
                     );
-                    // The title and avatar go out encrypted under the new
-                    // key, as the result returns them for the request.
+                    // The title goes out encrypted under the new key, as the
+                    // result returns it for the request; a create sets no avatar.
                     let key = result.conversation_key.as_ref().unwrap();
                     assert_eq!(gc.title, result.encrypted_title);
-                    assert_eq!(gc.avatar_url, result.encrypted_avatar_url);
+                    assert_eq!(result.encrypted_description, None);
+                    assert_eq!(gc.avatar_url, None);
                     assert_eq!(
                         core.decrypt(gc.title.as_deref().unwrap(), key).unwrap(),
                         "Squad"
-                    );
-                    assert_eq!(
-                        core.decrypt(gc.avatar_url.as_deref().unwrap(), key)
-                            .unwrap(),
-                        "https://img/a.png"
                     );
                     assert!(create
                         .signature_payload
@@ -7435,7 +7486,9 @@ mod tests {
             vec![],
         )
         .with_identity("910004", "1")
-        .with_current_title("Team");
+        .with_current_title("Team")
+        .with_current_description("Ships the app")
+        .with_current_avatar_url("https://ton.x.com/xchat_media/g555/avatar");
         let result = core.prepare_group_members_change(&params).unwrap();
 
         assert_eq!(result.action_signatures.len(), 2);
@@ -7452,6 +7505,9 @@ mod tests {
         assert!(add
             .signature_payload
             .starts_with("GroupChangeEvent.GroupMemberAddChange,"));
+        assert!(!add.signature_payload.contains("Team"));
+        assert!(!add.signature_payload.contains("Ships the app"));
+        assert_eq!(add.message_event_signature.signature_version, "8");
         match decode_detail(&add.encoded_message_event_detail) {
             MessageEventDetail::GroupChangeEvent(gce) => match gce.group_change.unwrap() {
                 GenGC::GroupMemberAdd(c) => {
@@ -7463,7 +7519,29 @@ mod tests {
                         c.current_member_ids.as_deref(),
                         Some(["910004".to_string()].as_slice())
                     );
-                    assert_eq!(c.current_title.as_deref(), Some("Team"));
+                    // The title and description go out encrypted under the
+                    // key the add generates, as the result returns them for
+                    // the request; the avatar URL goes out as passed.
+                    let key = result.conversation_key.as_ref().unwrap();
+                    assert_eq!(c.current_title, result.encrypted_title);
+                    assert_eq!(c.current_description, result.encrypted_description);
+                    assert_eq!(
+                        core.decrypt(c.current_title.as_deref().unwrap(), key)
+                            .unwrap(),
+                        "Team"
+                    );
+                    assert_eq!(
+                        core.decrypt(c.current_description.as_deref().unwrap(), key)
+                            .unwrap(),
+                        "Ships the app"
+                    );
+                    assert!(add
+                        .signature_payload
+                        .contains(c.current_description.as_deref().unwrap()));
+                    assert_eq!(
+                        c.current_avatar_url.as_deref(),
+                        Some("https://ton.x.com/xchat_media/g555/avatar")
+                    );
                     assert_eq!(c.screen_capture_blocking_enabled, None);
                     assert_eq!(
                         c.conversation_key_version.as_deref(),
@@ -7557,7 +7635,6 @@ mod tests {
         )
         .with_identity("910004", "1")
         .with_title("Squad")
-        .with_avatar_url("https://img/a.png")
         .with_ttl_msec(86400000);
         let created = core.prepare_group_create(&create_params).unwrap();
         let created_ckey_b64 =
@@ -7577,7 +7654,8 @@ mod tests {
             None,
         );
 
-        // GroupMemberAdd: CKCE + GroupMemberAdd signatures both round-trip.
+        // GroupMemberAdd: CKCE + GroupMemberAdd signatures both round-trip,
+        // with the description the add signs at version 8.
         let add_params = crate::GroupMembersChangeParams::new(
             input.clone(),
             "g555",
@@ -7588,6 +7666,7 @@ mod tests {
         )
         .with_identity("910004", "1")
         .with_current_title("Team")
+        .with_current_description("Ships the app")
         .with_current_avatar_url("https://img/b.png")
         .with_current_ttl_msec(3600000);
         let added = core.prepare_group_members_change(&add_params).unwrap();
@@ -7623,6 +7702,12 @@ mod tests {
         let blocked = core.prepare_group_members_change(&blocked_params).unwrap();
         let blocked_add = &blocked.action_signatures[1];
         assert!(blocked_add.signature_payload.ends_with(",true"));
+        // An add without a description signs at the current version, which
+        // every reader verifies.
+        assert_eq!(
+            blocked_add.message_event_signature.signature_version,
+            crate::signatures::SIGNATURE_VERSION
+        );
         match decode_detail(&blocked_add.encoded_message_event_detail) {
             MessageEventDetail::GroupChangeEvent(gce) => match gce.group_change.unwrap() {
                 crate::thrift::event::GroupChange::GroupMemberAdd(c) => {
@@ -7905,7 +7990,6 @@ mod tests {
             crate::GroupCreateParams::new(input.clone(), "g999", members.clone(), admins.clone())
                 .with_identity("910004", "1");
         ffi_params.title = Some("".into());
-        ffi_params.avatar_url = Some("".into());
         ffi_params.ttl_msec = Some(-1);
         let ffi_form = core
             .prepare_group_create_with_version(&ffi_params, "42")
@@ -7926,17 +8010,16 @@ mod tests {
             ffi_form.action_signatures[1]
                 .signature_payload
                 .ends_with(",null,null,null"),
-            "normalized title/avatar must sign as the null sentinel"
+            "a normalized title and the unset avatar must sign as the null sentinel"
         );
     }
 
     #[test]
-    fn prepare_group_members_change_rejects_comma_in_title() {
+    fn prepare_group_members_change_signs_a_comma_title_but_not_a_comma_avatar_url() {
         let core = ChatCore::new();
         core.generate_keypairs().unwrap();
         let pk = core.get_public_keys().unwrap();
         let input = vec![PublicKeyInput::new("910004", &pk.identity, "1")];
-
         let params = crate::GroupMembersChangeParams::new(
             input,
             "g999",
@@ -7945,9 +8028,25 @@ mod tests {
             vec!["910004".to_string()],
             vec![],
         )
-        .with_identity("910004", "1")
-        .with_current_title("Team, the sequel");
-        let result = core.prepare_group_members_change(&params);
+        .with_identity("910004", "1");
+
+        // The add signs the title's ciphertext, so a comma in the plaintext
+        // never reaches the comma-joined payload.
+        let added = core
+            .prepare_group_members_change(&params.clone().with_current_title("Team, the sequel"))
+            .unwrap();
+        assert_eq!(
+            core.decrypt(
+                added.encrypted_title.as_deref().unwrap(),
+                added.conversation_key.as_ref().unwrap()
+            )
+            .unwrap(),
+            "Team, the sequel"
+        );
+
+        // The avatar URL is signed as passed.
+        let result = core
+            .prepare_group_members_change(&params.with_current_avatar_url("https://ton.x.com/a,b"));
         assert!(matches!(result, Err(SdkError::Parse(_))));
     }
 
@@ -7964,7 +8063,8 @@ mod tests {
         // Empty strings and a negative TTL are the FFI encodings of "not
         // set"; unlike group create, title/avatar/TTL all enter the signed
         // member-add payload, so both the detail and the signed bytes must
-        // match the None form.
+        // match the None form, and an empty description must not move the
+        // add to the version that signs one.
         let mut ffi_params = crate::GroupMembersChangeParams::new(
             input.clone(),
             "g999",
@@ -7976,6 +8076,7 @@ mod tests {
         .with_identity("910004", "1");
         ffi_params.current_title = Some("".into());
         ffi_params.current_avatar_url = Some("".into());
+        ffi_params.current_description = Some("".into());
         ffi_params.current_ttl_msec = Some(-1);
         let ffi_form = core
             .prepare_group_members_change_with_version(&ffi_params, "42")
@@ -8218,9 +8319,7 @@ mod tests {
 
     #[test]
     fn group_change_none_returns_unknown() {
-        let change = ChatCore::new()
-            .group_change(None, None, &HashMap::new())
-            .unwrap();
+        let change = ChatCore::new().group_change(None, None, &HashMap::new());
         assert!(matches!(change, GroupChange::Unknown));
     }
 

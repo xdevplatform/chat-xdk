@@ -45,7 +45,9 @@ namespace ChatXdk.Tests
             [JsonPropertyName("event_group_create_b64")] public string EventGroupCreateB64 { get; init; } = "";
             [JsonPropertyName("event_group_create_conversation_key_b64")] public string EventGroupCreateConversationKeyB64 { get; init; } = "";
             [JsonPropertyName("event_group_create_conversation_key_version")] public string EventGroupCreateConversationKeyVersion { get; init; } = "";
+            [JsonPropertyName("event_group_create_encrypted_title")] public string EventGroupCreateEncryptedTitle { get; init; } = "";
             [JsonPropertyName("event_group_title")] public string EventGroupTitle { get; init; } = "";
+            [JsonPropertyName("event_group_avatar_change_b64")] public string EventGroupAvatarChangeB64 { get; init; } = "";
             [JsonPropertyName("event_group_avatar_url")] public string EventGroupAvatarUrl { get; init; } = "";
             [JsonPropertyName("event_key_change_b64")] public string EventKeyChangeB64 { get; init; } = "";
             [JsonPropertyName("event_message_b64")] public string EventMessageB64 { get; init; } = "";
@@ -817,13 +819,6 @@ namespace ChatXdk.Tests
                     ConversationKey = rotated.ConversationKey,
                     ConversationKeyVersion = rotated.ConversationKeyVersion,
                 }), "GroupChangeEvent.GroupTitleChange,", "Board: layoffs, Q3"),
-                (chat.PrepareGroupAvatarChange(new GroupAvatarChangeParams("g100", "https://img/a.png")
-                {
-                    SenderId = "111",
-                    SigningKeyVersion = "1",
-                    ConversationKey = rotated.ConversationKey,
-                    ConversationKeyVersion = rotated.ConversationKeyVersion,
-                }), "GroupChangeEvent.GroupAvatarUrlChange,", "https://img/a.png"),
                 (chat.PrepareGroupDescriptionChange(new GroupDescriptionChangeParams("g100", "Rules: be kind")
                 {
                     SenderId = "111",
@@ -841,6 +836,15 @@ namespace ChatXdk.Tests
                 Assert.DoesNotContain(plaintext, payload);
                 Assert.Equal(plaintext, chat.Decrypt(prepared.EncryptedValue, rotated.ConversationKey));
             }
+            const string avatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
+            var avatar = OnlyAction(chat.PrepareGroupAvatarChange(
+                new GroupAvatarChangeParams("g100", avatarUrl, rotated.ConversationKeyVersion)
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                }));
+            Assert.StartsWith("GroupChangeEvent.GroupAvatarUrlChange,", avatar.SignaturePayload);
+            Assert.EndsWith($",{rotated.ConversationKeyVersion},{avatarUrl}", avatar.SignaturePayload);
             var uncached = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupTitleChange(
                 new GroupTitleChangeParams("g100", "Board") { SenderId = "111", SigningKeyVersion = "1" }));
             Assert.Contains("no cached conversation key for 'g100'", uncached.Message);
@@ -1229,7 +1233,46 @@ namespace ChatXdk.Tests
             Assert.StartsWith("GroupChangeEvent.GroupMemberAddChange,", prepared.ActionSignatures[1].SignaturePayload);
             Assert.NotEmpty(prepared.ActionSignatures[1].EncodedMessageEventDetail);
             // Unset screen-capture blocking signs as the trailing null sentinel.
-            Assert.EndsWith(",null", prepared.ActionSignatures[1].SignaturePayload);
+            var add = prepared.ActionSignatures[1];
+            Assert.EndsWith(",null", add.SignaturePayload);
+            // The title goes out encrypted under the new key, the value the request
+            // sends as encrypted_title; the signature covers the ciphertext.
+            Assert.Contains(prepared.EncryptedTitle!, add.SignaturePayload);
+            Assert.DoesNotContain("Test Group", add.SignaturePayload);
+            Assert.Equal("Test Group", chat.Decrypt(prepared.EncryptedTitle!, prepared.ConversationKey));
+            Assert.Null(prepared.EncryptedDescription);
+            Assert.Equal("7", add.MessageEventSignature.SignatureVersion);
+        }
+
+        [Fact]
+        public void PrepareGroupMembersChange_EncryptsTheDescription()
+        {
+            using var chat = CreateUnlocked();
+            var publicKeys = chat.GetPublicKeys();
+            const string avatarUrl = "https://ton.x.com/xchat_media/g123/avatar";
+
+            var prepared = chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
+                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                "g123",
+                new[] { "910006" },
+                new[] { "910002" },
+                new[] { "910002" },
+                Array.Empty<string>())
+            {
+                SenderId = "910002",
+                SigningKeyVersion = "1",
+                CurrentTitle = "Test Group",
+                CurrentDescription = "Ships the app",
+                CurrentAvatarUrl = avatarUrl,
+            });
+
+            Assert.Equal("Ships the app", chat.Decrypt(prepared.EncryptedDescription!, prepared.ConversationKey));
+            // The description is signed at version 8, after the screen-capture slot;
+            // the avatar URL is signed as passed.
+            var add = prepared.ActionSignatures[1];
+            Assert.Equal("8", add.MessageEventSignature.SignatureVersion);
+            Assert.EndsWith($",null,{prepared.EncryptedDescription}", add.SignaturePayload);
+            Assert.Contains($",{avatarUrl},", add.SignaturePayload);
         }
 
         [Fact]
@@ -1288,7 +1331,7 @@ namespace ChatXdk.Tests
             Assert.Contains(prepared.EncryptedTitle!, payload);
             Assert.DoesNotContain("Test Group", payload);
             Assert.Equal("Test Group", chat.Decrypt(prepared.EncryptedTitle!, prepared.ConversationKey));
-            Assert.Null(prepared.EncryptedAvatarUrl);
+            Assert.Null(prepared.EncryptedDescription);
         }
 
         [Fact]
@@ -1564,15 +1607,38 @@ namespace ChatXdk.Tests
             Assert.Equal(v.EventGroupId, e.GetProperty("conversation_id").GetString());
             var change = e.GetProperty("change");
             Assert.Equal("DescriptionChanged", change.GetProperty("change_type").GetString());
-            Assert.Equal(v.EventGroupDescription, change.GetProperty("new_description").GetString());
+            var description = change.GetProperty("new_description").Deserialize<GroupText>()!;
+            Assert.Equal("Text", description.Kind);
+            Assert.Equal(v.EventGroupDescription, description.Text);
 
-            var keyless = Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(
-                new DecryptEventParams(v.EventGroupDescriptionB64) { SigningKeys = EventSigningKeys(v) }));
-            Assert.Contains("Group description encrypted with key version", keyless.Message);
+            // Without the key the description was encrypted under, the change still
+            // decrypts, with the description unavailable.
+            var keyless = chat.DecryptEvent(
+                new DecryptEventParams(v.EventGroupDescriptionB64) { SigningKeys = EventSigningKeys(v) });
+            var unavailable = keyless.GetProperty("change").GetProperty("new_description").Deserialize<GroupText>()!;
+            Assert.Equal("Unavailable", unavailable.Kind);
+            Assert.False(string.IsNullOrEmpty(unavailable.Raw));
+            Assert.NotEqual(v.EventGroupDescription, unavailable.Raw);
         }
 
         [Fact]
-        public void Vectors_GroupCreate_DecryptsItsTitleAndAvatarOnReceive()
+        public void Vectors_GroupAvatarChange_CarriesTheMediaUrl()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+
+            // The avatar URL is not encrypted, so the change reads without any key.
+            var e = chat.DecryptEvent(
+                new DecryptEventParams(v.EventGroupAvatarChangeB64) { SigningKeys = EventSigningKeys(v) });
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            var change = e.GetProperty("change");
+            Assert.Equal("AvatarChanged", change.GetProperty("change_type").GetString());
+            Assert.Equal(v.EventGroupAvatarUrl, change.GetProperty("new_avatar_url").GetString());
+            Assert.Equal(v.EventConversationKeyVersion, change.GetProperty("conversation_key_version").GetString());
+        }
+
+        [Fact]
+        public void Vectors_GroupCreate_DecryptsItsTitleOnReceive()
         {
             var v = LoadVectors();
             using var chat = new Chat();
@@ -1589,12 +1655,29 @@ namespace ChatXdk.Tests
             Assert.True(e.GetProperty("verified").GetBoolean());
             var change = e.GetProperty("change");
             Assert.Equal("Created", change.GetProperty("change_type").GetString());
-            Assert.Equal(v.EventGroupTitle, change.GetProperty("title").GetString());
-            Assert.Equal(v.EventGroupAvatarUrl, change.GetProperty("avatar_url").GetString());
+            var title = change.GetProperty("title").Deserialize<GroupText>()!;
+            Assert.Equal("Text", title.Kind);
+            Assert.Equal(v.EventGroupTitle, title.Text);
+            Assert.Equal(JsonValueKind.Null, change.GetProperty("avatar_url").ValueKind);
+            Assert.Equal(v.EventGroupCreateConversationKeyVersion, change.GetProperty("conversation_key_version").GetString());
 
-            var keyless = Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(
-                new DecryptEventParams(v.EventGroupCreateB64) { SigningKeys = EventSigningKeys(v) }));
-            Assert.Contains("Group title encrypted with key version", keyless.Message);
+            // Without the key the create seeded, the create still decrypts, on both paths,
+            // with its title unavailable as the ciphertext it carries.
+            var keyless = chat.DecryptEvent(
+                new DecryptEventParams(v.EventGroupCreateB64) { SigningKeys = EventSigningKeys(v) });
+            var keylessChange = keyless.GetProperty("change");
+            Assert.Equal(v.EventSenderId, keylessChange.GetProperty("member_ids")[0].GetString());
+            var unavailable = keylessChange.GetProperty("title").Deserialize<GroupText>()!;
+            Assert.Equal("Unavailable", unavailable.Kind);
+            Assert.Equal(v.EventGroupCreateEncryptedTitle, unavailable.Raw);
+            var batch = chat.DecryptEvents(new DecryptEventsParams(new[] { v.EventGroupCreateB64 })
+            {
+                SigningKeys = EventSigningKeys(v),
+            });
+            Assert.Empty(batch.Errors);
+            var batched = batch.Messages[0].Event.GetProperty("change").GetProperty("title").Deserialize<GroupText>()!;
+            Assert.Equal("Unavailable", batched.Kind);
+            Assert.Equal(v.EventGroupCreateEncryptedTitle, batched.Raw);
         }
 
         [Fact]
@@ -1936,8 +2019,8 @@ namespace ChatXdk.Tests
                 System.Text.Encoding.UTF8.GetBytes(v.PayloadMessageV10)));
         }
 
-        // Absent-value normalization: an empty title/avatar is "not set" and
-        // signs the null sentinel, exactly like leaving the field null.
+        // Absent-value normalization: an empty title is "not set" and signs the
+        // null sentinel, exactly like leaving the field null.
         [Fact]
         public void PrepareGroupCreate_EmptyTitle_SignsNullSentinel()
         {
@@ -1955,17 +2038,15 @@ namespace ChatXdk.Tests
                     SenderId = "910002",
                     SigningKeyVersion = "1",
                     Title = title,
-                    AvatarUrl = title,
                 });
-                // Trailing slots: title, avatar_url, ttl — all unset → null sentinels.
+                // Trailing slots: legacy upgrade, title, avatar_url — all unset → null sentinels.
                 Assert.EndsWith(",null,null,null", prepared.ActionSignatures[1].SignaturePayload);
                 Assert.Null(prepared.EncryptedTitle);
-                Assert.Null(prepared.EncryptedAvatarUrl);
             }
         }
 
         // The plaintext never enters the comma-joined signature payload, only its
-        // base64 ciphertext does, so a title or avatar URL with a comma encrypts.
+        // base64 ciphertext does, so a title with a comma encrypts.
         [Fact]
         public void PrepareGroupCreate_EncryptsACommaTitle()
         {
@@ -1981,10 +2062,8 @@ namespace ChatXdk.Tests
                 SenderId = "910002",
                 SigningKeyVersion = "1",
                 Title = "Team, the sequel",
-                AvatarUrl = "https://img.example/a.png",
             });
             Assert.Equal("Team, the sequel", chat.Decrypt(prepared.EncryptedTitle!, prepared.ConversationKey));
-            Assert.Equal("https://img.example/a.png", chat.Decrypt(prepared.EncryptedAvatarUrl!, prepared.ConversationKey));
         }
 
         // Error contracts and marshaling edge cases

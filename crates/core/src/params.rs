@@ -931,8 +931,11 @@ impl ConversationKeyChangeParams {
 /// Parameters for [`crate::ChatCore::prepare_group_members_change`].
 ///
 /// The `current_*` fields snapshot the group state the change is made
-/// against. An empty string or negative TTL in an optional field is treated
-/// as unset, and an unset value signs the null sentinel, so every binding
+/// against. `current_title` and `current_description` are plaintext: the
+/// call encrypts each under the new conversation key it generates and signs
+/// the ciphertext. `current_avatar_url` is the avatar's media URL, signed as
+/// is. An empty string or negative TTL in an optional field is treated as
+/// unset, and an unset value signs the null sentinel, so every binding
 /// produces identical signed bytes.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -955,10 +958,12 @@ pub struct GroupMembersChangeParams {
     /// Version of the signing key used to sign the change; resolves from the
     /// session identity when unset.
     pub signing_key_version: Option<String>,
-    /// The group's current title, if set.
+    /// The group's current title, as plaintext, if set.
     pub current_title: Option<String>,
-    /// The group's current avatar URL, if set.
+    /// The group's current avatar media URL, if set.
     pub current_avatar_url: Option<String>,
+    /// The group's current description, as plaintext, if set.
+    pub current_description: Option<String>,
     /// The group's current message TTL in milliseconds, if set.
     pub current_ttl_msec: Option<i64>,
     /// The group's current screen-capture-blocking state; `None` when unset.
@@ -986,20 +991,28 @@ impl GroupMembersChangeParams {
             signing_key_version: None,
             current_title: None,
             current_avatar_url: None,
+            current_description: None,
             current_ttl_msec: None,
             current_screen_capture_blocking_enabled: None,
         }
     }
 
-    /// Set the group's current title.
+    /// Set the group's current title, as plaintext; the call encrypts it.
     pub fn with_current_title(mut self, current_title: impl Into<String>) -> Self {
         self.current_title = non_empty(current_title);
         self
     }
 
-    /// Set the group's current avatar URL.
+    /// Set the group's current avatar media URL.
     pub fn with_current_avatar_url(mut self, current_avatar_url: impl Into<String>) -> Self {
         self.current_avatar_url = non_empty(current_avatar_url);
+        self
+    }
+
+    /// Set the group's current description, as plaintext; the call encrypts
+    /// it.
+    pub fn with_current_description(mut self, current_description: impl Into<String>) -> Self {
+        self.current_description = non_empty(current_description);
         self
     }
 
@@ -1033,11 +1046,12 @@ impl GroupMembersChangeParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_create`].
 ///
-/// `title` and `avatar_url` are the group's plaintext title and avatar URL:
-/// the create encrypts each under the new conversation key and signs the
-/// ciphertext. An empty string or negative TTL in an optional field is
-/// treated as unset, and an unset value signs the null sentinel, so every
-/// binding produces identical signed bytes.
+/// `title` is the group's plaintext title: the create encrypts it under the
+/// new conversation key and signs the ciphertext. A create sets no avatar;
+/// set it afterwards with [`crate::ChatCore::prepare_group_avatar_change`].
+/// An empty string or negative TTL in an optional field is treated as unset,
+/// and an unset value signs the null sentinel, so every binding produces
+/// identical signed bytes.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupCreateParams {
@@ -1058,8 +1072,6 @@ pub struct GroupCreateParams {
     pub signing_key_version: Option<String>,
     /// The group's title, as plaintext, if set.
     pub title: Option<String>,
-    /// The group's avatar URL, as plaintext, if set.
-    pub avatar_url: Option<String>,
     /// The group's message TTL in milliseconds, if set.
     pub ttl_msec: Option<i64>,
 }
@@ -1080,7 +1092,6 @@ impl GroupCreateParams {
             sender_id: None,
             signing_key_version: None,
             title: None,
-            avatar_url: None,
             ttl_msec: None,
         }
     }
@@ -1088,12 +1099,6 @@ impl GroupCreateParams {
     /// Set the group's title, as plaintext; the create encrypts it.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = non_empty(title);
-        self
-    }
-
-    /// Set the group's avatar URL, as plaintext; the create encrypts it.
-    pub fn with_avatar_url(mut self, avatar_url: impl Into<String>) -> Self {
-        self.avatar_url = non_empty(avatar_url);
         self
     }
 
@@ -1121,10 +1126,10 @@ impl GroupCreateParams {
 /// rotates the conversation key and encrypts the new key for them, so the
 /// removed members don't receive the key the group encrypts under next.
 ///
-/// `title`, `avatar_url` and `description` are the group's plaintext title,
-/// avatar URL and description. Each one set is encrypted under the new key
-/// and signed as a change of its own, so the members who stay read it under
-/// the key they hold; an empty value is unset.
+/// `title` and `description` are the group's plaintext title and
+/// description. Each one set is encrypted under the new key and signed as a
+/// change of its own, marked as a key-rotation re-encryption, so the members
+/// who stay read it under the key they hold; an empty value is unset.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupMembersRemoveParams {
@@ -1137,8 +1142,6 @@ pub struct GroupMembersRemoveParams {
     pub user_ids: Vec<String>,
     /// The group's title, re-encrypted under the new conversation key.
     pub title: Option<String>,
-    /// The group's avatar URL, re-encrypted under the new conversation key.
-    pub avatar_url: Option<String>,
     /// The group's description, re-encrypted under the new conversation key.
     pub description: Option<String>,
     /// User ID of the sender signing the removal; resolves from the session
@@ -1161,7 +1164,6 @@ impl GroupMembersRemoveParams {
             conversation_id: conversation_id.into(),
             user_ids,
             title: None,
-            avatar_url: None,
             description: None,
             sender_id: None,
             signing_key_version: None,
@@ -1171,13 +1173,6 @@ impl GroupMembersRemoveParams {
     /// Set the group's title, to re-encrypt under the new conversation key.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = non_empty(title);
-        self
-    }
-
-    /// Set the group's avatar URL, to re-encrypt under the new conversation
-    /// key.
-    pub fn with_avatar_url(mut self, avatar_url: impl Into<String>) -> Self {
-        self.avatar_url = non_empty(avatar_url);
         self
     }
 
@@ -1360,61 +1355,42 @@ impl std::fmt::Debug for GroupTitleChangeParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_avatar_change`].
 ///
-/// `new_avatar_url` is plaintext. The SDK encrypts it under the conversation key,
-/// resolved as `encrypt_message` resolves it: the explicit
-/// `conversation_key` and `conversation_key_version` pair, or the key cache
-/// when both are unset.
-///
-/// The conversation key is zeroized when the params are dropped and is
-/// redacted from `Debug` output. No `PartialEq` is derived:
-/// equality would byte-compare the key non-constant-time.
-#[derive(Clone)]
+/// A group's avatar URL is not encrypted. `new_avatar_url` is the media URL
+/// of the avatar image, which the app encrypts under the conversation key
+/// and uploads to the group's media before the change, and
+/// `conversation_key_version` is the version of the key the image is
+/// encrypted under: recipients decrypt the image with that key.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupAvatarChangeParams {
     /// ID of the group conversation.
     pub conversation_id: String,
-    /// The group's new avatar URL, as plaintext.
+    /// The media URL of the group's new avatar image, signed and sent as is.
     pub new_avatar_url: String,
+    /// Version of the conversation key the avatar image is encrypted under.
+    pub conversation_key_version: String,
     /// User ID of the sender signing the change; resolves from the session
     /// identity when unset.
     pub sender_id: Option<String>,
     /// Version of the signing key used to sign the change; resolves from the
     /// session identity when unset.
     pub signing_key_version: Option<String>,
-    /// Raw 32-byte conversation key the avatar URL is encrypted under; resolves
-    /// from the key cache when unset (set together with
-    /// `conversation_key_version`).
-    pub conversation_key: Option<Vec<u8>>,
-    /// Version of the conversation key; resolves from the key cache when
-    /// unset (set together with `conversation_key`).
-    pub conversation_key_version: Option<String>,
 }
 
 impl GroupAvatarChangeParams {
     /// Create params with required fields; all optional fields default to `None`.
-    pub fn new(conversation_id: impl Into<String>, new_avatar_url: impl Into<String>) -> Self {
+    pub fn new(
+        conversation_id: impl Into<String>,
+        new_avatar_url: impl Into<String>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
         Self {
             conversation_id: conversation_id.into(),
             new_avatar_url: new_avatar_url.into(),
+            conversation_key_version: conversation_key_version.into(),
             sender_id: None,
             signing_key_version: None,
-            conversation_key: None,
-            conversation_key_version: None,
         }
-    }
-
-    /// Set the explicit conversation key and its version.
-    ///
-    /// The two travel together: the version names the key the recipients use
-    /// to decrypt, so setting one without the other is rejected.
-    pub fn with_conversation_key(
-        mut self,
-        conversation_key: Vec<u8>,
-        conversation_key_version: impl Into<String>,
-    ) -> Self {
-        self.conversation_key = Some(conversation_key);
-        self.conversation_key_version = Some(conversation_key_version.into());
-        self
     }
 
     /// Set the explicit sender identity, overriding the session identity.
@@ -1426,28 +1402,6 @@ impl GroupAvatarChangeParams {
         self.sender_id = non_empty(sender_id);
         self.signing_key_version = non_empty(signing_key_version);
         self
-    }
-}
-
-impl Drop for GroupAvatarChangeParams {
-    fn drop(&mut self) {
-        self.conversation_key.zeroize();
-    }
-}
-
-impl std::fmt::Debug for GroupAvatarChangeParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GroupAvatarChangeParams")
-            .field("conversation_id", &self.conversation_id)
-            .field("new_avatar_url", &self.new_avatar_url)
-            .field("sender_id", &self.sender_id)
-            .field("signing_key_version", &self.signing_key_version)
-            .field(
-                "conversation_key",
-                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
-            )
-            .field("conversation_key_version", &self.conversation_key_version)
-            .finish()
     }
 }
 
@@ -2375,6 +2329,8 @@ mod tests {
         let via_builders = new(public_keys.clone())
             .with_identity("910002", "1")
             .with_current_title("Team")
+            .with_current_description("Ships the app")
+            .with_current_avatar_url("https://ton.x.com/xchat_media/g123/avatar")
             .with_current_ttl_msec(60_000)
             .with_current_screen_capture_blocking_enabled(true);
 
@@ -2382,22 +2338,24 @@ mod tests {
         via_fields.sender_id = Some("910002".into());
         via_fields.signing_key_version = Some("1".into());
         via_fields.current_title = Some("Team".into());
+        via_fields.current_description = Some("Ships the app".into());
+        via_fields.current_avatar_url = Some("https://ton.x.com/xchat_media/g123/avatar".into());
         via_fields.current_ttl_msec = Some(60_000);
         via_fields.current_screen_capture_blocking_enabled = Some(true);
         assert_eq!(via_builders, via_fields);
 
-        // Both constructions encode identical member-add event details for
-        // the same conversation-key version (the detail is deterministic).
-        let a = core
-            .prepare_group_members_change_with_version(&via_builders, "42")
-            .unwrap();
-        let b = core
-            .prepare_group_members_change_with_version(&via_fields, "42")
-            .unwrap();
-        assert_eq!(
-            a.action_signatures[1].encoded_message_event_detail,
-            b.action_signatures[1].encoded_message_event_detail,
-        );
+        // Each add encrypts the title and description under its own new key;
+        // both read back as the same plaintext.
+        for params in [&via_builders, &via_fields] {
+            let added = core
+                .prepare_group_members_change_with_version(params, "42")
+                .unwrap();
+            let key = added.conversation_key.as_ref().unwrap();
+            let title = added.encrypted_title.as_deref().unwrap();
+            let description = added.encrypted_description.as_deref().unwrap();
+            assert_eq!(core.decrypt(title, key).unwrap(), "Team");
+            assert_eq!(core.decrypt(description, key).unwrap(), "Ships the app");
+        }
     }
 
     #[test]

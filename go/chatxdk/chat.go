@@ -320,8 +320,12 @@ func (c *Chat) PrepareConversationKeyChange(params ConversationKeyChangeParams) 
 // PrepareGroupCreate; a key rotation without a roster change is
 // PrepareConversationKeyChange.
 //
-// CurrentTitle and CurrentAvatarURL may be empty; leave CurrentTTLMsec and
-// CurrentScreenCaptureBlockingEnabled nil when unset.
+// CurrentTitle, CurrentDescription and CurrentAvatarURL may be empty; leave
+// CurrentTTLMsec and CurrentScreenCaptureBlockingEnabled nil when unset.
+// CurrentTitle and CurrentDescription are plaintext: the call encrypts each
+// under the new conversation key, signs the ciphertext, and returns it as
+// EncryptedTitle and EncryptedDescription. CurrentAvatarURL is the avatar's
+// media URL, signed as is.
 func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	// Rosters are required fields; marshal nil slices as [] rather than null.
@@ -352,11 +356,10 @@ func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*Prep
 // minted by the initialize endpoint). Later key rotations use
 // PrepareConversationKeyChange; roster additions use PrepareGroupMembersChange.
 //
-// Title and AvatarURL are plaintext and may be empty; leave TTLMsec nil when
-// unset. The call encrypts a title and avatar URL under the new conversation
-// key, signs the ciphertext, and returns it as EncryptedTitle and
-// EncryptedAvatarURL: the group_name and group_avatar_url the create request
-// sends.
+// Title is plaintext and may be empty; leave TTLMsec nil when unset. The call
+// encrypts a title under the new conversation key, signs the ciphertext, and
+// returns it as EncryptedTitle: the group_name the create request sends. A
+// create sets no avatar; set it afterwards with PrepareGroupAvatarChange.
 func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	// Rosters are required fields; marshal nil slices as [] rather than null.
@@ -381,8 +384,10 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 // conversation key for the members who stay.
 //
 // PublicKeys are the identity keys of the members who stay. The result
-// carries the new key, those members' participant keys, and two action
-// signatures: the removal (bound to the new key version) and the key change.
+// carries the new key, those members' participant keys, and the action
+// signatures: the removal (bound to the new key version), a title and a
+// description change for each one the params set, re-encrypted under the new
+// key, and the key change.
 func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	if params.PublicKeys == nil {
@@ -417,10 +422,11 @@ func (c *Chat) PrepareGroupTitleChange(params GroupTitleChangeParams) (*Prepared
 	return c.prepareMetadataChange(params, ffiPrepareGroupTitleChange)
 }
 
-// PrepareGroupAvatarChange encrypts a new group avatar URL (plaintext
-// NewAvatarURL) under the conversation key and signs the change.
-func (c *Chat) PrepareGroupAvatarChange(params GroupAvatarChangeParams) (*PreparedGroupMetadataChange, error) {
-	return c.prepareMetadataChange(params, ffiPrepareGroupAvatarChange)
+// PrepareGroupAvatarChange signs a group avatar change: NewAvatarURL, the
+// avatar image's media URL, as is, and ConversationKeyVersion, the version of
+// the key the image is encrypted under.
+func (c *Chat) PrepareGroupAvatarChange(params GroupAvatarChangeParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareGroupAvatarChange)
 }
 
 // PrepareGroupDescriptionChange encrypts a new group description (plaintext
@@ -701,10 +707,10 @@ func (c *Chat) DecryptConversationKey(encryptedKeyB64 string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(keyB64)
 }
 
-// Decrypt decrypts a group title, avatar URL, or description the X API
-// returns for a conversation (base64 ciphertext) with the raw 32-byte
-// conversation key. Group changes in events need no call of their own:
-// DecryptEvent returns them decrypted.
+// Decrypt decrypts a group title or description the X API returns for a
+// conversation (base64 ciphertext) with the raw 32-byte conversation key.
+// Group changes in events need no call of their own: DecryptEvent returns
+// them decrypted.
 func (c *Chat) Decrypt(ciphertextB64 string, conversationKey []byte) (string, error) {
 	defer runtime.KeepAlive(c)
 	return ffiDecrypt(c.h, ciphertextB64, base64.StdEncoding.EncodeToString(conversationKey))

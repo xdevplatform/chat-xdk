@@ -318,7 +318,7 @@ async function main() {
 
   // A signed group description change: decryptEvent returns the description
   // decrypted under the fixture conversation key, and without that key the
-  // change fails instead of coming back as ciphertext.
+  // change still decrypts, with the description unavailable.
   const description = chat.decryptEvent({
     eventB64: v.event_group_description_b64,
     conversationKeys: fixtureKeys,
@@ -329,20 +329,34 @@ async function main() {
   assert.equal(description.conversationId, v.event_group_id);
   assert.deepEqual(description.change, {
     changeType: "descriptionChanged",
-    newDescription: v.event_group_description,
+    newDescription: { kind: "text", text: v.event_group_description },
   });
-  assert.throws(
-    () => chat.decryptEvent({
-      eventB64: v.event_group_description_b64,
-      conversationKeys: {},
-      signingKeys,
-    }),
-    /Group description encrypted with key version/,
-  );
+  const keyless = chat.decryptEvent({
+    eventB64: v.event_group_description_b64,
+    conversationKeys: {},
+    signingKeys,
+  });
+  assert.equal(keyless.change.newDescription.kind, "unavailable");
+  assert.ok(keyless.change.newDescription.raw);
+  assert.notEqual(keyless.change.newDescription.raw, v.event_group_description);
 
-  // A signed group create: decryptEvent returns its title and avatar URL
-  // decrypted under the key the create seeded, and without that key the
-  // create fails instead of coming back as ciphertext.
+  // A signed group avatar change carries the media URL as is, with the
+  // version of the key its image is encrypted under: no key needed.
+  const avatar = chat.decryptEvent({
+    eventB64: v.event_group_avatar_change_b64,
+    conversationKeys: {},
+    signingKeys,
+  });
+  assert.equal(avatar.verified, true);
+  assert.deepEqual(avatar.change, {
+    changeType: "avatarChanged",
+    newAvatarUrl: v.event_group_avatar_url,
+    conversationKeyVersion: v.event_conversation_key_version,
+  });
+
+  // A signed group create: decryptEvent returns its title decrypted under
+  // the key the create seeded. Without that key the create still decrypts,
+  // on both paths, with its title unavailable as the ciphertext it carries.
   const createKeys = {
     [v.event_group_create_conversation_key_version]: b64ToBytes(v.event_group_create_conversation_key_b64),
   };
@@ -357,17 +371,21 @@ async function main() {
     changeType: "created",
     memberIds: [v.event_sender_id],
     adminIds: [v.event_sender_id],
-    title: v.event_group_title,
-    avatarUrl: v.event_group_avatar_url,
+    title: { kind: "text", text: v.event_group_title },
+    avatarUrl: null,
+    conversationKeyVersion: v.event_group_create_conversation_key_version,
   });
-  assert.throws(
-    () => chat.decryptEvent({
-      eventB64: v.event_group_create_b64,
-      conversationKeys: {},
-      signingKeys,
-    }),
-    /Group title encrypted with key version/,
-  );
+  const unavailableTitle = { kind: "unavailable", raw: v.event_group_create_encrypted_title };
+  const keylessCreate = chat.decryptEvent({
+    eventB64: v.event_group_create_b64,
+    conversationKeys: {},
+    signingKeys,
+  });
+  assert.deepEqual(keylessCreate.change.memberIds, [v.event_sender_id]);
+  assert.deepEqual(keylessCreate.change.title, unavailableTitle);
+  const createBatch = chat.decryptEvents({ events: [v.event_group_create_b64], signingKeys });
+  assert.deepEqual(createBatch.errors, {});
+  assert.deepEqual(createBatch.messages[0].event.change.title, unavailableTitle);
 
   // Failure events are unsigned by protocol: the fixture failure decodes with
   // no keys, and JS camelCases the discriminator values and the tier field.

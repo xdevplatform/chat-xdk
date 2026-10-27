@@ -332,8 +332,6 @@ struct FfiGroupMembersRemoveParams {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
-    avatar_url: Option<String>,
-    #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     sender_id: Option<String>,
@@ -372,14 +370,11 @@ struct FfiGroupTitleChangeParams {
 struct FfiGroupAvatarChangeParams {
     conversation_id: String,
     new_avatar_url: String,
+    conversation_key_version: String,
     #[serde(default)]
     sender_id: Option<String>,
     #[serde(default)]
     signing_key_version: Option<String>,
-    #[serde(default)]
-    conversation_key: Option<String>,
-    #[serde(default)]
-    conversation_key_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -531,6 +526,8 @@ struct FfiGroupMembersChangeParams {
     #[serde(default)]
     current_avatar_url: Option<String>,
     #[serde(default)]
+    current_description: Option<String>,
+    #[serde(default)]
     current_ttl_msec: Option<i64>,
     #[serde(default)]
     current_screen_capture_blocking_enabled: Option<bool>,
@@ -548,8 +545,6 @@ struct FfiGroupCreateParams {
     signing_key_version: Option<String>,
     #[serde(default)]
     title: Option<String>,
-    #[serde(default)]
-    avatar_url: Option<String>,
     #[serde(default)]
     ttl_msec: Option<i64>,
 }
@@ -1315,7 +1310,7 @@ fn json_prepared_change(
     );
     for (name, value) in [
         ("encrypted_title", &res.encrypted_title),
-        ("encrypted_avatar_url", &res.encrypted_avatar_url),
+        ("encrypted_description", &res.encrypted_description),
     ] {
         if let Some(value) = value {
             out.insert(name.into(), serde_json::Value::String(value.clone()));
@@ -1368,9 +1363,13 @@ pub extern "C" fn chat_xdk_prepare_conversation_key_change(
 /// roster), `conversation_id`, `new_member_ids`, `current_member_ids`,
 /// `current_admin_ids`, `current_pending_member_ids`, plus optional
 /// `sender_id` / `signing_key_version` (absent resolves from the session
-/// identity), `current_title`, `current_avatar_url`, `current_ttl_msec`, and
+/// identity), `current_title` and `current_description` (plaintext,
+/// encrypted under the new conversation key), `current_avatar_url` (the
+/// avatar's media URL, signed as is), `current_ttl_msec`, and
 /// `current_screen_capture_blocking_enabled` (an absent key means unset,
-/// never false). Emits two action signatures.
+/// never false). Emits two action signatures; the result carries the
+/// encrypted title and description as `encrypted_title` and
+/// `encrypted_description`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_members_change(
     handle: *const ChatHandle,
@@ -1398,6 +1397,7 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
         params.signing_key_version = p.signing_key_version;
         params.current_title = p.current_title;
         params.current_avatar_url = p.current_avatar_url;
+        params.current_description = p.current_description;
         params.current_ttl_msec = p.current_ttl_msec;
         params.current_screen_capture_blocking_enabled = p.current_screen_capture_blocking_enabled;
 
@@ -1416,10 +1416,10 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
 /// `params_json` — single JSON document: `public_keys` (for the roster),
 /// `conversation_id`, `member_ids`, `admin_ids`, plus optional `sender_id` /
 /// `signing_key_version` (absent resolves from the session identity),
-/// `title` and `avatar_url` (plaintext, encrypted under the new conversation
-/// key), and `ttl_msec`. Emits two action signatures; the result carries the
-/// encrypted title and avatar URL as `encrypted_title` and
-/// `encrypted_avatar_url`.
+/// `title` (plaintext, encrypted under the new conversation key), and
+/// `ttl_msec`. Emits two action signatures; the result carries the
+/// encrypted title as `encrypted_title`. A create sets no avatar; set it
+/// afterwards with `chat_xdk_prepare_group_avatar_change`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_create(
     handle: *const ChatHandle,
@@ -1440,7 +1440,6 @@ pub extern "C" fn chat_xdk_prepare_group_create(
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
         params.title = p.title;
-        params.avatar_url = p.avatar_url;
         params.ttl_msec = p.ttl_msec;
 
         match h.inner.prepare_group_create(&params) {
@@ -1533,13 +1532,14 @@ fn ffi_prepared_change(
 /// members who stay.
 ///
 /// `params_json` — `public_keys` (the identity keys of the members who
-/// stay), `conversation_id`, `user_ids`, plus optional `title`, `avatar_url`
-/// and `description` (the group's plaintext metadata, re-encrypted under the
+/// stay), `conversation_id`, `user_ids`, plus optional `title` and
+/// `description` (the group's plaintext metadata, re-encrypted under the
 /// new key) and `sender_id` / `signing_key_version`.
 ///
 /// Returns JSON `PreparedConversationChange`: `conversation_key` is the new
-/// raw key base64, and `action_signatures` is the removal, a title, avatar
-/// and description change for each one set, then the key change.
+/// raw key base64, and `action_signatures` is the removal, a title and a
+/// description change for each one set, marked as key-rotation
+/// re-encryptions, then the key change.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_members_remove(
     handle: *const ChatHandle,
@@ -1557,7 +1557,6 @@ pub extern "C" fn chat_xdk_prepare_group_members_remove(
         let mut params =
             GroupMembersRemoveParams::new(p.public_keys, p.conversation_id, p.user_ids);
         params.title = p.title;
-        params.avatar_url = p.avatar_url;
         params.description = p.description;
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
@@ -1635,17 +1634,15 @@ pub extern "C" fn chat_xdk_prepare_group_title_change(
     })
 }
 
-/// Encrypt a new group avatar URL under the conversation key and sign the
-/// change.
+/// Sign a group avatar change.
 ///
-/// `params_json` — `conversation_id`, `new_avatar_url` (plaintext), plus
-/// optional `sender_id` / `signing_key_version` (unset resolves from the
-/// session identity) and `conversation_key` (base64 raw 32-byte key) /
-/// `conversation_key_version` (unset resolves from the opt-in key cache).
+/// `params_json` — `conversation_id`, `new_avatar_url` (the media URL of
+/// the avatar image, signed and sent as is), `conversation_key_version`
+/// (the version of the key the image is encrypted under), plus optional
+/// `sender_id` / `signing_key_version` (unset resolves from the session
+/// identity).
 ///
-/// Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
-/// ciphertext the request sends), `conversation_key_version`, and
-/// `action_signatures`.
+/// Returns JSON `PreparedAction`: `action_signatures`, one entry.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_avatar_change(
     handle: *const ChatHandle,
@@ -1660,16 +1657,14 @@ pub extern "C" fn chat_xdk_prepare_group_avatar_change(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let ckey_bytes = match decode_opt_ckey_bytes(p.conversation_key.as_deref()) {
-            Ok(k) => k,
-            Err(e) => return e,
-        };
-        let mut params = GroupAvatarChangeParams::new(p.conversation_id, p.new_avatar_url);
+        let mut params = GroupAvatarChangeParams::new(
+            p.conversation_id,
+            p.new_avatar_url,
+            p.conversation_key_version,
+        );
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
-        params.conversation_key = ckey_bytes;
-        params.conversation_key_version = p.conversation_key_version;
-        ffi_prepared_metadata_change(h.inner.prepare_group_avatar_change(&params))
+        ffi_prepared_action(h.inner.prepare_group_avatar_change(&params))
     })
 }
 
@@ -2334,7 +2329,7 @@ pub extern "C" fn chat_xdk_decrypt_conversation_key(
     })
 }
 
-/// Decrypt a group title, avatar URL, or description the X API returns for a
+/// Decrypt a group title or description the X API returns for a
 /// conversation: base64 ciphertext under the conversation key (base64 raw
 /// 32-byte key), decrypted to UTF-8 plaintext.
 #[no_mangle]

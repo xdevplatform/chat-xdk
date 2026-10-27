@@ -19,37 +19,39 @@ import (
 )
 
 type sdkVectors struct {
-	IdentityPrivateB64            string `json:"identity_private_b64"`
-	SigningPrivateB64             string `json:"signing_private_b64"`
-	PrivateKeysConcatB64          string `json:"private_keys_concat_b64"`
-	MessageUTF8                   string `json:"message_utf8"`
-	ConversationKeyB64            string `json:"conversation_key_b64"`
-	PlaintextB64                  string `json:"plaintext_b64"`
-	IdentityPublicB64             string `json:"identity_public_b64"`
-	SigningPublicB64              string `json:"signing_public_b64"`
-	SignatureB64                  string `json:"signature_b64"`
-	IdentityPublicKeySignatureB64 string `json:"identity_public_key_signature_b64"`
-	EventFailureB64               string `json:"event_failure_b64"`
-	EventGroupDescriptionB64      string `json:"event_group_description_b64"`
-	EventGroupDescription         string `json:"event_group_description"`
-	EventGroupID                  string `json:"event_group_id"`
-	EventGroupCreateB64           string `json:"event_group_create_b64"`
-	EventGroupCreateKeyB64        string `json:"event_group_create_conversation_key_b64"`
-	EventGroupCreateKeyVersion    string `json:"event_group_create_conversation_key_version"`
-	EventGroupTitle               string `json:"event_group_title"`
-	EventGroupAvatarURL           string `json:"event_group_avatar_url"`
-	EventKeyChangeB64             string `json:"event_key_change_b64"`
-	EventMessageB64               string `json:"event_message_b64"`
-	EventReplyValidB64            string `json:"event_reply_valid_b64"`
-	EventReplyForgedB64           string `json:"event_reply_forged_b64"`
-	EventGarbageB64               string `json:"event_garbage_b64"`
-	EventSenderID                 string `json:"event_sender_id"`
-	EventConversationID           string `json:"event_conversation_id"`
-	EventConversationKeyVersion   string `json:"event_conversation_key_version"`
-	EventSigningKeyVersion        string `json:"event_signing_key_version"`
-	EventRecipientKeyVersion      string `json:"event_recipient_key_version"`
-	EventMessageText              string `json:"event_message_text"`
-	EventReplyText                string `json:"event_reply_text"`
+	IdentityPrivateB64             string `json:"identity_private_b64"`
+	SigningPrivateB64              string `json:"signing_private_b64"`
+	PrivateKeysConcatB64           string `json:"private_keys_concat_b64"`
+	MessageUTF8                    string `json:"message_utf8"`
+	ConversationKeyB64             string `json:"conversation_key_b64"`
+	PlaintextB64                   string `json:"plaintext_b64"`
+	IdentityPublicB64              string `json:"identity_public_b64"`
+	SigningPublicB64               string `json:"signing_public_b64"`
+	SignatureB64                   string `json:"signature_b64"`
+	IdentityPublicKeySignatureB64  string `json:"identity_public_key_signature_b64"`
+	EventFailureB64                string `json:"event_failure_b64"`
+	EventGroupDescriptionB64       string `json:"event_group_description_b64"`
+	EventGroupDescription          string `json:"event_group_description"`
+	EventGroupID                   string `json:"event_group_id"`
+	EventGroupCreateB64            string `json:"event_group_create_b64"`
+	EventGroupCreateKeyB64         string `json:"event_group_create_conversation_key_b64"`
+	EventGroupCreateKeyVersion     string `json:"event_group_create_conversation_key_version"`
+	EventGroupCreateEncryptedTitle string `json:"event_group_create_encrypted_title"`
+	EventGroupTitle                string `json:"event_group_title"`
+	EventGroupAvatarChangeB64      string `json:"event_group_avatar_change_b64"`
+	EventGroupAvatarURL            string `json:"event_group_avatar_url"`
+	EventKeyChangeB64              string `json:"event_key_change_b64"`
+	EventMessageB64                string `json:"event_message_b64"`
+	EventReplyValidB64             string `json:"event_reply_valid_b64"`
+	EventReplyForgedB64            string `json:"event_reply_forged_b64"`
+	EventGarbageB64                string `json:"event_garbage_b64"`
+	EventSenderID                  string `json:"event_sender_id"`
+	EventConversationID            string `json:"event_conversation_id"`
+	EventConversationKeyVersion    string `json:"event_conversation_key_version"`
+	EventSigningKeyVersion         string `json:"event_signing_key_version"`
+	EventRecipientKeyVersion       string `json:"event_recipient_key_version"`
+	EventMessageText               string `json:"event_message_text"`
+	EventReplyText                 string `json:"event_reply_text"`
 
 	MessageKeyConversationKeyHex          string `json:"message_key_conversation_key_hex"`
 	MessageKeyConversationKeyVersion      string `json:"message_key_conversation_key_version"`
@@ -798,23 +800,67 @@ func TestGroupDescriptionChangeFixtureVector(t *testing.T) {
 	if change.ConversationID == nil || *change.ConversationID != v.EventGroupID {
 		t.Errorf("unexpected conversation_id: %v", change.ConversationID)
 	}
-	var description struct {
-		ChangeType     string `json:"change_type"`
-		NewDescription string `json:"new_description"`
+	type descriptionChange struct {
+		ChangeType     string    `json:"change_type"`
+		NewDescription GroupText `json:"new_description"`
 	}
+	var description descriptionChange
 	if err := json.Unmarshal(change.Change, &description); err != nil {
 		t.Fatalf("decode change: %v", err)
 	}
-	if description.ChangeType != "DescriptionChanged" || description.NewDescription != v.EventGroupDescription {
+	if description.ChangeType != "DescriptionChanged" ||
+		description.NewDescription != (GroupText{Kind: "Text", Text: v.EventGroupDescription}) {
 		t.Errorf("unexpected change: %+v", description)
 	}
 
-	_, err = chat.DecryptEvent(DecryptEventParams{
+	// Without the key the description was encrypted under, the change still
+	// decrypts, with the description unavailable.
+	event, err = chat.DecryptEvent(DecryptEventParams{
 		EventB64:    v.EventGroupDescriptionB64,
 		SigningKeys: v.eventSigningKeys(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "Group description encrypted with key version") {
-		t.Errorf("expected a missing-key error, got %v", err)
+	if err != nil {
+		t.Fatalf("DecryptEvent without the key failed: %v", err)
+	}
+	var keyless descriptionChange
+	if err := json.Unmarshal(event.AsGroupChange().Change, &keyless); err != nil {
+		t.Fatalf("decode change: %v", err)
+	}
+	if keyless.NewDescription.Kind != "Unavailable" || keyless.NewDescription.Raw == "" ||
+		keyless.NewDescription.Raw == v.EventGroupDescription {
+		t.Errorf("expected an unavailable description, got %+v", keyless.NewDescription)
+	}
+}
+
+func TestGroupAvatarChangeFixtureVector(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+
+	// The avatar URL is not encrypted, so the change reads without any key.
+	event, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:    v.EventGroupAvatarChangeB64,
+		SigningKeys: v.eventSigningKeys(),
+	})
+	if err != nil {
+		t.Fatalf("DecryptEvent failed: %v", err)
+	}
+	change := event.AsGroupChange()
+	if change == nil || !change.Verified {
+		t.Fatalf("expected a verified group change, got %+v", event)
+	}
+	var avatar struct {
+		ChangeType             string `json:"change_type"`
+		NewAvatarURL           string `json:"new_avatar_url"`
+		ConversationKeyVersion string `json:"conversation_key_version"`
+	}
+	if err := json.Unmarshal(change.Change, &avatar); err != nil {
+		t.Fatalf("decode change: %v", err)
+	}
+	if avatar.ChangeType != "AvatarChanged" || avatar.NewAvatarURL != v.EventGroupAvatarURL ||
+		avatar.ConversationKeyVersion != v.EventConversationKeyVersion {
+		t.Errorf("unexpected change: %+v", avatar)
 	}
 }
 
@@ -840,24 +886,57 @@ func TestGroupCreateFixtureVector(t *testing.T) {
 	if change == nil || !change.Verified {
 		t.Fatalf("expected a verified group change, got %+v", event)
 	}
-	var created struct {
-		ChangeType string `json:"change_type"`
-		Title      string `json:"title"`
-		AvatarURL  string `json:"avatar_url"`
+	type createdChange struct {
+		ChangeType             string     `json:"change_type"`
+		MemberIDs              []string   `json:"member_ids"`
+		Title                  *GroupText `json:"title"`
+		AvatarURL              *string    `json:"avatar_url"`
+		ConversationKeyVersion *string    `json:"conversation_key_version"`
 	}
+	var created createdChange
 	if err := json.Unmarshal(change.Change, &created); err != nil {
 		t.Fatalf("decode change: %v", err)
 	}
-	if created.ChangeType != "Created" || created.Title != v.EventGroupTitle || created.AvatarURL != v.EventGroupAvatarURL {
+	if created.ChangeType != "Created" || created.Title == nil ||
+		*created.Title != (GroupText{Kind: "Text", Text: v.EventGroupTitle}) || created.AvatarURL != nil ||
+		created.ConversationKeyVersion == nil || *created.ConversationKeyVersion != v.EventGroupCreateKeyVersion {
 		t.Errorf("unexpected change: %+v", created)
 	}
 
-	_, err = chat.DecryptEvent(DecryptEventParams{
+	// Without the key the create seeded, the create still decrypts, on both
+	// paths, with its title unavailable as the ciphertext it carries.
+	unavailable := GroupText{Kind: "Unavailable", Raw: v.EventGroupCreateEncryptedTitle}
+	event, err = chat.DecryptEvent(DecryptEventParams{
 		EventB64:    v.EventGroupCreateB64,
 		SigningKeys: v.eventSigningKeys(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "Group title encrypted with key version") {
-		t.Errorf("expected a missing-key error, got %v", err)
+	if err != nil {
+		t.Fatalf("DecryptEvent without the key failed: %v", err)
+	}
+	var keyless createdChange
+	if err := json.Unmarshal(event.AsGroupChange().Change, &keyless); err != nil {
+		t.Fatalf("decode change: %v", err)
+	}
+	if len(keyless.MemberIDs) != 1 || keyless.MemberIDs[0] != v.EventSenderID ||
+		keyless.Title == nil || *keyless.Title != unavailable {
+		t.Errorf("unexpected keyless change: %+v", keyless)
+	}
+	batch, err := chat.DecryptEvents(DecryptEventsParams{
+		Events:      []string{v.EventGroupCreateB64},
+		SigningKeys: v.eventSigningKeys(),
+	})
+	if err != nil {
+		t.Fatalf("DecryptEvents failed: %v", err)
+	}
+	if len(batch.Errors) != 0 || len(batch.Messages) != 1 {
+		t.Fatalf("unexpected batch: %+v", batch)
+	}
+	var batched createdChange
+	if err := json.Unmarshal(batch.Messages[0].Event.AsGroupChange().Change, &batched); err != nil {
+		t.Fatalf("decode change: %v", err)
+	}
+	if batched.Title == nil || *batched.Title != unavailable {
+		t.Errorf("unexpected batched title: %+v", batched.Title)
 	}
 }
 
@@ -1510,12 +1589,6 @@ func TestGroupActionSignatures(t *testing.T) {
 				NewTitle: "Board: layoffs, Q3", ConversationKey: key, ConversationKeyVersion: version,
 			})
 		}},
-		{"GroupChangeEvent.GroupAvatarUrlChange,", "https://img/a.png", func() (*PreparedGroupMetadataChange, error) {
-			return chat.PrepareGroupAvatarChange(GroupAvatarChangeParams{
-				SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
-				NewAvatarURL: "https://img/a.png", ConversationKey: key, ConversationKeyVersion: version,
-			})
-		}},
 		{"GroupChangeEvent.GroupDescriptionChange,", "Rules: be kind", func() (*PreparedGroupMetadataChange, error) {
 			return chat.PrepareGroupDescriptionChange(GroupDescriptionChangeParams{
 				SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
@@ -1541,6 +1614,16 @@ func TestGroupActionSignatures(t *testing.T) {
 		if err != nil || decrypted != m.plaintext {
 			t.Fatalf("decrypt %s: %q, %v", m.prefix, decrypted, err)
 		}
+	}
+	avatarURL := "https://ton.x.com/xchat_media/g100/avatar"
+	avatar, err := chat.PrepareGroupAvatarChange(GroupAvatarChangeParams{
+		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100",
+		NewAvatarURL: avatarURL, ConversationKeyVersion: version,
+	})
+	avatarSig := onlyAction(t, avatar, err)
+	if !strings.HasPrefix(avatarSig.SignaturePayload, "GroupChangeEvent.GroupAvatarUrlChange,") ||
+		!strings.HasSuffix(avatarSig.SignaturePayload, ","+version+","+avatarURL) {
+		t.Fatalf("avatar payload %q", avatarSig.SignaturePayload)
 	}
 	if _, err := chat.PrepareGroupTitleChange(GroupTitleChangeParams{
 		SenderID: "111", SigningKeyVersion: "1", ConversationID: "g100", NewTitle: "Board",
@@ -1891,6 +1974,55 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 	if prepared.ActionSignatures[1].EncodedMessageEventDetail == "" {
 		t.Error("expected non-empty member-add encoded event detail")
 	}
+	// The title goes out encrypted under the new key, the value the request
+	// sends as encrypted_title; the signature covers the ciphertext.
+	add := prepared.ActionSignatures[1]
+	if prepared.EncryptedTitle == nil || prepared.EncryptedDescription != nil {
+		t.Fatalf("expected only an encrypted title: %+v", prepared)
+	}
+	if !strings.Contains(add.SignaturePayload, *prepared.EncryptedTitle) || strings.Contains(add.SignaturePayload, "Team") {
+		t.Errorf("the add must sign the encrypted title, got: %q", add.SignaturePayload)
+	}
+	title, err := chat.Decrypt(*prepared.EncryptedTitle, prepared.ConversationKey)
+	if err != nil || title != "Team" {
+		t.Errorf("encrypted title decrypts to %q, %v", title, err)
+	}
+	if add.MessageEventSignature.SignatureVersion != "7" {
+		t.Errorf("an add without a description signs at 7, got %q", add.MessageEventSignature.SignatureVersion)
+	}
+
+	// A description is encrypted the same way and signed at version 8, after
+	// the screen-capture slot; the avatar URL is signed as passed.
+	avatarURL := "https://ton.x.com/xchat_media/g123/avatar"
+	described, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
+		SenderID:           "910002",
+		SigningKeyVersion:  "1",
+		PublicKeys:         publicKeys,
+		ConversationID:     "g123",
+		NewMemberIDs:       []string{"910009"},
+		CurrentMemberIDs:   []string{"910002"},
+		CurrentAdminIDs:    []string{"910002"},
+		CurrentTitle:       "Team",
+		CurrentDescription: "Ships the app",
+		CurrentAvatarURL:   avatarURL,
+	})
+	if err != nil {
+		t.Fatalf("PrepareGroupMembersChange with a description failed: %v", err)
+	}
+	if described.EncryptedDescription == nil {
+		t.Fatal("expected an encrypted description")
+	}
+	description, err := chat.Decrypt(*described.EncryptedDescription, described.ConversationKey)
+	if err != nil || description != "Ships the app" {
+		t.Errorf("encrypted description decrypts to %q, %v", description, err)
+	}
+	describedAdd := described.ActionSignatures[1]
+	if describedAdd.MessageEventSignature.SignatureVersion != "8" ||
+		!strings.HasSuffix(describedAdd.SignaturePayload, ",null,"+*described.EncryptedDescription) ||
+		!strings.Contains(describedAdd.SignaturePayload, ","+avatarURL+",") {
+		t.Errorf("unexpected described add: version %q, payload %q",
+			describedAdd.MessageEventSignature.SignatureVersion, describedAdd.SignaturePayload)
+	}
 }
 
 func TestPrepareGroupCreate(t *testing.T) {
@@ -1950,14 +2082,14 @@ func TestPrepareGroupCreate(t *testing.T) {
 	if err != nil || title != "Team" {
 		t.Errorf("encrypted title decrypts to %q, %v", title, err)
 	}
-	if prepared.EncryptedAvatarURL != nil {
-		t.Errorf("unexpected encrypted avatar URL: %q", *prepared.EncryptedAvatarURL)
+	if prepared.EncryptedDescription != nil {
+		t.Errorf("unexpected encrypted description: %q", *prepared.EncryptedDescription)
 	}
 }
 
 // TestPrepareGroupCreateEmptyTitleSignsNullSentinel pins absent-value
-// normalization across the FFI: an empty (Go zero-value) title/avatar is
-// "not set" and must sign the null sentinel, not an empty string.
+// normalization across the FFI: an empty (Go zero-value) title is "not set"
+// and must sign the null sentinel, not an empty string.
 func TestPrepareGroupCreateEmptyTitleSignsNullSentinel(t *testing.T) {
 	v := loadVectors(t)
 
@@ -1974,24 +2106,25 @@ func TestPrepareGroupCreateEmptyTitleSignsNullSentinel(t *testing.T) {
 		ConversationID:    "g123",
 		MemberIDs:         []string{"910002", "910005"},
 		AdminIDs:          []string{"910002"},
-		// Title and AvatarURL left as the zero value.
+		// Title left as the zero value.
 	})
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate failed: %v", err)
 	}
 	payload := prepared.ActionSignatures[1].SignaturePayload
-	// Trailing slots: title, avatar_url, ttl — all unset → null sentinels.
+	// Trailing slots: legacy upgrade, title, avatar_url — all unset → null
+	// sentinels.
 	if !strings.HasSuffix(payload, ",null,null,null") {
-		t.Errorf("title/avatar must sign as the null sentinel, got: %q", payload)
+		t.Errorf("the title and avatar must sign as the null sentinel, got: %q", payload)
 	}
-	if prepared.EncryptedTitle != nil || prepared.EncryptedAvatarURL != nil {
-		t.Errorf("unset title/avatar must not be encrypted: %+v", prepared)
+	if prepared.EncryptedTitle != nil {
+		t.Errorf("an unset title must not be encrypted: %+v", prepared)
 	}
 }
 
 // TestPrepareGroupCreateEncryptsACommaTitle: the plaintext never enters the
 // comma-joined signature payload, only its base64 ciphertext does, so a
-// title or avatar URL with a comma encrypts and signs.
+// title with a comma encrypts and signs.
 func TestPrepareGroupCreateEncryptsACommaTitle(t *testing.T) {
 	v := loadVectors(t)
 
@@ -2009,7 +2142,6 @@ func TestPrepareGroupCreateEncryptsACommaTitle(t *testing.T) {
 		MemberIDs:         []string{"910002", "910005"},
 		AdminIDs:          []string{"910002"},
 		Title:             "Team, the sequel",
-		AvatarURL:         "https://img.example/a.png",
 	})
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate failed: %v", err)
@@ -2017,10 +2149,6 @@ func TestPrepareGroupCreateEncryptsACommaTitle(t *testing.T) {
 	title, err := chat.Decrypt(*prepared.EncryptedTitle, prepared.ConversationKey)
 	if err != nil || title != "Team, the sequel" {
 		t.Errorf("encrypted title decrypts to %q, %v", title, err)
-	}
-	avatar, err := chat.Decrypt(*prepared.EncryptedAvatarURL, prepared.ConversationKey)
-	if err != nil || avatar != "https://img.example/a.png" {
-		t.Errorf("encrypted avatar URL decrypts to %q, %v", avatar, err)
 	}
 }
 
@@ -2739,13 +2867,15 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareGroupMembersChange (optional fields) failed: %v", err)
 	}
-	// Two signed actions: the key change and the member add. The title lives
-	// in the member-add payload (index 1).
+	// Two signed actions: the key change and the member add. The encrypted
+	// title and the avatar URL live in the member-add payload (index 1).
 	if len(prepared.ActionSignatures) != 2 || prepared.ActionSignatures[1].MessageEventSignature.Signature == "" {
 		t.Fatalf("expected 2 action signatures with a non-empty member-add signature, got %d", len(prepared.ActionSignatures))
 	}
-	if !strings.Contains(prepared.ActionSignatures[1].SignaturePayload, "My Group Chat") {
-		t.Error("expected the title in the member-add signature payload")
+	if prepared.EncryptedTitle == nil ||
+		!strings.Contains(prepared.ActionSignatures[1].SignaturePayload, *prepared.EncryptedTitle) ||
+		!strings.Contains(prepared.ActionSignatures[1].SignaturePayload, "https://example.com/avatar.png") {
+		t.Error("expected the encrypted title and the avatar URL in the member-add signature payload")
 	}
 	// Unset screen-capture blocking signs as the trailing null sentinel.
 	if !strings.HasSuffix(prepared.ActionSignatures[1].SignaturePayload, ",null") {

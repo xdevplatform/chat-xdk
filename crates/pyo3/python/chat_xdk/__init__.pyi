@@ -1,7 +1,7 @@
 """Type stubs for chat-xdk Python bindings."""
 
 from enum import Enum
-from typing import Optional, TypedDict, Union
+from typing import Literal, Optional, TypedDict, Union
 
 __version__: str
 
@@ -52,6 +52,19 @@ class QuickReply(TypedDict, total=False):
 
     request: QuickReplyRequest
     response: QuickReplyResponse
+
+class GroupText(TypedDict, total=False):
+    """A group title or description as a received event carries it.
+
+    ``kind`` ``"Text"`` carries ``text``: the value decrypted, or the
+    plaintext an event that names no key version carries. ``kind``
+    ``"Unavailable"`` carries ``raw``: a value the SDK could not decrypt, as
+    the event carries it. Show ``raw`` when a title isn't decryptable.
+    """
+
+    kind: Literal["Text", "Unavailable"]
+    text: str
+    raw: str
 
 class PublicKeys:
     identity: str
@@ -231,6 +244,7 @@ class GroupMembersChangeParams:
     signing_key_version: Optional[str]
     current_title: Optional[str]
     current_avatar_url: Optional[str]
+    current_description: Optional[str]
     current_ttl_msec: Optional[int]
     current_screen_capture_blocking_enabled: Optional[bool]
     def __init__(
@@ -246,6 +260,7 @@ class GroupMembersChangeParams:
         signing_key_version: Optional[str] = None,
         current_title: Optional[str] = None,
         current_avatar_url: Optional[str] = None,
+        current_description: Optional[str] = None,
         current_ttl_msec: Optional[int] = None,
         current_screen_capture_blocking_enabled: Optional[bool] = None,
     ) -> None: ...
@@ -258,7 +273,6 @@ class GroupCreateParams:
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     title: Optional[str]
-    avatar_url: Optional[str]
     ttl_msec: Optional[int]
     def __init__(
         self,
@@ -270,7 +284,6 @@ class GroupCreateParams:
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
         title: Optional[str] = None,
-        avatar_url: Optional[str] = None,
         ttl_msec: Optional[int] = None,
     ) -> None: ...
 
@@ -287,7 +300,6 @@ class GroupMembersRemoveParams:
     conversation_id: str
     user_ids: list[str]
     title: Optional[str]
-    avatar_url: Optional[str]
     description: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
@@ -298,7 +310,6 @@ class GroupMembersRemoveParams:
         user_ids: list[str],
         *,
         title: Optional[str] = None,
-        avatar_url: Optional[str] = None,
         description: Optional[str] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
@@ -341,19 +352,17 @@ class GroupTitleChangeParams:
 class GroupAvatarChangeParams:
     conversation_id: str
     new_avatar_url: str
+    conversation_key_version: str
     sender_id: Optional[str]
     signing_key_version: Optional[str]
-    conversation_key: Optional[bytes]
-    conversation_key_version: Optional[str]
     def __init__(
         self,
         conversation_id: str,
         new_avatar_url: str,
+        conversation_key_version: str,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
-        conversation_key: Optional[bytes] = None,
-        conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
 class GroupDescriptionChangeParams:

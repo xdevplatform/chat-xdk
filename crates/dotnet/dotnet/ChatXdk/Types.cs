@@ -188,10 +188,10 @@ namespace ChatXdk
     }
 
     /// <summary>
-    /// A signed group title, avatar, or description change: the value encrypted under the
+    /// A signed group title or description change: the value encrypted under the
     /// conversation key and the <c>action_signatures</c> a request carries. Returned by
-    /// <see cref="Chat.PrepareGroupTitleChange"/>, <see cref="Chat.PrepareGroupAvatarChange"/>,
-    /// and <see cref="Chat.PrepareGroupDescriptionChange"/>.
+    /// <see cref="Chat.PrepareGroupTitleChange"/> and
+    /// <see cref="Chat.PrepareGroupDescriptionChange"/>.
     /// </summary>
     public sealed class PreparedGroupMetadataChange
     {
@@ -281,22 +281,24 @@ namespace ChatXdk
         public List<ActionSignature> ActionSignatures { get; init; } = new();
 
         /// <summary>
-        /// Set by <see cref="Chat.PrepareGroupCreate"/> when the params carry a title: the
-        /// title encrypted under the new conversation key, base64, the <c>group_name</c>
-        /// the create request sends; otherwise null.
+        /// Set by <see cref="Chat.PrepareGroupCreate"/> and
+        /// <see cref="Chat.PrepareGroupMembersChange"/> when the params carry a title: the
+        /// title encrypted under the new conversation key, base64, the <c>group_name</c> a
+        /// create request sends and the <c>encrypted_title</c> an add-members request sends;
+        /// otherwise null.
         /// </summary>
         [JsonPropertyName("encrypted_title")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? EncryptedTitle { get; init; }
 
         /// <summary>
-        /// Set by <see cref="Chat.PrepareGroupCreate"/> when the params carry an avatar URL:
-        /// the avatar URL encrypted under the new conversation key, base64, the
-        /// <c>group_avatar_url</c> the create request sends; otherwise null.
+        /// Set by <see cref="Chat.PrepareGroupMembersChange"/> when the params carry a
+        /// description: the description encrypted under the new conversation key, base64, as
+        /// the signed member add carries it; otherwise null.
         /// </summary>
-        [JsonPropertyName("encrypted_avatar_url")]
+        [JsonPropertyName("encrypted_description")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? EncryptedAvatarUrl { get; init; }
+        public string? EncryptedDescription { get; init; }
     }
 
     /// <summary>
@@ -343,6 +345,34 @@ namespace ChatXdk
 
         /// <summary>String indices into the input batch for events that failed to decrypt.</summary>
         public Dictionary<string, string> Errors { get; init; } = new();
+    }
+
+    /// <summary>
+    /// A group title or description as a received group change carries it: the <c>title</c>
+    /// of a <c>Created</c> change, the <c>new_title</c> of a <c>TitleChanged</c> one and the
+    /// <c>new_description</c> of a <c>DescriptionChanged</c> one. A value converts from the
+    /// decrypted event JSON with <c>element.Deserialize&lt;GroupText&gt;()</c>. <see cref="Kind"/>
+    /// <c>"Text"</c> carries <see cref="Text"/>: the value decrypted, or the plaintext an event
+    /// that names no key version carries. <see cref="Kind"/> <c>"Unavailable"</c> carries
+    /// <see cref="Raw"/>: a value the SDK could not decrypt, as the event carries it. 0.5.x
+    /// apps sent titles as plaintext while naming a key version, so show <see cref="Raw"/>
+    /// when a title isn't decryptable.
+    /// </summary>
+    public sealed class GroupText
+    {
+        /// <summary><c>"Text"</c> or <c>"Unavailable"</c>.</summary>
+        [JsonPropertyName("kind")]
+        public string Kind { get; init; } = "";
+
+        /// <summary>The decrypted or plaintext value, for <c>"Text"</c>.</summary>
+        [JsonPropertyName("text")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Text { get; init; }
+
+        /// <summary>The value as the event carries it, for <c>"Unavailable"</c>.</summary>
+        [JsonPropertyName("raw")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Raw { get; init; }
     }
 
     /// <summary>
@@ -863,7 +893,12 @@ namespace ChatXdk
         public string? ConversationId { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupMembersChange"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupMembersChange"/>. <see cref="CurrentTitle"/>
+    /// and <see cref="CurrentDescription"/> are plaintext: the call encrypts each under the new
+    /// conversation key it generates. <see cref="CurrentAvatarUrl"/> is the avatar's media URL,
+    /// signed as is.
+    /// </summary>
     public sealed class GroupMembersChangeParams
     {
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
@@ -905,17 +940,22 @@ namespace ChatXdk
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
-        /// <summary>Current group title, if set.</summary>
+        /// <summary>Current group title, as plaintext, if set; the call encrypts it.</summary>
         public string? CurrentTitle { get; init; }
-        /// <summary>Current group avatar URL, if set.</summary>
+        /// <summary>Current group avatar media URL, if set.</summary>
         public string? CurrentAvatarUrl { get; init; }
+        /// <summary>Current group description, as plaintext, if set; the call encrypts it.</summary>
+        public string? CurrentDescription { get; init; }
         /// <summary>Current disappearing-message TTL in milliseconds, if set.</summary>
         public long? CurrentTtlMsec { get; init; }
         /// <summary>Current screen-capture-blocking state, if set.</summary>
         public bool? CurrentScreenCaptureBlockingEnabled { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareGroupCreate"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareGroupCreate"/>. A create sets no avatar; set it
+    /// afterwards with <see cref="Chat.PrepareGroupAvatarChange"/>.
+    /// </summary>
     public sealed class GroupCreateParams
     {
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
@@ -949,8 +989,6 @@ namespace ChatXdk
         public string? SigningKeyVersion { get; init; }
         /// <summary>Group title, as plaintext, if set; the create encrypts it.</summary>
         public string? Title { get; init; }
-        /// <summary>Group avatar URL, as plaintext, if set; the create encrypts it.</summary>
-        public string? AvatarUrl { get; init; }
         /// <summary>Disappearing-message TTL in milliseconds, if set.</summary>
         public long? TtlMsec { get; init; }
     }
@@ -1291,8 +1329,6 @@ namespace ChatXdk
         public IReadOnlyList<string> UserIds { get; }
         /// <summary>The group's title, re-encrypted under the new conversation key; null leaves it out.</summary>
         public string? Title { get; init; }
-        /// <summary>The group's avatar URL, re-encrypted under the new conversation key; null leaves it out.</summary>
-        public string? AvatarUrl { get; init; }
         /// <summary>The group's description, re-encrypted under the new conversation key; null leaves it out.</summary>
         public string? Description { get; init; }
         public string? SenderId { get; init; }
@@ -1335,27 +1371,26 @@ namespace ChatXdk
     }
 
     /// <summary>
-    /// Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>. <see cref="NewAvatarUrl"/> is plaintext: the
-    /// call encrypts it under the conversation key, <see cref="ConversationKey"/> /
-    /// <see cref="ConversationKeyVersion"/> or, both null, the key cache.
+    /// Parameters for <see cref="Chat.PrepareGroupAvatarChange"/>. A group's avatar URL is not
+    /// encrypted: <see cref="NewAvatarUrl"/> is the media URL of the avatar image, which the app
+    /// encrypts under the conversation key and uploads first.
     /// </summary>
     public sealed class GroupAvatarChangeParams
     {
-        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl)
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl, string conversationKeyVersion)
         {
             ConversationId = conversationId;
             NewAvatarUrl = newAvatarUrl;
+            ConversationKeyVersion = conversationKeyVersion;
         }
 
         public string ConversationId { get; }
-        /// <summary>The group's new avatar URL, as plaintext.</summary>
+        /// <summary>The media URL of the group's new avatar image, signed and sent as is.</summary>
         public string NewAvatarUrl { get; }
+        /// <summary>Version of the conversation key the avatar image is encrypted under.</summary>
+        public string ConversationKeyVersion { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
-        /// <summary>Raw 32-byte conversation key; resolves from the key cache when null.</summary>
-        public byte[]? ConversationKey { get; init; }
-        /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
-        public string? ConversationKeyVersion { get; init; }
     }
 
     /// <summary>

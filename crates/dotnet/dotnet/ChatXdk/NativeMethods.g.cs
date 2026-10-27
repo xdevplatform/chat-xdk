@@ -268,9 +268,13 @@ namespace ChatXdk
         ///  roster), `conversation_id`, `new_member_ids`, `current_member_ids`,
         ///  `current_admin_ids`, `current_pending_member_ids`, plus optional
         ///  `sender_id` / `signing_key_version` (absent resolves from the session
-        ///  identity), `current_title`, `current_avatar_url`, `current_ttl_msec`, and
+        ///  identity), `current_title` and `current_description` (plaintext,
+        ///  encrypted under the new conversation key), `current_avatar_url` (the
+        ///  avatar's media URL, signed as is), `current_ttl_msec`, and
         ///  `current_screen_capture_blocking_enabled` (an absent key means unset,
-        ///  never false). Emits two action signatures.
+        ///  never false). Emits two action signatures; the result carries the
+        ///  encrypted title and description as `encrypted_title` and
+        ///  `encrypted_description`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_members_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_members_change(ChatHandle* handle, byte* params_json);
@@ -281,10 +285,10 @@ namespace ChatXdk
         ///  `params_json` — single JSON document: `public_keys` (for the roster),
         ///  `conversation_id`, `member_ids`, `admin_ids`, plus optional `sender_id` /
         ///  `signing_key_version` (absent resolves from the session identity),
-        ///  `title` and `avatar_url` (plaintext, encrypted under the new conversation
-        ///  key), and `ttl_msec`. Emits two action signatures; the result carries the
-        ///  encrypted title and avatar URL as `encrypted_title` and
-        ///  `encrypted_avatar_url`.
+        ///  `title` (plaintext, encrypted under the new conversation key), and
+        ///  `ttl_msec`. Emits two action signatures; the result carries the
+        ///  encrypted title as `encrypted_title`. A create sets no avatar; set it
+        ///  afterwards with `chat_xdk_prepare_group_avatar_change`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_create", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_create(ChatHandle* handle, byte* params_json);
@@ -309,13 +313,14 @@ namespace ChatXdk
         ///  members who stay.
         ///
         ///  `params_json` — `public_keys` (the identity keys of the members who
-        ///  stay), `conversation_id`, `user_ids`, plus optional `title`, `avatar_url`
-        ///  and `description` (the group's plaintext metadata, re-encrypted under the
+        ///  stay), `conversation_id`, `user_ids`, plus optional `title` and
+        ///  `description` (the group's plaintext metadata, re-encrypted under the
         ///  new key) and `sender_id` / `signing_key_version`.
         ///
         ///  Returns JSON `PreparedConversationChange`: `conversation_key` is the new
-        ///  raw key base64, and `action_signatures` is the removal, a title, avatar
-        ///  and description change for each one set, then the key change.
+        ///  raw key base64, and `action_signatures` is the removal, a title and a
+        ///  description change for each one set, marked as key-rotation
+        ///  re-encryptions, then the key change.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_members_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_members_remove(ChatHandle* handle, byte* params_json);
@@ -351,17 +356,15 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_group_title_change(ChatHandle* handle, byte* params_json);
 
         /// <summary>
-        ///  Encrypt a new group avatar URL under the conversation key and sign the
-        ///  change.
+        ///  Sign a group avatar change.
         ///
-        ///  `params_json` — `conversation_id`, `new_avatar_url` (plaintext), plus
-        ///  optional `sender_id` / `signing_key_version` (unset resolves from the
-        ///  session identity) and `conversation_key` (base64 raw 32-byte key) /
-        ///  `conversation_key_version` (unset resolves from the opt-in key cache).
+        ///  `params_json` — `conversation_id`, `new_avatar_url` (the media URL of
+        ///  the avatar image, signed and sent as is), `conversation_key_version`
+        ///  (the version of the key the image is encrypted under), plus optional
+        ///  `sender_id` / `signing_key_version` (unset resolves from the session
+        ///  identity).
         ///
-        ///  Returns JSON `PreparedGroupMetadataChange`: `encrypted_value` (the base64
-        ///  ciphertext the request sends), `conversation_key_version`, and
-        ///  `action_signatures`.
+        ///  Returns JSON `PreparedAction`: `action_signatures`, one entry.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_avatar_change", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_avatar_change(ChatHandle* handle, byte* params_json);
@@ -599,7 +602,7 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_decrypt_conversation_key(ChatHandle* handle, byte* encrypted_key_b64);
 
         /// <summary>
-        ///  Decrypt a group title, avatar URL, or description the X API returns for a
+        ///  Decrypt a group title or description the X API returns for a
         ///  conversation: base64 ciphertext under the conversation key (base64 raw
         ///  32-byte key), decrypted to UTF-8 plaintext.
         /// </summary>

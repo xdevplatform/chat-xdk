@@ -7,7 +7,7 @@ use chat_xdk_core::crypto::{
 use chat_xdk_core::keys::conversation_keys::{decrypt_conversation_key, encrypt_conversation_key};
 use chat_xdk_core::ImportKeysParams;
 use chat_xdk_core::{
-    DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams,
+    DecryptEventParams, DecryptEventsParams, DecryptFileParams, FileDecryptorParams, GroupText,
 };
 
 #[derive(serde::Deserialize)]
@@ -29,7 +29,9 @@ struct Vectors {
     event_group_create_b64: String,
     event_group_create_conversation_key_b64: String,
     event_group_create_conversation_key_version: String,
+    event_group_create_encrypted_title: String,
     event_group_title: String,
+    event_group_avatar_change_b64: String,
     event_group_avatar_url: String,
     event_key_change_b64: String,
     event_message_b64: String,
@@ -308,7 +310,7 @@ fn vectors_group_description_change_decrypts_on_receive() {
                 chat_xdk_core::GroupChange::DescriptionChanged {
                     new_description, ..
                 } => {
-                    assert_eq!(new_description, v.event_group_description)
+                    assert_eq!(text_of(&new_description), v.event_group_description)
                 }
                 other => panic!("Expected DescriptionChanged, got {:?}", other),
             }
@@ -316,25 +318,72 @@ fn vectors_group_description_change_decrypts_on_receive() {
         other => panic!("Expected Event::GroupChange, got {:?}", other),
     }
 
-    // Without the key the description was encrypted under, the change does
-    // not decrypt: it never comes back as ciphertext.
-    let err = core
+    // Without the key the description was encrypted under, the change still
+    // decrypts, with the description unavailable.
+    let event = core
         .decrypt_event(
             DecryptEventParams::new(v.event_group_description_b64.clone(), Default::default())
                 .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
         )
-        .unwrap_err();
-    assert!(
-        err.to_string().contains(&format!(
-            "Group description encrypted with key version '{}'",
-            v.event_conversation_key_version
-        )),
-        "got: {err}"
-    );
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => match change.change {
+            chat_xdk_core::GroupChange::DescriptionChanged {
+                new_description, ..
+            } => match new_description {
+                GroupText::Unavailable { raw, .. } => {
+                    assert!(!raw.is_empty());
+                    assert_ne!(raw, v.event_group_description);
+                }
+                other => panic!("Expected an unavailable description, got {:?}", other),
+            },
+            other => panic!("Expected DescriptionChanged, got {:?}", other),
+        },
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+}
+
+fn text_of(value: &GroupText) -> &str {
+    match value {
+        GroupText::Text { text, .. } => text,
+        other => panic!("Expected decrypted text, got {:?}", other),
+    }
 }
 
 #[test]
-fn vectors_group_create_decrypts_its_title_and_avatar_on_receive() {
+fn vectors_group_avatar_change_carries_the_media_url() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    let event = core
+        .decrypt_event(
+            DecryptEventParams::new(v.event_group_avatar_change_b64.clone(), Default::default())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => {
+            assert!(change.verified);
+            match change.change {
+                chat_xdk_core::GroupChange::AvatarChanged {
+                    new_avatar_url,
+                    conversation_key_version,
+                    ..
+                } => {
+                    assert_eq!(new_avatar_url, v.event_group_avatar_url);
+                    assert_eq!(
+                        conversation_key_version.as_deref(),
+                        Some(v.event_conversation_key_version.as_str())
+                    );
+                }
+                other => panic!("Expected AvatarChanged, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
+}
+
+#[test]
+fn vectors_group_create_decrypts_its_title_on_receive() {
     let v = load_vectors();
     let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
     let conversation_keys = std::collections::HashMap::from([(
@@ -359,13 +408,18 @@ fn vectors_group_create_decrypts_its_title_and_avatar_on_receive() {
                     member_ids,
                     title,
                     avatar_url,
+                    conversation_key_version,
                     ..
                 } => {
                     assert_eq!(member_ids, std::slice::from_ref(&v.event_sender_id));
-                    assert_eq!(title.as_deref(), Some(v.event_group_title.as_str()));
                     assert_eq!(
-                        avatar_url.as_deref(),
-                        Some(v.event_group_avatar_url.as_str())
+                        title.as_ref().map(text_of),
+                        Some(v.event_group_title.as_str())
+                    );
+                    assert_eq!(avatar_url, None);
+                    assert_eq!(
+                        conversation_key_version.as_deref(),
+                        Some(v.event_group_create_conversation_key_version.as_str())
                     );
                 }
                 other => panic!("Expected Created, got {:?}", other),
@@ -374,20 +428,31 @@ fn vectors_group_create_decrypts_its_title_and_avatar_on_receive() {
         other => panic!("Expected Event::GroupChange, got {:?}", other),
     }
 
-    // Without the key the create seeded, its title does not decrypt.
-    let err = core
+    // Without the key the create seeded, the create still decrypts, with its
+    // title unavailable as the ciphertext the create carries.
+    let event = core
         .decrypt_event(
             DecryptEventParams::new(v.event_group_create_b64.clone(), Default::default())
                 .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
         )
-        .unwrap_err();
-    assert!(
-        err.to_string().contains(&format!(
-            "Group title encrypted with key version '{}'",
-            v.event_group_create_conversation_key_version
-        )),
-        "got: {err}"
-    );
+        .unwrap();
+    match event {
+        chat_xdk_core::Event::GroupChange(change) => match change.change {
+            chat_xdk_core::GroupChange::Created {
+                member_ids, title, ..
+            } => {
+                assert_eq!(member_ids, std::slice::from_ref(&v.event_sender_id));
+                match title {
+                    Some(GroupText::Unavailable { raw, .. }) => {
+                        assert_eq!(raw, v.event_group_create_encrypted_title)
+                    }
+                    other => panic!("Expected an unavailable title, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Created, got {:?}", other),
+        },
+        other => panic!("Expected Event::GroupChange, got {:?}", other),
+    }
 }
 
 #[test]

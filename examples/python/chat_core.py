@@ -475,7 +475,7 @@ class ChatCore:
         )
 
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str:
-        """Decrypt a group title, avatar URL, or description the X API returns."""
+        """Decrypt a group title or description the X API returns."""
         return self.chat.decrypt(ciphertext_b64, conversation_key)
 
 

@@ -409,8 +409,8 @@ impl Chat {
         self.inner.file_decryptor(params)
     }
 
-    /// Decrypt a group title, avatar URL, or description the X API returns
-    /// for a conversation; see [`crate::ChatCore::decrypt`].
+    /// Decrypt a group title or description the X API returns for a
+    /// conversation; see [`crate::ChatCore::decrypt`].
     pub fn decrypt(
         &self,
         ciphertext_b64: &str,
@@ -444,9 +444,8 @@ impl Chat {
     ///
     /// Emits two action signatures: a conversation-key change and the
     /// group-create action the backend validates together. The plaintext
-    /// title and avatar URL are encrypted under the new conversation key and
-    /// returned as `encrypted_title` and `encrypted_avatar_url`; see
-    /// [`crate::ChatCore::prepare_group_create`].
+    /// title is encrypted under the new conversation key and returned as
+    /// `encrypted_title`; see [`crate::ChatCore::prepare_group_create`].
     pub fn prepare_group_create(
         &self,
         params: &GroupCreateParams,
@@ -491,11 +490,12 @@ impl Chat {
     ) -> Result<PreparedGroupMetadataChange, SdkError> {
         self.inner.prepare_group_title_change(params)
     }
-    /// Encrypt a new group avatar URL and sign the change.
+    /// Sign a group avatar change: the avatar image's media URL, as is, and
+    /// the version of the key the image is encrypted under.
     pub fn prepare_group_avatar_change(
         &self,
         params: &GroupAvatarChangeParams,
-    ) -> Result<PreparedGroupMetadataChange, SdkError> {
+    ) -> Result<PreparedAction, SdkError> {
         self.inner.prepare_group_avatar_change(params)
     }
     /// Encrypt a new group description and sign the change.
@@ -1602,6 +1602,7 @@ mod tests {
                 &["admin-1".to_string()],
                 "1",
                 Some("Group Name"),
+                None,
                 None,
                 None,
                 None,

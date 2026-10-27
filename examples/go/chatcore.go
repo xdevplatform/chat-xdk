@@ -394,8 +394,8 @@ func (c *ChatCore) PrepareGroupTitleChange(conversationID, title string, convers
 	})
 }
 
-// Decrypt decrypts a group title, avatar URL, or description the X API
-// returns for a conversation.
+// Decrypt decrypts a group title or description the X API returns for a
+// conversation.
 func (c *ChatCore) Decrypt(ciphertextB64 string, conversationKey []byte) (string, error) {
 	return c.chat.Decrypt(ciphertextB64, conversationKey)
 }

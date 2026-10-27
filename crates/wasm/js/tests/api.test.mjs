@@ -269,7 +269,7 @@ async function main() {
   assert.ok(groupPrep.actionSignatures[1].signaturePayload.includes(groupPrep.encryptedTitle));
   assert.ok(!groupPrep.actionSignatures[1].signaturePayload.includes("My Group"));
   assert.equal(chat.decrypt(groupPrep.encryptedTitle, groupPrep.conversationKey), "My Group");
-  assert.equal("encryptedAvatarUrl" in groupPrep, false);
+  assert.equal("encryptedDescription" in groupPrep, false);
   const commaPrep = chat.prepareGroupCreate({
     senderId: "910002",
     signingKeyVersion: "1",
@@ -278,13 +278,8 @@ async function main() {
     memberIds: ["910002"],
     adminIds: ["910002"],
     title: "Team, the sequel",
-    avatarUrl: "https://img.example/a.png",
   });
   assert.equal(chat.decrypt(commaPrep.encryptedTitle, commaPrep.conversationKey), "Team, the sequel");
-  assert.equal(
-    chat.decrypt(commaPrep.encryptedAvatarUrl, commaPrep.conversationKey),
-    "https://img.example/a.png",
-  );
 
   // 2c. An empty title is the "not set" encoding: it signs the null
   // sentinel, exactly like omitting the field.
@@ -297,14 +292,12 @@ async function main() {
       memberIds: ["910002", "910005"],
       adminIds: ["910002"],
       title,
-      avatarUrl: title,
     });
     assert.ok(
       p.actionSignatures[1].signaturePayload.endsWith(",null,null,null"),
-      `title/avatar must sign as the null sentinel, got: ${p.actionSignatures[1].signaturePayload}`,
+      `the title and avatar must sign as the null sentinel, got: ${p.actionSignatures[1].signaturePayload}`,
     );
     assert.equal("encryptedTitle" in p, false);
-    assert.equal("encryptedAvatarUrl" in p, false);
   }
 
   const convKey = b64ToBytes(v.conversation_key_b64);
@@ -656,9 +649,9 @@ async function main() {
   );
 
   // 4c5. Group actions: a removal signs version 11 and rotates the key for
-  // the members who stay, the title, avatar and description changes sign the
-  // value encrypted under the conversation key, and the other prepares sign
-  // one version-7 payload.
+  // the members who stay, the title and description changes sign the value
+  // encrypted under the conversation key, the avatar change signs the media
+  // URL as is, and the other prepares sign one version-7 payload.
   const identity = { senderId: "111", signingKeyVersion: "1" };
   const keys = chat.getPublicKeys();
   const remaining = [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }];
@@ -705,8 +698,6 @@ async function main() {
   const metadata = [
     [chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board: layoffs, Q3", ...metadataKey }),
       "GroupChangeEvent.GroupTitleChange,", "Board: layoffs, Q3"],
-    [chat.prepareGroupAvatarChange({ ...identity, conversationId: "g100", newAvatarUrl: "https://img/a.png", ...metadataKey }),
-      "GroupChangeEvent.GroupAvatarUrlChange,", "https://img/a.png"],
     [chat.prepareGroupDescriptionChange({ ...identity, conversationId: "g100", newDescription: "Rules: be kind", ...metadataKey }),
       "GroupChangeEvent.GroupDescriptionChange,", "Rules: be kind"],
   ];
@@ -720,6 +711,16 @@ async function main() {
     assert.ok(!payload.includes(plaintext), payload);
     assert.equal(chat.decrypt(prepared.encryptedValue, rotated.conversationKey), plaintext);
   }
+  const groupAvatarUrl = "https://ton.x.com/xchat_media/g100/avatar";
+  const avatarPrep = chat.prepareGroupAvatarChange({
+    ...identity,
+    conversationId: "g100",
+    newAvatarUrl: groupAvatarUrl,
+    conversationKeyVersion: rotated.conversationKeyVersion,
+  });
+  const avatarPayload = onlyAction(avatarPrep).signaturePayload;
+  assert.ok(avatarPayload.startsWith("GroupChangeEvent.GroupAvatarUrlChange,"), avatarPayload);
+  assert.ok(avatarPayload.endsWith(`,${rotated.conversationKeyVersion},${groupAvatarUrl}`), avatarPayload);
   assert.throws(
     () => chat.prepareGroupTitleChange({ ...identity, conversationId: "g100", newTitle: "Board" }),
     /no cached conversation key for 'g100'/,
@@ -849,6 +850,37 @@ async function main() {
   );
   // Unset screen-capture blocking signs as the trailing null sentinel.
   assert.ok(membersPrep.actionSignatures[1].signaturePayload.endsWith(",null"));
+
+  // 4d1. The current title and description go out encrypted under the key
+  // the add generates, as the result returns them; the description is
+  // signed at version 8, after the screen-capture slot, and the avatar URL
+  // as passed.
+  const avatarUrl = "https://ton.x.com/xchat_media/g-1/avatar";
+  const describedPrep = chat.prepareGroupMembersChange({
+    senderId: "910002",
+    signingKeyVersion: "1",
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    conversationId: "g-1",
+    newMemberIds: ["910005"],
+    currentMemberIds: ["910002"],
+    currentAdminIds: ["910002"],
+    currentPendingMemberIds: [],
+    currentTitle: "Team",
+    currentDescription: "Ships the app",
+    currentAvatarUrl: avatarUrl,
+  });
+  const describedAdd = describedPrep.actionSignatures[1];
+  assert.equal(chat.decrypt(describedPrep.encryptedTitle, describedPrep.conversationKey), "Team");
+  assert.equal(
+    chat.decrypt(describedPrep.encryptedDescription, describedPrep.conversationKey),
+    "Ships the app",
+  );
+  assert.ok(!describedAdd.signaturePayload.includes("Team"));
+  assert.equal(describedAdd.messageEventSignature.signatureVersion, "8");
+  assert.ok(describedAdd.signaturePayload.endsWith(`,null,${describedPrep.encryptedDescription}`));
+  assert.ok(describedAdd.signaturePayload.includes(`,${avatarUrl},`));
+  assert.equal("encryptedTitle" in membersPrep, false);
+  assert.equal(membersPrep.actionSignatures[1].messageEventSignature.signatureVersion, "7");
 
   // 4d2. The group's screen-capture-blocking state fills the trailing signed slot.
   const membersPrepScb = chat.prepareGroupMembersChange({

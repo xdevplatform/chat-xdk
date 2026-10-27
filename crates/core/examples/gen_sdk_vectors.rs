@@ -15,7 +15,8 @@ use chat_xdk_core::internals::{self, FixtureAttachment};
 use chat_xdk_core::keys::conversation_keys::encrypt_conversation_key;
 use chat_xdk_core::signatures::build_ckey_change_signature;
 use chat_xdk_core::{
-    AttachmentDescriptor, ChatCore, EncryptMessageParams, GroupDescriptionChangeParams,
+    AttachmentDescriptor, ChatCore, EncryptMessageParams, GroupAvatarChangeParams,
+    GroupDescriptionChangeParams,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::json;
@@ -34,7 +35,7 @@ const EVENT_GARBAGE: &str = "!!!not-an-event!!!";
 const EVENT_GROUP_ID: &str = "g1111";
 const EVENT_GROUP_DESCRIPTION: &str = "fixture group description, encrypted";
 const EVENT_GROUP_TITLE: &str = "fixture group title, encrypted";
-const EVENT_GROUP_AVATAR_URL: &str = "https://example.com/fixture-avatar.png";
+const EVENT_GROUP_AVATAR_URL: &str = "https://ton.x.com/xchat_media/g1111/fixture-avatar";
 const EVENT_GROUP_CREATE_KEY_VERSION: &str = "1002";
 
 // Raw Thrift enum values embedded in the failure vector; suites assert the
@@ -254,9 +255,27 @@ fn main() {
     )
     .expect("frame group description change");
 
-    // Group create vector: a signed create whose title and avatar URL are
-    // encrypted under the key the create seeds. The key is emitted with it,
-    // so every suite can check decrypt_event returns them decrypted.
+    // Group avatar vector: a signed avatar change carrying the media URL as
+    // is, with the version of the key its image is encrypted under, so every
+    // suite can check decrypt_event returns both without any key.
+    let avatar_change = core
+        .prepare_group_avatar_change(&GroupAvatarChangeParams::new(
+            EVENT_GROUP_ID,
+            EVENT_GROUP_AVATAR_URL,
+            EVENT_CONVERSATION_KEY_VERSION,
+        ))
+        .expect("prepare group avatar change");
+    let event_group_avatar_change_b64 = internals::frame_action_signature(
+        &avatar_change.action_signatures[0],
+        EVENT_SENDER_ID,
+        EVENT_GROUP_ID,
+    )
+    .expect("frame group avatar change");
+
+    // Group create vector: a signed create whose title is encrypted under
+    // the key the create seeds. The key is emitted with it, so every suite
+    // can check decrypt_event returns the title decrypted, and the
+    // ciphertext, so suites can check the title without the key.
     let group_create = core
         .prepare_group_create_with_version(
             &chat_xdk_core::GroupCreateParams::new(
@@ -269,8 +288,7 @@ fn main() {
                 vec![EVENT_SENDER_ID.to_string()],
                 vec![EVENT_SENDER_ID.to_string()],
             )
-            .with_title(EVENT_GROUP_TITLE)
-            .with_avatar_url(EVENT_GROUP_AVATAR_URL),
+            .with_title(EVENT_GROUP_TITLE),
             EVENT_GROUP_CREATE_KEY_VERSION,
         )
         .expect("prepare group create");
@@ -493,7 +511,9 @@ fn main() {
         "event_group_create_b64": event_group_create_b64,
         "event_group_create_conversation_key_b64": B64.encode(group_create_key.encoded()),
         "event_group_create_conversation_key_version": EVENT_GROUP_CREATE_KEY_VERSION,
+        "event_group_create_encrypted_title": group_create.encrypted_title,
         "event_group_title": EVENT_GROUP_TITLE,
+        "event_group_avatar_change_b64": event_group_avatar_change_b64,
         "event_group_avatar_url": EVENT_GROUP_AVATAR_URL,
         "event_key_change_b64": event_key_change_b64,
         "event_message_b64": event_message_b64,

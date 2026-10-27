@@ -33,7 +33,7 @@ import threading as _threading
 import time as _time
 import urllib.parse as _urllib_parse
 from enum import Enum
-from typing import Optional, TypedDict
+from typing import Literal, Optional, TypedDict
 
 from chat_xdk import _native
 from chat_xdk._native import __version__
@@ -253,6 +253,24 @@ class QuickReply(TypedDict, total=False):
     request: QuickReplyRequest
     response: QuickReplyResponse
 
+
+class GroupText(TypedDict, total=False):
+    """A group title or description as a received event carries it.
+
+    The ``title`` of a ``Created`` group change, the ``new_title`` of a
+    ``TitleChanged`` one and the ``new_description`` of a
+    ``DescriptionChanged`` one have this shape. ``kind`` ``"Text"`` carries
+    ``text``: the value decrypted, or the plaintext an event that names no
+    key version carries. ``kind`` ``"Unavailable"`` carries ``raw``: a value
+    the SDK could not decrypt, as the event carries it. 0.5.x apps sent
+    titles as plaintext while naming a key version, so show ``raw`` when a
+    title isn't decryptable.
+    """
+
+    kind: Literal["Text", "Unavailable"]
+    text: str
+    raw: str
+
 # Stable invalid-PIN message form the core emits
 # ("Invalid PIN: guesses_remaining=N"). Anchored on the full form so a count
 # embedded in an unrelated pass-through message is not misread.
@@ -297,6 +315,7 @@ __all__ = [
     "GroupLeaveParams",
     "GroupMembersChangeParams",
     "GroupMembersRemoveParams",
+    "GroupText",
     "GroupTitleChangeParams",
     "MarkConversationReadParams",
     "MessageDeleteParams",
