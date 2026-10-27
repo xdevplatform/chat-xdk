@@ -14,21 +14,23 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `SetIdentity`](#setidentity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `ImportKeys`](#importkeys-takes-importkeysparams)
+- [ ] [Pass the Juicebox config to `new Chat(config)`, and PINs as `byte[]`](#keys-stored-in-juicebox)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `DecryptEvents`](#decryptevents-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `DecryptEvents` and read its `Events`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `DecryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a `PublicKeyInput`'s properties `IdentityPublicKey` and `PublicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
-- [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
+- [ ] [Tell exceptions apart by `Kind`](#errors-carry-their-kind)
+- [ ] [Name a native library you build yourself `chat_xdk_ffi`](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
@@ -48,9 +50,11 @@ decrypted key change, message, deletion, read receipt and group change, as
 `https://api.x.com` + `path` with your user access token and returns the
 parsed JSON response as a `JsonElement`. `PhotoAttachment(mediaHashKey)`
 stands for your code that builds a photo's `AttachmentDescriptor`, and
-`ShowEdit`, `ShowTitle`, `ShowDescription` and `ShowAvatar` for your code
-that displays an edit, or a group's title, description or avatar. The types
-are in the `ChatXdk` namespace.
+`ShowEdit`, `ShowTitle`, `ShowDescription`, `ShowAvatar`, `ShowEvent` and
+`ShowGuessesLeft` for your code that displays an edit, a group's title,
+description or avatar, a decrypted event, or the PIN attempts left. `pin` is
+the PIN, `juiceboxConfig` the Juicebox config the X API returns, and `e` a
+`ChatXdkException` a call threw. The types are in the `ChatXdk` namespace.
 
 ## Upgrade readers before v1 sends start
 
@@ -112,6 +116,10 @@ var response = api.Post($"/2/users/{userId}/public_keys", new { public_key = reg
 chat.SetIdentity(new SetIdentityParams(userId, response.GetProperty("data").GetProperty("public_key_version").GetString()!));
 ```
 
+`PublicKeys`, which `GetPublicKeys` and `Setup` return, holds the two public
+keys, `Identity` and `Signing`, and no `Version`: their version is the
+`public_key_version` the registration request returns.
+
 ## `SetIdentity` takes `SetIdentityParams`
 
 Pass the user id and the signing-key version in a `SetIdentityParams`. It
@@ -143,6 +151,38 @@ chat.ImportKeys(new ImportKeysParams(privateKeys));
 chat.ImportKeys(new ImportKeysParams(privateKeys) { SigningKeyVersion = signingKeyVersion });
 ```
 
+`ExportKeys` throws a `ChatXdkException` of kind `InvalidState` when no
+identity key is loaded, where it returned `null`; check `HasIdentityKey`
+first where that can happen.
+
+## Keys stored in Juicebox
+
+A chat that keeps its keys in Juicebox takes the Juicebox config the X API
+returns when it's created, with `new Chat(juiceboxConfig)`, or later with
+`UpdateConfig`, on first boot, before the account has one. `Setup` and
+`Unlock` take only the PIN, as `ChangePin` and `Delete` take no config, and
+every PIN is a `byte[]`, so you can zero it once the call returns.
+`SetupAsync`, `UnlockAsync`, `ChangePinAsync` and `DeleteAsync` run the same
+calls off the calling thread, and `new Chat()` creates a chat that manages
+its keys with `ImportKeys` and `ExportKeys` alone:
+
+```csharp
+// 0.5.x
+using var chat = new Chat();
+chat.Unlock(pin, juiceboxConfig);
+
+// 0.6.0
+using var chat = new Chat(juiceboxConfig);
+var pinBytes = Encoding.UTF8.GetBytes(pin);
+await chat.UnlockAsync(pinBytes);
+Array.Clear(pinBytes);
+```
+
+Every method of a `Chat`, `UpdateConfig` included, is safe to call from
+several threads at once; a Juicebox call already under way keeps the config
+it started with. A wrong PIN throws a `ChatXdkException` of kind
+`InvalidPin` (see [Errors carry their kind](#errors-carry-their-kind)).
+
 ## User ids are strings of digits
 
 Every user id is a string of digits: the `SetIdentityParams` user id,
@@ -166,7 +206,7 @@ var reply = new EncryptReplyParams(conversationId, "pong", eventB64) { ReplyToSe
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `SigningKeyVersion` and each public key's
-`KeyVersion`) and `ConversationKeyVersion`. Anything else throws
+`PublicKeyVersion`) and `ConversationKeyVersion`. Anything else throws
 `ChatXdkException` naming the field, such as `Invalid signing_key_version
 'v1': pass the key version as the X API returns it, an integer in digits`.
 There's no code to change if you pass the versions the X API returns.
@@ -175,16 +215,26 @@ There's no code to change if you pass the versions the X API returns.
 
 Pass the events, an `IReadOnlyList<string>` such as an array or a list, in
 a `DecryptEventsParams`, and the signing keys as `SigningKeys`. Left
-`null`, the keys `SetSigningKeys` stored verify the events. The result is
-unchanged, and per-event errors are still collected in it.
+`null`, the keys `SetSigningKeys` stored verify the events. Per-event errors
+are still collected in the result, and the call throws only for invalid
+params. The result holds the decrypted events, of every event type, in
+`Events`, each a `DecryptedEvent`:
 
 ```csharp
 // 0.5.x
 var result = chat.DecryptEvents(events, signingKeys);
+foreach (var decrypted in result.Messages) ShowEvent(decrypted.Event);
 
 // 0.6.0
 var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys });
+foreach (var decrypted in result.Events) ShowEvent(decrypted.Event);
 ```
+
+`result.ConversationKeys.LatestVersion`, the version to encrypt with, is
+the newest version whose key change verified, and it never moves back for
+the chat's lifetime. It's `null` until a key change verifies: a key change
+the SDK can't verify still adds its key to `result.ConversationKeys.Keys`,
+for decrypting, but never becomes the version you encrypt with.
 
 ## `DecryptEvent` takes `DecryptEventParams`
 
@@ -374,6 +424,21 @@ var actionSignatures = prepared.ActionSignatures.Select(sig => new Dictionary<st
 var actionSignatures = prepared.ActionSignatures;
 ```
 
+## Public key inputs name the identity key and its version
+
+A `PublicKeyInput`, one participant a conversation key is encrypted to,
+names its key `IdentityPublicKey` and the key's version `PublicKeyVersion`,
+as `SigningKeyEntry` does: the `public_key` the X API returns for a user is
+their identity key:
+
+```csharp
+// 0.5.x
+var input = new PublicKeyInput { UserId = userId, PublicKey = identityPublicKey, KeyVersion = publicKeyVersion };
+
+// 0.6.0
+var input = new PublicKeyInput { UserId = userId, IdentityPublicKey = identityPublicKey, PublicKeyVersion = publicKeyVersion };
+```
+
 ## Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
@@ -484,14 +549,31 @@ var deletion = chat.PrepareMessageDelete(
 var messageId = deletion.ActionSignatures[0].MessageId;
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter throws `ChatXdkException` with a message that
-names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
-(digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+Every SDK failure throws a `ChatXdkException`, whose `Kind`, a
+`ChatXdkErrorKind`, names the failure the same way in every binding:
+`InvalidInput`, `InvalidState`, `Parse`, `Decryption`, `Verification`,
+`InvalidPin`, `Juicebox` or `Internal`. After a wrong PIN, its
+`GuessesRemaining` holds the attempts Juicebox reports left, `0` once the
+stored keys are locked and `null` when Juicebox reports no count.
+
+A missing or invalid parameter throws one of kind `InvalidInput` with a
+message that names the value, such as `Invalid sender_id 'user-1': pass a
+numeric user id (digits only)` or `too many attachments: at most 10 per
+message`, without an `Invalid state:` prefix. That covers a key or signature
+that `Verify`, `VerifyKeyBinding` or `MatchesRegisteredKey` can't decode.
+Errors about state the chat lacks, such as a missing session identity or an
+empty key cache, are of kind `InvalidState` and keep their prefix. Tell them
+apart by kind rather than by message:
+
+```csharp
+// 0.5.x
+var invalidInput = !e.Message.StartsWith("Invalid state:");
+
+// 0.6.0
+var invalidInput = e.Kind == ChatXdkErrorKind.InvalidInput;
+```
 
 ## The package bundles the linux-arm64 native library
 
@@ -499,7 +581,10 @@ The package bundles the native library for 64-bit ARM Linux (`linux-arm64`)
 as well, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need
 no copy of their own. There's no code to change. If you shipped a library
 you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
-entry points 0.6.0 calls (see [C ABI](c-abi.md)).
+entry points 0.6.0 calls (see [C ABI](c-abi.md)). The native library is
+`chat_xdk_ffi` (`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`,
+`chat_xdk_ffi.dll`), built from the `chat-xdk-ffi` crate: name one you
+build yourself for another platform the same way.
 
 ## Group actions should be signed
 

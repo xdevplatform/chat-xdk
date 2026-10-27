@@ -16,12 +16,30 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 1 | **new** | `Chat::new(config: JuiceboxConfig)` | `new Chat()` (config via `createChat(opts)`; `juiceboxConfig` optional; free with `free()`) | `Chat(config_json?: str)` | `New() *Chat` (free with `Close()`) | `new Chat()` (free with `close()` / `try-with-resources`) | `new Chat()` then `UpdateConfig(string)` (free with `Dispose()` / `using`) |
-| 2 | **update_config** | `update_config(&mut self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
-| 3 | **set_reject_unverified** | `set_reject_unverified(&mut self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
+| 1 | **new** | `Chat::new(config: JuiceboxConfig)`, `ChatCore::new()` | `createChat({ juiceboxConfig?, getAuthToken? })` → `Promise<ChatWithJuicebox>` (free with `free()`) | `Chat(config_json?: str)` | `New() *Chat`, `NewWithJuiceboxConfig(configJSON string) (*Chat, error)` (free with `Close()`) | `new Chat()`, `new Chat(String juiceboxConfigJson)` (free with `close()` / `try-with-resources`) | `new Chat()`, `new Chat(string juiceboxConfigJson)` (free with `Dispose()` / `using`) |
+| 2 | **update_config** | `update_config(&self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
+| 3 | **set_reject_unverified** | `set_reject_unverified(&self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
+| 3a | **set_feature_switches** | `set_feature_switches(&self, status: u16, body: &[u8])` | — | — | — | — | — |
 
-The config JSON accepted by the constructor, `update_config`, `setup`, and
-`unlock` supports three shapes, checked in this order:
+A chat takes its Juicebox config when it's created, in every binding, and
+`update_config` replaces it: on first boot, when the account has no config
+yet, or to refresh its tokens. A Juicebox call already under way keeps the
+config it started with. The C ABI's `chat_xdk_new(juicebox_config_json,
+&chat)` takes it the same way, NULL for none.
+
+Rust's `set_feature_switches` hands a chat the answer to
+`GET /2/chat/features` (`FEATURES_ENDPOINT`), which
+the bindings read themselves when a chat is created (see
+[ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)): make the request once,
+when you create the chat, without credentials or query parameters, within
+`FEATURES_TIMEOUT_MS`, reading at most one byte past `FEATURES_MAX_BODY`,
+and pass its status and body. Sends stay v0 until an answer turns
+`v1_send` on; a chat takes one answer for its lifetime, and a status other
+than 200 or a body that is too long or isn't a features object leaves every
+switch off.
+
+The config JSON accepted by the constructor and `update_config` supports
+three shapes, checked in this order:
 
 1. **Direct SDK config** — `{"sdk_config": "<json string>", "tokens": {realm_id: token}, "max_guess_count": N}`;
    `sdk_config` goes straight to the Juicebox SDK. Default guesses: 20.
@@ -39,10 +57,10 @@ The config JSON accepted by the constructor, `update_config`, `setup`, and
    keys, so it only works against realms that don't require them. Default
    guesses: 5.
 
-In JS, realm auth tokens always come from the `getAuthToken` callback
-instead of the config, so the `tokens`/`token_map` token fields are not
-validated there (and a raw realms config is accepted as a fourth shape);
-a config accepted by JS may still be rejected by the native bindings.
+The guess budget is the config's `max_guess_count` in every binding. In JS,
+realm auth tokens always come from the `getAuthToken` callback instead of
+the config, so the SDK reads the config without its `tokens` / `token_map`
+token fields, and accepts a raw realms config as a fourth shape.
 
 `createChat`'s `juiceboxConfig` is optional to support **JS first boot**: the
 account's `juicebox_config` is created by `POST /2/users/{id}/public_keys`, so
@@ -52,16 +70,18 @@ client; `setup`/`unlock`/`changePin`/`delete` throw a clear error until
 `updateConfig` supplies a real config. The first-boot flow is:
 `createChat({ getAuthToken })` → `generateKeypairs()` → caller POSTs the
 payload → `updateConfig(configFromGet)` → `setup(pin)`. Already-provisioned
-accounts keep passing `juiceboxConfig` at creation, unchanged.
+accounts pass `juiceboxConfig` at creation. `createChat()` without
+`getAuthToken` creates a chat without Juicebox, which loads no juicebox-sdk
+and keeps its keys with `importKeys` / `exportKeys`.
 
 ### Juicebox Key Storage
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 4 | **setup** | `async setup(pin: &[u8]) → PublicKeys` | `setup(pin: string \| Uint8Array) → Promise<PublicKeys>` | `setup(pin: str) → PublicKeys` | `Setup(pin []byte, configJSON string) (*PublicKeys, error)` | `setup(String pin, String configJson)` | `Setup(string pin, string configJson)` |
-| 5 | **unlock** | `async unlock(pin: &[u8])` | `unlock(pin: string \| Uint8Array) → Promise<void>` | `unlock(pin: str)` | `Unlock(pin []byte, configJSON string) error` | `unlock(String pin, String configJson)` | `Unlock(string pin, string configJson)` |
-| 6 | **change_pin** | `async change_pin(old: &[u8], new: &[u8])` | `changePin(old: string \| Uint8Array, new: string \| Uint8Array) → Promise<void>` | `change_pin(old_pin: str, new_pin: str)` | `ChangePin(oldPin, newPin []byte) error` | `changePin(String oldPin, String newPin)` | `ChangePin(string oldPin, string newPin)` |
-| 7 | **delete** | `async delete()` | `delete() → Promise<void>` | `delete()` | `Delete() error` | `delete()` | `Delete()` |
+| 4 | **setup** | `async setup(pin: &[u8]) → PublicKeys` | `setup(pin: string \| Uint8Array) → Promise<PublicKeys>` | `setup(pin: str \| bytes \| bytearray) → PublicKeys`, `async setup_async(pin)` | `Setup(pin []byte) (*PublicKeys, error)` | `setup(byte[] pin)`, `setupAsync(byte[] pin)` → `CompletableFuture<PublicKeys>` | `Setup(byte[] pin)`, `SetupAsync(byte[] pin)` → `Task<PublicKeys>` |
+| 5 | **unlock** | `async unlock(pin: &[u8])` | `unlock(pin: string \| Uint8Array) → Promise<void>` | `unlock(pin)`, `async unlock_async(pin)` | `Unlock(pin []byte) error` | `unlock(byte[] pin)`, `unlockAsync(byte[] pin)` | `Unlock(byte[] pin)`, `UnlockAsync(byte[] pin)` |
+| 6 | **change_pin** | `async change_pin(old: &[u8], new: &[u8])` | `changePin(old: string \| Uint8Array, new: string \| Uint8Array) → Promise<void>` | `change_pin(old_pin, new_pin)`, `async change_pin_async(old_pin, new_pin)` | `ChangePin(oldPin, newPin []byte) error` | `changePin(byte[] oldPin, byte[] newPin)`, `changePinAsync(…)` | `ChangePin(byte[] oldPin, byte[] newPin)`, `ChangePinAsync(…)` |
+| 7 | **delete** | `async delete()` | `delete() → Promise<void>` | `delete()`, `async delete_async()` | `Delete() error` | `delete()`, `deleteAsync()` | `Delete()`, `DeleteAsync()` |
 | 8 | **lock** | `lock()` | `lock()` | `lock()` | `Lock()` | `lock()` | `Lock()` |
 | 9 | **is_unlocked** | `is_unlocked() → bool` | `isUnlocked() → boolean` | `is_unlocked() → bool` | `IsUnlocked() bool` | `isUnlocked()` | `IsUnlocked { get; }` |
 | 10 | **has_identity_key** | `has_identity_key() → bool` | `hasIdentityKey() → boolean` | `has_identity_key() → bool` | `HasIdentityKey() bool` | `hasIdentityKey()` | `HasIdentityKey { get; }` |
@@ -73,19 +93,15 @@ accounts keep passing `juiceboxConfig` at creation, unchanged.
 | 11 | **generate_keypairs** | `→ PublicKeyRegistrationPayload` | `generateKeypairs() → object` | `generate_keypairs() → PublicKeyRegistrationPayload` | `GenerateKeypairs() (*PublicKeyRegistrationPayload, error)` | `generateKeypairs()` | `GenerateKeypairs()` |
 | 12 | **get_public_keys** | `→ PublicKeys` | `getPublicKeys() → object` | `get_public_keys() → PublicKeys` | `GetPublicKeys() (*PublicKeys, error)` | `getPublicKeys()` | `GetPublicKeys()` |
 | 13 | **get_public_key_fingerprint** | `→ String` | `getPublicKeyFingerprint() → string` | `get_public_key_fingerprint() → str` | `GetPublicKeyFingerprint() (string, error)` | `getPublicKeyFingerprint()` | `GetPublicKeyFingerprint()` |
-| 14 | **export_keys** | `→ Vec<u8>` | not exposed¹ | `export_keys() → Optional[bytearray]` | `ExportKeys() ([]byte, error)` | `exportKeys()` → `byte[]` | `ExportKeys()` → `byte[]?` |
-| 15 | **import_keys** | `import_keys(&ImportKeysParams)` | not exposed¹ | `import_keys(ImportKeysParams)` | `ImportKeys(ImportKeysParams) error` | `importKeys(ImportKeysParams)` | `ImportKeys(ImportKeysParams)` |
+| 14 | **export_keys** | `→ Vec<u8>` | `exportKeys() → Uint8Array` | `export_keys() → bytearray` | `ExportKeys() ([]byte, error)` | `exportKeys()` → `byte[]` | `ExportKeys()` → `byte[]` |
+| 15 | **import_keys** | `import_keys(&ImportKeysParams)` | `importKeys(params: ImportKeysParams)` | `import_keys(ImportKeysParams)` | `ImportKeys(ImportKeysParams) error` | `importKeys(ImportKeysParams)` | `ImportKeys(ImportKeysParams)` |
 | 16 | **set_identity** | `set_identity(&SetIdentityParams) → Result<()>` | `setIdentity(params: SetIdentityParams)` | `set_identity(SetIdentityParams)` | `SetIdentity(SetIdentityParams) error` | `setIdentity(SetIdentityParams)` | `SetIdentity(SetIdentityParams)` |
 
-¹ By design: the public JS surface (`createChat()`/`ChatWithJuicebox`) does
-not expose raw key export/import, so raw private key material stays inside
-the wasm boundary; keys are managed through `setup`/`unlock` instead.
-
 `export_keys` returns **unencrypted** private key material — handle with
-care (Python returns a mutable `bytearray` so callers can zero it after
-use). It requires a loaded identity key (the signing key is optional,
-giving a 32-byte export); Python/Go/.NET/JVM return `None`/`nil`/`null`
-when no identity key is loaded, while Rust errors.
+care, and zero the bytes once stored (Python returns a mutable `bytearray`
+so callers can zero it). It requires a loaded identity key (the signing key
+is optional, giving a 32-byte export) and fails with an invalid-state error
+when none is loaded, in every binding.
 
 Both calls take a params object, as every call with more than one input
 does. `ImportKeysParams` holds the key blob (`keys`) and an optional
@@ -118,22 +134,24 @@ that did not verify still decrypt messages.
 
 PINs passed to `setup`/`change_pin` must be at least 4 characters and must
 not be a single repeated character or a sequential digit run; `unlock`
-performs no validation so existing registrations stay recoverable. The
-Rust core takes PINs as `&[u8]` and Go takes `[]byte` so callers can
-zeroize their buffers; the JS wrapper additionally accepts `Uint8Array`
-PINs for the same reason.
+performs no validation so existing registrations stay recoverable. The SDK
+core applies the rule in every binding. The Rust core takes PINs as
+`&[u8]`, Go, .NET, the JVM and the C ABI take bytes, Python takes `str`,
+`bytes` or `bytearray`, and JS a string or a `Uint8Array`, so callers can
+zeroize their buffers.
 
 A wrong PIN fails `unlock` (and `change_pin`, which unlocks with the old PIN
-first) with an invalid-PIN error whose message carries the stable token
-`guesses_remaining=N` — the attempt budget Juicebox reports after the failure.
-`0` means the budget is exhausted and the stored keys are locked; the token is
-absent when no count is available. Read it structurally instead of parsing the
-message: Rust `JuiceboxError::InvalidPin { guesses_remaining: Option<u16> }`,
-JVM `ChatXdkException.getGuessesRemaining()` (`Integer`, `null` when absent),
-.NET `ChatXdkException.GuessesRemaining` (`int?`), Go
-`GuessesRemaining(err) (int, bool)`, Python `chat_xdk.guesses_remaining(exc)`
-(`int | None`), JS `guessesRemaining(err)` (`number | null`, reading the
-wrapper's `reason=InvalidPin guesses_remaining=N` error form).
+first) with an error of the invalid-PIN kind that carries the attempt budget
+Juicebox reports after the failure. `0` means the budget is exhausted and
+the stored keys are locked; it is absent when no count is available: Rust
+`SdkError::guesses_remaining() → Option<u16>`, Python
+`InvalidPinError.guesses_remaining` (`int | None`), JS
+`ChatXdkError.guessesRemaining` (`number | null`), Go
+`(*chatxdk.Error).GuessesRemaining` (`*int`), .NET
+`ChatXdkException.GuessesRemaining` (`int?`), JVM
+`ChatXdkException.getGuessesRemaining()` (`Integer`), and the C ABI error
+document's `guesses_remaining`. The message reads
+`Juicebox error: Invalid PIN: guesses_remaining=N` in every binding.
 
 ### Conversation Keys
 
@@ -178,7 +196,7 @@ from the session identity set via `set_identity`.
 | 21 | **extract_conversation_keys** | `(events: &[&str]) → ConversationKeyResult` | `extractConversationKeys(string[]) → ConversationKeyResult` | `extract_conversation_keys(list[str]) → dict` | `ExtractConversationKeys(events []string) (*ConversationKeyBundle, error)` | `extractConversationKeys(List<String>)` | `ExtractConversationKeys(IEnumerable<string>)` |
 | 22 | **set_cache_keys** | `set_cache_keys(enabled: bool)` | `setCacheKeys(enabled: boolean)` | `set_cache_keys(enabled: bool)` | `SetCacheKeys(enabled bool)` | `setCacheKeys(boolean)` | `SetCacheKeys(bool)` |
 | 23 | **set_signing_keys** | `set_signing_keys(&[SigningKeyEntry])` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
-| 24 | **decrypt_events** | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `decryptEvents(params: DecryptEventsParams) → DecryptEventsResult` | `decrypt_events(DecryptEventsParams) → dict` | `DecryptEvents(DecryptEventsParams) (*DecryptEventsResult, error)` | `decryptEvents(DecryptEventsParams)` → `DecryptEventsResult` | `DecryptEvents(DecryptEventsParams)` → `DecryptEventsResult` |
+| 24 | **decrypt_events** | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `decryptEvents(params: DecryptEventsParams) → DecryptEventsResult` | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `DecryptEvents(DecryptEventsParams) (*DecryptEventsResult, error)` | `decryptEvents(DecryptEventsParams)` → `DecryptEventsResult` | `DecryptEvents(DecryptEventsParams)` → `DecryptEventsResult` |
 | 25 | **decrypt_event** | `decrypt_event(DecryptEventParams) → Event` | `decryptEvent(params: DecryptEventParams) → Event` | `decrypt_event(DecryptEventParams) → dict` | `DecryptEvent(DecryptEventParams) (*Event, error)` | `decryptEvent(DecryptEventParams)` → `JsonNode` | `DecryptEvent(DecryptEventParams)` → `JsonElement` |
 
 **Session stores for the decrypt/encrypt paths.** Both decrypt methods accept
@@ -204,8 +222,9 @@ unset or empty key fields and fall back to two opt-in session stores:
   the returned key map to `decrypt_event` explicitly.
 
 An explicit non-empty value always wins over the stores. The stores do not
-change the two decrypt contracts: `decrypt_events` never throws (per-event
-errors are collected in the result) and `decrypt_event` throws on failure.
+change the two decrypt contracts: `decrypt_events` collects per-event errors
+in the result and throws only for invalid params, and `decrypt_event` throws
+on failure.
 
 ---
 
@@ -799,17 +818,23 @@ Decrypts multiple events in one call. Handles everything internally:
 | events | `events: string[]` | `events: list[str]` | `events: Vec<String>` | `Events []string` | `List<String> events` | `IReadOnlyList<string> Events` | All base64-encoded raw events. **Must include KeyChange events** — without them, messages depending on those keys will land in `errors`. The events endpoint returns KeyChange events in **`meta.conversation_key_events`**, separate from the `data` array; concatenate both into this field. |
 | signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **all participants**. The SDK extracts each event's `senderId` internally and filters to the matching keys. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
-**Returns: `DecryptEventsResult`** — never throws/raises. Errors are collected.
+**Returns: `DecryptEventsResult`.** An event that fails is collected in
+`errors` rather than thrown; the call throws (raises) only for invalid params,
+such as a malformed signing key entry. `events` holds the events that
+decrypted, of every event type. `conversation_keys.latest_version`, the
+version to encrypt with, is the newest version whose key change verified,
+monotonic for the chat's lifetime, and null until a key change verifies; a
+key change that doesn't verify still adds its key to `conversation_keys.keys`.
 
 ```typescript
 // JS
 interface DecryptEventsResult {
-  messages: DecryptedMessage[];             // successfully decrypted events
+  events: DecryptedEvent[];                 // the events that decrypted, of every type
   conversationKeys: ConversationKeyResult;  // extracted keys (cache these)
   errors: { [index: string]: string };      // event index (string key) → error message
 }
 
-interface DecryptedMessage {
+interface DecryptedEvent {
   event: Event;           // the decrypted event (same type as decryptEvent returns)
   originalB64?: string;   // the raw input string, for reference
 }
@@ -818,7 +843,7 @@ interface DecryptedMessage {
 ```python
 # Python
 {
-    "messages": [
+    "events": [
         { "event": { "type": "Message", ... }, "original_b64": "SGVsbG8..." },
         ...
     ],
@@ -842,9 +867,9 @@ failures:
 
 | Error | Meaning |
 |---|---|
-| `…signature missing or no matching signing key` on a KeyChange | The key change was never signed (or signed with an unpublished key). Its conversation key is never extracted. |
+| `…signature missing or no matching signing key` on a KeyChange | The key change was never signed (or signed with an unpublished key). Its key still decrypts messages, but never becomes the version to encrypt with. |
 | `ECDSA mismatch: key_version=…` | The signer fed different bytes into the signature than the event carries (e.g. a non-canonical conversation id). |
-| `Message encrypted with key version '…' but no matching key found` (key events included in the batch) | The message's key came from an unverifiable KeyChange above — collateral of the first row. |
+| `Message encrypted with key version '…' but no matching key found` (key events included in the batch) | No key change in the batch gives this device the message's key: none names that version, or none is encrypted to this device's key version. |
 
 New messages are unaffected: rotating the key starts a clean, verifiable
 history from that point forward. (Verifiability only — rotation does not
@@ -866,7 +891,7 @@ const signingKeys: SigningKeyEntry[] = [
 const result = chat.decryptEvents({ events: rawEvents, signingKeys });
 
 // Iterate decrypted messages
-for (const dm of result.messages) {
+for (const dm of result.events) {
   if (dm.event.type === "message") {
     console.log(dm.event.senderId, dm.event.content.text);
   }
@@ -883,7 +908,7 @@ from chat_xdk import DecryptEventsParams
 
 result = chat.decrypt_events(DecryptEventsParams(raw_events, signing_keys=signing_keys))
 
-for dm in result["messages"]:
+for dm in result["events"]:
     evt = dm["event"]
     if evt["type"] == "Message":
         print(evt["sender_id"], evt["content"]["text"])
@@ -902,7 +927,7 @@ if err != nil {
     panic(err)
 }
 
-for _, dm := range result.Messages {
+for _, dm := range result.Events {
     if dm.Event.Type == "Message" {
         fmt.Println(dm.Event.AsMessage().Text())
     }
@@ -918,7 +943,7 @@ DecryptEventsParams params = new DecryptEventsParams(rawEvents);
 params.signingKeys = signingKeys;
 DecryptEventsResult result = chat.decryptEvents(params);
 
-for (DecryptedMessage dm : result.messages) {
+for (DecryptedEvent dm : result.events) {
     JsonNode event = dm.event;
     if ("Message".equals(event.path("type").asText())) {
         System.out.println(event.path("content").path("text").asText());
@@ -933,7 +958,7 @@ Map<String, byte[]> cachedKeys = result.conversationKeys.keys;
 ```csharp
 var result = chat.DecryptEvents(new DecryptEventsParams(rawEvents) { SigningKeys = signingKeys });
 
-foreach (var dm in result.Messages)
+foreach (var dm in result.Events)
 {
     if (dm.Event.GetProperty("type").GetString() == "Message")
         Console.WriteLine(dm.Event.GetProperty("content").GetProperty("text").GetString());
@@ -1058,8 +1083,8 @@ if (eventJson.GetProperty("type").GetString() == "Message")
 | **Input** | 1 event (`string`) | N events (`string[]`) |
 | **Conversation keys** | Caller provides (`ConversationKeyMap`); empty ⇒ opt-in key cache (`setCacheKeys`) | SDK extracts from KeyChange events internally |
 | **Signing keys** | For the **sender only**, matched by `publicKeyVersion`; unset ⇒ `setSigningKeys` store | For **all participants**, SDK filters by `userId` per event; unset ⇒ `setSigningKeys` store |
-| **Error handling** | **Throws** on failure | **Never throws** — errors collected in `result.errors` |
-| **Return type** | `Event` (flat) | `DecryptEventsResult` wrapping `DecryptedMessage[]` |
+| **Error handling** | **Throws** on failure | Per-event errors collected in `result.errors`; throws only for invalid params |
+| **Return type** | `Event` (flat) | `DecryptEventsResult` wrapping `DecryptedEvent[]` |
 | **Returns original b64** | No | Yes (`originalB64` on each message) |
 | **Returns conv keys** | No | Yes (`conversationKeys` with `latestVersion`) |
 | **Parses each event** | 1× | multiple passes (key extraction → key-change signature enforcement → freshness pinning → senderId extraction → decrypt) |
@@ -1645,6 +1670,35 @@ ImageDimensions? dims = ChatXdkUtilities.DetectImageDimensions(imageBytes);
 
 **Supported image dimensions**: PNG, JPEG, GIF, WebP, BMP.
 
+### Errors
+
+Every failure has a kind, which the SDK core assigns and every binding
+reports with the same name in its own idiom:
+
+| Kind | Rust `ErrorKind` | Python exception | JS `ChatXdkError.kind` | Go `chatxdk.ErrorKind` | .NET `ChatXdkErrorKind` / JVM `ChatXdkException.Kind` | C ABI `kind` |
+|---|---|---|---|---|---|---|
+| A parameter is missing or invalid; the message names it | `InvalidInput` | `InvalidInputError` | `invalidInput` | `ErrorKindInvalidInput` | `InvalidInput` / `INVALID_INPUT` | `invalid_input` |
+| A value was neither passed nor available from the chat's state, such as no keys loaded or no session identity | `InvalidState` | `InvalidStateError` | `invalidState` | `ErrorKindInvalidState` | `InvalidState` / `INVALID_STATE` | `invalid_state` |
+| Event or other wire data is malformed | `Parse` | `ParseError` | `parse` | `ErrorKindParse` | `Parse` / `PARSE` | `parse` |
+| Ciphertext didn't decrypt, or no key for it was available | `Decryption` | `DecryptionError` | `decryption` | `ErrorKindDecryption` | `Decryption` / `DECRYPTION` | `decryption` |
+| A signature didn't verify, or couldn't be verified while unverified events are rejected | `Verification` | `VerificationError` | `verification` | `ErrorKindVerification` | `Verification` / `VERIFICATION` | `verification` |
+| Juicebox rejected the PIN | `InvalidPin` | `InvalidPinError` | `invalidPin` | `ErrorKindInvalidPin` | `InvalidPin` / `INVALID_PIN` | `invalid_pin` |
+| Another Juicebox key-storage failure | `Juicebox` | `JuiceboxError` | `juicebox` | `ErrorKindJuicebox` | `Juicebox` / `JUICEBOX` | `juicebox` |
+| A failure inside the SDK | `Internal` | `ChatXdkError` | `internal` | `ErrorKindInternal` | `Internal` / `INTERNAL` | `internal` |
+
+Rust returns an `SdkError`, whose `kind()` and `guesses_remaining()` report
+the kind and, after a wrong PIN, the attempts left. Python raises the
+exception of the kind, a `ChatXdkError` (itself a `ValueError`) with `kind`
+and `guesses_remaining`; a missing argument or one of the wrong type raises
+`TypeError`. JS throws a `ChatXdkError` (an `Error`) with `kind` and
+`guessesRemaining`. Go returns a `*chatxdk.Error`, with `Kind`, `Message`
+and `GuessesRemaining`, matched with `errors.As`. .NET and the JVM throw
+`ChatXdkException`, with `Kind` / `getKind()` and `GuessesRemaining` /
+`getGuessesRemaining()`. The C ABI's `FfiResult.error` is a JSON document,
+`{"kind": "...", "message": "..."}`, with `"guesses_remaining"` after a
+wrong PIN. The message is the same in every binding, apart from the JS
+params check, which prefixes `Invalid <method> params:`.
+
 ---
 
 ## Quick Start
@@ -1692,7 +1746,7 @@ chat.setSigningKeys([
 // and (with the cache on) retains each conversation's latest verified key.
 const result = chat.decryptEvents({ events: rawEvents });
 
-for (const dm of result.messages) {
+for (const dm of result.events) {
   if (dm.event.type === "message") {
     console.log(dm.event.senderId, dm.event.content.text);
   }
@@ -1786,7 +1840,7 @@ chat.set_signing_keys(signing_keys)  # all participants
 
 # ── Initial load: use decrypt_events ──
 result = chat.decrypt_events(DecryptEventsParams(raw_events))
-for dm in result["messages"]:
+for dm in result["events"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
 
@@ -1860,7 +1914,7 @@ func main() {
     if err != nil {
         panic(err)
     }
-    for _, dm := range result.Messages {
+    for _, dm := range result.Events {
         if dm.Event.Type == "Message" {
             fmt.Println(dm.Event.AsMessage().Text())
         }
@@ -1971,7 +2025,7 @@ chat.set_signing_keys(&signing_keys); // all participants
 
 // ── Initial load: use decrypt_events (unset signing keys = stored signing keys) ──
 let result = chat.decrypt_events(&DecryptEventsParams::new(raw_events));
-for dm in &result.messages {
+for dm in &result.events {
     if let Event::Message(msg) = &dm.event {
         println!("{}: {}", msg.meta.sender_id.as_deref().unwrap_or("?"), msg.text().unwrap_or(""));
     }
@@ -2044,7 +2098,7 @@ chat.SetSigningKeys(signingKeys); // all participants
 
 // Initial load — unset signing keys come from the store.
 var result = chat.DecryptEvents(new DecryptEventsParams(rawEvents));
-foreach (var dm in result.Messages)
+foreach (var dm in result.Events)
 {
     if (dm.Event.GetProperty("type").GetString() == "Message")
         Console.WriteLine(dm.Event.GetProperty("content").GetProperty("text").GetString());
@@ -2114,7 +2168,7 @@ try (Chat chat = new Chat()) {
 
     // Initial load — unset (null) signing keys fall back to the store
     DecryptEventsResult batch = chat.decryptEvents(new DecryptEventsParams(rawEvents));
-    for (DecryptedMessage dm : batch.messages) {
+    for (DecryptedEvent dm : batch.events) {
         JsonNode evt = dm.event;
         if (evt != null && "Message".equals(evt.path("type").asText())) {
             String text = evt.path("content").path("text").asText();
@@ -2173,12 +2227,11 @@ Returned by `setup()` and `get_public_keys()`.
 interface PublicKeys {
   identity: string;  // Base64-encoded identity public key (P-256 SEC1)
   signing: string;   // Base64-encoded signing public key (P-256 SEC1)
-  version?: string;  // Key version identifier (may be empty)
 }
 ```
 
 ```python
-# Python — same fields: .identity, .signing, .version (str; may be "")
+# Python — same fields: .identity, .signing
 ```
 
 ### PublicKeyRegistrationPayload

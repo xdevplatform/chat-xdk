@@ -67,8 +67,8 @@ the file calls (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor
 and two decrypt paths whose contracts are **identical across bindings**:
 
 - `decryptEvents({ events, signingKeys })` — batch (initial load / pagination).
-  Self-extracts conversation keys from `KeyChange` events, **never throws**
-  (per-event errors collected in the result).
+  Self-extracts conversation keys from `KeyChange` events; per-event errors
+  are collected in the result, and it **throws only for invalid params**.
 - `decryptEvent({ eventB64, conversationKeys, signingKeys })` — single event
   with pre-cached keys. **Throws** on failure.
 
@@ -119,10 +119,13 @@ a bug even when every binding "works".
   `QuickReply` are untagged with `deny_unknown_fields`, so a stray
   `"response": null` next to `"request"` is rejected.
 - **Errors follow one style per binding.** Invalid input fails in the core with
-  a message naming the value (`Invalid quick reply: …`), surfaced as the
-  binding's error type: Python `ValueError`, JS a thrown `Error`, Go a returned
-  `error`, .NET and JVM `ChatXdkException`. Never return a partial result or
-  silently drop the bad value.
+  a message naming the value (`Invalid quick reply: …`). The core gives every
+  error a kind (`SdkError::kind()`), which each binding surfaces as its error
+  type: Python the exception subclass of `ChatXdkError` (a `ValueError`), JS a
+  thrown `ChatXdkError` with `kind`, Go a returned `*chatxdk.Error` with
+  `Kind`, .NET and JVM `ChatXdkException` with its kind, and the C ABI an error
+  document with `kind`. Never return a partial result or silently drop the bad
+  value, and never read a kind or a count out of a message's text.
 
 **Known exceptions** (do not copy these patterns into new surface; fix them
 when touching the area): Go `TextContent` nested fields other than quick reply,

@@ -10,12 +10,13 @@ change.
 ## Checklist
 
 - [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
+- [ ] [Hand a chat the X API's feature switches to send v1](#the-feature-switch-request)
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `&SetIdentityParams` to `set_identity` and handle its `Result`](#set_identity-takes-setidentityparams)
 - [ ] [Pass an `&ImportKeysParams` to `import_keys`](#import_keys-takes-importkeysparams)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `decrypt_events`](#decrypt_events-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `decrypt_events` and read its `events`](#decrypt_events-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass params by reference to every method](#methods-take-params-by-reference)
 - [ ] [Build params with `new` and `with_*`, and give matches on SDK enums a wildcard arm](#types-are-non_exhaustive)
@@ -24,11 +25,12 @@ change.
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Read a `PublicKeyInput` as `identity_public_key` and `public_key_version`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Match `SdkError::InvalidInput` for invalid input](#invalid-input-errors)
+- [ ] [Tell errors apart by `kind()`, and read a wrong PIN's attempts from `guesses_remaining()`](#errors-carry-their-kind)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
@@ -51,18 +53,20 @@ your user access token and returns the parsed JSON response as a
 `serde_json::Value`. `photo_attachment(media_hash_key)` stands for your code
 that builds a photo's `AttachmentDescriptor`, and `show_edit`, `show_title`,
 `show_description` and `show_avatar` for your code that displays an edit, or
-a group's title, description or avatar. Every type and module the snippets
-use imports from `chat_xdk_core`, except `SdkError`, which imports from
-`chat_xdk_core::error`.
+a group's title, description or avatar. `http_get(url, timeout_ms,
+max_bytes)` stands for your HTTP client's anonymous GET: it returns the
+response's status and at most `max_bytes` of its body. Every type and module
+the snippets use imports from `chat_xdk_core`, except `SdkError`,
+`ErrorKind` and `JuiceboxError`, which import from `chat_xdk_core::error`.
 
 ## Upgrade readers before v1 sends start
 
-0.6.0 reads messages, replies, reactions and edits in two formats. v0 is the
-format 0.5.x sends. v1 encrypts each message under its own key, derived from
-the conversation key, the sender and the message id, and signs it at
-signature version 10. The Rust crate doesn't fetch the X API's feature
-switches, so it always sends v0. The Python, JavaScript, Go, JVM and .NET
-bindings send v1 while the X API's `v1_send` feature switch is on.
+0.6.0 sends each message, reply, reaction and edit in one of two formats.
+v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
+derived from the conversation key, the sender and the message id, and signs
+it at signature version 10. A chat sends v1 while the X API's `v1_send`
+feature switch is on for it, and v0 otherwise (see
+[The feature-switch request](#the-feature-switch-request)).
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations, Rust ones included, to 0.6.0 before
@@ -70,6 +74,28 @@ any sender can send v1. 0.6.0 reads both formats, including v1 reply
 previews, edits and files. There's no code to change: to see which format a
 send used, read `signature_info.signature_version`, `"7"` for v0 and `"10"`
 for v1.
+
+## The feature-switch request
+
+The language bindings read the X API's feature switches with one anonymous
+request, `GET https://api.x.com/2/chat/features`, when a chat is created.
+The Rust crate never makes the request: a chat sends v0 until you make it
+and hand the answer to `set_feature_switches`, which `ChatCore` and `Chat`
+both have. Make the request once, when you create the chat, as the crate's
+constants say: GET `FEATURES_ENDPOINT` without credentials or query
+parameters, within `FEATURES_TIMEOUT_MS` milliseconds, reading at most one
+byte past `FEATURES_MAX_BODY`:
+
+```rust
+// 0.6.0
+let (status, body) = http_get(FEATURES_ENDPOINT, FEATURES_TIMEOUT_MS, FEATURES_MAX_BODY + 1)?;
+chat.set_feature_switches(status, &body);
+```
+
+A chat takes one answer for its lifetime: a later call changes nothing.
+Every switch stays off when the status isn't 200 or the body is larger than
+`FEATURES_MAX_BODY` or isn't a `{"features": {...}}` object, so a chat whose
+request fails keeps sending v0. Without the call there's no code to change.
 
 ## Register keys with the public key only
 
@@ -110,6 +136,10 @@ let registration = chat.generate_keypairs_with_version(signing_key_version)?;
 // 0.6.0
 let registration = chat.generate_keypairs()?;
 ```
+
+`PublicKeys`, which `get_public_keys` and `setup` return, holds the two
+public keys, `identity` and `signing`, and no version: their version is the
+`public_key_version` the registration request returns.
 
 ## `set_identity` takes `SetIdentityParams`
 
@@ -168,7 +198,7 @@ let reply = EncryptReplyParams::new(conversation_id, "pong", event_b64).with_rep
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `signing_key_version` and each
-`PublicKeyInput::key_version`) and `conversation_key_version`. Anything else
+`PublicKeyInput::public_key_version`) and `conversation_key_version`. Anything else
 fails with `SdkError::InvalidInput` naming the field, such as
 `Invalid signing_key_version 'v1': pass the key version as the X API returns
 it, an integer in digits`. There's no code to change if you pass the
@@ -179,15 +209,25 @@ versions the X API returns.
 Pass the events, a `Vec<String>`, in a `DecryptEventsParams`, and the
 signing keys with `with_signing_keys`. Without signing keys, the ones
 `set_signing_keys` stored verify the events. The call still returns a
-`DecryptEventsResult` that collects errors per event.
+`DecryptEventsResult` that collects errors per event, and it holds the
+decrypted events, of every event type, in `events`, each a
+`DecryptedEvent`:
 
 ```rust
 // 0.5.x
 let result = chat.decrypt_events(&events, &signing_keys);
+let first: Option<&DecryptedMessage> = result.messages.first();
 
 // 0.6.0
 let result = chat.decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys));
+let first: Option<&DecryptedEvent> = result.events.first();
 ```
+
+`result.conversation_keys.latest_version`, the version to encrypt with, is
+the newest version whose key change verified, and it never moves back for
+the chat's lifetime. It's `None` until a key change verifies: a key change
+the SDK can't verify still adds its key to `conversation_keys.keys`, for
+decrypting, but never becomes the version you encrypt with.
 
 ## `decrypt_event` takes `DecryptEventParams`
 
@@ -214,7 +254,9 @@ and `prepare_group_members_change`, and to the `ChatCore` methods'
 as they are; `decrypt_events`, `decrypt_event`, `encrypt_file`,
 `file_encryptor`, `decrypt_file`, `file_decryptor` and
 `prepare_mark_conversation_read` take `&params` too, and
-`set_signing_keys` takes a slice.
+`set_signing_keys` takes a slice. Every `ChatCore` and `Chat` method takes
+`&self`, `set_reject_unverified` and `Chat::update_config` included, so one
+chat serves every thread without a lock.
 
 ```rust
 // 0.5.x
@@ -455,6 +497,28 @@ let action_signatures: Vec<serde_json::Value> = prepared
 let action_signatures = serde_json::to_value(&prepared.action_signatures)?;
 ```
 
+## Public key inputs name the identity key and its version
+
+A `PublicKeyInput`, one participant a conversation key is encrypted to,
+names its key `identity_public_key` and the key's version
+`public_key_version`, as `SigningKeyEntry` does: the `public_key` the X API
+returns for a user is their identity key. Build it with `new`, which takes
+the user id, the key and its version in that order:
+
+```rust
+// 0.5.x
+let input = PublicKeyInput {
+    user_id: user_id.to_string(),
+    public_key: identity_public_key.to_string(),
+    key_version: public_key_version.to_string(),
+};
+let version = &input.key_version;
+
+// 0.6.0
+let input = PublicKeyInput::new(user_id, identity_public_key, public_key_version);
+let version = &input.public_key_version;
+```
+
 ## Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
@@ -561,22 +625,36 @@ let deletion = chat.prepare_message_delete(&MessageDeleteParams::new(conversatio
 let message_id = deletion.action_signatures[0].message_id.clone();
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter fails with `SdkError::InvalidInput`, whose
-message names the value, such as `Invalid sender_id 'user-1': pass a numeric
-user id (digits only)` or `too many attachments: at most 10 per message`.
-`SdkError::InvalidState` is left for values the chat lacks, such as a
-missing session identity or an empty key cache. Match the new variant where
-your code checks for invalid input; a `match` on `SdkError` takes a wildcard
-arm (see [Types are `#[non_exhaustive]`](#types-are-non_exhaustive)):
+Every `SdkError` reports its `kind()`, an `ErrorKind` that names the failure
+the same way in every binding: `InvalidInput`, `InvalidState`, `Parse`,
+`Decryption`, `Verification`, `InvalidPin`, `Juicebox` or `Internal`.
+
+A missing or invalid parameter fails with `SdkError::InvalidInput`, of kind
+`InvalidInput`, whose message names the value, such as `Invalid sender_id
+'user-1': pass a numeric user id (digits only)` or `too many attachments: at
+most 10 per message`. That covers a key or signature that `verify`,
+`verify_key_binding` or `matches_registered_key` can't decode, a
+conversation key or key blob of the wrong length, and an empty
+`public_keys`. `SdkError::InvalidState` is left for values the chat lacks,
+such as a missing session identity or an empty key cache. After a wrong PIN,
+`guesses_remaining()` holds the attempts Juicebox reports left, `Some(0)`
+once the stored keys are locked. Tell failures apart by kind; a `match` on
+`ErrorKind` or `SdkError` takes a wildcard arm (see
+[Types are `#[non_exhaustive]`](#types-are-non_exhaustive)):
 
 ```rust
 // 0.5.x
 let invalid_input = matches!(err, SdkError::InvalidState(_));
+let guesses_left = match &err {
+    SdkError::Juicebox(JuiceboxError::InvalidPin { guesses_remaining }) => *guesses_remaining,
+    _ => None,
+};
 
 // 0.6.0
-let invalid_input = matches!(err, SdkError::InvalidInput(_));
+let invalid_input = err.kind() == ErrorKind::InvalidInput;
+let guesses_left = err.guesses_remaining();
 ```
 
 ## Group actions should be signed

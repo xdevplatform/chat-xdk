@@ -64,7 +64,7 @@ func main() {
         panic(err)
     }
 
-    for _, row := range batch.Messages {
+    for _, row := range batch.Events {
         if row.Event.Type == "Message" {
             fmt.Println(row.Event.AsMessage().Text())
         }

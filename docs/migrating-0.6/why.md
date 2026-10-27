@@ -28,9 +28,11 @@ signature version 10, so it rejects every v1 send as a signature
 verification failure. 0.6.0 therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
-chat that can't read the switch keeps sending v0. No public API turns v1
-on, and the Rust crate and the C ABI make no requests, so they always send
-v0. Upgrade the apps that read your conversations first:
+chat that can't read the switch keeps sending v0. The Rust crate makes no
+requests: a Rust app makes the one request itself and hands the chat its
+answer, under the same rules the bindings follow, so Rust apps send v1 when
+the switch says so too. A chat called through the C ABI directly sends v0.
+Upgrade the apps that read your conversations first:
 [Rust](rust.md#upgrade-readers-before-v1-sends-start),
 [Python](python.md#upgrade-readers-before-v1-sends-start),
 [JavaScript](javascript.md#upgrade-readers-before-v1-sends-start),
@@ -48,7 +50,11 @@ it is created, and keeps the answer for its lifetime, so a change to a switch
 reaches the chats created after it; chats created while a request is in
 flight share it. The request never delays or fails a call, and any failure
 leaves every switch off for the chat's lifetime, so its sends stay in v0, the
-format every reader opens:
+format every reader opens. The SDK decides what an answer means in one
+place, its Rust core: a binding only performs the request, and a body is
+read only up to its size limit, never whole first. A Rust app hands the
+core the answer to a request it made:
+[Rust](rust.md#the-feature-switch-request),
 [Python](python.md#the-feature-switch-request),
 [JavaScript](javascript.md#the-feature-switch-request),
 [Go](go.md#the-feature-switch-request),
@@ -130,6 +136,47 @@ prepare method:
 [.NET](dotnet.md#setidentity-takes-setidentityparams),
 [C ABI](c-abi.md#set-the-identity-with-a-params-document).
 
+## A key change sets the version to encrypt with only once it verifies
+
+`decrypt_events` returns, with the keys it decrypts, the version to encrypt
+new messages with. A key change carries the key it introduces whether or not
+its signature verifies, and a reader that can't verify one (no signing key
+for its sender yet, or a forged change) still needs its key to read
+messages sent under it. Only a verified key change can set the version to
+encrypt with, and that version never moves back for the chat's lifetime: a
+key change from someone who can't sign for the conversation can't steer a
+chat's sends to a key they chose, and a replayed older change can't roll the
+version back. Every binding's `decrypt_events` result works this way:
+[Rust](rust.md#decrypt_events-takes-decrypteventsparams),
+[Python](python.md#decrypt_events-takes-decrypteventsparams),
+[JavaScript](javascript.md#decryptevents-takes-a-params-object),
+[Go](go.md#decryptevents-takes-decrypteventsparams),
+[JVM](jvm.md#decryptevents-takes-decrypteventsparams),
+[.NET](dotnet.md#decryptevents-takes-decrypteventsparams),
+[C ABI](c-abi.md#decrypt-with-params-documents).
+
+## Keys stored in Juicebox take their config when the chat is created
+
+The bindings took the Juicebox config in different places: some at
+creation, some on each setup and unlock call, and JS through its own
+options. Every binding now takes it when the chat is created, or with
+`update_config` on first boot, before the account has one, so setup and
+unlock take only the PIN. PINs are bytes in every binding that can hold
+them so, so an app can zero its copy once a call returns, and the bindings
+whose apps run event loops or UI threads add async forms of the Juicebox
+calls, which wait on network round trips. The JS binding runs the Juicebox
+client itself, but the SDK core still decides what a config means, which
+PINs a new registration accepts, how many guesses a registration allows
+(the config's `max_guess_count`), and how a failure reads, so every binding
+behaves the same. JS also loads keys with `importKeys` and saves them with
+`exportKeys`, as every binding does, without Juicebox:
+[Python](python.md#keys-stored-in-juicebox),
+[JavaScript](javascript.md#keys-stored-in-juicebox),
+[Go](go.md#keys-stored-in-juicebox),
+[JVM](jvm.md#keys-stored-in-juicebox),
+[.NET](dotnet.md#keys-stored-in-juicebox),
+[C ABI](c-abi.md#keys-stored-in-juicebox).
+
 ## Action signatures come nested
 
 The requests that carry signed actions (conversation-key changes, group
@@ -138,7 +185,8 @@ the signature nested under `message_event_signature`, next to the signer's
 `signing_public_key`. The prepare methods return that shape, so apps send
 the entries as returned; deletes and read receipts return a
 `PreparedAction`, one entry in the same shape. Only the JSON shape is
-nested; what is signed is the same:
+nested; what is signed is the same, and the signed payload itself stays
+inside the SDK, so a request never carries it:
 [Rust](rust.md#action-signatures-come-nested),
 [Python](python.md#action-signatures-come-nested),
 [JavaScript](javascript.md#action-signatures-come-nested),
@@ -190,6 +238,21 @@ Received keys:
 [JVM](jvm.md#received-participant-keys-take-the-same-names),
 [.NET](dotnet.md#received-participant-keys-take-the-same-names),
 [C ABI](c-abi.md#received-participant-keys-take-the-same-names).
+
+## Public key inputs name the identity key and its version
+
+The public keys a key change or group change encrypts a new conversation
+key to name their fields `identity_public_key` and `public_key_version`, as
+the signing key entries the decrypt calls take do, so one name holds one
+value in every key list an app builds: the key a user's `public_key` is,
+their identity key, and the version the X API gives it:
+[Rust](rust.md#public-key-inputs-name-the-identity-key-and-its-version),
+[Python](python.md#public-key-inputs-name-the-identity-key-and-its-version),
+[JavaScript](javascript.md#public-key-inputs-name-the-identity-key-and-its-version),
+[Go](go.md#public-key-inputs-name-the-identity-key-and-its-version),
+[JVM](jvm.md#public-key-inputs-name-the-identity-key-and-its-version),
+[.NET](dotnet.md#public-key-inputs-name-the-identity-key-and-its-version),
+[C ABI](c-abi.md#public-key-inputs-name-the-identity-key-and-its-version).
 
 ## Decrypted events use the names the calls take
 
@@ -297,19 +360,27 @@ calls and how to read a `GroupText`:
 [.NET](dotnet.md#group-actions-should-be-signed), [C
 ABI](c-abi.md#group-actions-should-be-signed).
 
-## Invalid input has its own error
+## Errors carry their kind
 
-A missing or invalid parameter fails with an error that names the value
-(`SdkError::InvalidInput` in Rust), without the `Invalid state:` prefix,
-which is left for state the chat lacks, such as a missing identity or an
-empty key cache. Callers can tell a bad argument from missing setup:
-[Rust](rust.md#invalid-input-errors),
-[Python](python.md#invalid-input-errors),
-[JavaScript](javascript.md#invalid-input-errors),
-[Go](go.md#invalid-input-errors),
-[JVM](jvm.md#invalid-input-errors),
-[.NET](dotnet.md#invalid-input-errors),
-[C ABI](c-abi.md#invalid-input-errors).
+Apps react differently to a bad argument, missing setup, a forged event and
+a wrong PIN, and reading that from a message's text breaks when the text
+changes. Every error has a kind, which the SDK core assigns once and every
+binding reports the same way: an exception class in Python, a kind on the
+error in the other bindings, and a `kind` in the C ABI's error document. A
+wrong PIN carries the attempts Juicebox reports left as a number, not text
+to parse. A missing or invalid parameter fails with an error that names the
+value (`SdkError::InvalidInput` in Rust), without the `Invalid state:`
+prefix, which is left for state the chat lacks, such as a missing identity
+or an empty key cache. Calls that answered with a bare result, such as
+`verify` and `export_keys`, report the core's error too, rather than a
+generic failure or no value:
+[Rust](rust.md#errors-carry-their-kind),
+[Python](python.md#errors-carry-their-kind),
+[JavaScript](javascript.md#errors-carry-their-kind),
+[Go](go.md#errors-carry-their-kind),
+[JVM](jvm.md#errors-carry-their-kind),
+[.NET](dotnet.md#errors-carry-their-kind),
+[C ABI](c-abi.md#errors-carry-their-kind).
 
 ## Smaller changes
 
@@ -318,9 +389,19 @@ empty key cache. Callers can tell a bad argument from missing setup:
   ([JavaScript](javascript.md#typescript-import-the-types-the-package-exports)).
 - The JVM file methods throw the unchecked `ChatXdkException` and declare no
   checked exceptions ([JVM](jvm.md#exceptions)).
-- C ABI entry points whose arguments differ from 0.5.x take new names, so a
-  stale header or library fails to link instead of misreading its arguments
-  ([C ABI](c-abi.md)).
+- One crate, `chat-xdk-ffi`, builds the C ABI library of every binding over
+  it, so Go, .NET and the JVM call the same functions with the same
+  behavior. The ABI has a version, which the library reports, every call
+  returns its result and error the same way, and the header declares the
+  Juicebox calls only for a library built with them
+  ([C ABI](c-abi.md#check-the-abi-version)).
+- Python types the dicts its calls take and return with exported
+  `TypedDict`s, so a type checker reads them
+  ([Python](python.md#key-entries-and-results-have-named-types)).
+- .NET params documents omit a field left `null`, and JVM descriptors
+  leave required fields unset rather than filled with `""` or `0`, so a
+  missing value fails with an error that names it instead of a stand-in
+  reaching the core ([JVM](jvm.md#entities-take-their-values-in-the-constructor)).
 - Rust's public enums, params structs and result structs, `SendPayload`
   among them, are `#[non_exhaustive]`, so a variant or field can be added
   without breaking code that builds params with `new` and `with_*`, reads

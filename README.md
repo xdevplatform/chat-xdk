@@ -87,7 +87,7 @@ chat.set_cache_keys(True)
 chat.set_signing_keys(signing_keys)
 
 result = chat.decrypt_events(DecryptEventsParams(raw_events))
-for dm in result["messages"]:
+for dm in result["events"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
 
@@ -107,7 +107,7 @@ chat.setCacheKeys(true);
 chat.setSigningKeys(signingKeys);
 
 const result = chat.decryptEvents({ events: rawEvents });
-for (const dm of result.messages) {
+for (const dm of result.events) {
   if (dm.event.type === "message") console.log(dm.event.senderId, dm.event.content.text);
 }
 const event = chat.decryptEvent({ eventB64: newEventB64 });
@@ -122,10 +122,8 @@ runnable code for all six is in [`examples/`](examples).
 Private keys can be held two ways:
 
 - **Local blob** — `exportKeys()` / `importKeys()` move raw private-key bytes
-  yourself (native bindings: Python, Go, .NET, JVM, Rust). Simplest; the bytes
-  are **unencrypted identity material** — never commit them or log them. The
-  browser/WASM build does not expose raw export/import and manages keys through
-  Juicebox instead.
+  yourself, in every binding. Simplest; the bytes are **unencrypted identity
+  material** — never commit them or log them, and zero them once stored.
 - **Juicebox (production)** — `generate_keypairs()` creates the keys, then
   `setup(pin)` stores the generated keys in
   [Juicebox](https://juicebox.xyz/) distributed PIN-protected storage;

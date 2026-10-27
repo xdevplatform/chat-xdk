@@ -37,10 +37,10 @@ Place the native library (`libchat_xdk_ffi.dylib` / `.so` / `chat_xdk_ffi.dll`) 
 ```csharp
 using ChatXdk;
 
-using var chat = new Chat();
-chat.UpdateConfig(juiceboxConfigJson);
-chat.Unlock(pin, juiceboxConfigJson);
-// Or load a local key blob + its registered version instead of Juicebox:
+using var chat = new Chat(juiceboxConfigJson);
+await chat.UnlockAsync(pinBytes); // the PIN's UTF-8 bytes; zero them afterwards
+// Or create the chat with new Chat() and load a local key blob + its
+// registered version instead of Juicebox:
 // chat.ImportKeys(new ImportKeysParams(privateKeyBytes) { SigningKeyVersion = registeredKeyVersion });
 
 // Set the session once: your user id + registered signing-key version,
@@ -52,7 +52,7 @@ chat.SetSigningKeys(signingKeys);
 // Batch load — signing keys come from the store; the verified conversation
 // keys populate the cache.
 var batch = chat.DecryptEvents(new DecryptEventsParams(rawEventB64List));
-foreach (var dm in batch.Messages)
+foreach (var dm in batch.Events)
 {
     if (dm.Event.GetProperty("type").GetString() == "Message")
         Console.WriteLine(dm.Event.GetProperty("sender_id").GetString());

@@ -137,11 +137,11 @@ class DecryptedEvent(TypedDict, total=False):
 
 class DecryptEventsResult(TypedDict):
     """What ``decrypt_events`` returns. ``errors`` maps the index of each
-    event that failed to its error."""
+    event that failed, as a string, to its error."""
 
     events: list[DecryptedEvent]
     conversation_keys: ConversationKeyResult
-    errors: dict[int, str]
+    errors: dict[str, str]
 
 class MessageEventSignature(TypedDict):
     """The signature of an action, as requests carry it."""

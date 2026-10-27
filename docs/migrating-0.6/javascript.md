@@ -12,21 +12,23 @@ other bindings' pages. [API.md](../API.md) documents every call, and the
 - [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
 - [ ] [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
+- [ ] [Put the PIN guess budget in the Juicebox config, and keep keys yourself with `importKeys` and `exportKeys`](#keys-stored-in-juicebox)
 - [ ] [Pass `{ userId, signingKeyVersion }` to `setIdentity`](#setidentity-takes-a-params-object)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a params object to `decryptEvents`](#decryptevents-takes-a-params-object)
+- [ ] [Pass a params object to `decryptEvents` and read its `events`](#decryptevents-takes-a-params-object)
 - [ ] [Pass a params object to `decryptEvent`](#decryptevent-takes-a-params-object)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a public key input's fields `identityPublicKey` and `publicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Tell errors apart by `kind`, and read a wrong PIN's attempts from `guessesRemaining`](#errors-carry-their-kind)
 - [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
@@ -42,14 +44,15 @@ the conversation key map `decryptEvents` returns, `payload` for a
 `SendPayload`, `prepared` for a `PreparedConversationChange`, and
 `keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
 decrypted keyChange, message, messageDeleted, readReceipt and groupChange
-event. `api.post(path, body)` stands for your HTTP client: it POSTs `body`
+event, and `err` for an error a call threw. `api.post(path, body)` stands for your HTTP client: it POSTs `body`
 as JSON to `https://api.x.com` + `path` with your user access token, writing
 every key in snake_case as the X API takes them (the package returns
 camelCase), and resolves to the parsed JSON response.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-attachment descriptor, and `showEdit`, `showTitle`, `showDescription` and
-`showAvatar` for your code that displays an edit, or a group's title,
-description or avatar. Functions such as `encryptedFileSize` and
+attachment descriptor, and `showEdit`, `showTitle`, `showDescription`,
+`showAvatar` and `showGuessesLeft` for your code that displays an edit, a
+group's title, description or avatar, or the PIN attempts left.
+`ChatXdkError` and functions such as `encryptedFileSize` and
 `bytesToBase64` import from `@xdevplatform/chat-xdk`.
 
 ## Upgrade readers before v1 sends start
@@ -114,6 +117,66 @@ const response = await api.post(`/2/users/${userId}/public_keys`, { public_key: 
 chat.setIdentity({ userId, signingKeyVersion: response.data.public_key_version });
 ```
 
+The public keys `getPublicKeys()` and `setup()` return hold the two keys,
+`identity` and `signing`, and no `version`: their version is the
+`public_key_version` the registration request returns.
+
+## Keys stored in Juicebox
+
+`createChat` keeps your keys in Juicebox when you pass `getAuthToken`, with
+the Juicebox config the X API returns as `juiceboxConfig`, or set later with
+`updateConfig` on first boot. The PIN guess budget is the config's
+`max_guess_count`, as in every binding; `createChat` takes no
+`maxGuessCount`. To register under another budget, set it in the config:
+
+```js
+// 0.5.x
+const chat = await createChat({ juiceboxConfig, getAuthToken, maxGuessCount: 10 });
+
+// 0.6.0
+const chat = await createChat({
+  juiceboxConfig: JSON.stringify({ ...JSON.parse(juiceboxConfig), max_guess_count: 10 }),
+  getAuthToken,
+});
+```
+
+The SDK reads the config, so a malformed one throws a `ChatXdkError` of kind
+`invalidInput` naming what's wrong, such as `Invalid Juicebox config:
+Missing token_map or sdk_config`, and a Juicebox failure throws one of kind
+`juicebox` with the message every binding gives it, such as `Juicebox
+error: Transient error - retry`. A wrong PIN throws one of kind
+`invalidPin`, whose `guessesRemaining` holds the attempts Juicebox reports
+left, `0` once the stored keys are locked and `null` when Juicebox reports
+no count:
+
+```js
+// 0.5.x
+try {
+  await chat.unlock(pin);
+} catch (err) {
+  showGuessesLeft(guessesRemaining(err));
+}
+
+// 0.6.0
+try {
+  await chat.unlock(pin);
+} catch (err) {
+  showGuessesLeft(err instanceof ChatXdkError ? err.guessesRemaining : null);
+}
+```
+
+Without `getAuthToken`, `createChat()` returns a chat that keeps its keys
+outside Juicebox and loads no juicebox-sdk: `importKeys` loads the keys
+`exportKeys` returned, as in every binding. `exportKeys` returns the raw
+private keys, so store them only where private keys belong and zero the
+bytes once stored; it throws when no identity key is loaded:
+
+```js
+// 0.6.0
+const chat = await createChat();
+chat.importKeys({ keys: privateKeys, signingKeyVersion });
+```
+
 ## `setIdentity` takes a params object
 
 Pass the user id and the signing-key version as `{ userId,
@@ -156,7 +219,7 @@ const reply = chat.encryptReply({
 
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `setIdentity`, a call's
-`signingKeyVersion` and each public key's `keyVersion`) and
+`signingKeyVersion` and each public key's `publicKeyVersion`) and
 `conversationKeyVersion`. Anything else throws an error that names the
 field, such as `Invalid signing_key_version 'v1': pass the key version as
 the X API returns it, an integer in digits`. There's no code to change if
@@ -165,16 +228,27 @@ you pass the versions the X API returns.
 ## `decryptEvents` takes a params object
 
 Pass `{ events, signingKeys }`. `signingKeys` is optional; without it, the
-keys `setSigningKeys` stored verify the events. The result is unchanged, and
-the call still never throws: errors are collected per event.
+keys `setSigningKeys` stored verify the events. An event that fails is
+collected in the result's `errors` rather than thrown; the call throws only
+for invalid params, such as `events` that is not an array of strings or a
+malformed `signingKeys` entry. The result holds the decrypted events, of
+every event type, in `events`:
 
 ```js
 // 0.5.x
 const result = chat.decryptEvents(events, signingKeys);
+const decrypted = result.messages;
 
 // 0.6.0
 const result = chat.decryptEvents({ events, signingKeys });
+const decrypted = result.events;
 ```
+
+`result.conversationKeys.latestVersion`, the version to encrypt with, is the
+newest version whose key change verified, and it never moves back for the
+chat's lifetime. It's `null` until a key change verifies: a key change the
+SDK can't verify still adds its key to `result.conversationKeys.keys`, for
+decrypting, but never becomes the version you encrypt with.
 
 ## `decryptEvent` takes a params object
 
@@ -353,6 +427,21 @@ const actionSignatures = prepared.actionSignatures.map((sig) => ({
 const actionSignatures = prepared.actionSignatures;
 ```
 
+## Public key inputs name the identity key and its version
+
+Each public key the prepare params take, one participant a conversation key
+is encrypted to, names its key `identityPublicKey` and the key's version
+`publicKeyVersion`, as a signing key entry does: the `public_key` the X API
+returns for a user is their identity key:
+
+```js
+// 0.5.x
+const publicKeys = [{ userId, publicKey: identityPublicKey, keyVersion: publicKeyVersion }];
+
+// 0.6.0
+const publicKeys = [{ userId, identityPublicKey, publicKeyVersion }];
+```
+
 ## Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
@@ -470,14 +559,30 @@ const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, delete
 const messageId = deletion.actionSignatures[0].messageId;
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter throws an `Error` whose message names the
-value, such as `Invalid sender_id 'user-1': pass a numeric user id (digits
-only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+Every call throws a `ChatXdkError`, an `Error` whose `kind` names the
+failure the same way in every binding: `invalidInput`, `invalidState`,
+`parse`, `decryption`, `verification`, `invalidPin`, `juicebox` or
+`internal`. Its `guessesRemaining` is set after a wrong PIN (see
+[Keys stored in Juicebox](#keys-stored-in-juicebox)).
+
+A missing or invalid parameter throws one of kind `invalidInput` whose
+message names the value, such as `Invalid sender_id 'user-1': pass a numeric
+user id (digits only)` or `too many attachments: at most 10 per message`,
+without an `Invalid state:` prefix. That covers a key or signature that
+`verify`, `verifyKeyBinding` or `matchesRegisteredKey` can't decode. Errors
+about state the chat lacks, such as a missing session identity or an empty
+key cache, are of kind `invalidState` and keep their prefix. Tell failures
+apart by kind rather than by message:
+
+```js
+// 0.5.x
+const invalidInput = !err.message.startsWith("Invalid state:");
+
+// 0.6.0
+const invalidInput = err instanceof ChatXdkError && err.kind === "invalidInput";
+```
 
 ## TypeScript: import the types the package exports
 
@@ -496,6 +601,10 @@ import type { ChatWithJuicebox, FileEncryptor } from "@xdevplatform/chat-xdk";
 let session: ChatWithJuicebox;
 let encryptor: FileEncryptor;
 ```
+
+The typings also declare `ChatXdkError` with its `ChatXdkErrorKind`,
+`ImportKeysParams` for `importKeys`, and `DecryptedEvent` for each entry of
+a `decryptEvents` result.
 
 ## Group actions should be signed
 

@@ -8,26 +8,31 @@ the native libraries in the .NET and JVM packages export the same functions.
 [Why 0.6.0 changes](why.md) explains why each change was made, and the
 [index](README.md) lists the language bindings' pages.
 
-Every entry point whose arguments changed takes a new name, so a stale
-header or library fails to link instead of misreading its arguments.
+Some entry points keep their names but take or return different values, so
+check that the library matches your header before you call it (see
+[Check the ABI version](#check-the-abi-version)).
 
 ## Checklist
 
 - [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
+- [ ] [Link `chat_xdk_ffi` and check its ABI version](#check-the-abi-version)
+- [ ] [Read every result from an `FfiResult`, booleans as `true` or `false`](#every-call-returns-an-ffiresult)
+- [ ] [Create the chat with its Juicebox config, define `CHAT_XDK_JUICEBOX`, and pass PINs as bytes](#keys-stored-in-juicebox)
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
-- [ ] [Set the identity with `chat_xdk_set_identity_params`](#set-the-identity-with-a-params-document)
-- [ ] [Import keys with `chat_xdk_import_keys_params`](#import-keys-with-a-params-document)
+- [ ] [Set the identity with a params document](#set-the-identity-with-a-params-document)
+- [ ] [Import keys with a params document](#import-keys-with-a-params-document)
 - [ ] [Pass user ids and key versions as strings of digits](#user-ids-and-key-versions-are-strings-of-digits)
-- [ ] [Decrypt with `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params`](#decrypt-with-params-documents)
+- [ ] [Decrypt with params documents, and read a batch's `events`](#decrypt-with-params-documents)
 - [ ] [Read the send payload under the send request's field names and send `xdk_version`](#the-send-payload-takes-the-send-requests-field-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use the file encryptor and decryptor for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a public key's fields `identity_public_key` and `public_key_version`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Read errors as documents with a `kind`](#errors-carry-their-kind)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
@@ -37,8 +42,10 @@ header or library fails to link instead of misreading its arguments.
 Each snippet shows the lines that change, first as 0.5.x code writes them
 and then as 0.6.0 code writes them. `chat` is a `ChatHandle *` with your
 keys loaded, and `keys`, `keys_len` and `keys_b64` are your saved private
-keys. `take(r)` stands for your error handling: it returns `r.data` (free it
-with `chat_xdk_free_string`) and handles `r.error`. The `*_json` and `*_b64`
+keys. `pin` and `pin_len` are the PIN's bytes, and
+`juicebox_config_json` the Juicebox config the X API returns. `take(r)`
+stands for your error handling: it returns `r.data` (free it with
+`chat_xdk_free_string`) and handles `r.error`. The `*_json` and `*_b64`
 values are documents and base64 strings your code builds, `title`,
 `avatar_url`, `description`, `new_title` and `created_title` are UTF-8
 strings it holds, and
@@ -55,9 +62,10 @@ strings.
 0.6.0 reads messages, replies, reactions and edits in two formats. v0 is the
 format 0.5.x sends. v1 encrypts each message under its own key, derived from
 the conversation key, the sender and the message id, and signs it at
-signature version 10. The C ABI doesn't fetch the X API's feature switches,
-so direct callers always send v0. The Python, JavaScript, Go, JVM and .NET
-bindings send v1 while the X API's `v1_send` feature switch is on.
+signature version 10. A chat you call directly through the C ABI doesn't
+read the X API's feature switches, so it sends v0. The Python, JavaScript,
+Go, JVM and .NET bindings read them and send v1 while the X API's `v1_send`
+feature switch is on.
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations to 0.6.0 before any sender can send
@@ -65,6 +73,75 @@ v1. 0.6.0 reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read the send
 payload's `signature_info.signature_version`, `"7"` for v0 and `"10"` for
 v1.
+
+## Check the ABI version
+
+The native library is built from one crate, `chat-xdk-ffi`, for every
+binding over it: link `libchat_xdk_ffi.a`, which the Go module carries
+under `go/chatxdk/libs/<os>_<arch>/`, or load `chat_xdk_ffi`
+(`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`, `chat_xdk_ffi.dll`), which
+the .NET package and the JVM jar carry. `cargo build -p chat-xdk-ffi
+--release` builds both. The header defines `CHAT_XDK_ABI_VERSION`, the
+version of the functions and the shapes of their arguments and results,
+and `chat_xdk_abi_version()` returns the library's. Compare them before the
+first call, since a header and a library of different versions don't match:
+
+```c
+// 0.6.0
+if (chat_xdk_abi_version() != CHAT_XDK_ABI_VERSION) abort();
+```
+
+## Every call returns an `FfiResult`
+
+Every function returns an `FfiResult`, apart from `chat_xdk_abi_version`
+and the `_free` functions. A boolean comes back as `true` or `false` in
+`data`: `chat_xdk_is_unlocked`, `chat_xdk_has_identity_key`,
+`chat_xdk_verify`, `chat_xdk_verify_key_binding` and
+`chat_xdk_matches_registered_key` return one, and an input they can't read,
+such as a key that isn't base64, is an error naming it. `chat_xdk_lock`,
+`chat_xdk_set_reject_unverified` and `chat_xdk_set_cache_keys` return an
+`FfiResult` too, with no `data`:
+
+```c
+// 0.5.x
+int32_t valid = chat_xdk_verify(chat, public_key_b64, signature_b64, data, data_len);
+chat_xdk_set_cache_keys(chat, 1);
+
+// 0.6.0
+char *verified = take(chat_xdk_verify(chat, public_key_b64, signature_b64, data, data_len));
+bool valid = strcmp(verified, "true") == 0;
+take(chat_xdk_set_cache_keys(chat, 1));
+```
+
+## Keys stored in Juicebox
+
+`chat_xdk_new` takes the Juicebox config the X API returns, or NULL for a
+chat that manages its keys with `chat_xdk_import_keys` alone, and writes
+the handle to its out-parameter. `chat_xdk_update_config` replaces the
+config, on first boot, before the account has one, or to refresh it.
+`chat_xdk_setup` and `chat_xdk_unlock` take only the PIN, and every PIN is
+bytes and a length, so you can zero yours once the call returns. The header
+declares the Juicebox functions (`chat_xdk_update_config`,
+`chat_xdk_setup`, `chat_xdk_unlock`, `chat_xdk_change_pin` and
+`chat_xdk_delete`) when `CHAT_XDK_JUICEBOX` is defined, so define it
+before you include `chat_xdk.h` (or pass `-DCHAT_XDK_JUICEBOX`) when you
+link a library built with Juicebox, as the bindings do:
+
+```c
+// 0.5.x
+ChatHandle *chat = chat_xdk_new();
+take(chat_xdk_unlock(chat, "2580", juicebox_config_json));
+
+// 0.6.0
+ChatHandle *chat = NULL;
+take(chat_xdk_new(juicebox_config_json, &chat));
+take(chat_xdk_unlock(chat, pin, pin_len));
+```
+
+Calls on one handle may run on any thread at once, `chat_xdk_update_config`
+included; free the handle once every call on it has returned.
+`chat_xdk_export_keys` fails with an `invalid_state` error when no identity
+key is loaded.
 
 ## Register keys with the public key only
 
@@ -74,12 +151,13 @@ v1.
 for new keys: set the identity with the `public_key_version` the request
 returns (see the next section). A signed call made without a version fails with `Invalid state:
 signing_key_version is not set: pass it explicitly or call set_identity()
-first`.
+first`. `chat_xdk_get_public_keys` returns the two public keys,
+`{"identity": "...", "signing": "..."}`.
 
 ## Set the identity with a params document
 
-`chat_xdk_set_identity_params` takes the user id and the signing-key
-version as one document. It fails when either value is invalid (see
+`chat_xdk_set_identity` takes the user id and the signing-key version as
+one document. It fails when either value is invalid (see
 [user ids and key versions](#user-ids-and-key-versions-are-strings-of-digits)).
 
 ```c
@@ -87,14 +165,13 @@ version as one document. It fails when either value is invalid (see
 take(chat_xdk_set_identity(chat, "4201", "1"));
 
 // 0.6.0
-take(chat_xdk_set_identity_params(chat, "{\"user_id\":\"4201\",\"signing_key_version\":\"1\"}"));
+take(chat_xdk_set_identity(chat, "{\"user_id\":\"4201\",\"signing_key_version\":\"1\"}"));
 ```
 
 ## Import keys with a params document
 
-`chat_xdk_import_keys_params` takes the key bytes by pointer and length,
-and a document with the optional signing-key version they were registered
-under. Without a version, pass `"{}"` and set the identity before the first
+`chat_xdk_import_keys` takes the key bytes by pointer and length, and a
+document with the optional signing-key version they were registered under. Without a version, pass `"{}"` and set the identity before the first
 signed call.
 
 ```c
@@ -103,8 +180,8 @@ take(chat_xdk_import_keys(chat, keys_b64));
 take(chat_xdk_import_keys_with_version(chat, keys, keys_len, "1"));
 
 // 0.6.0
-take(chat_xdk_import_keys_params(chat, keys, keys_len, "{}"));
-take(chat_xdk_import_keys_params(chat, keys, keys_len, "{\"signing_key_version\":\"1\"}"));
+take(chat_xdk_import_keys(chat, keys, keys_len, "{}"));
+take(chat_xdk_import_keys(chat, keys, keys_len, "{\"signing_key_version\":\"1\"}"));
 ```
 
 ## User ids and key versions are strings of digits
@@ -121,10 +198,11 @@ names the field, such as
 
 ## Decrypt with params documents
 
-`chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params` each
-take one document. Leave out `signing_keys` to verify with the keys
+`chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` each take one
+document. Leave out `signing_keys` to verify with the keys
 `chat_xdk_set_signing_keys` stored, and `conversation_keys` to resolve the
-key from the key cache.
+key from the key cache. A batch's result holds the decrypted events, of
+every event type, under `events`.
 
 ```c
 // 0.5.x
@@ -132,11 +210,17 @@ char *batch = take(chat_xdk_decrypt_events(chat, events_json, signing_keys_json)
 char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_json, signing_keys_json));
 
 // 0.6.0
-// {"events":[...],"signing_keys":[...]}
-char *batch = take(chat_xdk_decrypt_events_params(chat, decrypt_events_json));
+// {"events":[...],"signing_keys":[...]} -> {"events":[{"event":{...}}],"conversation_keys":{...},"errors":{}}
+char *batch = take(chat_xdk_decrypt_events(chat, decrypt_events_json));
 // {"event_b64":"...","conversation_keys":{"<version>":"<base64 key>"},"signing_keys":[...]}
-char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+char *event = take(chat_xdk_decrypt_event(chat, decrypt_event_json));
 ```
+
+A batch's `conversation_keys.latest_version`, the version to encrypt with,
+is the newest version whose key change verified, and it never moves back
+for the chat's lifetime. It's `null` until a key change verifies: a key
+change the SDK can't verify still adds its key to `conversation_keys.keys`,
+for decrypting, but never becomes the version you encrypt with.
 
 ## The send payload takes the send request's field names
 
@@ -197,7 +281,7 @@ empty media hash key, or one media hash key twice, is rejected.
 message that carries the file, the conversation key map and the file's
 media hash key from the decrypted message. The SDK finds the file in the
 event and derives its key. It doesn't check the message's signature: use
-`verified` from `chat_xdk_decrypt_event_params` for that.
+`verified` from `chat_xdk_decrypt_event` for that.
 
 ```c
 // 0.5.x
@@ -262,6 +346,23 @@ char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 Send those entries as the request's `action_signatures`; the signed
 payload stays inside the SDK.
 
+## Public key inputs name the identity key and its version
+
+Each public key the prepare documents take, one participant a conversation
+key is encrypted to, names its key `identity_public_key` and the key's
+version `public_key_version`, as a signing key does: the `public_key` the X
+API returns for a user is their identity key:
+
+```c
+// 0.5.x
+// {"public_keys":[{"user_id":"4201","public_key":"...","key_version":"1"}],...}
+char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
+
+// 0.6.0
+// {"public_keys":[{"user_id":"4201","identity_public_key":"...","public_key_version":"1"}],...}
+char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
+```
+
 ## Participant keys take the key requests' names
 
 `chat_xdk_prepare_conversation_key_change`, `chat_xdk_prepare_group_create`
@@ -288,7 +389,7 @@ char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_
 
 ## Received participant keys take the same names
 
-`chat_xdk_decrypt_event_params` and `chat_xdk_decrypt_events_params` return
+`chat_xdk_decrypt_event` and `chat_xdk_decrypt_events` return
 a key change's participant keys under the names Thrift's
 `ConversationKeyChangeEvent` gives them, the same names a prepared change
 uses: `conversation_participant_keys`, each entry with `user_id`,
@@ -303,7 +404,7 @@ char *key_change = take(chat_xdk_decrypt_event(chat, key_change_b64, conversatio
 // 0.6.0
 // {"type":"KeyChange",...,"conversation_participant_keys":[{"user_id":"...",
 //   "encrypted_conversation_key":"...","public_key_version":"..."}]}
-char *key_change = take(chat_xdk_decrypt_event_params(chat, decrypt_key_change_json));
+char *key_change = take(chat_xdk_decrypt_event(chat, decrypt_key_change_json));
 ```
 
 ## Decrypted events use the names the calls take
@@ -319,7 +420,7 @@ char *message = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_j
 
 // 0.6.0
 // {"type":"Message",...,"conversation_key_version":"...",...}
-char *message = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+char *message = take(chat_xdk_decrypt_event(chat, decrypt_event_json));
 ```
 
 Fields that hold sequence ids take the names of the params that send them.
@@ -343,17 +444,34 @@ char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_jso
 // {"type":"Message",...,"content":{"content_type":"Edit","target_message_sequence_id":"7","updated_text":"..."}}
 // {"type":"MessageDeleted",...,"sequence_ids":["7"],...}
 // {"type":"ReadReceipt",...,"seen_until_sequence_id":"7",...}
-char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+char *event = take(chat_xdk_decrypt_event(chat, decrypt_event_json));
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter fails with an error whose message names the
-value, such as `Invalid sender_id 'user-1': pass a numeric user id (digits
-only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+An `FfiResult`'s `error` is a JSON document: `kind`, which names the failure
+the same way in every binding (`invalid_input`, `invalid_state`, `parse`,
+`decryption`, `verification`, `invalid_pin`, `juicebox` or `internal`),
+`message`, and, after a wrong PIN, `guesses_remaining`, the attempts
+Juicebox reports left (`0` once the stored keys are locked):
+
+```c
+// 0.5.x
+// "Juicebox error: Invalid PIN: guesses_remaining=2"
+FfiResult r = chat_xdk_unlock(chat, "2580", juicebox_config_json);
+
+// 0.6.0
+// {"kind":"invalid_pin","message":"Juicebox error: Invalid PIN: guesses_remaining=2","guesses_remaining":2}
+FfiResult r = chat_xdk_unlock(chat, pin, pin_len);
+```
+
+A missing or invalid parameter fails with an error of kind `invalid_input`
+whose message names the value, such as `Invalid sender_id 'user-1': pass a
+numeric user id (digits only)` or `too many attachments: at most 10 per
+message`, without an `Invalid state:` prefix. Errors about state the chat
+lacks, such as a missing session identity or an empty key cache, are of kind
+`invalid_state` and keep their prefix. Match the kind rather than the
+message.
 
 ## Group actions should be signed
 
@@ -414,7 +532,7 @@ char *title = take(chat_xdk_decrypt(chat, created_title, conversation_key_b64));
 // 0.6.0
 // {"type":"GroupChange",...,"change":{"change_type":"Created",...,
 //  "title":{"kind":"Text","text":"Team"},"avatar_url":null,"conversation_key_version":"..."}}
-char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+char *event = take(chat_xdk_decrypt_event(chat, decrypt_event_json));
 ```
 
 A `Created` change also carries the create's `conversation_key_version`, and
@@ -550,7 +668,7 @@ char *title = take(chat_xdk_decrypt(chat, new_title, conversation_key_b64));
 
 // 0.6.0
 // {"type":"GroupChange",...,"change":{"change_type":"TitleChanged","new_title":{"kind":"Text","text":"Team"}}}
-char *event = take(chat_xdk_decrypt_event_params(chat, decrypt_event_json));
+char *event = take(chat_xdk_decrypt_event(chat, decrypt_event_json));
 ```
 
 ### Changing the avatar
@@ -693,7 +811,7 @@ the default policy reject an unsigned receipt. The call takes a document
 with `conversation_id`, `seen_until_sequence_id` (the sequence id of the
 newest event read) and a `seen_at_msec` that defaults to now, and returns
 `action_signatures` as a delete does. The path takes the conversation id in
-its hyphen form. A recipient's `chat_xdk_decrypt_event_params` returns a
+its hyphen form. A recipient's `chat_xdk_decrypt_event` returns a
 signed receipt as a verified `ReadReceipt` event.
 
 ```c

@@ -14,21 +14,24 @@ change.
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `set_identity`](#set_identity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `import_keys`](#import_keys-takes-importkeysparams)
+- [ ] [Expect `export_keys` to raise without keys, and use the `_async` Juicebox calls in `asyncio` code](#keys-stored-in-juicebox)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `decrypt_events`](#decrypt_events-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `decrypt_events` and read its `events`](#decrypt_events-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
 - [ ] [Pass a params class to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-classes)
+- [ ] [Annotate key lists and results with the types the package exports](#key-entries-and-results-have-named-types)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a public key input's fields `identity_public_key` and `public_key_version`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Catch errors by class, and read a wrong PIN's attempts from `guesses_remaining`](#errors-carry-their-kind)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
@@ -96,8 +99,8 @@ the snippet), and send it as the only field of the
 `POST /2/users/{id}/public_keys` body. 0.6.0 doesn't pick a signing-key
 version for new keys: call `set_identity` with the `public_key_version` the
 request returns (see the next section). A signed call made without a version
-raises `ValueError: Invalid state: signing_key_version is not set: pass it
-explicitly or call set_identity() first`.
+raises `InvalidStateError: Invalid state: signing_key_version is not set:
+pass it explicitly or call set_identity() first`.
 
 ```python
 # 0.5.x
@@ -115,10 +118,14 @@ response = api.post(f"/2/users/{user_id}/public_keys", {"public_key": public_key
 chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_version"]))
 ```
 
+`PublicKeys`, which `get_public_keys()` and `setup()` return, holds the two
+public keys, `identity` and `signing`, and no `version`: their version is
+the `public_key_version` the registration request returns.
+
 ## `set_identity` takes `SetIdentityParams`
 
 Pass the user id and the signing-key version in a `SetIdentityParams`. It
-raises `ValueError` when either value is invalid (see
+raises `InvalidInputError` when either value is invalid (see
 [user ids](#user-ids-are-strings-of-digits) and
 [key versions](#key-versions-are-integers-written-as-strings)).
 
@@ -146,13 +153,49 @@ chat.import_keys(ImportKeysParams(private_keys))
 chat.import_keys(ImportKeysParams(private_keys, signing_key_version=signing_key_version))
 ```
 
+## Keys stored in Juicebox
+
+`Chat(config_json)` keeps your keys in Juicebox under the Juicebox config
+the X API returns, as in 0.5.x, and `Chat()` manages them with
+`import_keys` and `export_keys` alone. `setup`, `unlock`, `change_pin` and
+`delete` block on their Juicebox round trips; `setup_async`,
+`unlock_async`, `change_pin_async` and `delete_async` run the same calls on
+a worker thread, for an `asyncio` event loop. A wrong PIN raises
+`InvalidPinError`, whose `guesses_remaining` holds the attempts Juicebox
+reports left, `0` once the stored keys are locked and `None` when Juicebox
+reports no count:
+
+```python
+# 0.5.x
+try:
+    chat.unlock(pin)
+except ValueError as err:
+    guesses_left = guesses_remaining(err)
+
+# 0.6.0
+try:
+    chat.unlock(pin)
+except InvalidPinError as err:
+    guesses_left = err.guesses_remaining
+```
+
+`export_keys` raises `InvalidStateError` when no identity key is loaded:
+
+```python
+# 0.5.x
+private_keys = chat.export_keys()
+
+# 0.6.0
+private_keys = chat.export_keys() if chat.has_identity_key() else None
+```
+
 ## User ids are strings of digits
 
 Every user id is a `str` of digits: the `SetIdentityParams` user id,
 `sender_id`, `reply_to_sender_id`, the `user_id` of each public key and
 signing key, and group member, admin and pending-member ids. Each must be a
 positive integer written without a sign or leading zeros; anything else
-raises `ValueError` naming the field, such as
+raises `InvalidInputError` naming the field, such as
 `Invalid sender_id 'user-1': pass a numeric user id (digits only)`.
 `reply_to_sender_id` takes a `str`:
 
@@ -173,8 +216,8 @@ reply = chat.encrypt_reply(EncryptReplyParams(
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `signing_key_version` and each public key's
-`key_version`) and `conversation_key_version`. Anything else raises
-`ValueError` naming the field, such as `Invalid signing_key_version 'v1':
+`public_key_version`) and `conversation_key_version`. Anything else raises
+`InvalidInputError` naming the field, such as `Invalid signing_key_version 'v1':
 pass the key version as the X API returns it, an integer in digits`. There's
 no code to change if you pass the versions the X API returns.
 
@@ -182,16 +225,28 @@ no code to change if you pass the versions the X API returns.
 
 Pass the events in a `DecryptEventsParams`. `signing_keys` is optional and
 keyword-only; without it, the keys `set_signing_keys` stored verify the
-events. The result is the same dict, and the call still never raises: errors
-are collected per event.
+events. An event that fails is collected in the result's `errors` rather
+than raised; the call raises only for invalid params, such as a signing key
+entry without `public_key_version` (`InvalidInputError`) or `events` that
+is not a list (`TypeError`). The result holds the decrypted events, of every
+event type, under `events`:
 
 ```python
 # 0.5.x
 result = chat.decrypt_events(events, signing_keys)
+decrypted = result["messages"]
 
 # 0.6.0
 result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
+decrypted = result["events"]
 ```
+
+`result["conversation_keys"]["latest_version"]`, the version to encrypt
+with, is the newest version whose key change verified, and it never moves
+back for the chat's lifetime. It's `None` until a key change verifies: a key
+change the SDK can't verify still adds its key to
+`result["conversation_keys"]["keys"]`, for decrypting, but never becomes the
+version you encrypt with.
 
 ## `decrypt_event` takes `DecryptEventParams`
 
@@ -239,6 +294,30 @@ payload = chat.encrypt_message(EncryptMessageParams(conversation_id, "hello", tt
 reaction = chat.encrypt_add_reaction(EncryptReactionParams(event_b64, "👍"))
 edit = chat.encrypt_edit(EncryptEditParams(event_b64, "fixed text"))
 prepared = chat.prepare_conversation_key_change(
+    ConversationKeyChangeParams(public_keys, conversation_id=conversation_id)
+)
+```
+
+## Key entries and results have named types
+
+The package exports a `TypedDict` for each dict the calls take or return, so
+a type checker reads them: `SigningKeyEntry` for each signing key that
+`set_signing_keys` and the decrypt params take, `PublicKeyInput` for each
+public key the prepare params take, and `ConversationKeyResult`,
+`DecryptEventsResult` and `DecryptedEvent`, `PreparedAction`,
+`PreparedGroupMetadataChange` and `PreparedConversationChange`, with
+`ActionSignature`, `MessageEventSignature` and `ConversationParticipantKey`,
+for the results. They're plain dicts at runtime, so there's no code to
+change; annotate with them where you held `dict`:
+
+```python
+# 0.5.x
+result: dict = chat.decrypt_events(events, signing_keys)
+prepared: dict = chat.prepare_conversation_key_change(public_keys, conversation_id=conversation_id)
+
+# 0.6.0
+result: DecryptEventsResult = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
+prepared: PreparedConversationChange = chat.prepare_conversation_key_change(
     ConversationKeyChangeParams(public_keys, conversation_id=conversation_id)
 )
 ```
@@ -401,6 +480,23 @@ action_signatures = [
 action_signatures = prepared["action_signatures"]
 ```
 
+## Public key inputs name the identity key and its version
+
+Each public key the prepare params take, one participant a conversation key
+is encrypted to, names its key `identity_public_key` and the key's version
+`public_key_version`, as a signing key entry does: the `public_key` the X
+API returns for a user is their identity key:
+
+```python
+# 0.5.x
+public_keys = [{"user_id": user_id, "public_key": identity_public_key, "key_version": public_key_version}]
+
+# 0.6.0
+public_keys: list[PublicKeyInput] = [
+    {"user_id": user_id, "identity_public_key": identity_public_key, "public_key_version": public_key_version}
+]
+```
+
 ## Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
@@ -502,14 +598,40 @@ deletion = chat.prepare_message_delete(MessageDeleteParams(conversation_id, sequ
 message_id = deletion["action_signatures"][0]["message_id"]
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid argument raises `ValueError` with a message that names
-the value, such as `Invalid sender_id 'user-1': pass a numeric user id
-(digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+Every SDK failure raises a `ChatXdkError`, a `ValueError`, of the subclass
+that names its kind the same way in every binding: `InvalidInputError`,
+`InvalidStateError`, `ParseError`, `DecryptionError`, `VerificationError`,
+`InvalidPinError` or `JuiceboxError`, and `ChatXdkError` itself for a
+failure inside the SDK. Each carries the kind as `kind`
+(`"invalid_input"`, `"invalid_state"`, ...) and `guesses_remaining`, set
+on an `InvalidPinError` (see [Keys stored in Juicebox](#keys-stored-in-juicebox)).
+
+A missing or invalid argument raises `InvalidInputError` with a message
+that names the value, such as `Invalid sender_id 'user-1': pass a numeric
+user id (digits only)` or `too many attachments: at most 10 per message`,
+without an `Invalid state:` prefix. That covers a key or signature that
+`verify`, `verify_key_binding` or `matches_registered_key` can't decode. A
+call missing a required argument, or given one of the wrong type, still
+raises `TypeError`. Errors about state the chat lacks, such as a missing
+session identity or an empty key cache, raise `InvalidStateError` and keep
+their prefix. Catch the class rather than reading the message:
+
+```python
+# 0.5.x
+try:
+    chat.set_identity(user_id, signing_key_version)
+except ValueError as err:
+    if str(err).startswith("Invalid state:"):
+        raise
+
+# 0.6.0
+try:
+    chat.set_identity(SetIdentityParams(user_id, signing_key_version))
+except InvalidInputError:
+    pass
+```
 
 ## Group actions should be signed
 
@@ -619,7 +741,7 @@ an [avatar change](#changing-the-avatar) naming the new key version.
 conversation key, so the members removed don't receive the key the group
 encrypts under next. `GroupMembersRemoveParams` takes the identity keys of
 the members who stay, the conversation id and the members to remove; a key
-for a member being removed raises `ValueError`. The group's title and
+for a member being removed raises `InvalidInputError`. The group's title and
 description are encrypted under the conversation key: pass the ones the
 group has, as plaintext, as `title` and `description`, and the call encrypts
 each under the new key and signs it as a key-rotation re-encryption, which X

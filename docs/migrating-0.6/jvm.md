@@ -14,23 +14,26 @@ was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] [Pass a `SetIdentityParams` to `setIdentity`](#setidentity-takes-setidentityparams)
 - [ ] [Pass an `ImportKeysParams` to `importKeys`](#importkeys-takes-importkeysparams)
+- [ ] [Pass the Juicebox config to `new Chat(config)`, and PINs as `byte[]`](#keys-stored-in-juicebox)
 - [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a `DecryptEventsParams` to `decryptEvents`](#decryptevents-takes-decrypteventsparams)
+- [ ] [Pass a `DecryptEventsParams` to `decryptEvents` and read its `events`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Build an `EntityDescriptor` with its constructor](#entities-take-their-values-in-the-constructor)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] [Name a `PublicKeyInput`'s fields `identityPublicKey` and `publicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
 - [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
 - [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
 - [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
 - [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Check code that reads error messages](#invalid-input-errors)
+- [ ] [Tell exceptions apart by `getKind()`](#errors-carry-their-kind)
 - [ ] [Know which calls throw `ChatXdkException`](#exceptions)
 - [ ] [If you call `ChatNative` directly, follow the C ABI changes](#chatnative)
-- [ ] [On ARM64 Linux, drop any native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
+- [ ] [Name a native library you build yourself `chat_xdk_ffi`](#the-jar-bundles-the-linux-arm64-native-library)
 - [ ] [Group actions should be signed](#group-actions-should-be-signed)
 - [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
 - [ ] [Sign read receipts](#read-receipts-should-be-signed)
@@ -49,10 +52,13 @@ decrypted key change, message, deletion, read receipt and group change, as
 `body`, serialized with Jackson, to `https://api.x.com` + `path` with your
 user access token and returns the parsed JSON response as a `JsonNode`.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-`AttachmentDescriptor`, and `showEdit`, `showTitle`, `showDescription` and
-`showAvatar` for your code that displays an edit, or a group's title,
-description or avatar. The types import from `com.x.chatxdk`,
-`com.x.chatxdk.Types`, `com.fasterxml.jackson.databind` and `java.util`.
+`AttachmentDescriptor`, and `showEdit`, `showTitle`, `showDescription`,
+`showAvatar` and `showEvent` for your code that displays an edit, a group's
+title, description or avatar, or a decrypted event. `pin` is the PIN,
+`juiceboxConfig` the Juicebox config the X API returns, and `e` a
+`ChatXdkException` a call threw. The types import from `com.x.chatxdk`,
+`com.x.chatxdk.Types`, `com.fasterxml.jackson.databind`,
+`java.nio.charset` and `java.util`.
 
 ## Upgrade readers before v1 sends start
 
@@ -112,6 +118,10 @@ JsonNode response = api.post("/2/users/" + userId + "/public_keys", Map.of("publ
 chat.setIdentity(new SetIdentityParams(userId, response.path("data").path("public_key_version").asText()));
 ```
 
+`PublicKeys`, which `getPublicKeys` and `setup` return, holds the two public
+keys, `identity` and `signing`, and no `version`: their version is the
+`public_key_version` the registration request returns.
+
 ## `setIdentity` takes `SetIdentityParams`
 
 Pass the user id and the signing-key version in a `SetIdentityParams`. It
@@ -143,6 +153,39 @@ chat.importKeys(new ImportKeysParams(privateKeys));
 chat.importKeys(new ImportKeysParams(privateKeys, signingKeyVersion));
 ```
 
+`exportKeys` throws a `ChatXdkException` of kind `INVALID_STATE` when no
+identity key is loaded, where it returned `null`; check `hasIdentityKey`
+first where that can happen.
+
+## Keys stored in Juicebox
+
+A chat that keeps its keys in Juicebox takes the Juicebox config the X API
+returns when it's created, with `new Chat(juiceboxConfig)`, or later with
+`updateConfig`, on first boot, before the account has one. `setup` and
+`unlock` take only the PIN, as `changePin` and `delete` take no config, and
+every PIN is a `byte[]`, so you can zero it once the call returns.
+`setupAsync`, `unlockAsync`, `changePinAsync` and `deleteAsync` return a
+`CompletableFuture` that runs the same call off the calling thread, and
+`new Chat()` creates a chat that manages its keys with `importKeys` and
+`exportKeys` alone:
+
+```java
+// 0.5.x
+Chat chat = new Chat();
+chat.unlock(pin, juiceboxConfig);
+
+// 0.6.0
+Chat chat = new Chat(juiceboxConfig);
+byte[] pinBytes = pin.getBytes(StandardCharsets.UTF_8);
+chat.unlockAsync(pinBytes).join();
+Arrays.fill(pinBytes, (byte) 0);
+```
+
+Every method of a `Chat`, `updateConfig` included, is safe to call from
+several threads at once; a Juicebox call already under way keeps the config
+it started with. A wrong PIN throws a `ChatXdkException` of kind
+`INVALID_PIN` (see [Errors carry their kind](#errors-carry-their-kind)).
+
 ## User ids are strings of digits
 
 Every user id is a string of digits: the `SetIdentityParams` user id,
@@ -168,7 +211,7 @@ reply.replyToSenderId = "4201";
 Every key version is a non-negative integer written as a string of digits,
 as the X API returns it: the signing-key version (in `SetIdentityParams`,
 `ImportKeysParams`, a call's `signingKeyVersion` and each public key's
-`keyVersion`) and `conversationKeyVersion`. Anything else throws
+`publicKeyVersion`) and `conversationKeyVersion`. Anything else throws
 `ChatXdkException` naming the field, such as `Invalid signing_key_version
 'v1': pass the key version as the X API returns it, an integer in digits`.
 There's no code to change if you pass the versions the X API returns.
@@ -177,18 +220,27 @@ There's no code to change if you pass the versions the X API returns.
 
 Pass the events in a `DecryptEventsParams`, and the signing keys in its
 `signingKeys` field. Left `null`, the keys `setSigningKeys` stored verify
-the events. The result is unchanged, and per-event errors are still
-collected in it.
+the events. Per-event errors are still collected in the result, and the
+call throws only for invalid params. The result holds the decrypted events,
+of every event type, in `events`, each a `DecryptedEvent`:
 
 ```java
 // 0.5.x
 DecryptEventsResult result = chat.decryptEvents(events, signingKeys);
+for (DecryptedMessage decrypted : result.messages) showEvent(decrypted.event);
 
 // 0.6.0
 DecryptEventsParams batch = new DecryptEventsParams(events);
 batch.signingKeys = signingKeys;
 DecryptEventsResult result = chat.decryptEvents(batch);
+for (DecryptedEvent decrypted : result.events) showEvent(decrypted.event);
 ```
+
+`result.conversationKeys.latestVersion`, the version to encrypt with, is
+the newest version whose key change verified, and it never moves back for
+the chat's lifetime. It's `null` until a key change verifies: a key change
+the SDK can't verify still adds its key to `result.conversationKeys.keys`,
+for decrypting, but never becomes the version you encrypt with.
 
 ## `decryptEvent` takes `DecryptEventParams`
 
@@ -239,6 +291,25 @@ code that stores payloads. A payload also carries `eventB64`, the message
 as recipients receive it. It isn't part of the send request: keep it to
 encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
+
+## Entities take their values in the constructor
+
+An `EntityDescriptor` takes its start, end and type in its constructor, and
+its fields are final. The attachment descriptors and
+`UrlAttachmentImageDescriptor` start with their required fields unset rather
+than `""` or `0`, so a field you leave out fails the call with an error that
+names it:
+
+```java
+// 0.5.x
+EntityDescriptor mention = new EntityDescriptor();
+mention.start = 0;
+mention.end = 5;
+mention.entityType = "mention";
+
+// 0.6.0
+EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
+```
 
 ## Encrypt a file from its message
 
@@ -367,6 +438,27 @@ for (ActionSignature sig : prepared.actionSignatures) {
 List<ActionSignature> actionSignatures = prepared.actionSignatures;
 ```
 
+## Public key inputs name the identity key and its version
+
+A `PublicKeyInput`, one participant a conversation key is encrypted to,
+names its key `identityPublicKey` and the key's version `publicKeyVersion`,
+as `SigningKeyEntry` does: the `public_key` the X API returns for a user is
+their identity key:
+
+```java
+// 0.5.x
+PublicKeyInput input = new PublicKeyInput();
+input.userId = userId;
+input.publicKey = identityPublicKey;
+input.keyVersion = publicKeyVersion;
+
+// 0.6.0
+PublicKeyInput input = new PublicKeyInput();
+input.userId = userId;
+input.identityPublicKey = identityPublicKey;
+input.publicKeyVersion = publicKeyVersion;
+```
+
 ## Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
@@ -474,22 +566,39 @@ PreparedAction deletion = chat.prepareMessageDelete(
 String messageId = deletion.actionSignatures.get(0).messageId;
 ```
 
-## Invalid input errors
+## Errors carry their kind
 
-A missing or invalid parameter throws `ChatXdkException` with a message that
-names the value, such as `Invalid sender_id 'user-1': pass a numeric user id
-(digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
-match the message instead. Errors about state the chat lacks, such as a
-missing session identity or an empty key cache, keep their prefix.
+Every SDK failure throws a `ChatXdkException`, whose `getKind()`, a
+`ChatXdkException.Kind`, names the failure the same way in every binding:
+`INVALID_INPUT`, `INVALID_STATE`, `PARSE`, `DECRYPTION`, `VERIFICATION`,
+`INVALID_PIN`, `JUICEBOX` or `INTERNAL`. After a wrong PIN, its
+`getGuessesRemaining()` holds the attempts Juicebox reports left, `0` once
+the stored keys are locked and `null` when Juicebox reports no count.
+
+A missing or invalid parameter throws one of kind `INVALID_INPUT` with a
+message that names the value, such as `Invalid sender_id 'user-1': pass a
+numeric user id (digits only)` or `too many attachments: at most 10 per
+message`, without an `Invalid state:` prefix. Errors about state the chat
+lacks, such as a missing session identity or an empty key cache, are of
+kind `INVALID_STATE` and keep their prefix. Tell them apart by kind rather
+than by message:
+
+```java
+// 0.5.x
+boolean invalidInput = !e.getMessage().startsWith("Invalid state:");
+
+// 0.6.0
+boolean invalidInput = e.getKind() == ChatXdkException.Kind.INVALID_INPUT;
+```
 
 ## Exceptions
 
 There's no code to change. `ChatXdkException` is unchecked. `setIdentity`
-and `importKeys` throw it on invalid input, and the file methods
-(`encryptFile`, `decryptFile`, `fileEncryptor`, `fileDecryptor`) declare no
-checked exceptions and throw it too. The methods that declare
-`throws Exception` keep that clause.
+and `importKeys` throw it on invalid input; `verify`, `verifyKeyBinding` and
+`matchesRegisteredKey` throw it for a key or signature they can't decode,
+naming it; and the file methods (`encryptFile`, `decryptFile`,
+`fileEncryptor`, `fileDecryptor`) declare no checked exceptions and throw it
+too. The methods that declare `throws Exception` keep that clause.
 
 ## `ChatNative`
 
@@ -502,7 +611,10 @@ The jar bundles the native library for 64-bit ARM Linux (`linux-arm64`) as
 well, and on ARM64 Linux loads it ahead of any copy on `jna.library.path`.
 There's no code to change. If you built a library to run 0.5.x there,
 remove it: a 0.5.x build doesn't export the entry points 0.6.0 calls (see
-[C ABI](c-abi.md)).
+[C ABI](c-abi.md)). The native library is `chat_xdk_ffi`
+(`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`, `chat_xdk_ffi.dll`), built
+from the `chat-xdk-ffi` crate: name one you build yourself for another
+platform the same way.
 
 ## Group actions should be signed
 
