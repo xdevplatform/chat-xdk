@@ -248,9 +248,8 @@ def main() -> None:
         # A deterministic multi-chunk payload, so the incremental encryptor
         # emits several frames and any corruption is byte-attributable.
         plaintext = bytes((i * 31 + 7) % 256 for i in range(300_000))
-        session_id, media_hash_key = api.start_media_upload(
-            canonical_conv, encrypted_file_size(len(plaintext))
-        )
+        encrypted_size = encrypted_file_size(len(plaintext))
+        session_id, media_hash_key = api.start_media_upload(canonical_conv, encrypted_size)
 
         media_msg = core.encrypt_reply(
             conversation_id=canonical_conv,
@@ -263,7 +262,7 @@ def main() -> None:
                     "media_hash_key": media_hash_key,
                     "width": 0,
                     "height": 0,
-                    "filesize_bytes": len(plaintext),
+                    "filesize_bytes": encrypted_size,
                     "filename": "e2e.bin",
                     "media_type": 5,
                 }

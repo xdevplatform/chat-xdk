@@ -369,7 +369,7 @@ fn e2e_live() {
                         media_hash_key: media_hash_key.clone(),
                         width: 0,
                         height: 0,
-                        filesize_bytes: plaintext.len() as i64,
+                        filesize_bytes: total_bytes as i64,
                         filename: "e2e.bin".to_string(),
                         media_type: Some(5),
                         duration_millis: None,

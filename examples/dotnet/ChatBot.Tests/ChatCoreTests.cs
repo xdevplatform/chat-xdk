@@ -268,16 +268,17 @@ public class ChatCoreTests
         var convKeys = new Dictionary<string, byte[]> { ["1"] = convKey };
         var plaintext = new byte[300_000];
         for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
+        var encryptedSize = ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length);
         var body = core.EncryptReply(
             "1000:2000",
             "a photo",
             convKey,
             "1",
-            attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, plaintext.Length, "photo.bin", 5) });
+            attachments: new[] { AttachmentDescriptor.Media("photo", 4, 3, (long)encryptedSize, "photo.bin", 5) });
         Assert.False(string.IsNullOrEmpty(body.EventB64));
 
         var ciphertext = core.EncryptMedia(plaintext, body.EventB64, convKey, "1", "photo");
-        Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length), (ulong)ciphertext.Length);
+        Assert.Equal(encryptedSize, (ulong)ciphertext.Length);
         Assert.Equal(plaintext, core.DecryptMedia(ciphertext, body.EventB64, convKeys, "photo"));
         var ex = Assert.Throws<ChatXdkException>(
             () => core.DecryptMedia(ciphertext[..^4], body.EventB64, convKeys, "photo"));

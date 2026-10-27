@@ -291,7 +291,7 @@ class TestPreparedChanges(unittest.TestCase):
                     "media_hash_key": "photo",
                     "width": 4,
                     "height": 3,
-                    "filesize_bytes": len(plaintext),
+                    "filesize_bytes": encrypted_file_size(len(plaintext)),
                     "filename": "photo.bin",
                     "media_type": 5,
                 }

@@ -335,6 +335,8 @@ fn media_encrypt_decrypt_roundtrip() {
     let plaintext: Vec<u8> = (0..300_000u32)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
+    let encrypted_size = chat_xdk_core::utils::encrypted_file_size(plaintext.len() as u64)
+        .expect("encrypted_file_size");
     let body = core
         .encrypt_reply(
             "1000:2000",
@@ -344,7 +346,7 @@ fn media_encrypt_decrypt_roundtrip() {
                     media_hash_key: "photo".to_string(),
                     width: 4,
                     height: 3,
-                    filesize_bytes: plaintext.len() as i64,
+                    filesize_bytes: encrypted_size as i64,
                     filename: "photo.bin".to_string(),
                     media_type: Some(5),
                     duration_millis: None,
@@ -359,10 +361,7 @@ fn media_encrypt_decrypt_roundtrip() {
     let ciphertext = core
         .encrypt_media(&plaintext, &body.event_b64, &key, "1", "photo")
         .expect("encrypt_media");
-    assert_eq!(
-        Some(ciphertext.len() as u64),
-        chat_xdk_core::utils::encrypted_file_size(plaintext.len() as u64)
-    );
+    assert_eq!(ciphertext.len() as u64, encrypted_size);
     assert_eq!(
         core.decrypt_media(&ciphertext, &body.event_b64, &keys, "photo")
             .expect("decrypt_media"),

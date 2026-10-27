@@ -323,7 +323,7 @@ func TestE2ELive(t *testing.T) {
 				MediaHashKey:   mediaHashKey,
 				Width:          0,
 				Height:         0,
-				FilesizeBytes:  int64(len(plaintext)),
+				FilesizeBytes:  int64(totalBytes),
 				Filename:       "e2e.bin",
 				MediaType:      &mediaType,
 			}},

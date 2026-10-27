@@ -297,8 +297,8 @@ public class E2ELiveTests
             // emits several frames and any corruption is byte-attributable.
             var plaintext = new byte[300_000];
             for (var i = 0; i < plaintext.Length; i++) plaintext[i] = (byte)((i * 31 + 7) % 256);
-            var (sessionId, mediaHashKey) = await api.StartMediaUploadAsync(
-                canonicalConv, ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length));
+            var encryptedSize = ChatXdkUtilities.EncryptedFileSize((ulong)plaintext.Length);
+            var (sessionId, mediaHashKey) = await api.StartMediaUploadAsync(canonicalConv, encryptedSize);
 
             var mediaMsg = core.EncryptReply(
                 canonicalConv,
@@ -307,7 +307,7 @@ public class E2ELiveTests
                 kv,
                 attachments: new[]
                 {
-                    AttachmentDescriptor.Media(mediaHashKey, 0, 0, plaintext.Length, "e2e.bin", 5),
+                    AttachmentDescriptor.Media(mediaHashKey, 0, 0, (long)encryptedSize, "e2e.bin", 5),
                 },
                 ttlMsec: 24L * 60 * 60 * 1000);
             var ciphertext = core.EncryptMedia(plaintext, mediaMsg.EventB64, key, kv, mediaHashKey);

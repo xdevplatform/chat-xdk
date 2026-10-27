@@ -280,7 +280,8 @@ class ChatCoreTest {
                     "1",
                     null,
                     null,
-                    List.of(AttachmentDescriptor.media("photo", 4, 3, plaintext.length, "photo.bin", 5, null)),
+                    List.of(AttachmentDescriptor.media(
+                            "photo", 4, 3, ChatXdkUtilities.encryptedFileSize(plaintext.length), "photo.bin", 5, null)),
                     null,
                     null);
             assertFalse(body.eventB64().isEmpty());

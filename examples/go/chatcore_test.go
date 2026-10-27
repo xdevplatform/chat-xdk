@@ -379,6 +379,10 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 	for i := range plaintext {
 		plaintext[i] = byte((i*31 + 7) % 256)
 	}
+	size, err := chatxdk.EncryptedFileSize(uint64(len(plaintext)))
+	if err != nil {
+		t.Fatalf("EncryptedFileSize: %v", err)
+	}
 	mediaType := int32(5)
 	body, err := core.EncryptReply("1000:2000", "a photo", &ReplyOptions{
 		ConversationKey:        key,
@@ -388,7 +392,7 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 			MediaHashKey:   "photo",
 			Width:          4,
 			Height:         3,
-			FilesizeBytes:  int64(len(plaintext)),
+			FilesizeBytes:  int64(size),
 			Filename:       "photo.bin",
 			MediaType:      &mediaType,
 		}},
@@ -403,10 +407,6 @@ func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 	ciphertext, err := core.EncryptMedia(plaintext, body.EventB64, key, "1", "photo")
 	if err != nil {
 		t.Fatalf("EncryptMedia: %v", err)
-	}
-	size, err := chatxdk.EncryptedFileSize(uint64(len(plaintext)))
-	if err != nil {
-		t.Fatalf("EncryptedFileSize: %v", err)
 	}
 	if uint64(len(ciphertext)) != size {
 		t.Errorf("encrypted size %d, want %d", len(ciphertext), size)

@@ -280,7 +280,7 @@ test("media encrypt -> decrypt round-trip and truncation", async () => {
         media_hash_key: "photo",
         width: 4,
         height: 3,
-        filesize_bytes: plaintext.length,
+        filesize_bytes: ChatCore.encryptedFileSize(plaintext.length),
         filename: "photo.bin",
         media_type: 5,
       },

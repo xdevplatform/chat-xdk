@@ -272,10 +272,8 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
   // A deterministic multi-chunk payload, so the incremental encryptor emits
   // several frames and any corruption is byte-attributable.
   const plaintext = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 31 + 7) % 256);
-  const upload = await api.startMediaUpload(
-    canonicalConv,
-    ChatCore.encryptedFileSize(plaintext.length),
-  );
+  const encryptedSize = ChatCore.encryptedFileSize(plaintext.length);
+  const upload = await api.startMediaUpload(canonicalConv, encryptedSize);
   const { mediaHashKey } = upload;
 
   const mediaMsg = core.encryptReply({
@@ -289,7 +287,7 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
         media_hash_key: mediaHashKey,
         width: 0,
         height: 0,
-        filesize_bytes: plaintext.length,
+        filesize_bytes: encryptedSize,
         filename: "e2e.bin",
         media_type: 5,
       },

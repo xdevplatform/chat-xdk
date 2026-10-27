@@ -375,12 +375,12 @@ class E2ELiveTest {
         for (int i = 0; i < plaintext.length; i++) {
             plaintext[i] = (byte) ((i * 31 + 7) % 256);
         }
-        XChatClient.MediaUpload upload =
-                api.startMediaUpload(canonicalConv, ChatXdkUtilities.encryptedFileSize(plaintext.length));
+        long encryptedSize = ChatXdkUtilities.encryptedFileSize(plaintext.length);
+        XChatClient.MediaUpload upload = api.startMediaUpload(canonicalConv, encryptedSize);
         String mediaHashKey = upload.mediaHashKey();
 
         AttachmentDescriptor descriptor =
-                AttachmentDescriptor.media(mediaHashKey, 0, 0, plaintext.length, "e2e.bin", 5, null);
+                AttachmentDescriptor.media(mediaHashKey, 0, 0, encryptedSize, "e2e.bin", 5, null);
         ChatCore.SendBody mediaMsg = core.encryptReply(
                 canonicalConv,
                 "chat-xdk e2e media [jvm] " + (System.currentTimeMillis() / 1000),
