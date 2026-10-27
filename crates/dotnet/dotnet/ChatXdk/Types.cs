@@ -310,7 +310,11 @@ namespace ChatXdk
         /// <summary>Version string → raw 32-byte conversation key.</summary>
         public Dictionary<string, byte[]> Keys { get; init; } = new();
 
-        /// <summary>Highest key version (for encrypting new messages), or <see langword="null"/>.</summary>
+        /// <summary>
+        /// The version to encrypt with: from <see cref="Chat.DecryptEvents"/>, the newest version
+        /// whose key change verified (<see langword="null"/> until one verifies); from
+        /// <see cref="Chat.ExtractConversationKeys"/>, the batch's highest version.
+        /// </summary>
         public string? LatestVersion { get; init; }
     }
 

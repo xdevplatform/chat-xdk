@@ -108,12 +108,13 @@ logical inputs. Calling a signing method with neither a per-call value nor a
 session identity is an error.
 
 `decrypt_events`
-reports `latest_version` (the version to encrypt with) as the newest key
-change with a valid signature and holds it monotonic for the lifetime of the
-instance, so a replayed older key cannot downgrade what you encrypt with.
-This applies to key changes with signature version ≥ 6 (whose signed payload
-embeds the plaintext key); for a conversation seen only through older key
-changes, `latest_version` falls back to the batch's highest version.
+reports as `latest_version` (the version to encrypt with) the newest key
+change of the batch's conversations whose signature verified, and holds it
+monotonic for the lifetime of the instance, so neither a replayed older key
+change nor one the SDK could not verify sets what you encrypt with. Only key
+changes signed at version ≥ 6 (whose signed payload embeds the plaintext key)
+can verify; until one does, `latest_version` is null. Keys from key changes
+that did not verify still decrypt messages.
 
 PINs passed to `setup`/`change_pin` must be at least 4 characters and must
 not be a single repeated character or a sequential digit run; `unlock`
@@ -880,7 +881,7 @@ for (const dm of result.messages) {
 
 // Cache conversation keys for later decryptEvent calls
 const cachedKeys = result.conversationKeys;
-console.log(cachedKeys.latestVersion); // "3" — use for encrypting replies
+console.log(cachedKeys.latestVersion); // "3": the newest verified key change, null until one verifies
 ```
 
 **Python example:**

@@ -95,7 +95,10 @@ type PublicKeyInput struct {
 }
 
 // ConversationKeyBundle holds decrypted conversation key material keyed by version.
-// Keys maps version string -> raw 32-byte conversation key.
+// Keys maps version string -> raw 32-byte conversation key. LatestVersion is
+// the version to encrypt with: from DecryptEvents, the newest version whose
+// key change verified (nil until one verifies); from ExtractConversationKeys,
+// the batch's highest version.
 type ConversationKeyBundle struct {
 	Keys          map[string][]byte `json:"keys"`
 	LatestVersion *string           `json:"latest_version"`

@@ -314,7 +314,11 @@ public final class Types {
         /** Version string &#8594; raw 32-byte conversation key. */
         public Map<String, byte[]> keys = Collections.emptyMap();
 
-        /** Highest key version (for encrypting new messages), or {@code null}. */
+        /**
+         * The version to encrypt with: from {@link Chat#decryptEvents}, the newest version whose
+         * key change verified ({@code null} until one verifies); from
+         * {@link Chat#extractConversationKeys}, the batch's highest version.
+         */
         public String latestVersion;
     }
 

@@ -1095,10 +1095,10 @@ impl ChatCore {
     ///
     /// This call adopts every decryptable key without checking signatures and
     /// reports the batch's highest version. [`Self::decrypt_events`] hardens
-    /// this: it pins `latest_version` to the newest key change with a valid
-    /// signature and holds it monotonic, so a replayed older key cannot
-    /// downgrade what callers encrypt with; per-message signatures are verified
-    /// in [`Self::decrypt_event`].
+    /// this: only a key change whose signature verified sets its
+    /// `latest_version`, held monotonic, so neither an unverified key change
+    /// nor a replayed older one sets what callers encrypt with; per-message
+    /// signatures are verified in [`Self::decrypt_event`].
     ///
     /// `latest_version` here is the highest version within this batch only.
     pub fn extract_conversation_keys(&self, events: &[&str]) -> ConversationKeyResult {
@@ -1226,28 +1226,22 @@ impl ChatCore {
             );
             if !verified {
                 result.keys.remove(&version);
-                if result.latest_version.as_deref() == Some(version.as_str()) {
-                    result.latest_version = result
-                        .keys
-                        .keys()
-                        .filter_map(|v| v.parse::<u64>().ok().map(|n| (n, v.clone())))
-                        .max_by_key(|(n, _)| *n)
-                        .map(|(_, v)| v);
-                }
             }
         }
     }
 
-    /// Pin the reported latest conversation-key version to the newest one whose
-    /// key change is authentic, monotonically across this instance's lifetime.
+    /// Set the reported latest conversation-key version to the newest one
+    /// whose key change verified, monotonically across this instance's
+    /// lifetime.
     ///
     /// A malicious relay can replay an old, validly signed key change to make a
-    /// caller encrypt under a stale key. Recording the highest *verified*
-    /// version per conversation and never reporting a lower one defeats that
-    /// downgrade, while every version stays adopted for decryption. Only
-    /// signature versions carrying a reproducible plaintext-key payload can be
-    /// authenticated; a conversation seen only through earlier versions keeps
-    /// the value derived from the batch.
+    /// caller encrypt under a stale key, or inject a key change it cannot sign.
+    /// Recording the highest *verified* version per conversation and never
+    /// reporting a lower or unverified one defeats both, while every adopted
+    /// version stays available for decryption. Only signature versions
+    /// carrying a reproducible plaintext-key payload can be verified, so a
+    /// batch whose conversations have no verified key change reports no
+    /// latest version.
     fn apply_ckey_freshness(
         &self,
         events: &[&str],
@@ -1372,13 +1366,11 @@ impl ChatCore {
             .conversation_key_high_water
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        let pinned = batch_conversations
+        result.latest_version = batch_conversations
             .iter()
             .filter_map(|c| high_water.get(c).copied())
-            .max();
-        if let Some(version_num) = pinned {
-            result.latest_version = Some(version_num.to_string());
-        }
+            .max()
+            .map(|version_num| version_num.to_string());
     }
 
     /// Decrypt the conversation key carried in a `ConversationKeyChange` event
@@ -1433,7 +1425,11 @@ impl ChatCore {
     /// # Returns
     /// A `DecryptEventsResult` containing:
     /// * `messages` - Successfully decrypted messages
-    /// * `conversation_keys` - Extracted conversation keys (for caching)
+    /// * `conversation_keys` - Extracted conversation keys (for caching). Its
+    ///   `latest_version` is the newest version whose key change verified, for
+    ///   the batch's conversations and held monotonic for this instance's
+    ///   lifetime; `None` until a key change verifies. A key from a key change
+    ///   that did not verify still decrypts but never becomes the latest.
     /// * `errors` - Map of event index → error message for failed decryptions
     pub fn decrypt_events(&self, params: DecryptEventsParams) -> DecryptEventsResult {
         let events: Vec<&str> = params.events.iter().map(String::as_str).collect();
@@ -1472,9 +1468,8 @@ impl ChatCore {
             &mut conv_keys_result,
             CKEY_SIG_V6_ENFORCE_AFTER_SEQ,
         );
-        // Pin the reported latest version to the newest authenticated key
-        // change so a replayed older one cannot downgrade what callers encrypt
-        // with.
+        // Only a verified key change may set the reported latest version, and
+        // a replayed older one cannot lower it.
         self.apply_ckey_freshness(events, &verified_signing_keys, &mut conv_keys_result);
 
         let mut messages = Vec::new();
@@ -8714,12 +8709,10 @@ mod tests {
         let events: Vec<&str> = vec![&kc_b64, &msg_b64];
         let result = core.decrypt_events_with(&events, &signing_keys);
 
-        // Key adopted despite the unverifiable KeyChange signature.
+        // Key adopted despite the unverifiable KeyChange signature, but an
+        // unverified key change never becomes the latest version.
         assert!(result.conversation_keys.keys.contains_key(ckey_version));
-        assert_eq!(
-            result.conversation_keys.latest_version,
-            Some(ckey_version.to_string())
-        );
+        assert_eq!(result.conversation_keys.latest_version, None);
         // The message under it decrypts (its own signature verifies).
         let msg = result
             .messages
@@ -8857,10 +8850,13 @@ mod tests {
         let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
         // The shipped decrypt path holds enforcement off, so a bad signature
-        // is still adopted (and surfaced as an error).
+        // is still adopted (and surfaced as an error), but it is not reported
+        // as the latest version.
         let bad = build(&core, "100", true);
         let result = core.decrypt_events_with(&[&bad], &signing_keys);
         assert!(result.conversation_keys.keys.contains_key("1001"));
+        assert!(result.errors.contains_key(&0));
+        assert_eq!(result.conversation_keys.latest_version, None);
 
         // Enforce from sequence 0: a valid signature is kept.
         let good = build(&core, "100", false);
@@ -8873,7 +8869,6 @@ mod tests {
         let mut kr = core.extract_conversation_keys(&[&bad]);
         core.enforce_ckey_signatures(&[&bad], &signing_keys, &mut kr, 0);
         assert!(!kr.keys.contains_key("1001"));
-        assert_eq!(kr.latest_version, None);
 
         // Threshold above the event sequence: the bad signature is kept.
         let bad = build(&core, "100", true);
@@ -9001,6 +8996,35 @@ mod tests {
             Some("200")
         );
         assert!(result.conversation_keys.keys.contains_key("100"));
+    }
+
+    #[test]
+    fn latest_version_is_none_until_a_keychange_verifies() {
+        let core = ChatCore::new();
+        let reg = core.generate_keypairs().unwrap();
+        let signing_keys = [signing_key_entry_for(&reg, "910003")];
+
+        // A key change whose signature is rejected sets no latest version,
+        // though its key still decrypts.
+        let kc200_bad = build_freshness_keychange(&core, "conv-1", "200", true);
+        let result = core.decrypt_events_with(&[&kc200_bad], &signing_keys);
+        assert!(result.errors.contains_key(&0));
+        assert!(result.conversation_keys.keys.contains_key("200"));
+        assert_eq!(result.conversation_keys.latest_version, None);
+
+        // Without the sender's signing key nothing verifies either.
+        let kc300 = build_freshness_keychange(&core, "conv-1", "300", false);
+        let result = core.decrypt_events_with(&[&kc300], &[]);
+        assert_eq!(result.conversation_keys.latest_version, None);
+
+        // Once a key change verifies, it is the latest version, and the
+        // rejected higher one still is not.
+        let kc100 = build_freshness_keychange(&core, "conv-1", "100", false);
+        let result = core.decrypt_events_with(&[&kc200_bad, &kc100], &signing_keys);
+        assert_eq!(
+            result.conversation_keys.latest_version.as_deref(),
+            Some("100")
+        );
     }
 
     #[test]

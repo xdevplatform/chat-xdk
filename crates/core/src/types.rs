@@ -1543,7 +1543,9 @@ pub struct ConversationKeyResult {
     /// Map of key version → raw conversation key bytes.
     #[serde(skip)]
     pub keys: std::collections::HashMap<String, crate::crypto::keys::XChatConversationKey>,
-    /// The latest (highest) key version, if any.
+    /// The version to encrypt with. From `decrypt_events`, the newest version
+    /// whose key change verified (`None` until one verifies); from
+    /// `extract_conversation_keys`, the batch's highest version.
     pub latest_version: Option<String>,
 }
 

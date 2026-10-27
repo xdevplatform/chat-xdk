@@ -149,7 +149,11 @@ export type ConversationKeyMap = { [version: string]: Uint8Array };
 export interface ConversationKeyResult {
   /** Map of key version → raw conversation key bytes. */
   keys: ConversationKeyMap;
-  /** The latest (highest) key version, for encrypting new messages. */
+  /**
+   * The version to encrypt with: from decryptEvents, the newest version whose
+   * key change verified (null until one verifies); from
+   * extractConversationKeys, the batch's highest version.
+   */
   latestVersion: string | null;
 }
 

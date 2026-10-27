@@ -2473,7 +2473,9 @@ impl Chat {
     /// Returns:
     ///     A dict with:
     ///     - ``messages``: List of ``{"event": dict, "original_b64": str}``
-    ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str}``
+    ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str}``;
+    ///       ``latest_version`` is the newest version whose key change
+    ///       verified, ``None`` until one verifies
     ///     - ``errors``: Dict mapping event index (string, e.g. ``"0"``) to error message
     fn decrypt_events(
         &self,
