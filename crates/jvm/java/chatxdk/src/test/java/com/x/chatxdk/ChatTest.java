@@ -14,8 +14,10 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -643,6 +645,54 @@ class ChatTest {
             capture.signingKeyVersion = "1";
             assertTrue(onlyAction(chat.prepareScreenCapture(capture)).signaturePayload.startsWith(
                     "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"));
+        }
+    }
+
+    /** One signed action: the event its payload names, the payload's end, and the prepare call. */
+    private record GroupActionCase(String event, String suffix, Callable<PreparedAction> prepare) {}
+
+    // The group and conversation-metadata actions each sign one action at signature version 7: its
+    // payload names the event and ends with the signed fields, and its signature verifies with the
+    // signer's signing key.
+    @Test
+    void groupActionsSignEachAction() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("111", "1"));
+            String signingKey = chat.getPublicKeys().signing;
+            Map<String, GroupActionCase> cases = new LinkedHashMap<>();
+            cases.put("avatar", new GroupActionCase("GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
+                    () -> chat.prepareGroupAvatarChange(new GroupAvatarChangeParams("g100", "4", "https://img/a.png"))));
+            cases.put("description", new GroupActionCase("GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
+                    () -> chat.prepareGroupDescriptionChange(new GroupDescriptionChangeParams("g100", "4", "enc-desc"))));
+            cases.put("admins add", new GroupActionCase("GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+                    () -> chat.prepareGroupAdminsAdd(new GroupAdminsAddParams("g100", List.of("910008", "910009")))));
+            cases.put("admins remove", new GroupActionCase("GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+                    () -> chat.prepareGroupAdminsRemove(new GroupAdminsRemoveParams("g100", List.of("910008")))));
+            cases.put("invite enable", new GroupActionCase("GroupChangeEvent.GroupInviteEnable",
+                    ",g100,https://x.com/i/invite/abc,null,null",
+                    () -> chat.prepareGroupInviteEnable(new GroupInviteEnableParams("g100", "https://x.com/i/invite/abc"))));
+            cases.put("invite disable", new GroupActionCase("GroupChangeEvent.GroupInviteDisable", ",g100,111",
+                    () -> chat.prepareGroupInviteDisable(new GroupInviteDisableParams("g100"))));
+            cases.put("join request", new GroupActionCase("GroupChangeEvent.GroupJoinRequest", ",g100,111",
+                    () -> chat.prepareGroupJoinRequest(new GroupJoinRequestParams("g100"))));
+            cases.put("join reject", new GroupActionCase("GroupChangeEvent.GroupJoinReject", ",g100,910010",
+                    () -> chat.prepareGroupJoinReject(new GroupJoinRejectParams("g100", List.of("910010")))));
+            cases.put("ttl change", new GroupActionCase("ConversationMetadataChangeEvent.MessageDurationChange",
+                    ",g100,86400000", () -> chat.prepareMessageTtlChange(new MessageTtlChangeParams("g100", 86400000L))));
+            cases.put("ttl remove", new GroupActionCase("ConversationMetadataChangeEvent.MessageDurationRemove",
+                    ",111,g100", () -> chat.prepareMessageTtlRemove(new MessageTtlRemoveParams("g100"))));
+            for (Map.Entry<String, GroupActionCase> entry : cases.entrySet()) {
+                String name = entry.getKey();
+                GroupActionCase c = entry.getValue();
+                ActionSignature action = onlyAction(c.prepare().call());
+                assertTrue(action.signaturePayload.startsWith(c.event() + ","), name + ": " + action.signaturePayload);
+                assertTrue(action.signaturePayload.endsWith(c.suffix()), name + ": " + action.signaturePayload);
+                MessageEventSignature sig = action.messageEventSignature;
+                assertEquals("7", sig.signatureVersion, name);
+                assertEquals(signingKey, sig.signingPublicKey, name);
+                byte[] raw = Base64.getDecoder().decode(sig.signature);
+                assertTrue(chat.verify(signingKey, raw, action.signaturePayload.getBytes(StandardCharsets.UTF_8)), name);
+            }
         }
     }
 
@@ -1764,15 +1814,32 @@ class ChatTest {
         }
     }
 
-    // JNA plumbing smokes only: the values cross the boundary without a crash.
-    // The behaviors themselves are pinned by
-    // vectorsDecryptEventsBatchAndSingleEventContracts and the Rust core suite.
+    // The session identity signs a call that names no identity of its own, and
+    // setRejectUnverified decides whether a message from a sender whose signing
+    // key the chat lacks is rejected or returned unverified.
     @Test
-    void setIdentityAndSetRejectUnverifiedSmoke() throws Exception {
-        try (Chat chat = createUnlocked()) {
+    void setIdentityAndSetRejectUnverifiedTakeEffect() throws Exception {
+        try (Chat chat = createUnlocked(); Chat sender = createUnlocked()) {
             chat.setIdentity(new SetIdentityParams("910004", "12345"));
+            ActionSignature action = onlyAction(chat.prepareMessageTtlRemove(new MessageTtlRemoveParams("g100")));
+            assertTrue(action.signaturePayload.endsWith(",910004,g100"), action.signaturePayload);
+            assertEquals("12345", action.messageEventSignature.publicKeyVersion);
+
+            byte[] conversationKey = new byte[32];
+            EncryptMessageParams send = new EncryptMessageParams("910004:910005", "hi");
+            send.senderId = "910005";
+            send.signingKeyVersion = "1";
+            send.conversationKey = conversationKey;
+            send.conversationKeyVersion = "1";
+            DecryptEventParams received =
+                    new DecryptEventParams(sender.encryptMessage(send).eventB64, Map.of("1", conversationKey));
+            assertThrows(ChatXdkException.class, () -> chat.decryptEvent(received));
             chat.setRejectUnverified(false);
+            JsonNode unverified = chat.decryptEvent(received);
+            assertEquals("hi", unverified.path("content").path("text").asText());
+            assertFalse(unverified.path("verified").asBoolean());
             chat.setRejectUnverified(true);
+            assertThrows(ChatXdkException.class, () -> chat.decryptEvent(received));
         }
     }
 

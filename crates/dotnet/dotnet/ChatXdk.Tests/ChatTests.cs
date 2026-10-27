@@ -813,6 +813,53 @@ namespace ChatXdk.Tests
             Assert.StartsWith("ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,", blocking.SignaturePayload);
         }
 
+        // The group and conversation-metadata actions each sign one action at signature
+        // version 7: its payload names the event and ends with the signed fields, and its
+        // signature verifies with the signer's signing key.
+        [Fact]
+        public void GroupActions_SignEachAction()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("111", "1"));
+            var signingKey = chat.GetPublicKeys().Signing;
+            var cases = new (string Name, string Event, string Suffix, Func<PreparedAction> Prepare)[]
+            {
+                ("avatar", "GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
+                    () => chat.PrepareGroupAvatarChange(new GroupAvatarChangeParams("g100", "4", "https://img/a.png"))),
+                ("description", "GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
+                    () => chat.PrepareGroupDescriptionChange(new GroupDescriptionChangeParams("g100", "4", "enc-desc"))),
+                ("admins add", "GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+                    () => chat.PrepareGroupAdminsAdd(new GroupAdminsAddParams("g100", new[] { "910008", "910009" }))),
+                ("admins remove", "GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+                    () => chat.PrepareGroupAdminsRemove(new GroupAdminsRemoveParams("g100", new[] { "910008" }))),
+                ("invite enable", "GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null",
+                    () => chat.PrepareGroupInviteEnable(new GroupInviteEnableParams("g100", "https://x.com/i/invite/abc"))),
+                ("invite disable", "GroupChangeEvent.GroupInviteDisable", ",g100,111",
+                    () => chat.PrepareGroupInviteDisable(new GroupInviteDisableParams("g100"))),
+                ("join request", "GroupChangeEvent.GroupJoinRequest", ",g100,111",
+                    () => chat.PrepareGroupJoinRequest(new GroupJoinRequestParams("g100"))),
+                ("join reject", "GroupChangeEvent.GroupJoinReject", ",g100,910010",
+                    () => chat.PrepareGroupJoinReject(new GroupJoinRejectParams("g100", new[] { "910010" }))),
+                ("ttl change", "ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000",
+                    () => chat.PrepareMessageTtlChange(new MessageTtlChangeParams("g100", 86400000))),
+                ("ttl remove", "ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+                    () => chat.PrepareMessageTtlRemove(new MessageTtlRemoveParams("g100"))),
+            };
+            foreach (var (name, eventName, suffix, prepare) in cases)
+            {
+                var action = OnlyAction(prepare());
+                var payload = action.SignaturePayload ?? "";
+                Assert.True(payload.StartsWith(eventName + ",", StringComparison.Ordinal), $"{name}: {payload}");
+                Assert.True(payload.EndsWith(suffix, StringComparison.Ordinal), $"{name}: {payload}");
+                var sig = action.MessageEventSignature;
+                Assert.Equal("7", sig.SignatureVersion);
+                Assert.Equal(signingKey, sig.SigningPublicKey);
+                // The signature is base64 without padding, as the wire carries it.
+                var raw = Convert.FromBase64String(sig.Signature.PadRight((sig.Signature.Length + 3) / 4 * 4, '='));
+                Assert.True(chat.Verify(signingKey, raw, System.Text.Encoding.UTF8.GetBytes(payload)), name);
+            }
+        }
+
         [Fact]
         public void PrepareMessageDelete_ForSelf()
         {
@@ -1334,16 +1381,30 @@ namespace ChatXdk.Tests
             Assert.Null(chat.ExportKeys());
         }
 
-        // P/Invoke plumbing smoke only: the flag crosses the boundary without a
-        // crash. The policy's behavior is pinned by
-        // Vectors_DecryptEvents_BatchAndSingleEventContracts (default reject)
-        // and the Rust core suite.
+        // SetRejectUnverified decides whether a message from a sender whose signing key the
+        // chat lacks is rejected or returned unverified.
         [Fact]
-        public void SetRejectUnverified_DoesNotThrow()
+        public void SetRejectUnverified_DecidesWhetherUnverifiedMessagesAreRejected()
         {
             using var chat = CreateUnlocked();
-            chat.SetRejectUnverified(true);
+            using var sender = CreateUnlocked();
+            var conversationKey = new byte[32];
+            var payload = sender.EncryptMessage(new EncryptMessageParams("910004:910005", "hi")
+            {
+                SenderId = "910005",
+                SigningKeyVersion = "1",
+                ConversationKey = conversationKey,
+                ConversationKeyVersion = "1",
+            });
+            var received = new DecryptEventParams(
+                payload.EventB64, new Dictionary<string, byte[]> { ["1"] = conversationKey });
+            Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(received));
             chat.SetRejectUnverified(false);
+            var unverified = chat.DecryptEvent(received);
+            Assert.Equal("hi", unverified.GetProperty("content").GetProperty("text").GetString());
+            Assert.False(unverified.GetProperty("verified").GetBoolean());
+            chat.SetRejectUnverified(true);
+            Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(received));
         }
 
         // Deterministic cross-binding fixture pins (tests/fixtures/sdk_vectors.json)
