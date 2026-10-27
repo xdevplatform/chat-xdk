@@ -180,8 +180,13 @@ Array.Clear(pinBytes);
 
 Every method of a `Chat`, `UpdateConfig` included, is safe to call from
 several threads at once; a Juicebox call already under way keeps the config
-it started with. A wrong PIN throws a `ChatXdkException` of kind
-`InvalidPin` (see [Errors carry their kind](#errors-carry-their-kind)).
+it started with. Until a chat has a config, `Setup`, `Unlock`, `ChangePin`
+and `Delete` and their async forms throw a `ChatXdkException` of kind
+`InvalidState`, `Invalid state: no Juicebox config: pass the
+juicebox_config the X API returns when you create the chat, or call
+update_config() first`, the error every binding gives, and a wrong PIN
+throws one of kind `InvalidPin` (see
+[Errors carry their kind](#errors-carry-their-kind)).
 
 ## User ids are strings of digits
 

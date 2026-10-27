@@ -1572,8 +1572,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
    * (4+ characters, not a single repeated character or sequential digit
    * run). Pass a Uint8Array to be able to zero the buffer afterwards.
    *
-   * Requires a Juicebox config: throws if the instance was created without
-   * `juiceboxConfig` and `updateConfig()` has not been called yet.
+   * Requires a Juicebox config: throws a `ChatXdkError` of kind
+   * `invalidState` if the instance was created without `juiceboxConfig` and
+   * `updateConfig()` has not been called yet.
    */
   setup(pin: string | Uint8Array): Promise<PublicKeys>;
   /** Requires a Juicebox config, like setup(). */

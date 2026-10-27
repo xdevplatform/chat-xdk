@@ -4,8 +4,8 @@ chat-xdk - Python bindings for the X Chat encryption SDK.
 Quick Start:
     from chat_xdk import Chat, DecryptEventParams, EncryptMessageParams, SetIdentityParams
 
-    chat = Chat(config_json)  # optional; None or an empty JSON object ("{}")
-                              # selects manual key management
+    chat = Chat(config_json)  # the X API's Juicebox config; Chat() without one
+                              # loads keys with import_keys instead of unlock
     chat.unlock("2580")
     chat.set_identity(SetIdentityParams(my_user_id, signing_key_version))
 
@@ -383,8 +383,11 @@ class Chat(_native.Chat):
 
     ``Chat(config_json)`` keeps the keys in Juicebox with the Juicebox
     configuration the X API returns; ``Chat()`` manages them with
-    ``import_keys`` and ``generate_keypairs`` alone. The ``_async`` methods
-    run the Juicebox round trips on a worker thread, for an ``asyncio`` loop.
+    ``import_keys`` and ``generate_keypairs`` alone, or takes the config
+    later from ``update_config``. Until a chat has one, ``setup``,
+    ``unlock``, ``change_pin`` and ``delete`` raise ``InvalidStateError``.
+    The ``_async`` methods run the Juicebox round trips on a worker thread,
+    for an ``asyncio`` loop.
     """
 
     async def setup_async(self, pin):

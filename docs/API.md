@@ -16,27 +16,37 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 1 | **new** | `Chat::new(config: JuiceboxConfig)`, `ChatCore::new()` | `createChat({ juiceboxConfig?, getAuthToken? })` → `Promise<ChatWithJuicebox>` (free with `free()`) | `Chat(config_json?: str)` | `New() *Chat`, `NewWithJuiceboxConfig(configJSON string) (*Chat, error)` (free with `Close()`) | `new Chat()`, `new Chat(String juiceboxConfigJson)` (free with `close()` / `try-with-resources`) | `new Chat()`, `new Chat(string juiceboxConfigJson)` (free with `Dispose()` / `using`) |
+| 1 | **new** | `Chat::new(config: JuiceboxConfig)`, `Chat::default()`, `ChatCore::new()` | `createChat({ juiceboxConfig?, getAuthToken? })` → `Promise<ChatWithJuicebox>` (free with `free()`) | `Chat(config_json?: str)` | `New() *Chat`, `NewWithJuiceboxConfig(configJSON string) (*Chat, error)` (free with `Close()`) | `new Chat()`, `new Chat(String juiceboxConfigJson)` (free with `close()` / `try-with-resources`) | `new Chat()`, `new Chat(string juiceboxConfigJson)` (free with `Dispose()` / `using`) |
 | 2 | **update_config** | `update_config(&self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 | 3a | **set_feature_switches** | `set_feature_switches(&self, status: u16, body: &[u8])` | — | — | — | — | — |
 
 A chat takes its Juicebox config when it's created, in every binding, and
-`update_config` replaces it: on first boot, when the account has no config
-yet, or to refresh its tokens. A Juicebox call already under way keeps the
-config it started with. The C ABI's `chat_xdk_new(juicebox_config_json,
-&chat)` takes it the same way, NULL for none.
+`update_config` sets or replaces it: on first boot, when the account has no
+config yet, or to refresh its tokens. A Juicebox call already under way
+keeps the config it started with. The C ABI's
+`chat_xdk_new(juicebox_config_json, &chat)` takes it the same way, NULL for
+none. A chat created without one (`Chat::default()`,
+`createChat({ getAuthToken })`, `Chat()`, `New()`, `new Chat()`,
+`chat_xdk_new(NULL, &chat)`) runs every crypto call, and until it has one
+`setup`, `unlock`, `change_pin` and `delete` fail with an invalid-state
+error worded the same in every binding: `Invalid state: no Juicebox config:
+pass the juicebox_config the X API returns when you create the chat, or
+call update_config() first`.
 
-Rust's `set_feature_switches` hands a chat the answer to
-`GET /2/chat/features` (`FEATURES_ENDPOINT`), which
-the bindings read themselves when a chat is created (see
+Rust's `set_feature_switches`, and the C ABI's
+`chat_xdk_set_feature_switches(chat, status, body, body_len)`, hand a chat
+the answer to `GET /2/chat/features` (`FEATURES_ENDPOINT`,
+`CHAT_XDK_FEATURES_ENDPOINT` in `chat_xdk.h`), which the bindings read
+themselves when a chat is created (see
 [ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)): make the request once,
 when you create the chat, without credentials or query parameters, within
-`FEATURES_TIMEOUT_MS`, reading at most one byte past `FEATURES_MAX_BODY`,
-and pass its status and body. Sends stay v0 until an answer turns
-`v1_send` on; a chat takes one answer for its lifetime, and a status other
-than 200 or a body that is too long or isn't a features object leaves every
-switch off.
+`FEATURES_TIMEOUT_MS` (`CHAT_XDK_FEATURES_TIMEOUT_MS`), reading at most one
+byte past `FEATURES_MAX_BODY` (`CHAT_XDK_FEATURES_MAX_BODY`), and pass its
+status, 0 when no response arrived, and body. Sends stay v0 until an answer
+turns `v1_send` on; a chat takes one answer for its lifetime, and a status
+other than 200 or a body that is too long or isn't a features object leaves
+every switch off.
 
 The config JSON accepted by the constructor and `update_config` supports
 three shapes, checked in this order:
@@ -66,8 +76,8 @@ token fields, and accepts a raw realms config as a fourth shape.
 account's `juicebox_config` is created by `POST /2/users/{id}/public_keys`, so
 a brand-new user has none yet. Created without a config, the instance runs
 every crypto method (including `generateKeypairs`) but builds no Juicebox
-client; `setup`/`unlock`/`changePin`/`delete` throw a clear error until
-`updateConfig` supplies a real config. The first-boot flow is:
+client; `setup`/`unlock`/`changePin`/`delete` throw the invalid-state error
+above until `updateConfig` supplies a real config. The first-boot flow is:
 `createChat({ getAuthToken })` → `generateKeypairs()` → caller POSTs the
 payload → `updateConfig(configFromGet)` → `setup(pin)`. Already-provisioned
 accounts pass `juiceboxConfig` at creation. `createChat()` without
@@ -1215,8 +1225,11 @@ The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings read in the background once, when a chat
 is created (see
 [ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
-**The Rust crate never fetches it, so `ChatCore` and `Chat` always send
-v0.** They read v1 sends like every binding. The fetch logs nothing; to see
+**The Rust crate and the C ABI never fetch it:** a Rust app or a C caller
+makes the request and hands a chat the answer, with `set_feature_switches`
+or `chat_xdk_set_feature_switches` (see
+[Constructor & Config](#constructor--config)), and a chat without one sends
+v0. They read v1 sends like every binding. The fetch logs nothing; to see
 which format a send used, read the payload's
 `signature_info.signature_version`: `"7"` for v0, `"10"` for v1. A 0.5.x
 reader rejects a v1 send as a signature verification failure, so in its logs
@@ -1678,7 +1691,7 @@ reports with the same name in its own idiom:
 | Kind | Rust `ErrorKind` | Python exception | JS `ChatXdkError.kind` | Go `chatxdk.ErrorKind` | .NET `ChatXdkErrorKind` / JVM `ChatXdkException.Kind` | C ABI `kind` |
 |---|---|---|---|---|---|---|
 | A parameter is missing or invalid; the message names it | `InvalidInput` | `InvalidInputError` | `invalidInput` | `ErrorKindInvalidInput` | `InvalidInput` / `INVALID_INPUT` | `invalid_input` |
-| A value was neither passed nor available from the chat's state, such as no keys loaded or no session identity | `InvalidState` | `InvalidStateError` | `invalidState` | `ErrorKindInvalidState` | `InvalidState` / `INVALID_STATE` | `invalid_state` |
+| A value was neither passed nor available from the chat's state, such as no keys loaded, no session identity or no Juicebox config | `InvalidState` | `InvalidStateError` | `invalidState` | `ErrorKindInvalidState` | `InvalidState` / `INVALID_STATE` | `invalid_state` |
 | Event or other wire data is malformed | `Parse` | `ParseError` | `parse` | `ErrorKindParse` | `Parse` / `PARSE` | `parse` |
 | Ciphertext didn't decrypt, or no key for it was available | `Decryption` | `DecryptionError` | `decryption` | `ErrorKindDecryption` | `Decryption` / `DECRYPTION` | `decryption` |
 | A signature didn't verify, or couldn't be verified while unverified events are rejected | `Verification` | `VerificationError` | `verification` | `ErrorKindVerification` | `Verification` / `VERIFICATION` | `verification` |

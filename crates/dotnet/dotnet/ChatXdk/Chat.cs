@@ -62,8 +62,11 @@ namespace ChatXdk
         };
 
         /// <summary>
-        /// Create a Chat SDK instance that manages its keys with <see cref="ImportKeys"/> and
-        /// <see cref="GenerateKeypairs"/> alone.
+        /// Create a Chat SDK instance without a Juicebox config, which manages its keys with
+        /// <see cref="ImportKeys"/> and <see cref="GenerateKeypairs"/> alone or takes its config
+        /// later from <see cref="UpdateConfig"/>. Until then <see cref="Setup"/>,
+        /// <see cref="Unlock"/>, <see cref="ChangePin"/> and <see cref="Delete"/> throw a
+        /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidState"/>.
         /// </summary>
         public Chat() : this(null, null, TimeSpan.Zero)
         {
@@ -312,8 +315,8 @@ namespace ChatXdk
         // Juicebox lifecycle
 
         /// <summary>
-        /// Replace the Juicebox configuration — call this whenever the X API
-        /// issues fresh short-lived auth tokens.
+        /// Set or replace the Juicebox configuration: on first boot, for a chat created
+        /// without one, or whenever the X API issues fresh short-lived auth tokens.
         /// </summary>
         public void UpdateConfig(string configJson)
         {

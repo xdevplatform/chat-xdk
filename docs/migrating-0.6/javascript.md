@@ -125,7 +125,11 @@ The public keys `getPublicKeys()` and `setup()` return hold the two keys,
 
 `createChat` keeps your keys in Juicebox when you pass `getAuthToken`, with
 the Juicebox config the X API returns as `juiceboxConfig`, or set later with
-`updateConfig` on first boot. The PIN guess budget is the config's
+`updateConfig` on first boot. Until it has one, `setup`, `unlock`,
+`changePin` and `delete` throw a `ChatXdkError` of kind `invalidState`,
+`Invalid state: no Juicebox config: pass the juicebox_config the X API
+returns when you create the chat, or call update_config() first`, the error
+every binding gives. The PIN guess budget is the config's
 `max_guess_count`, as in every binding; `createChat` takes no
 `maxGuessCount`. To register under another budget, set it in the config:
 

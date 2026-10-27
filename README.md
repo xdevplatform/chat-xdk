@@ -145,7 +145,9 @@ a request is in flight share it.
 The request carries no credentials and never delays or fails an SDK call.
 Until it answers, and for the chat's lifetime if it fails or is blocked, every
 switch stays off and sends stay in v0, the format 0.5.x sends. The Rust crate
-never makes the request, so its sends are always v0.
+and the C ABI never make the request: a Rust app or a C caller makes it and
+hands the chat the answer (`set_feature_switches`,
+`chat_xdk_set_feature_switches`), and a chat that gets none sends v0.
 
 ## Cryptography
 

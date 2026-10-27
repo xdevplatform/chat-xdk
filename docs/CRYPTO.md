@@ -258,7 +258,8 @@ in one of two formats:
 
 A chat sends v1 while the X API's `v1_send` feature switch is on for it, and
 v0 otherwise: the language bindings read the switch themselves, and a Rust
-app hands a chat the answer with `set_feature_switches`. The sender id must be
+app or a direct C ABI caller hands a chat the answer with
+`set_feature_switches` (`chat_xdk_set_feature_switches`). The sender id must be
 the sender's numeric user id, the form the key derivation and recipients use.
 The SDK generates the message id and returns it in the `SendPayload`: one
 derived from its files for a v1 message with files (see

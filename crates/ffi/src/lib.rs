@@ -355,7 +355,8 @@ pub extern "C" fn chat_xdk_new(
     })
 }
 
-/// Replace the Juicebox configuration (e.g., to refresh auth tokens).
+/// Set or replace the Juicebox configuration: on first boot, for a chat
+/// created without one, or to refresh its auth tokens.
 #[cfg(feature = "juicebox")]
 #[no_mangle]
 pub extern "C" fn chat_xdk_update_config(

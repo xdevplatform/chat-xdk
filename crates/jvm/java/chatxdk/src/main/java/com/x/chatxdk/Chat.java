@@ -79,8 +79,11 @@ public final class Chat implements AutoCloseable {
     private final Cleaner.Cleanable cleanable;
 
     /**
-     * Create a Chat SDK instance that manages its keys with {@link #importKeys} and
-     * {@link #generateKeypairs} alone.
+     * Create a Chat SDK instance without a Juicebox config, which manages its keys with
+     * {@link #importKeys} and {@link #generateKeypairs} alone or takes its config later from
+     * {@link #updateConfig}. Until then {@link #setup}, {@link #unlock}, {@link #changePin} and
+     * {@link #delete} throw a {@link ChatXdkException} of kind
+     * {@link ChatXdkException.Kind#INVALID_STATE}.
      */
     public Chat() {
         this(null, null, null);
@@ -262,8 +265,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Replace the Juicebox configuration — call this whenever the X API
-     * issues fresh short-lived auth tokens.
+     * Set or replace the Juicebox configuration: on first boot, for a chat created without one,
+     * or whenever the X API issues fresh short-lived auth tokens.
      *
      * @param configJson Juicebox configuration JSON from the X API.
      */

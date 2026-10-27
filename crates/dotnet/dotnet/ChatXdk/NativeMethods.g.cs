@@ -84,7 +84,8 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_new(byte* juicebox_config_json, ChatHandle** out_chat);
 
         /// <summary>
-        ///  Replace the Juicebox configuration (e.g., to refresh auth tokens).
+        ///  Set or replace the Juicebox configuration: on first boot, for a chat
+        ///  created without one, or to refresh its auth tokens.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_update_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_update_config(ChatHandle* handle, byte* config_json);

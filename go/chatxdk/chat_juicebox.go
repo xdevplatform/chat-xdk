@@ -22,8 +22,10 @@ func NewWithJuiceboxConfig(configJSON string) (*Chat, error) {
 	return c, nil
 }
 
-// UpdateConfig replaces the Juicebox configuration (e.g., to refresh auth
-// tokens).
+// UpdateConfig sets or replaces the Juicebox configuration: on first boot,
+// for a chat created with New, or to refresh its auth tokens. Until a chat
+// has one, Setup, Unlock, ChangePin and Delete return an error of kind
+// ErrorKindInvalidState.
 func (c *Chat) UpdateConfig(configJSON string) error {
 	defer runtime.KeepAlive(c)
 	_, err := ffiUpdateConfig(c.h, configJSON)

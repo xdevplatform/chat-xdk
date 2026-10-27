@@ -28,10 +28,10 @@ signature version 10, so it rejects every v1 send as a signature
 verification failure. 0.6.0 therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
-chat that can't read the switch keeps sending v0. The Rust crate makes no
-requests: a Rust app makes the one request itself and hands the chat its
-answer, under the same rules the bindings follow, so Rust apps send v1 when
-the switch says so too. A chat called through the C ABI directly sends v0.
+chat that can't read the switch keeps sending v0. The Rust crate and the C
+ABI make no requests: a Rust app, or code that calls the C ABI directly,
+makes the one request itself and hands the chat its answer, under the same
+rules the bindings follow, so it sends v1 when the switch says so too.
 Upgrade the apps that read your conversations first:
 [Rust](rust.md#upgrade-readers-before-v1-sends-start),
 [Python](python.md#upgrade-readers-before-v1-sends-start),
@@ -52,14 +52,16 @@ flight share it. The request never delays or fails a call, and any failure
 leaves every switch off for the chat's lifetime, so its sends stay in v0, the
 format every reader opens. The SDK decides what an answer means in one
 place, its Rust core: a binding only performs the request, and a body is
-read only up to its size limit, never whole first. A Rust app hands the
-core the answer to a request it made:
+read only up to its size limit, never whole first. A Rust app, or code
+that calls the C ABI directly, hands the core the answer to a request it
+made, and the core applies the same rules to it:
 [Rust](rust.md#the-feature-switch-request),
 [Python](python.md#the-feature-switch-request),
 [JavaScript](javascript.md#the-feature-switch-request),
 [Go](go.md#the-feature-switch-request),
 [JVM](jvm.md#the-feature-switch-request),
-[.NET](dotnet.md#the-feature-switch-request).
+[.NET](dotnet.md#the-feature-switch-request),
+[C ABI](c-abi.md#the-feature-switch-request).
 
 ## User ids and key versions take one form
 
@@ -157,19 +159,21 @@ version back. Every binding's `decrypt_events` result works this way:
 
 ## Keys stored in Juicebox take their config when the chat is created
 
-The bindings took the Juicebox config in different places: some at
-creation, some on each setup and unlock call, and JS through its own
-options. Every binding now takes it when the chat is created, or with
-`update_config` on first boot, before the account has one, so setup and
-unlock take only the PIN. PINs are bytes in every binding that can hold
-them so, so an app can zero its copy once a call returns, and the bindings
-whose apps run event loops or UI threads add async forms of the Juicebox
-calls, which wait on network round trips. The JS binding runs the Juicebox
-client itself, but the SDK core still decides what a config means, which
-PINs a new registration accepts, how many guesses a registration allows
-(the config's `max_guess_count`), and how a failure reads, so every binding
-behaves the same. JS also loads keys with `importKeys` and saves them with
-`exportKeys`, as every binding does, without Juicebox:
+The bindings took the Juicebox config in different places: some at creation,
+some on each setup and unlock call, and JS through its own options. Every
+binding now takes it when the chat is created, or with `update_config` on
+first boot, before the account has one, so setup and unlock take only the
+PIN. Until a chat has a config, the SDK core fails its Juicebox calls before
+any request, with one `invalid_state` error worded the same in every
+binding. PINs are bytes in every binding whose language can hold them that
+way, so an app can zero its copy once a call returns, and the bindings whose
+apps run event loops or UI threads add async forms of the Juicebox calls,
+which wait on network round trips. The JS binding runs the Juicebox client
+itself, but the SDK core still decides what a config means, which PINs a new
+registration accepts, how many guesses a registration allows (the config's
+`max_guess_count`), and how a failure reads, so every binding behaves the
+same. JS also loads keys with `importKeys` and saves them with `exportKeys`,
+as every binding does, without Juicebox:
 [Python](python.md#keys-stored-in-juicebox),
 [JavaScript](javascript.md#keys-stored-in-juicebox),
 [Go](go.md#keys-stored-in-juicebox),

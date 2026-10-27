@@ -638,7 +638,11 @@ most 10 per message`. That covers a key or signature that `verify`,
 `verify_key_binding` or `matches_registered_key` can't decode, a
 conversation key or key blob of the wrong length, and an empty
 `public_keys`. `SdkError::InvalidState` is left for values the chat lacks,
-such as a missing session identity or an empty key cache. After a wrong PIN,
+such as a missing session identity, an empty key cache, or the Juicebox
+config of a `Chat` made with `Chat::default()`, whose Juicebox calls fail
+with `Invalid state: no Juicebox config: pass the juicebox_config the X API
+returns when you create the chat, or call update_config() first` until
+`update_config` gives it one. After a wrong PIN,
 `guesses_remaining()` holds the attempts Juicebox reports left, `Some(0)`
 once the stored keys are locked. Tell failures apart by kind; a `match` on
 `ErrorKind` or `SdkError` takes a wildcard arm (see

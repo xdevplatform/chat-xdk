@@ -15,6 +15,7 @@ check that the library matches your header before you call it (see
 ## Checklist
 
 - [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
+- [ ] [Hand a chat the X API's feature switches to send v1](#the-feature-switch-request)
 - [ ] [Link `chat_xdk_ffi` and check its ABI version](#check-the-abi-version)
 - [ ] [Read every result from an `FfiResult`, booleans as `true` or `false`](#every-call-returns-an-ffiresult)
 - [ ] [Create the chat with its Juicebox config, define `CHAT_XDK_JUICEBOX`, and pass PINs as bytes](#keys-stored-in-juicebox)
@@ -51,6 +52,10 @@ values are documents and base64 strings your code builds, `title`,
 strings it holds, and
 `encrypt_file_json(photo_message)` and `file_encryptor_json(photo_message)`
 stand for building a file's params from a send payload's `event_b64`.
+`http_get(url, timeout_ms, max_bytes, &body, &body_len)` stands for your
+HTTP client's anonymous GET: it returns the response's status, or 0 when no
+response arrived, and sets `body` to a `malloc`ed buffer holding at most
+`max_bytes` of the response's body and `body_len` to its length.
 
 The params documents use the snake_case field names of the params types in
 [API.md](../API.md), with byte fields (`file`, `encrypted`,
@@ -59,13 +64,12 @@ strings.
 
 ## Upgrade readers before v1 sends start
 
-0.6.0 reads messages, replies, reactions and edits in two formats. v0 is the
-format 0.5.x sends. v1 encrypts each message under its own key, derived from
-the conversation key, the sender and the message id, and signs it at
-signature version 10. A chat you call directly through the C ABI doesn't
-read the X API's feature switches, so it sends v0. The Python, JavaScript,
-Go, JVM and .NET bindings read them and send v1 while the X API's `v1_send`
-feature switch is on.
+0.6.0 sends each message, reply, reaction and edit in one of two formats.
+v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
+derived from the conversation key, the sender and the message id, and signs
+it at signature version 10. A chat sends v1 while the X API's `v1_send`
+feature switch is on for it, and v0 otherwise (see
+[The feature-switch request](#the-feature-switch-request)).
 
 0.5.x rejects every v1 send as a signature verification failure, so upgrade
 every app that reads your conversations to 0.6.0 before any sender can send
@@ -73,6 +77,34 @@ v1. 0.6.0 reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read the send
 payload's `signature_info.signature_version`, `"7"` for v0 and `"10"` for
 v1.
+
+## The feature-switch request
+
+The language bindings read the X API's feature switches with one anonymous
+request, `GET https://api.x.com/2/chat/features`, when a chat is created.
+The C ABI never makes the request: a chat sends v0 until you make it and
+hand the answer to `chat_xdk_set_feature_switches`. Make the request once,
+when you create the chat, as the header's constants say: GET
+`CHAT_XDK_FEATURES_ENDPOINT` without credentials or query parameters,
+within `CHAT_XDK_FEATURES_TIMEOUT_MS` milliseconds, reading at most one
+byte past `CHAT_XDK_FEATURES_MAX_BODY`. Pass its status, 0 when no response
+arrived, and the bytes of the body you read:
+
+```c
+// 0.6.0
+uint8_t *body = NULL;
+size_t body_len = 0;
+int32_t status = http_get(CHAT_XDK_FEATURES_ENDPOINT, CHAT_XDK_FEATURES_TIMEOUT_MS,
+                          CHAT_XDK_FEATURES_MAX_BODY + 1, &body, &body_len);
+take(chat_xdk_set_feature_switches(chat, status, body, body_len));
+free(body);
+```
+
+A chat takes one answer for its lifetime: a later call changes nothing.
+Every switch stays off when the status isn't 200 or the body is larger than
+`CHAT_XDK_FEATURES_MAX_BODY` or isn't a `{"features": {...}}` object, so a
+chat whose request fails keeps sending v0. Without the call there's no code
+to change.
 
 ## Check the ABI version
 
@@ -117,10 +149,15 @@ take(chat_xdk_set_cache_keys(chat, 1));
 
 `chat_xdk_new` takes the Juicebox config the X API returns, or NULL for a
 chat that manages its keys with `chat_xdk_import_keys` alone, and writes
-the handle to its out-parameter. `chat_xdk_update_config` replaces the
-config, on first boot, before the account has one, or to refresh it.
-`chat_xdk_setup` and `chat_xdk_unlock` take only the PIN, and every PIN is
-bytes and a length, so you can zero yours once the call returns. The header
+the handle to its out-parameter. `chat_xdk_update_config` sets the config,
+on first boot, before the account has one, or replaces it to refresh it.
+Until a chat has one, `chat_xdk_setup`, `chat_xdk_unlock`,
+`chat_xdk_change_pin` and `chat_xdk_delete` fail with the `invalid_state`
+error every binding gives, `Invalid state: no Juicebox config: pass the
+juicebox_config the X API returns when you create the chat, or call
+update_config() first`. `chat_xdk_setup` and `chat_xdk_unlock` take only
+the PIN, and every PIN is bytes and a length, so you can zero yours once
+the call returns. The header
 declares the Juicebox functions (`chat_xdk_update_config`,
 `chat_xdk_setup`, `chat_xdk_unlock`, `chat_xdk_change_pin` and
 `chat_xdk_delete`) when `CHAT_XDK_JUICEBOX` is defined, so define it

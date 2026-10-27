@@ -77,13 +77,13 @@ wire formats, and the SDK picks which:
   edit names the message it edits.
 
 Sends are v0 unless the X API's `v1_send` feature switch turns v1 on for the
-chat. The bindings read the switches themselves; a Rust chat sends v1 once
-it's handed an answer that turns the switch on (`set_feature_switches`), and
-a chat called through the C ABI directly sends v0. Readers need per-message-key support
-for v1 sends: 0.5.x rejects each one as a signature verification failure (an
-ECDSA mismatch), so upgrade readers first. Other signed actions
-(conversation-key changes, group changes and deletes) still sign at version
-7.
+chat. The bindings read the switches themselves; a Rust chat, or one called
+through the C ABI directly, sends v1 once it's handed an answer that turns
+the switch on (`set_feature_switches`, `chat_xdk_set_feature_switches`).
+Readers need per-message-key support for v1 sends: 0.5.x rejects each one as
+a signature verification failure (an ECDSA mismatch), so upgrade readers
+first. Other signed actions (conversation-key changes, group changes and
+deletes) still sign at version 7.
 
 `sender_id` must be the sender's numeric user id, and
 `conversation_key_version` an integer as its key-change event carries it.
@@ -498,9 +498,9 @@ is `SdkError::InvalidInput`. That covers a key or signature `verify`,
 `verify_key_binding` or `matches_registered_key` can't decode, a
 conversation key or key blob of the wrong length, and an empty
 `public_keys`. `SdkError::InvalidState` is left for values neither passed
-nor set on the chat, such as a missing session identity or an empty key
-cache. `export_keys` fails with an invalid-state error when no identity key
-is loaded, in every binding.
+nor set on the chat, such as a missing session identity, an empty key cache
+or a missing Juicebox config. `export_keys` fails with an invalid-state
+error when no identity key is loaded, in every binding.
 
 #### Juicebox key storage
 
@@ -509,15 +509,22 @@ returns when it's created, in every binding: `Chat::new(config)` in Rust,
 `Chat(config_json)` in Python, `createChat({ juiceboxConfig, getAuthToken })`
 in JS, `NewWithJuiceboxConfig(config)` in Go, `new Chat(config)` in .NET and
 the JVM, and `chat_xdk_new(config, &chat)` in the C ABI. `update_config`
-replaces it, for first boot or refreshed tokens, and setup and unlock take
-only the PIN. Go, .NET, the JVM and the C ABI take PINs as bytes the caller
-can zero. Python (`setup_async`, `unlock_async`, `change_pin_async`,
-`delete_async`), .NET (`SetupAsync`, …) and the JVM (`setupAsync`, …) run the
-Juicebox calls off the calling thread. The PIN guess budget is the config's
-`max_guess_count` in every binding. In JS, the SDK reads the config, checks
-a new PIN and words a Juicebox failure as every binding does, and a chat
-created without `getAuthToken` keeps its keys with `importKeys` and
-`exportKeys`, without juicebox-sdk.
+sets or replaces it, for first boot or refreshed tokens, and setup and
+unlock take only the PIN. A chat created without a config (`Chat::default()`
+in Rust, `Chat()` in Python, `createChat({ getAuthToken })` in JS, `New()`
+in Go, `new Chat()` in .NET and the JVM, and `chat_xdk_new(NULL, &chat)` in
+the C ABI) runs every crypto call, and until it has one, setup, unlock,
+`change_pin` and `delete` fail with the same invalid-state error in every
+binding: `Invalid state: no Juicebox config: pass the juicebox_config the X
+API returns when you create the chat, or call update_config() first`. Go,
+.NET, the JVM and the C ABI take PINs as bytes the caller can zero. Python
+(`setup_async`, `unlock_async`, `change_pin_async`, `delete_async`), .NET
+(`SetupAsync`, …) and the JVM (`setupAsync`, …) run the Juicebox calls off
+the calling thread. The PIN guess budget is the config's `max_guess_count`
+in every binding. In JS, the SDK reads the config, checks a new PIN and
+words a Juicebox failure as every binding does, and a chat created without
+`getAuthToken` keeps its keys with `importKeys` and `exportKeys`, without
+juicebox-sdk.
 
 #### Other breaking changes
 
@@ -615,12 +622,12 @@ created without `getAuthToken` keeps its keys with `importKeys` and
   `prepare_mark_conversation_read` return a `PreparedAction`
   (`action_signatures`, one entry); read the action's `message_id` from that
   entry.
-- Every binding but Rust makes an outbound HTTPS request when a chat is
-  created: `GET https://api.x.com/2/chat/features`, in the background (see
-  Added). Allow it through egress filters for v1 sends; blocked, sends stay
-  v0. A chat sends v0 until the answer arrives, so its first sends can be v0
-  while the switch is on. In Node before 20.16 a request still in flight can
-  delay exit until it ends, at most 2 seconds.
+- Every binding but Rust and the C ABI makes an outbound HTTPS request when
+  a chat is created: `GET https://api.x.com/2/chat/features`, in the
+  background (see Added). Allow it through egress filters for v1 sends;
+  blocked, sends stay v0. A chat sends v0 until the answer arrives, so its
+  first sends can be v0 while the switch is on. In Node before 20.16 a
+  request still in flight can delay exit until it ends, at most 2 seconds.
 - .NET params documents omit a field left `null`, so an unset optional
   resolves from the session identity or key cache and an unset required
   field fails with an error naming it. JVM: `EntityDescriptor` takes its
@@ -640,12 +647,15 @@ created without `getAuthToken` keeps its keys with `importKeys` and
   chats created while a request is in flight share it. The request is
   anonymous; until it answers, and for the chat's lifetime if it fails or is
   blocked, sends stay v0. See "Network access" in the README.
-- Rust: `ChatCore::set_feature_switches` and `Chat::set_feature_switches`
-  take the status and body of a `GET /2/chat/features` the caller made, as
-  the crate's `FEATURES_ENDPOINT`, `FEATURES_TIMEOUT_MS` and
-  `FEATURES_MAX_BODY` describe it. A chat takes one answer for its
-  lifetime, and every switch stays off unless a 200 answer of at most
-  `FEATURES_MAX_BODY` bytes turns it on.
+- Rust and the C ABI: `ChatCore::set_feature_switches` and
+  `Chat::set_feature_switches`, and
+  `chat_xdk_set_feature_switches(chat, status, body, body_len)`, take the
+  status and body of a `GET /2/chat/features` the caller made, as the
+  crate's `FEATURES_ENDPOINT`, `FEATURES_TIMEOUT_MS` and `FEATURES_MAX_BODY`
+  describe it, and `chat_xdk.h`'s `CHAT_XDK_FEATURES_ENDPOINT`,
+  `CHAT_XDK_FEATURES_TIMEOUT_MS` and `CHAT_XDK_FEATURES_MAX_BODY`. A chat
+  takes one answer for its lifetime, and every switch stays off unless a 200
+  answer of at most `FEATURES_MAX_BODY` bytes turns it on.
 - JS: `importKeys` and `exportKeys`, as in every binding.
 - Python: `SigningKeyEntry`, `PublicKeyInput`, `ConversationKeyResult`,
   `DecryptEventsResult`, `DecryptedEvent`, `PreparedAction`,

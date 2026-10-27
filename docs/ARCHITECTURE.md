@@ -201,9 +201,12 @@ The core holds the whole policy: when to fetch, how chats share an answer,
 response validation and the fail-closed default. It never makes the request
 itself. Each language binding performs the GET the core hands it, with its own
 HTTP stack (`fetch` in a browser), and hands the status and body back. A Rust
-app is its own binding: it performs the GET and hands the status and body to
-`set_feature_switches`, which applies the same validation and the one answer
-per chat; without it, every switch stays off:
+app, or code that calls the C ABI directly, is its own binding: it performs
+the GET and hands the status and body to `set_feature_switches`
+(`chat_xdk_set_feature_switches` in the C ABI, whose header defines the
+endpoint, timeout and body limit as `CHAT_XDK_FEATURES_*`), which applies
+the same validation and the one answer per chat; without it, every switch
+stays off:
 
 - **When:** a chat reads the switches once, when it is created, and keeps the
   answer for its lifetime. Nothing reads them again; a chat created later
@@ -507,7 +510,7 @@ input types callers fill in (`PublicKeyInput`, `SigningKeyEntry`,
 
 | Type | Description |
 |------|-------------|
-| `SdkError` | Top-level: `Crypto`, `Key`, `Juicebox`, `Serialization`, `Parse` |
+| `SdkError` | Top-level: `Crypto`, `Key`, `Juicebox`, `Serialization`, `Parse`, `InvalidState`, `InvalidInput`; `kind()` names the failure as every binding does |
 | `CryptoError` | Key generation, encryption, decryption, signing, verification failures |
 | `KeyError` | `NotUnlocked`, `NotFound`, `WeakPin`, `ReconstructionFailed` |
 | `JuiceboxError` | `InvalidPin`, `NotRegistered`, `InvalidAuth`, `UpgradeRequired`, `Transient`, `RateLimitExceeded`, etc. |

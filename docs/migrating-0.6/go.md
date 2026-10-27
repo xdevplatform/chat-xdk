@@ -189,7 +189,11 @@ must(chat.Unlock(pin))
 The PINs are `[]byte`, so you can zero yours once the call returns. Every
 method of a `*chatxdk.Chat`, `UpdateConfig` included, is safe to call from
 several goroutines at once; a Juicebox call already under way keeps the
-config it started with. A wrong PIN returns an error of kind
+config it started with. Until a chat has a config, `Setup`, `Unlock`,
+`ChangePin` and `Delete` return an error of kind `ErrorKindInvalidState`,
+`Invalid state: no Juicebox config: pass the juicebox_config the X API
+returns when you create the chat, or call update_config() first`, the error
+every binding gives, and a wrong PIN returns one of kind
 `ErrorKindInvalidPin` (see [Errors carry their kind](#errors-carry-their-kind)).
 
 ## User ids are strings of digits

@@ -55,8 +55,11 @@ impl Chat {
     ///
     /// Args:
     ///     config_json: Juicebox configuration JSON.
-    ///         Pass ``None`` or an empty JSON object (e.g. ``"{}"``) for
-    ///         manual key management without Juicebox.
+    ///         Pass ``None`` or an empty JSON object (e.g. ``"{}"``) for a
+    ///         chat without one, which manages its keys with ``import_keys``
+    ///         or takes its config later from ``update_config``; until then
+    ///         ``setup``, ``unlock``, ``change_pin`` and ``delete`` raise
+    ///         ``InvalidStateError``.
     #[new]
     #[pyo3(signature = (config_json=None))]
     pub(crate) fn new(py: Python<'_>, config_json: Option<&str>) -> PyResult<Self> {
@@ -82,7 +85,8 @@ impl Chat {
         Ok(chat)
     }
 
-    /// Update the Juicebox configuration (e.g. to refresh auth tokens).
+    /// Set or replace the Juicebox configuration: on first boot, for a chat
+    /// created without one, or to refresh its auth tokens.
     pub(crate) fn update_config(&self, config_json: &str) -> PyResult<()> {
         let config = parse_juicebox_config(config_json)?;
         self.inner.update_config(config);

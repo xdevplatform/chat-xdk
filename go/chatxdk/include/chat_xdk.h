@@ -138,7 +138,8 @@ struct FfiResult chat_xdk_new(const char *juicebox_config_json, struct ChatHandl
 
 #if defined(CHAT_XDK_JUICEBOX)
 /**
- * Replace the Juicebox configuration (e.g., to refresh auth tokens).
+ * Set or replace the Juicebox configuration: on first boot, for a chat
+ * created without one, or to refresh its auth tokens.
  */
 struct FfiResult chat_xdk_update_config(const struct ChatHandle *handle, const char *config_json);
 #endif

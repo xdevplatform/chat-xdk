@@ -157,10 +157,14 @@ chat.import_keys(ImportKeysParams(private_keys, signing_key_version=signing_key_
 
 `Chat(config_json)` keeps your keys in Juicebox under the Juicebox config
 the X API returns, as in 0.5.x, and `Chat()` manages them with
-`import_keys` and `export_keys` alone. `setup`, `unlock`, `change_pin` and
+`import_keys` and `export_keys` alone, or takes the config later from
+`update_config`, on first boot. `setup`, `unlock`, `change_pin` and
 `delete` block on their Juicebox round trips; `setup_async`,
 `unlock_async`, `change_pin_async` and `delete_async` run the same calls on
-a worker thread, for an `asyncio` event loop. A wrong PIN raises
+a worker thread, for an `asyncio` event loop. Until a chat has a config,
+they raise `InvalidStateError`, `Invalid state: no Juicebox config: pass
+the juicebox_config the X API returns when you create the chat, or call
+update_config() first`, the error every binding gives. A wrong PIN raises
 `InvalidPinError`, whose `guesses_remaining` holds the attempts Juicebox
 reports left, `0` once the stored keys are locked and `None` when Juicebox
 reports no count:
