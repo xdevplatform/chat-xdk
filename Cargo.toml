@@ -5,8 +5,7 @@ members = [
     "crates/macros",
     "crates/pyo3",
     "crates/wasm",
-    "crates/go",
-    "crates/dotnet",
+    "crates/ffi",
 ]
 
 [workspace.package]

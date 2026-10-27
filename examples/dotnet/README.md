@@ -19,13 +19,13 @@ are generated + registered on first run); conversation state is in memory.
 ## Prerequisites
 
 - .NET 8+ SDK
-- The native `chat_xdk_dotnet` library, built once from the repo root:
+- The native `chat_xdk_ffi` library, built once from the repo root:
 
 ```bash
-cargo build -p chat-xdk-dotnet --release
+cargo build -p chat-xdk-ffi --release
 ```
 
-Place the resulting `libchat_xdk_dotnet.dylib` / `.so` / `chat_xdk_dotnet.dll`
+Place the resulting `libchat_xdk_ffi.dylib` / `.so` / `chat_xdk_ffi.dll`
 next to the built app (or on the loader path) so P/Invoke can find it.
 
 ## Run it
@@ -66,7 +66,7 @@ retrying. Set `CHAT_PIN` to additionally back the keys up in Juicebox
 ## Test it (offline, no credentials)
 
 ```bash
-cargo build -p chat-xdk-dotnet --release   # build the native lib first
+cargo build -p chat-xdk-ffi --release   # build the native lib first
 dotnet test
 ```
 

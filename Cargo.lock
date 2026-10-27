@@ -325,26 +325,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "chat-xdk-dotnet"
-version = "0.5.2"
-dependencies = [
- "base64 0.22.1",
- "chat-xdk-core",
- "csbindgen",
- "serde",
- "serde_json",
- "tokio",
- "zeroize",
-]
-
-[[package]]
-name = "chat-xdk-go"
+name = "chat-xdk-ffi"
 version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "cbindgen",
  "chat-xdk-core",
- "libc",
+ "csbindgen",
  "serde",
  "serde_json",
  "tokio",

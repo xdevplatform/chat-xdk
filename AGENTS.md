@@ -49,9 +49,9 @@ When you add or change SDK behavior:
 
 1. Implement it once in `crates/core` (`ChatCore`, or `Chat` for Juicebox).
 2. Surface it in **every** binding with matching behavior and signatures:
-   Python `crates/pyo3`, JS/WASM `crates/wasm`, Go `crates/go` → `go/chatxdk`,
-   .NET + JVM (both over the `chat_xdk_dotnet` cdylib in `crates/dotnet`,
-   `crates/jvm`).
+   Python `crates/pyo3`, JS/WASM `crates/wasm`, and Go `go/chatxdk`, .NET
+   `crates/dotnet` and JVM `crates/jvm`, all three over the one C ABI in
+   `crates/ffi`.
 3. Use each language's idiom for naming only: `snake_case` (Rust/Python),
    `camelCase` (JS/Java), `PascalCase` methods (.NET/Go).
 4. Update the per-binding tables in [`docs/API.md`](docs/API.md) in lockstep.
@@ -246,7 +246,7 @@ params as `Invalid encryptMessage params: …` instead of the core message.
 ```
 crates/core/     chat-xdk-core: engine, crypto/, keys/, thrift/ (generated)
 crates/pyo3/     Python        crates/wasm/   WASM (+ js/ wrapper)
-crates/go/       cdylib → go/chatxdk        crates/dotnet/ + crates/jvm/  (over chat_xdk_dotnet)
+crates/ffi/      C ABI (chat_xdk_ffi) under go/chatxdk, crates/dotnet/ and crates/jvm/
 docs/            API.md, ARCHITECTURE.md, CRYPTO.md
 examples/        clone-and-run demo bots (NOT shipped SDK code)
 tests/fixtures/  sdk_vectors.json — cross-binding vectors

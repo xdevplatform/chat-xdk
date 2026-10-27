@@ -10,7 +10,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.Locale;
 
 /**
- * Loads the {@code chat_xdk_dotnet} cdylib for JNA.
+ * Loads the {@code chat_xdk_ffi} cdylib for JNA.
  *
  * <p>Published JARs embed per-platform natives under {@code /native/<rid>/}. On first use the
  * matching library is extracted to a temp directory and loaded by absolute path. When no embedded
@@ -19,7 +19,7 @@ import java.util.Locale;
  */
 final class NativeLoader {
 
-    private static final String LIB_BASENAME = "chat_xdk_dotnet";
+    private static final String LIB_BASENAME = "chat_xdk_ffi";
 
     // The library every interface loads from, once the first load picks it, so they all share
     // one copy of the native state.

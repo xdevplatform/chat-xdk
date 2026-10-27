@@ -5,7 +5,7 @@ import com.sun.jna.Pointer;
 import com.sun.jna.ptr.PointerByReference;
 
 /**
- * JNA mapping to the {@code chat_xdk_dotnet} cdylib.
+ * JNA mapping to the {@code chat_xdk_ffi} cdylib.
  *
  * <p>Loaded via {@link NativeLoader}: embedded multi-arch natives from the published JAR when
  * present, otherwise {@code jna.library.path} / system library search (local development).

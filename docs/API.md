@@ -2,7 +2,7 @@
 
 This document covers the full API across Rust, Python, JavaScript/WASM, Go (`github.com/xdevplatform/chat-xdk/go/chatxdk`), .NET (`ChatXdk` — [`crates/dotnet/README.md`](../crates/dotnet/README.md)), and JVM (`com.x.chatxdk` — [`crates/jvm/README.md`](../crates/jvm/README.md); JNA to the same native library as .NET).
 
-The JVM binding mirrors the .NET surface (JSON across the native boundary, same method names in `camelCase`). Tables below list Rust, JS, Python, Go, JVM, and .NET. Go consumers: `crates/go/README.md`.
+The JVM binding mirrors the .NET surface (JSON across the native boundary, same method names in `camelCase`). Tables below list Rust, JS, Python, Go, JVM, and .NET. Go consumers: `go/chatxdk/README.md`.
 
 **Key design principle**: Base64 is only at the edges (data from/to the X API). Between SDK methods, everything is raw bytes.
 
@@ -2101,7 +2101,7 @@ Stateless helpers: `ChatXdkUtilities.BytesToBase64`, `DetectMimeType`, etc. (`cr
 
 ### JVM
 
-`com.x.chatxdk` — same native `chat_xdk_dotnet` cdylib as .NET, via JNA. Use **`try-with-resources`** on `Chat` (implements `AutoCloseable`). Stateless helpers live on **`ChatXdkUtilities`**.
+`com.x.chatxdk` — same native `chat_xdk_ffi` cdylib as .NET, via JNA. Use **`try-with-resources`** on `Chat` (implements `AutoCloseable`). Stateless helpers live on **`ChatXdkUtilities`**.
 
 ```java
 import com.fasterxml.jackson.databind.JsonNode;

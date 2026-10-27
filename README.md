@@ -11,7 +11,7 @@ Thrift wire protocol, exposed through idiomatic bindings for six languages.
 | Rust | `chat-xdk-core` | — | [docs/API.md](docs/API.md) |
 | Python | `chat_xdk` | PyO3 | [crates/pyo3/README.md](crates/pyo3/README.md) |
 | JavaScript / WASM | `@xdevplatform/chat-xdk` | wasm-bindgen | [crates/wasm/js/README.md](crates/wasm/js/README.md) |
-| Go | `github.com/xdevplatform/chat-xdk/go/chatxdk` | cgo | [crates/go/README.md](crates/go/README.md) |
+| Go | `github.com/xdevplatform/chat-xdk/go/chatxdk` | cgo | [go/chatxdk/README.md](go/chatxdk/README.md) |
 | .NET | `ChatXdk` | P/Invoke | [crates/dotnet/README.md](crates/dotnet/README.md) |
 | JVM | `com.x.chatxdk` | JNA | [crates/jvm/README.md](crates/jvm/README.md) |
 
@@ -191,8 +191,10 @@ chat-xdk/
 │   ├── core/     # chat-xdk-core: ChatCore engine, crypto, keys, Thrift types
 │   ├── pyo3/     # Python binding (chat_xdk)
 │   ├── wasm/     # JS/WASM binding (+ js/ wrapper and tests)
-│   ├── go/       # Go binding (cgo + prebuilt staticlib)
-│   └── dotnet/   # .NET + JVM native cdylib (chat_xdk_dotnet)
+│   ├── ffi/      # C ABI (chat_xdk.h): Go's static archive, .NET's and the JVM's shared library
+│   ├── dotnet/   # .NET binding (P/Invoke)
+│   └── jvm/      # JVM binding (JNA)
+├── go/chatxdk/   # Go binding (cgo + prebuilt static archives)
 ├── examples/     # one clone-and-run bot per binding (+ Makefile, CI)
 ├── docs/         # API.md, ARCHITECTURE.md, CRYPTO.md
 └── tests/        # cross-binding fixtures (sdk_vectors.json)

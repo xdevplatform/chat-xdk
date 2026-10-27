@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * The main X Chat encryption SDK (JNA &#8594; {@code chat_xdk_dotnet}).
+ * The main X Chat encryption SDK (JNA &#8594; {@code chat_xdk_ffi}).
  *
  * <p>Wraps the Rust {@code chat_xdk_core} library and provides the operations exposed by the SDK:
  *
@@ -97,7 +97,7 @@ public final class Chat implements AutoCloseable {
         handle = ChatNative.INSTANCE.chat_xdk_new();
         if (handle == null) {
             throw new IllegalStateException(
-                    "chat_xdk_new() returned null — ensure libchat_xdk_dotnet is on jna.library.path.");
+                    "chat_xdk_new() returned null — ensure libchat_xdk_ffi is on jna.library.path.");
         }
         cleanable = CLEANER.register(this, new FreeHandle(handle));
         if (featureEndpoint != null) {

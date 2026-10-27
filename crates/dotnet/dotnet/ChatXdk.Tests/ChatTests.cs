@@ -1,9 +1,9 @@
 // Integration tests for the ChatXdk .NET bindings.
 //
-// These tests require the native library (chat_xdk_dotnet.dylib / .so / .dll)
+// These tests require the native library (chat_xdk_ffi.dylib / .so / .dll)
 // to be built and on the library path:
 //
-//   cargo build -p chat-xdk-dotnet --release
+//   cargo build -p chat-xdk-ffi --release
 //
 // Then copy the resulting library next to the test assembly (or set
 // DYLD_LIBRARY_PATH / LD_LIBRARY_PATH / PATH) before running:

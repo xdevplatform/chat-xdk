@@ -176,20 +176,20 @@ crates/
 ├── pyo3/                         # Python bindings via PyO3
 │   └── src/lib.rs                # Thin wrapper: delegates to core Chat
 │
-├── go/                           # Go bindings (cgo + staticlib; see go/chatxdk/)
-│   ├── src/lib.rs                # C ABI (`chat_xdk.h`)
-│   └── go/chatxdk/               # Go package
+├── ffi/                          # C ABI shared by Go, .NET and the JVM
+│   └── src/lib.rs                # `chat_xdk.h` (cbindgen) and NativeMethods.g.cs (csbindgen)
 │
 ├── wasm/                         # JavaScript/WASM bindings via wasm-bindgen
 │   ├── src/lib.rs                # Thin wrapper: delegates to ChatCore
 │   └── js/                       # JS wrapper, TypeScript types, tests
 │
-├── dotnet/                       # .NET bindings (P/Invoke over a Rust cdylib)
-│   ├── src/lib.rs                # C ABI (csbindgen-generated NativeMethods)
+├── dotnet/                       # .NET bindings (P/Invoke over the ffi shared library)
 │   └── dotnet/ChatXdk/           # C# package
 │
-└── jvm/                          # JVM bindings (JNA over the dotnet cdylib)
+└── jvm/                          # JVM bindings (JNA over the ffi shared library)
     └── java/chatxdk/             # Java package
+
+go/chatxdk/                       # Go bindings (cgo over the ffi static archive)
 ```
 
 ### Feature Switches

@@ -52,7 +52,7 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
-          <!-- Point JNA at the native chat_xdk_dotnet library built by cargo. -->
+          <!-- Point JNA at the native chat_xdk_ffi library built by cargo. -->
           <argLine>-Djna.library.path=${project.basedir}/../../target/release -Djna.encoding=UTF-8</argLine>
         </configuration>
       </plugin>

@@ -86,7 +86,7 @@ namespace ChatXdk
             if (_handle == null)
                 throw new InvalidOperationException(
                     "chat_xdk_new() returned NULL — ensure the native library " +
-                    "(chat_xdk_dotnet.dylib / .so / .dll) is on the library search path.");
+                    "(chat_xdk_ffi.dylib / .so / .dll) is on the library search path.");
             if (featureEndpoint != null)
                 ConfigureFeatures(featureEndpoint, featureTimeout);
             FeatureFetch.Start(this);

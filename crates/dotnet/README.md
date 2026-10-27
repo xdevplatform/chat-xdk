@@ -5,7 +5,7 @@
 ## Architecture
 
 ```
-C# (ChatXdk) → P/Invoke → Rust cdylib (chat_xdk_dotnet) → chat-xdk-core
+C# (ChatXdk) → P/Invoke → Rust cdylib (chat_xdk_ffi) → chat-xdk-core
 ```
 
 Complex values cross the FFI boundary as JSON strings. P/Invoke entry points are generated with csbindgen from `src/lib.rs` into `dotnet/ChatXdk/NativeMethods.g.cs`.
@@ -13,14 +13,14 @@ Complex values cross the FFI boundary as JSON strings. P/Invoke entry points are
 ## Prerequisites
 
 - **.NET 8+** SDK
-- **Rust** (stable) to build the native `chat_xdk_dotnet` library
+- **Rust** (stable) to build the native `chat_xdk_ffi` library
 
 ## Setup
 
 From the repo root, build the native library:
 
 ```bash
-cargo build -p chat-xdk-dotnet --release
+cargo build -p chat-xdk-ffi --release
 ```
 
 Then build the managed wrapper:
@@ -30,7 +30,7 @@ cd crates/dotnet/dotnet/ChatXdk
 dotnet build -c Release
 ```
 
-Place the native library (`libchat_xdk_dotnet.dylib` / `.so` / `chat_xdk_dotnet.dll`) on the loader path next to your app. After changing FFI exports in `src/lib.rs`, regenerate `NativeMethods.g.cs` with your csbindgen workflow.
+Place the native library (`libchat_xdk_ffi.dylib` / `.so` / `chat_xdk_ffi.dll`) on the loader path next to your app. `NativeMethods.g.cs` is generated from the C ABI in `crates/ffi` by its build script, so building the native library regenerates it.
 
 ## Quick Start
 

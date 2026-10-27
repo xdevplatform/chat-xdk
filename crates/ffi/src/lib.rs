@@ -1,7 +1,15 @@
-//! C FFI layer for Go bindings.
+//! The C ABI of the SDK: the one native layer under the Go, .NET and JVM
+//! bindings. Go links it as a static archive; .NET (P/Invoke) and the JVM
+//! (JNA) load it as a shared library.
 //!
-//! All `*mut c_char` must be freed via `chat_xdk_free_string`.
-//! The opaque `ChatHandle` must be freed via `chat_xdk_free`.
+//! Complex values cross the boundary as JSON strings. All `*mut c_char`
+//! must be freed via `chat_xdk_free_string`. The opaque `ChatHandle` must be
+//! freed via `chat_xdk_free`.
+//!
+//! `ChatHandle` crosses the boundary as a raw pointer, so nothing on the
+//! caller's side enforces exclusive access: calls that take the handle as
+//! `*mut` (setup, unlock, delete, change_pin, update_config,
+//! set_reject_unverified) must not race any other call on the same handle.
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
