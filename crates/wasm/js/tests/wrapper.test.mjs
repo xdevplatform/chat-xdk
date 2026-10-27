@@ -282,6 +282,28 @@ async function delegationTests() {
     ),
   );
 
+  // The conversation key is secret: JSON.stringify leaves it out of every
+  // prepared change, while the object, its keys and its copies still carry it.
+  const removalPrep = chat.prepareGroupMembersRemove({
+    senderId: "910002",
+    signingKeyVersion: "1",
+    conversationId: "g-1",
+    userIds: ["910005"],
+    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+  });
+  for (const prepared of [prep, groupPrep, membersPrep, removalPrep]) {
+    assert.equal(prepared.conversationKey.length, 32);
+    assert.ok(Object.keys(prepared).includes("conversationKey"));
+    assert.equal({ ...prepared }.conversationKey, prepared.conversationKey);
+    const json = JSON.parse(JSON.stringify(prepared));
+    assert.equal("conversationKey" in json, false);
+    assert.deepEqual(
+      Object.keys(json),
+      Object.keys(prepared).filter((key) => key !== "conversationKey"),
+    );
+    assert.equal("conversationKey" in JSON.parse(JSON.stringify({ body: prepared })).body, false);
+  }
+
   // Message-encryption delegations (params objects flow through intact).
   const convKey = b64ToBytes(v.conversation_key_b64);
   const sendPayload = chat.encryptMessage({

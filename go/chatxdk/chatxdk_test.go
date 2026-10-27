@@ -1752,6 +1752,89 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 	}
 }
 
+// The conversation key is secret: a prepared change carries it, but the JSON a
+// request body is built from never does.
+func TestPreparedConversationChangeJSONLeavesOutTheKey(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "910002", SigningKeyVersion: "1"}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	publicKeys := []PublicKeyInput{
+		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+	}
+
+	keyChange, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
+		PublicKeys:     publicKeys,
+		ConversationID: "910002:910005",
+	})
+	if err != nil {
+		t.Fatalf("PrepareConversationKeyChange failed: %v", err)
+	}
+	created, err := chat.PrepareGroupCreate(GroupCreateParams{
+		PublicKeys:     publicKeys,
+		ConversationID: "g123",
+		MemberIDs:      []string{"910002", "910005"},
+		AdminIDs:       []string{"910002"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareGroupCreate failed: %v", err)
+	}
+	added, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
+		PublicKeys:       publicKeys,
+		ConversationID:   "g123",
+		NewMemberIDs:     []string{"910005"},
+		CurrentMemberIDs: []string{"910002"},
+		CurrentAdminIDs:  []string{"910002"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareGroupMembersChange failed: %v", err)
+	}
+	removed, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
+		PublicKeys:     publicKeys,
+		ConversationID: "g123",
+		UserIDs:        []string{"910005"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareGroupMembersRemove failed: %v", err)
+	}
+
+	for name, prepared := range map[string]*PreparedConversationChange{
+		"key change":     keyChange,
+		"group create":   created,
+		"members change": added,
+		"members remove": removed,
+	} {
+		if len(prepared.ConversationKey) != 32 {
+			t.Errorf("%s: expected a 32-byte conversation key, got %d bytes", name, len(prepared.ConversationKey))
+		}
+		data, err := json.Marshal(prepared)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatalf("%s: unmarshal: %v", name, err)
+		}
+		if _, leaked := fields["conversation_key"]; leaked {
+			t.Errorf("%s: JSON carries the conversation key: %s", name, data)
+		}
+		for _, field := range []string{"conversation_id", "conversation_key_version", "conversation_participant_keys", "action_signatures"} {
+			if _, ok := fields[field]; !ok {
+				t.Errorf("%s: JSON lacks %s: %s", name, field, data)
+			}
+		}
+		if len(fields) != 4 {
+			t.Errorf("%s: expected 4 JSON fields, got %d: %s", name, len(fields), data)
+		}
+	}
+}
+
 func TestPrepareGroupCreate(t *testing.T) {
 	v := loadVectors(t)
 

@@ -789,6 +789,44 @@ class ChatTest {
         }
     }
 
+    // The conversation key is secret: a prepared change carries it, but its JSON,
+    // the shape a request body is built from, never does.
+    @Test
+    void preparedChangeJsonLeavesOutTheConversationKey() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("910002", "1"));
+            PublicKeyInput input = new PublicKeyInput();
+            input.userId = "910002";
+            input.publicKey = chat.getPublicKeys().identity;
+            input.keyVersion = "1";
+            List<PublicKeyInput> publicKeys = List.of(input);
+
+            ConversationKeyChangeParams keyChange = new ConversationKeyChangeParams(publicKeys);
+            keyChange.conversationId = "910002:910005";
+            GroupMembersRemoveParams removal = new GroupMembersRemoveParams("g123", List.of("910005"));
+            removal.publicKeys = publicKeys;
+            List<PreparedConversationChange> prepared = List.of(
+                    chat.prepareConversationKeyChange(keyChange),
+                    chat.prepareGroupCreate(new GroupCreateParams(
+                            publicKeys, "g123", List.of("910002", "910005"), List.of("910002"))),
+                    chat.prepareGroupMembersRemove(removal));
+
+            for (PreparedConversationChange change : prepared) {
+                assertEquals(32, change.conversationKey.length);
+                for (ObjectMapper mapper : List.of(ChatJson.MAPPER, new ObjectMapper())) {
+                    JsonNode json = mapper.readTree(mapper.writeValueAsString(change));
+                    assertFalse(json.has("conversation_key"), "JSON carries the key: " + json);
+                    List<String> fields = new ArrayList<>();
+                    json.fieldNames().forEachRemaining(fields::add);
+                    assertEquals(
+                            List.of("conversation_id", "conversation_key_version",
+                                    "conversation_participant_keys", "action_signatures"),
+                            fields);
+                }
+            }
+        }
+    }
+
     @Test
     void extractConversationKeysEmptyEventsReturnsEmptyBundle() throws Exception {
         try (Chat chat = createUnlocked()) {

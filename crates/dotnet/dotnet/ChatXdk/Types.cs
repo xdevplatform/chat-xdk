@@ -242,10 +242,21 @@ namespace ChatXdk
 
         /// <summary>
         /// Raw 32-byte conversation key when one was generated, otherwise <see langword="null"/>.
-        /// (JSON carries it base64-encoded; <see cref="byte"/> arrays map to that natively.)
+        /// It is secret, so serializing this object to JSON leaves it out.
         /// </summary>
-        [JsonPropertyName("conversation_key")]
+        [JsonIgnore]
         public byte[]? ConversationKey { get; init; }
+
+        // Reads the key from the native result; never written, so the key stays out of the
+        // JSON this object serializes to.
+        [JsonInclude]
+        [JsonPropertyName("conversation_key")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        private byte[]? NativeConversationKey
+        {
+            get => null;
+            init => ConversationKey = value;
+        }
 
         /// <summary>Version assigned to the conversation key.</summary>
         [JsonPropertyName("conversation_key_version")]
