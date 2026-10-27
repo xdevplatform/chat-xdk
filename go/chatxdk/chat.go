@@ -305,11 +305,7 @@ func (c *Chat) PrepareConversationKeyChange(params ConversationKeyChangeParams) 
 	if err != nil {
 		return nil, err
 	}
-	var out PreparedConversationChange
-	if err := json.Unmarshal([]byte(data), &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return decodePreparedConversationChange(data)
 }
 
 // PrepareGroupMembersChange generates, encrypts, and signs a group member-add
@@ -337,11 +333,7 @@ func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*Prep
 	if err != nil {
 		return nil, err
 	}
-	var out PreparedConversationChange
-	if err := json.Unmarshal([]byte(data), &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return decodePreparedConversationChange(data)
 }
 
 // PrepareGroupCreate generates, encrypts, and signs a group create for the new
@@ -366,11 +358,7 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 	if err != nil {
 		return nil, err
 	}
-	var out PreparedConversationChange
-	if err := json.Unmarshal([]byte(data), &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return decodePreparedConversationChange(data)
 }
 
 // PrepareGroupMembersRemove signs a group member removal.
@@ -391,10 +379,23 @@ func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*Prep
 	if err != nil {
 		return nil, err
 	}
-	var out PreparedConversationChange
-	if err := json.Unmarshal([]byte(data), &out); err != nil {
+	return decodePreparedConversationChange(data)
+}
+
+// preparedConversationChangeWire is a native prepare result, which carries the
+// conversation key that PreparedConversationChange keeps out of its JSON.
+type preparedConversationChangeWire struct {
+	PreparedConversationChange
+	ConversationKey []byte `json:"conversation_key"`
+}
+
+func decodePreparedConversationChange(data string) (*PreparedConversationChange, error) {
+	var wire preparedConversationChangeWire
+	if err := json.Unmarshal([]byte(data), &wire); err != nil {
 		return nil, err
 	}
+	out := wire.PreparedConversationChange
+	out.ConversationKey = wire.ConversationKey
 	return &out, nil
 }
 
@@ -860,8 +861,9 @@ func (d *FileDecryptor) Close() {
 	}
 }
 
-// Sign signs arbitrary data with the signing key.
-// Returns the raw 64-byte ECDSA P-256 signature.
+// Sign signs application data with the signing key.
+// Returns the raw 64-byte ECDSA P-256 signature, or an error for an event
+// signature payload or a public key, which only the SDK signs.
 func (c *Chat) Sign(data []byte) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	sigB64, err := ffiSign(c.h, data)

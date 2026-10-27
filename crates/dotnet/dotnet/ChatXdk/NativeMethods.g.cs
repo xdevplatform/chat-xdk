@@ -690,9 +690,10 @@ namespace ChatXdk
         internal static extern void chat_xdk_file_decryptor_free(FileDecryptorHandle* handle);
 
         /// <summary>
-        ///  Sign arbitrary data with the signing key.
+        ///  Sign application data with the signing key.
         ///
-        ///  Returns a base64-encoded ECDSA signature (64 bytes).
+        ///  Returns a base64-encoded ECDSA signature (64 bytes), or an error for an
+        ///  event signature payload or a public key, which only the SDK signs.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_sign", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_sign(ChatHandle* handle, byte* data, nuint data_len);

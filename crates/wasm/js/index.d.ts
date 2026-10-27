@@ -214,7 +214,10 @@ export interface PublicKeyInput {
 export interface PreparedConversationChange {
   /** Conversation id the change applies to (derived for a one-to-one, or the id you passed). */
   conversationId: string;
-  /** Raw conversation key bytes (32 bytes). Store locally for encrypting messages. */
+  /**
+   * Raw conversation key bytes (32 bytes). Store locally for encrypting
+   * messages. It is secret, so JSON.stringify leaves it out of this object.
+   */
   conversationKey: Uint8Array;
   /** Timestamp-based version string for this conversation key. */
   conversationKeyVersion: string;
@@ -1206,7 +1209,10 @@ interface ChatCrypto {
    */
   decryptEvent(params: DecryptEventParams): Event;
 
-  /** Sign data. Returns raw signature bytes (64 bytes). */
+  /**
+   * Sign application data. Returns raw signature bytes (64 bytes). Throws for
+   * an event signature payload or a public key, which only the SDK signs.
+   */
   sign(data: Uint8Array): Uint8Array;
 
   /** Verify a signature. */

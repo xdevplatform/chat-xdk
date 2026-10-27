@@ -8,6 +8,10 @@ The documentation matches the code: API.md, the migration guides, the
 READMEs and the doc comments in every binding. Their code examples compile
 against the 0.6.0 API, and the Rust crate's examples build as doctests.
 
+The .NET `Verify` and JVM `verify` errors ask you to check the inputs that
+failed: the public key, which must be a base64 P-256 signing key, and the
+signature. Verifying needs no loaded keys.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.
@@ -549,6 +553,16 @@ prepared = chat.prepare_conversation_key_change(
 
 ### Security
 
+- The JSON of a prepared conversation change leaves out its conversation
+  key in the Go, JavaScript, JVM and .NET bindings, so a request body
+  serialized from the returned object never carries the key. The key stays
+  on the object (`ConversationKey` / `conversationKey`) for the app to keep.
+  The X API requests that take a prepared change read its participant keys,
+  key version and action signatures, never the key itself. Rust, whose
+  `PreparedConversationChange` never serialized the key, and Python, whose
+  result is a dict that `json.dumps` refuses to encode because the key is
+  bytes, are unchanged. The C ABI returns the key in its JSON result, as the
+  only way it hands the key to the caller.
 - Juicebox realm requests (setup, unlock, and key deletion) go out through an
   HTTP client in `chat-xdk-core` on reqwest 0.12.28, rustls 0.23.46 (ring),
   rustls-webpki 0.103.16, webpki-roots 1.0.11, and h2 0.4.20. juicebox-sdk's
@@ -571,3 +585,15 @@ prepared = chat.prepare_conversation_key_change(
     `User-Agent: juicebox_networking/<juicebox version>` on every request;
   - applies the timeout juicebox-sdk sets on each request, or 30 seconds when
     it sets none.
+- `sign` refuses data that only the SDK signs: a payload recipients verify
+  as a signed event (a message, conversation-key change, group or
+  conversation-metadata change, delete or read receipt), and a P-256 public
+  key, whose signature by the signing key binds it as an identity key. An
+  app that signed data an attacker chose could otherwise hand back a
+  signature that verifies as one of those events, such as a key change to a
+  key the attacker knows. The refusal is the invalid-input error each
+  binding raises for a bad argument (`SdkError::InvalidInput` in Rust,
+  `ValueError` in Python, a thrown `Error` in JS, a returned `error` in Go,
+  `ChatXdkException` in .NET and the JVM, `FfiResult.error` in the C ABI).
+  Any other data signs to the same signature bytes, and the SDK signs events
+  on its own path, which this does not touch.

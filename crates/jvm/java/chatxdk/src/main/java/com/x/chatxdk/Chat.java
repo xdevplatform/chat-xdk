@@ -969,7 +969,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Sign arbitrary data with the signing key.
+     * Sign application data with the signing key. Throws {@link ChatXdkException} for an
+     * event signature payload or a public key, which only the SDK signs.
      *
      * @param data Bytes to sign. May be empty but not null.
      * @return 64-byte ECDSA P-256 signature.
@@ -1001,8 +1002,9 @@ public final class Chat implements AutoCloseable {
      * @param signature Raw signature bytes from {@link #sign}.
      * @param data The original signed data.
      * @return {@code true} if the signature is valid, {@code false} if invalid.
-     * @throws ChatXdkException when the SDK returns an error (e.g. keys not loaded, malformed
-     *     public key). An SDK error is always thrown, never returned as a {@code false} result.
+     * @throws ChatXdkException when the SDK returns an error (a malformed public key or
+     *     signature). Verifying needs no loaded keys. An SDK error is always thrown, never
+     *     returned as a {@code false} result.
      */
     public boolean verify(String publicKeyB64, byte[] signature, byte[] data) {
         throwIfDisposed();
@@ -1024,7 +1026,7 @@ public final class Chat implements AutoCloseable {
                 case 1 -> true;
                 case 0 -> false;
                 default -> throw new ChatXdkException(
-                        "Signature verification error — ensure the SDK is unlocked and the public key is valid.");
+                        "Signature verification error — ensure the public key is a base64 P-256 signing key and the signature is valid.");
             };
         } finally {
             Reference.reachabilityFence(this);
