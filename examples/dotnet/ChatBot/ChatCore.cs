@@ -22,6 +22,16 @@ public sealed class ChatCore : IDisposable
     private readonly Chat _chat = new();
     public string SigningKeyVersion { get; private set; } = "";
 
+    /// <summary>
+    /// A chat whose conversation-key cache is on: <see cref="DecryptBatch"/>
+    /// fills it from verified key changes, and the encrypt calls take the
+    /// newest key from it.
+    /// </summary>
+    public ChatCore()
+    {
+        _chat.SetCacheKeys(true);
+    }
+
     // -- Key management -----------------------------------------------------
 
     /// <summary>Import an existing base64 private-key blob (identity[+signing])
@@ -100,13 +110,15 @@ public sealed class ChatCore : IDisposable
     /// afterwards with <see cref="EncryptMedia"/> and the returned body's
     /// <c>EventB64</c>); <paramref name="quickReply"/> offers selectable
     /// options or answers them; <paramref name="ttlMsec"/> makes the message
-    /// disappear after the given lifetime.
+    /// disappear after the given lifetime. The conversation key comes from
+    /// the SDK's cache unless <paramref name="conversationKey"/> and
+    /// <paramref name="conversationKeyVersion"/> are passed.
     /// </summary>
     public SendBody EncryptReply(
         string conversationId,
         string text,
-        byte[] conversationKey,
-        string conversationKeyVersion,
+        byte[]? conversationKey = null,
+        string? conversationKeyVersion = null,
         string? replyToEvent = null,
         IReadOnlyList<EntityDescriptor>? entities = null,
         IReadOnlyList<AttachmentDescriptor>? attachments = null,

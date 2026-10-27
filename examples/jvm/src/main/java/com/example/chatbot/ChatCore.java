@@ -35,6 +35,15 @@ public final class ChatCore implements AutoCloseable {
     private final Chat chat = new Chat();
     private String signingKeyVersion;
 
+    /**
+     * A chat whose conversation-key cache is on: {@link #decryptBatch} fills it
+     * from verified key changes, and the encrypt calls take the newest key from
+     * it.
+     */
+    public ChatCore() {
+        chat.setCacheKeys(true);
+    }
+
     public String signingKeyVersion() {
         return signingKeyVersion;
     }
@@ -140,6 +149,8 @@ public final class ChatCore implements AutoCloseable {
      * media hash key its upload started with (encrypt the files afterwards
      * with {@link #encryptMedia} and the returned body's {@code eventB64});
      * {@code ttlMsec} makes the message disappear after the given lifetime.
+     * With {@code conversationKey} and {@code conversationKeyVersion} null, the
+     * conversation key comes from the SDK's cache.
      */
     public SendBody encryptReply(
             String conversationId,

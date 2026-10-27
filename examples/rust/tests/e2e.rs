@@ -280,8 +280,6 @@ fn e2e_live() {
         .encrypt_reply(
             &canonical_conv,
             &format!("@user {marker}"),
-            &key,
-            &kv,
             ReplyOptions {
                 // Threading by raw event: the SDK derives the preview from it
                 // and embeds it; the key changes cover an original encrypted
@@ -292,7 +290,9 @@ fn e2e_live() {
                 attachments: None,
                 quick_reply: None,
                 ttl_msec: Some(24 * 60 * 60 * 1000),
-            },
+                ..Default::default()
+            }
+            .with_conversation_key(&key, &kv),
         )
         .expect("encrypt_reply");
     api.send_message(&canonical_conv, &body)
@@ -361,8 +361,6 @@ fn e2e_live() {
             .encrypt_reply(
                 &canonical_conv,
                 &format!("chat-xdk e2e media [rust] {}", unix_secs()),
-                &key,
-                &kv,
                 ReplyOptions {
                     reply_to_event: None,
                     reply_to_ckces: None,
@@ -378,7 +376,9 @@ fn e2e_live() {
                     }]),
                     quick_reply: None,
                     ttl_msec: Some(24 * 60 * 60 * 1000),
-                },
+                    ..Default::default()
+                }
+                .with_conversation_key(&key, &kv),
             )
             .expect("encrypt media message");
         let ciphertext = core
@@ -507,7 +507,11 @@ fn groups_flow(
 
     let marker = format!("chat-xdk e2e group [rust] {}", unix_secs());
     let msg = core
-        .encrypt_reply(&group_id, &marker, &key, &kv, ReplyOptions::default())
+        .encrypt_reply(
+            &group_id,
+            &marker,
+            ReplyOptions::default().with_conversation_key(&key, &kv),
+        )
         .expect("encrypt group message");
     api.send_message(&group_id, &msg)
         .expect("send group message");

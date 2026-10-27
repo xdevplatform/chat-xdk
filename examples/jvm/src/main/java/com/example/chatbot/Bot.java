@@ -1,6 +1,7 @@
 package com.example.chatbot;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.x.chatxdk.ChatXdkException;
 import com.x.chatxdk.Types.SigningKeyEntry;
 
 import java.util.ArrayList;
@@ -96,7 +97,10 @@ public final class Bot {
         return out;
     }
 
-    /** Initial load: batch-decrypt the backlog (decryptEvents path). */
+    /**
+     * Initial load: batch-decrypt the backlog (decryptEvents path), filling the
+     * SDK's conversation-key cache from the key changes.
+     */
     public void loadBacklog(String conversationId) throws Exception {
         ConversationState st = stateFor(conversationId);
         JsonNode page = api.getEvents(conversationId, 100, null);
@@ -107,8 +111,6 @@ public final class Bot {
             if (!ev.isEmpty()) eventsB64.add(ev);
         }
         var result = core.decryptBatch(eventsB64, signingKeysFor(raw));
-        st.conversationKeys.putAll(result.conversationKeys.keys);
-        st.latestKeyVersion = result.conversationKeys.latestVersion;
         st.paginationToken = nextToken(page);
         System.out.printf("backlog_loaded conv=%s messages=%d keys=%d%n",
                 conversationId, result.events.size(), result.conversationKeys.keys.size());
@@ -121,35 +123,25 @@ public final class Bot {
         List<JsonNode> raw = dataArray(page);
         List<SigningKeyEntry> signingKeys = signingKeysFor(raw);
 
-        // Key changes for this page arrive in meta, not data; adopt their
-        // keys before decrypting the messages that need them.
+        // Key changes for this page arrive in meta, not data; only the batch
+        // path feeds the key cache, so route them through it before
+        // decrypting the messages that need them.
         List<String> pageKeyEvents = keyEvents(page);
         if (!pageKeyEvents.isEmpty()) {
-            var rotated = core.decryptBatch(pageKeyEvents, signingKeys);
-            st.conversationKeys.putAll(rotated.conversationKeys.keys);
-            if (rotated.conversationKeys.latestVersion != null) {
-                st.latestKeyVersion = rotated.conversationKeys.latestVersion;
-            }
+            core.decryptBatch(pageKeyEvents, signingKeys);
         }
 
         for (JsonNode item : raw) {
             String eventB64 = item.path("encoded_event").asText("");
             if (eventB64.isEmpty()) continue;
-            JsonNode event = core.decryptOne(eventB64, st.conversationKeys, signingKeys);
+            // An empty key map: the conversation keys come from the cache.
+            JsonNode event = core.decryptOne(eventB64, Map.of(), signingKeys);
 
             if ("KeyChange".equals(event.path("type").asText())) {
-                String keyVersion = event.path("conversation_key_version").asText();
-                for (JsonNode pk : event.path("conversation_participant_keys")) {
-                    String enc = pk.path("encrypted_conversation_key").asText("");
-                    if (enc.isEmpty()) continue;
-                    try {
-                        st.conversationKeys.put(keyVersion, core.decryptConversationKey(enc));
-                        st.latestKeyVersion = keyVersion;
-                        break;
-                    } catch (RuntimeException ignored) {
-                        // not for us
-                    }
-                }
+                // Only the batch path adopts keys into the cache; replay the
+                // key change through it so the rotated key becomes the
+                // sending key.
+                core.decryptBatch(List.of(eventB64), signingKeys);
                 continue;
             }
             maybeReply(conversationId, event, eventB64);
@@ -169,22 +161,22 @@ public final class Bot {
         String text = ChatCore.messageText(event);
         if (text == null || text.isEmpty()) return;
 
-        String keyVersion = event.path("conversation_key_version").asText(st.latestKeyVersion);
-        byte[] convKey = keyVersion == null ? null : st.conversationKeys.get(keyVersion);
-        if (convKey == null || keyVersion == null) {
-            System.err.println("no_conversation_key conv=" + conversationId);
-            return;
-        }
-
         // The message signature covers the conversation_id, so sign with the
         // canonical id carried inside the event (the X API uses a different
         // separator in its URL paths than the form embedded in events).
         String replyConvId = event.path("conversation_id").asText(conversationId);
         String reply = generateReply(text);
         // Reply by raw event: the SDK derives the threaded-reply preview from
-        // the incoming signed event and embeds it for recipient validation.
-        ChatCore.SendBody body =
-                core.encryptReply(replyConvId, reply, convKey, keyVersion, eventB64, null, null, null, null);
+        // the incoming signed event and embeds it for recipient validation,
+        // and the conversation key resolves from the key cache.
+        ChatCore.SendBody body;
+        try {
+            body = core.encryptReply(replyConvId, reply, null, null, eventB64, null, null, null, null);
+        } catch (ChatXdkException e) {
+            if (e.getKind() != ChatXdkException.Kind.INVALID_STATE) throw e;
+            System.err.println("no_conversation_key conv=" + conversationId);
+            return;
+        }
         api.sendMessage(replyConvId, body);
         System.out.printf("reply_sent conv=%s len=%d%n", replyConvId, reply.length());
     }
@@ -203,9 +195,8 @@ public final class Bot {
         }
     }
 
+    /** In-memory state for one conversation. Its conversation keys live in the SDK's cache. */
     private static final class ConversationState {
-        final Map<String, byte[]> conversationKeys = new HashMap<>();
-        String latestKeyVersion;
         final Set<String> seenEventIds = new HashSet<>();
         String paginationToken;
     }

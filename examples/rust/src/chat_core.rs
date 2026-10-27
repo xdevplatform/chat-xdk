@@ -47,6 +47,17 @@ pub struct ReplyOptions {
     pub quick_reply: Option<QuickReply>,
     /// Disappearing-message lifetime in milliseconds.
     pub ttl_msec: Option<i64>,
+    /// The conversation key and its version to encrypt under, overriding
+    /// the SDK's cached key: the newest one a verified key change carried.
+    pub conversation_key: Option<(XChatConversationKey, String)>,
+}
+
+impl ReplyOptions {
+    /// Encrypt under `key` at `version` rather than the SDK's cached key.
+    pub fn with_conversation_key(mut self, key: &XChatConversationKey, version: &str) -> Self {
+        self.conversation_key = Some((key.clone(), version.to_string()));
+        self
+    }
 }
 
 /// Fields the X API expects for an encrypted message send, plus the
@@ -72,11 +83,22 @@ pub struct ChatCore {
 }
 
 impl ChatCore {
+    /// A chat whose conversation-key cache is on: `decrypt_batch` fills it
+    /// from verified key changes, and the encrypt calls take the newest key
+    /// from it.
     pub fn new() -> Self {
+        let inner = SdkCore::new();
+        inner.set_cache_keys(true);
         Self {
-            inner: SdkCore::new(),
+            inner,
             signing_key_version: String::new(),
         }
+    }
+
+    /// Take the answer to `GET /2/chat/features`: its status and body. The
+    /// switches decide whether sends are v0 or v1.
+    pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
+        self.inner.set_feature_switches(status, body);
     }
 
     // -- Key management -----------------------------------------------------
@@ -202,19 +224,23 @@ impl ChatCore {
     /// descriptors (e.g. a media reference); `quick_reply` offers selectable
     /// options or answers them; `ttl_msec` makes the message disappear after
     /// the given lifetime. The sender identity comes from
-    /// [`ChatCore::set_identity`].
+    /// [`ChatCore::set_identity`], and the conversation key from the SDK's
+    /// cache unless `options` sets one.
     pub fn encrypt_reply(
         &self,
         conversation_id: &str,
         text: &str,
-        conversation_key: &XChatConversationKey,
-        conversation_key_version: &str,
         options: ReplyOptions,
     ) -> Result<SendBody, SdkError> {
+        let (conversation_key, conversation_key_version) = match options.conversation_key {
+            Some((key, version)) => (Some(key.to_bytes()), Some(version)),
+            None => (None, None),
+        };
         let payload = match &options.reply_to_event {
             None => {
-                let mut params = EncryptMessageParams::new(conversation_id, text)
-                    .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+                let mut params = EncryptMessageParams::new(conversation_id, text);
+                params.conversation_key = conversation_key;
+                params.conversation_key_version = conversation_key_version;
                 params.entities = options.entities;
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
@@ -223,11 +249,9 @@ impl ChatCore {
             }
             Some(reply_to_event) => {
                 let mut params =
-                    EncryptReplyParams::new(conversation_id, text, reply_to_event.clone())
-                        .with_conversation_key(
-                            conversation_key.to_bytes(),
-                            conversation_key_version,
-                        );
+                    EncryptReplyParams::new(conversation_id, text, reply_to_event.clone());
+                params.conversation_key = conversation_key;
+                params.conversation_key_version = conversation_key_version;
                 params.reply_to_ckces = options.reply_to_ckces.clone();
                 params.entities = options.entities;
                 params.attachments = options.attachments;

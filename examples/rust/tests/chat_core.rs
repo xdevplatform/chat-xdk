@@ -119,9 +119,7 @@ fn encrypt_reply_produces_sendable_payload() {
         .encrypt_reply(
             "6789:12345",
             "pong",
-            &key,
-            "1710000000000",
-            ReplyOptions::default(),
+            ReplyOptions::default().with_conversation_key(&key, "1710000000000"),
         )
         .expect("encrypt_reply");
     assert!(!body.encoded_message_create_event.is_empty());
@@ -309,8 +307,6 @@ fn threaded_reply_with_entities_and_ttl() {
         .encrypt_reply(
             v["event_conversation_id"].as_str().unwrap(),
             "@user hello",
-            &key,
-            v["event_conversation_key_version"].as_str().unwrap(),
             ReplyOptions {
                 reply_to_event: Some(v["event_message_b64"].as_str().unwrap().to_string()),
                 reply_to_ckces: None,
@@ -318,7 +314,9 @@ fn threaded_reply_with_entities_and_ttl() {
                 attachments: None,
                 quick_reply: None,
                 ttl_msec: Some(60_000),
-            },
+                ..Default::default()
+            }
+            .with_conversation_key(&key, v["event_conversation_key_version"].as_str().unwrap()),
         )
         .expect("encrypt_reply");
     assert!(!body.encoded_message_create_event.is_empty());
@@ -341,8 +339,6 @@ fn media_encrypt_decrypt_roundtrip() {
         .encrypt_reply(
             "1000:2000",
             "a photo",
-            &key,
-            "1",
             ReplyOptions {
                 attachments: Some(vec![AttachmentDescriptor::Media {
                     media_hash_key: "photo".to_string(),
@@ -354,7 +350,8 @@ fn media_encrypt_decrypt_roundtrip() {
                     duration_millis: None,
                 }]),
                 ..Default::default()
-            },
+            }
+            .with_conversation_key(&key, "1"),
         )
         .expect("encrypt_reply (media)");
     assert!(!body.event_b64.is_empty());
