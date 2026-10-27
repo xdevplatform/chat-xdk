@@ -1,36 +1,15 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
-### Fixed
+## [0.6.0] - 2026-10-26
 
-The documentation matches the code: API.md, the migration guides, the
-READMEs and the doc comments in every binding. Their code examples compile
-against the 0.6.0 API, and the Rust crate's examples build as doctests.
-
-A `verify` error names the input that failed, in every binding: the public
-key, which must be a base64 P-256 public key, or the signature, which must be
-the 64-byte raw signature. Verifying needs no loaded keys.
-
-In JavaScript, a millisecond field (`ttlMsec`, `currentTtlMsec`,
-`seenAtMsec`, `expiresAtMsec`) takes a finite number within the safe integer
-range. NaN, an infinity or a number past that range names no instant or
-duration, so the call throws an `Invalid <method> params` error rather than
-signing some other value. A fraction is truncated toward zero.
-
-In every binding the feature-switch request sends and stores no cookies and
-follows no redirect. A cookie the endpoint sets never reaches a later chat's
-request, and a redirect counts as an answer other than 200, so the chat's
-sends stay v0.
-
-The Python type stub names the byte parameter of `bytes_to_base64`,
-`bytes_to_hex`, `detect_mime_type` and `detect_image_dimensions` `bytes`, as
-the functions take it, so a type checker accepts exactly the keyword the call
-accepts.
-
-`chat-xdk-core`'s build script watches only the `CHAT_XDK_BINDINGS`
-variable it reads, so Cargo rebuilds the crate only when its sources or that
-variable change, in this repository and in crates that depend on it.
+To move code from 0.5.x, follow your binding's guide in
+[docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
+with before/after code, and [Why 0.6.0 changes](docs/migrating-0.6/why.md)
+explains why each change was made. API.md, the guides, the READMEs and the
+doc comments in every binding describe this API: their code examples compile
+against it, and the Rust crate's examples build as doctests.
 
 ### Added
 
@@ -83,10 +62,52 @@ A decrypted v1 edit carries the signed message id of the message it edits
 as `target_message_id` (`targetMessageId` in JS), next to that message's
 `target_message_sequence_id`; a v0 edit carries the sequence id only.
 
-To move code from 0.5.x, follow your binding's guide in
-[docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
-with before/after code, and [Why 0.6.0 changes](docs/migrating-0.6/why.md)
-explains why each change was made.
+- The bindings fetch the feature switches from
+  `GET https://api.x.com/2/chat/features` in the background, without
+  delaying or failing anything; there is nothing to call. Each chat reads
+  them once, when it is created, and keeps the answer for its lifetime;
+  chats created while a request is in flight share it. The request is
+  anonymous: it carries no credentials or query parameters, sends and stores
+  no cookies, and follows no redirect, so a cookie the endpoint sets never
+  reaches a later chat's request and a redirect counts as an answer other
+  than 200. Until it answers, and for the chat's lifetime if it fails or is
+  blocked, sends stay v0. See "Network access" in the README.
+- Rust and the C ABI: `ChatCore::set_feature_switches` and
+  `Chat::set_feature_switches`, and
+  `chat_xdk_set_feature_switches(chat, status, body, body_len)`, take the
+  status and body of a `GET /2/chat/features` the caller made, as the
+  crate's `FEATURES_ENDPOINT`, `FEATURES_TIMEOUT_MS` and `FEATURES_MAX_BODY`
+  describe it, and `chat_xdk.h`'s `CHAT_XDK_FEATURES_ENDPOINT`,
+  `CHAT_XDK_FEATURES_TIMEOUT_MS` and `CHAT_XDK_FEATURES_MAX_BODY`. A chat
+  takes one answer for its lifetime, and every switch stays off unless a 200
+  answer of at most `FEATURES_MAX_BODY` bytes turns it on.
+- JS: `importKeys` and `exportKeys`, as in every binding.
+- Python: `SigningKeyEntry`, `PublicKeyInput`, `ConversationKeyResult`,
+  `DecryptEventsResult`, `DecryptedEvent`, `PreparedAction`,
+  `PreparedGroupMetadataChange`, `PreparedConversationChange`,
+  `ActionSignature`, `MessageEventSignature` and
+  `ConversationParticipantKey` type the dicts the calls take and return.
+- `SendPayload` carries `xdk_version`, the SDK version that built it
+  (`xdkVersion` in JS, `XdkVersion` in Go and .NET).
+- Messages encrypted under per-message keys (`contents_encryption_version`
+  1 or more) decrypt, as do their reply previews, edits and files. A reply
+  to such a message carries the original's key, and a v1 edit names the
+  message it edits.
+- Signatures verify at versions 8 through 11, in the payload layout of the
+  version each carries. Versions above 11 are rejected.
+- Read receipts should be signed. `prepare_mark_conversation_read` takes
+  `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
+  (the sequence id of the newest event read) and a `seen_at_msec`, which
+  defaults to the current time. It returns a `PreparedAction`. Apps should
+  send its `action_signatures` on the mark-read request
+  (`POST /2/chat/conversations/{id}/read`) as they are, nested as the
+  conversation-change requests nest theirs. Recipients on the default policy
+  reject an unsigned receipt; `decrypt_event` returns a signed receipt as a
+  verified `ReadReceipt`. The C ABI adds
+  `chat_xdk_prepare_mark_conversation_read`.
+- The JVM jar and the .NET package bundle the native library for 64-bit ARM
+  Linux (`linux-arm64`) too, so both bindings run there without a library of
+  your own.
 
 ### Breaking changes
 
@@ -697,51 +718,23 @@ juicebox-sdk.
   returns but doesn't export, are interfaces. `ChatXdkError`,
   `ChatXdkErrorKind`, `ImportKeysParams` and `DecryptedEvent` are declared.
 
-### Added
+### Fixed
 
-- The bindings fetch the feature switches from
-  `GET https://api.x.com/2/chat/features` in the background, without
-  delaying or failing anything; there is nothing to call. Each chat reads
-  them once, when it is created, and keeps the answer for its lifetime;
-  chats created while a request is in flight share it. The request is
-  anonymous; until it answers, and for the chat's lifetime if it fails or is
-  blocked, sends stay v0. See "Network access" in the README.
-- Rust and the C ABI: `ChatCore::set_feature_switches` and
-  `Chat::set_feature_switches`, and
-  `chat_xdk_set_feature_switches(chat, status, body, body_len)`, take the
-  status and body of a `GET /2/chat/features` the caller made, as the
-  crate's `FEATURES_ENDPOINT`, `FEATURES_TIMEOUT_MS` and `FEATURES_MAX_BODY`
-  describe it, and `chat_xdk.h`'s `CHAT_XDK_FEATURES_ENDPOINT`,
-  `CHAT_XDK_FEATURES_TIMEOUT_MS` and `CHAT_XDK_FEATURES_MAX_BODY`. A chat
-  takes one answer for its lifetime, and every switch stays off unless a 200
-  answer of at most `FEATURES_MAX_BODY` bytes turns it on.
-- JS: `importKeys` and `exportKeys`, as in every binding.
-- Python: `SigningKeyEntry`, `PublicKeyInput`, `ConversationKeyResult`,
-  `DecryptEventsResult`, `DecryptedEvent`, `PreparedAction`,
-  `PreparedGroupMetadataChange`, `PreparedConversationChange`,
-  `ActionSignature`, `MessageEventSignature` and
-  `ConversationParticipantKey` type the dicts the calls take and return.
-- `SendPayload` carries `xdk_version`, the SDK version that built it
-  (`xdkVersion` in JS, `XdkVersion` in Go and .NET).
-- Messages encrypted under per-message keys (`contents_encryption_version`
-  1 or more) decrypt, as do their reply previews, edits and files. A reply
-  to such a message carries the original's key, and a v1 edit names the
-  message it edits.
-- Signatures verify at versions 8 through 11, in the payload layout of the
-  version each carries. Versions above 11 are rejected.
-- Read receipts should be signed. `prepare_mark_conversation_read` takes
-  `MarkConversationReadParams`: `conversation_id`, `seen_until_sequence_id`
-  (the sequence id of the newest event read) and a `seen_at_msec`, which
-  defaults to the current time. It returns a `PreparedAction`. Apps should
-  send its `action_signatures` on the mark-read request
-  (`POST /2/chat/conversations/{id}/read`) as they are, nested as the
-  conversation-change requests nest theirs. Recipients on the default policy
-  reject an unsigned receipt; `decrypt_event` returns a signed receipt as a
-  verified `ReadReceipt`. The C ABI adds
-  `chat_xdk_prepare_mark_conversation_read`.
-- The JVM jar and the .NET package bundle the native library for 64-bit ARM
-  Linux (`linux-arm64`) too, so both bindings run there without a library of
-  your own.
+- A `verify` error names the input that failed, in every binding: the public
+  key, which must be a base64 P-256 public key, or the signature, which must
+  be the 64-byte raw signature. Verifying needs no loaded keys.
+- JS: a millisecond field (`ttlMsec`, `currentTtlMsec`, `seenAtMsec`,
+  `expiresAtMsec`) takes a finite number within the safe integer range. NaN,
+  an infinity or a number past that range names no instant or duration, so
+  the call throws an `Invalid <method> params` error rather than signing some
+  other value. A fraction is truncated toward zero.
+- The Python type stub names the byte parameter of `bytes_to_base64`,
+  `bytes_to_hex`, `detect_mime_type` and `detect_image_dimensions` `bytes`,
+  as the functions take it, so a type checker accepts exactly the keyword the
+  call accepts.
+- `chat-xdk-core`'s build script watches only the `CHAT_XDK_BINDINGS`
+  variable it reads, so Cargo rebuilds the crate only when its sources or
+  that variable change, in this repository and in crates that depend on it.
 
 ### Security
 
@@ -757,11 +750,11 @@ juicebox-sdk.
   serialized from the returned object never carries the key. The key stays
   on the object (`ConversationKey` / `conversationKey`) for the app to keep.
   The X API requests that take a prepared change read its participant keys,
-  key version and action signatures, never the key itself. Rust, whose
-  `PreparedConversationChange` never serialized the key, and Python, whose
-  result is a dict that `json.dumps` refuses to encode because the key is
-  bytes, are unchanged. The C ABI returns the key in its JSON result, as the
-  only way it hands the key to the caller.
+  key version and action signatures, never the key itself. Rust's
+  `PreparedConversationChange` doesn't serialize the key, Python's result is
+  a dict that `json.dumps` refuses to encode because the key is bytes, and
+  the C ABI returns the key in its JSON result, as the only way it hands the
+  key to the caller.
 - Juicebox realm requests (setup, unlock, and key deletion) go out through an
   HTTP client in `chat-xdk-core` on reqwest 0.12.28, rustls 0.23.46 (ring),
   rustls-webpki 0.103.16, webpki-roots 1.0.11, and h2 0.4.20. juicebox-sdk's
@@ -798,3 +791,6 @@ juicebox-sdk.
   `invalid_input` error document in the C ABI).
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
+
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/xdevplatform/chat-xdk/compare/v0.5.2...v0.6.0
