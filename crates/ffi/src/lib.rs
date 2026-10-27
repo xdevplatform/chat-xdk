@@ -40,6 +40,14 @@ use chat_xdk_core::{
 /// don't match; compare it with [`chat_xdk_abi_version`] at startup.
 pub const CHAT_XDK_ABI_VERSION: u32 = 1;
 
+/// How long the feature-switch request may take, body included, in
+/// milliseconds.
+pub const CHAT_XDK_FEATURES_TIMEOUT_MS: u64 = 2000;
+
+/// The largest feature-switch response body accepted, in bytes. Read at most
+/// one byte more, so a longer body is seen and rejected.
+pub const CHAT_XDK_FEATURES_MAX_BODY: usize = 65536;
+
 // FFI result type
 
 /// Result type returned by FFI functions.
@@ -585,6 +593,35 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
             return err_result("Null handle");
         }
         unsafe { &*handle }.inner.set_cache_keys(enabled != 0);
+        ok_void()
+    })
+}
+
+/// Set this chat's feature switches from the answer to the GET of
+/// `CHAT_XDK_FEATURES_ENDPOINT` you made: its HTTP status, 0 when no
+/// response arrived, and `body_len` bytes of its body, read to the end or to
+/// one byte past [`CHAT_XDK_FEATURES_MAX_BODY`]; `body` may be NULL when
+/// `body_len` is 0. Make the request once, when you create the chat, within
+/// [`CHAT_XDK_FEATURES_TIMEOUT_MS`]. Sends are v0 until an answer turns
+/// `v1_send` on, then v1. A chat takes one answer for its lifetime, the
+/// first, and a status other than 200, or a body longer than
+/// [`CHAT_XDK_FEATURES_MAX_BODY`] or that isn't a `{"features": {...}}`
+/// object, leaves every switch off.
+#[no_mangle]
+pub extern "C" fn chat_xdk_set_feature_switches(
+    handle: *const ChatHandle,
+    status: i32,
+    body: *const u8,
+    body_len: usize,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let body = unsafe { bytes_from_ffi_ptr(body, body_len) };
+        unsafe { &*handle }
+            .inner
+            .set_feature_switches(u16::try_from(status).unwrap_or(0), body);
         ok_void()
     })
 }

@@ -38,6 +38,98 @@ fn new_chat() -> *mut ChatHandle {
     chat
 }
 
+/// The signature version a message sent from `chat` signs at: "7" for v0,
+/// "10" for v1.
+fn send(chat: *mut ChatHandle) -> String {
+    let params = c(&serde_json::json!({
+        "conversation_id": "1001:2002",
+        "text": "hi",
+        "conversation_key": BASE64.encode([7u8; 32]),
+        "conversation_key_version": "1",
+    })
+    .to_string());
+    let payload: serde_json::Value =
+        serde_json::from_str(&data(chat_xdk_encrypt_message(chat, params.as_ptr())).unwrap())
+            .unwrap();
+    payload["signature_info"]["signature_version"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn answer(chat: *mut ChatHandle, status: i32, body: &[u8]) {
+    data(chat_xdk_set_feature_switches(
+        chat,
+        status,
+        body.as_ptr(),
+        body.len(),
+    ));
+}
+
+#[test]
+fn the_feature_switch_constants_are_the_cores() {
+    assert_eq!(
+        CHAT_XDK_FEATURES_TIMEOUT_MS,
+        chat_xdk_core::FEATURES_TIMEOUT_MS
+    );
+    assert_eq!(CHAT_XDK_FEATURES_MAX_BODY, chat_xdk_core::FEATURES_MAX_BODY);
+    let header = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../go/chatxdk/include/chat_xdk.h"
+    ))
+    .unwrap();
+    let endpoint = format!(
+        "#define CHAT_XDK_FEATURES_ENDPOINT \"{}\"",
+        chat_xdk_core::FEATURES_ENDPOINT
+    );
+    assert!(header.contains(&endpoint), "the header lacks {endpoint}");
+}
+
+#[test]
+fn a_caller_hands_a_chat_its_feature_switches_once() {
+    let on = br#"{"features":{"v1_send":true}}"#;
+    let chat = new_chat();
+    assert_eq!(send(chat), "7", "no answer: v0");
+    answer(chat, 200, on);
+    assert_eq!(send(chat), "10");
+    answer(chat, 200, br#"{"features":{"v1_send":false}}"#);
+    assert_eq!(send(chat), "10", "a chat takes one answer");
+    chat_xdk_free(chat);
+
+    let mut oversized = on.to_vec();
+    oversized.resize(CHAT_XDK_FEATURES_MAX_BODY + 1, b' ');
+    for (status, body) in [
+        (404, on.as_slice()),
+        (0, b"".as_slice()),
+        (200, b"not json".as_slice()),
+        (200, oversized.as_slice()),
+    ] {
+        let chat = new_chat();
+        answer(chat, status, body);
+        assert_eq!(send(chat), "7", "{status} {}", body.len());
+        chat_xdk_free(chat);
+    }
+
+    let chat = new_chat();
+    data(chat_xdk_set_feature_switches(
+        chat,
+        200,
+        std::ptr::null(),
+        0,
+    ));
+    assert_eq!(send(chat), "7", "an empty answer");
+    chat_xdk_free(chat);
+    assert_eq!(
+        error(chat_xdk_set_feature_switches(
+            std::ptr::null(),
+            200,
+            std::ptr::null(),
+            0
+        ))["kind"],
+        "invalid_input"
+    );
+}
+
 #[cfg(feature = "juicebox")]
 #[test]
 fn juicebox_calls_without_a_config_fail_with_the_cores_invalid_state_error() {
