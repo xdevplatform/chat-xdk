@@ -217,33 +217,32 @@ class ChatTest {
     }
 
     @Test
-    void guessesRemainingParsedFromInvalidPinMessage() {
-        // The core's invalid-PIN unlock error carries the stable
-        // "guesses_remaining=N" token in the message; 0 means exhausted.
-        assertEquals(
-                3,
-                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=3")
-                        .getGuessesRemaining());
-        assertEquals(
-                0,
-                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=0")
-                        .getGuessesRemaining());
-        assertNull(
-                new ChatXdkException("Juicebox error: Invalid PIN").getGuessesRemaining());
-        // The count is read only from the invalid-PIN form, not from
-        // unrelated messages that happen to contain the token.
-        assertNull(
-                new ChatXdkException("Delete failed: guesses_remaining=7")
-                        .getGuessesRemaining());
+    void errorsCarryTheirKind() {
+        try (Chat chat = new Chat()) {
+            ChatXdkException config =
+                    assertThrows(ChatXdkException.class, () -> chat.updateConfig("not json"));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, config.getKind());
+            assertNull(config.getGuessesRemaining());
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, assertThrows(ChatXdkException.class,
+                    () -> chat.setup("123".getBytes(StandardCharsets.UTF_8))).getKind());
+            assertEquals(ChatXdkException.Kind.PARSE, assertThrows(ChatXdkException.class,
+                    () -> chat.decryptEvent(new DecryptEventParams("not base64!"))).getKind());
+            assertEquals(ChatXdkException.Kind.INVALID_STATE, assertThrows(ChatXdkException.class,
+                    () -> chat.sign(new byte[] {1})).getKind());
+        }
+        assertThrows(NullPointerException.class, () -> new Chat((String) null));
     }
 
     @Test
-    void guessesRemainingNullOnNonPinErrors() {
-        try (Chat chat = new Chat()) {
-            ChatXdkException ex =
-                    assertThrows(ChatXdkException.class, () -> chat.updateConfig("not json"));
-            assertNull(ex.getGuessesRemaining());
-        }
+    void errorsReadTheInvalidPinCount() {
+        ChatXdkException wrongPin = ChatXdkException.fromDocument(
+                "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN: guesses_remaining=3\","
+                        + "\"guesses_remaining\":3}");
+        assertEquals(ChatXdkException.Kind.INVALID_PIN, wrongPin.getKind());
+        assertEquals(3, wrongPin.getGuessesRemaining());
+        assertEquals("Juicebox error: Invalid PIN: guesses_remaining=3", wrongPin.getMessage());
+        assertNull(ChatXdkException.fromDocument(
+                "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN\"}").getGuessesRemaining());
     }
 
     @Test
@@ -1939,8 +1938,8 @@ class ChatTest {
         try (Chat chat = new Chat()) {
             assertThrows(Exception.class, chat::getPublicKeys);
             assertThrows(ChatXdkException.class, () -> chat.sign(new byte[] {1, 2, 3}));
-            // exportKeys returns null (not throws) when locked.
-            assertNull(chat.exportKeys());
+            assertEquals(ChatXdkException.Kind.INVALID_STATE,
+                    assertThrows(ChatXdkException.class, chat::exportKeys).getKind());
         }
     }
 

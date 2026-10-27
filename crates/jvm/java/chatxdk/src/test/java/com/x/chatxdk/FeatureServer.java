@@ -112,7 +112,7 @@ final class FeatureServer implements AutoCloseable {
         if (v1Server == null) {
             v1Server = new FeatureServer();
         }
-        return new Chat(v1Server.endpoint, Duration.ofSeconds(2));
+        return new Chat(null, v1Server.endpoint, Duration.ofSeconds(2));
     }
 
     /** Send from {@code chat}, which has keys, until a send is v1. */

@@ -111,9 +111,6 @@ public final class Register {
                 body = b;
 
                 byte[] exported = chat.exportKeys();
-                if (exported == null) {
-                    throw new IllegalStateException("exportKeys returned nothing — no identity to save");
-                }
                 saveBlob(Base64.getEncoder().encodeToString(exported));
 
                 ObjectNode m = MAPPER.createObjectNode();
@@ -180,7 +177,8 @@ public final class Register {
             if (pin != null && !pin.isEmpty()) {
                 try {
                     XChatClient.JuiceboxConfigResult jb = api.getJuiceboxConfig(userId);
-                    chat.setup(pin, jb.configJson());
+                    chat.updateConfig(jb.configJson());
+                    chat.setup(pin.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     System.out.println("Stored the keys in Juicebox under the PIN.");
                 } catch (Exception err) {
                     System.err.println("Juicebox backup failed (keys are still saved locally): " + err.getMessage());

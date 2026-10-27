@@ -1,44 +1,78 @@
 package com.x.chatxdk;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import com.fasterxml.jackson.databind.JsonNode;
 
-/** Thrown when the native chat-xdk library returns an error string. */
+/** Thrown when the SDK fails, with the {@link #getKind kind} of failure. */
 public class ChatXdkException extends RuntimeException {
 
-    /**
-     * Stable invalid-PIN message form the core emits ("Invalid PIN: guesses_remaining=N").
-     * Anchored on the full form so a count embedded in an unrelated pass-through message is
-     * not misread.
-     */
-    private static final Pattern GUESSES_REMAINING =
-            Pattern.compile("\\bInvalid PIN: guesses_remaining=(\\d+)");
+    /** What kind of failure a {@link ChatXdkException} is, the same in every binding. */
+    public enum Kind {
+        /** A parameter is missing or invalid; the message names it. */
+        INVALID_INPUT,
+        /** A value was neither passed nor available from the chat's state, such as no keys loaded. */
+        INVALID_STATE,
+        /** Event or other wire data is malformed. */
+        PARSE,
+        /** Ciphertext did not decrypt, or no key for it was available. */
+        DECRYPTION,
+        /** A signature did not verify, or could not be verified while unverified events are rejected. */
+        VERIFICATION,
+        /** Juicebox rejected the PIN; see {@link ChatXdkException#getGuessesRemaining}. */
+        INVALID_PIN,
+        /** Another Juicebox key-storage failure. */
+        JUICEBOX,
+        /** A failure inside the SDK. */
+        INTERNAL,
+    }
 
-    public ChatXdkException(String message) {
+    private final Kind kind;
+    private final Integer guessesRemaining;
+
+    public ChatXdkException(Kind kind, String message, Integer guessesRemaining) {
         super(message);
+        this.kind = kind;
+        this.guessesRemaining = guessesRemaining;
+    }
+
+    public ChatXdkException(Kind kind, String message) {
+        this(kind, message, null);
+    }
+
+    /** What kind of failure this is. */
+    public Kind getKind() {
+        return kind;
     }
 
     /**
-     * Remaining PIN attempts reported by Juicebox, or {@code null} when the message carries no
-     * count.
-     *
-     * <p>Present only on invalid-PIN {@link Chat#unlock} / {@link Chat#changePin} failures.
-     * {@code 0} means the guess budget is exhausted and the stored keys are locked.
+     * The PIN attempts left after an {@link Kind#INVALID_PIN} failure, when Juicebox reports
+     * them; {@code 0} means the guess budget is exhausted and the stored keys are locked.
+     * {@code null} for every other failure.
      */
     public Integer getGuessesRemaining() {
-        String message = getMessage();
-        if (message == null) {
-            return null;
-        }
-        Matcher m = GUESSES_REMAINING.matcher(message);
-        if (!m.find()) {
-            return null;
-        }
+        return guessesRemaining;
+    }
+
+    /** The exception for the native library's error document. */
+    static ChatXdkException fromDocument(String document) {
         try {
-            return Integer.valueOf(m.group(1));
-        } catch (NumberFormatException e) {
-            // Digits too large for an int — treat as no usable count.
-            return null;
+            JsonNode root = ChatJson.MAPPER.readTree(document);
+            Kind kind = switch (root.path("kind").asText()) {
+                case "invalid_input" -> Kind.INVALID_INPUT;
+                case "invalid_state" -> Kind.INVALID_STATE;
+                case "parse" -> Kind.PARSE;
+                case "decryption" -> Kind.DECRYPTION;
+                case "verification" -> Kind.VERIFICATION;
+                case "invalid_pin" -> Kind.INVALID_PIN;
+                case "juicebox" -> Kind.JUICEBOX;
+                default -> Kind.INTERNAL;
+            };
+            JsonNode guesses = root.get("guesses_remaining");
+            return new ChatXdkException(
+                    kind,
+                    root.path("message").asText(),
+                    guesses != null && guesses.canConvertToInt() ? guesses.intValue() : null);
+        } catch (Exception e) {
+            return new ChatXdkException(Kind.INTERNAL, document);
         }
     }
 }

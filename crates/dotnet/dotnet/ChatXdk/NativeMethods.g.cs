@@ -19,6 +19,13 @@ namespace ChatXdk
 
 
         /// <summary>
+        ///  The version of this C ABI, [`CHAT_XDK_ABI_VERSION`] when the library
+        ///  matches the header it was built with.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_abi_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern uint chat_xdk_abi_version();
+
+        /// <summary>
         ///  Encode bytes to standard base64.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_bytes_to_base64", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -62,31 +69,38 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_detect_image_dimensions(byte* data, nuint data_len);
 
         /// <summary>
-        ///  Create a new Chat SDK instance.
+        ///  Create a new Chat SDK instance and write its handle to `out_chat`.
         ///
-        ///  Returns an opaque handle that must be freed with [`chat_xdk_free`].
-        ///  Returns NULL on failure.
+        ///  `juicebox_config_json` is the Juicebox configuration JSON the X API
+        ///  returns, which `chat_xdk_setup`, `chat_xdk_unlock`,
+        ///  `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL or an empty string
+        ///  for a chat that manages its keys with `chat_xdk_import_keys` alone. On
+        ///  failure `out_chat` is set to NULL. Free the handle with [`chat_xdk_free`].
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern ChatHandle* chat_xdk_new();
+        internal static extern FfiResult chat_xdk_new(byte* juicebox_config_json, ChatHandle** out_chat);
 
         /// <summary>
-        ///  Update the Juicebox configuration (e.g., to refresh auth tokens).
+        ///  Replace the Juicebox configuration (e.g., to refresh auth tokens).
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_update_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_update_config(ChatHandle* handle, byte* config_json);
 
         /// <summary>
-        ///  Register existing keys with Juicebox (first-time setup).
+        ///  Register the loaded keys with Juicebox under `pin` (first-time setup) and
+        ///  return the public keys as JSON. `pin` / `pin_len` are the PIN's bytes,
+        ///  which the caller can wipe once the call returns.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_setup", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_setup(ChatHandle* handle, byte* pin, byte* config_json);
+        internal static extern FfiResult chat_xdk_setup(ChatHandle* handle, byte* pin, nuint pin_len);
 
         /// <summary>
-        ///  Unlock the SDK by recovering keys from Juicebox.
+        ///  Recover the keys from Juicebox with `pin` and load them. `pin` /
+        ///  `pin_len` are the PIN's bytes, which the caller can wipe once the call
+        ///  returns.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_unlock", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_unlock(ChatHandle* handle, byte* pin, byte* config_json);
+        internal static extern FfiResult chat_xdk_unlock(ChatHandle* handle, byte* pin, nuint pin_len);
 
         /// <summary>
         ///  Delete keys from Juicebox and clear from memory.
@@ -95,10 +109,12 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_delete(ChatHandle* handle);
 
         /// <summary>
-        ///  Change the PIN protecting keys in Juicebox.
+        ///  Re-register the keys in Juicebox under a new PIN, after unlocking with
+        ///  the old one. Both PINs are bytes the caller can wipe once the call
+        ///  returns.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_change_pin", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_change_pin(ChatHandle* handle, byte* old_pin, byte* new_pin);
+        internal static extern FfiResult chat_xdk_change_pin(ChatHandle* handle, byte* old_pin, nuint old_pin_len, byte* new_pin, nuint new_pin_len);
 
         /// <summary>
         ///  Free a Chat SDK instance.
@@ -122,30 +138,28 @@ namespace ChatXdk
         internal static extern void chat_xdk_free_string(byte* s);
 
         /// <summary>
-        ///  Check if the SDK is unlocked (both identity and signing keys loaded).
-        ///
-        ///  Returns 1 if unlocked, 0 if locked, -1 if handle is NULL.
+        ///  Whether both the identity and the signing key are loaded: `true` or
+        ///  `false`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_is_unlocked", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_is_unlocked(ChatHandle* handle);
+        internal static extern FfiResult chat_xdk_is_unlocked(ChatHandle* handle);
 
         /// <summary>
-        ///  Check if the identity key is loaded (sufficient for decryption).
-        ///
-        ///  Returns 1 if identity key loaded, 0 if not, -1 if handle is NULL.
+        ///  Whether the identity key is loaded (sufficient for decryption): `true`
+        ///  or `false`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_has_identity_key", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_has_identity_key(ChatHandle* handle);
+        internal static extern FfiResult chat_xdk_has_identity_key(ChatHandle* handle);
 
         /// <summary>
-        ///  Enable or disable rejection of unverified events.
+        ///  Enable (non-zero) or disable (0) rejection of unverified events.
         ///
-        ///  When enabled — the default — `chat_xdk_decrypt_event_params` returns an error for
+        ///  When enabled — the default — `chat_xdk_decrypt_event` returns an error for
         ///  any signed event whose signature cannot be verified (invalid, missing, or
         ///  no matching signing key) instead of returning it with `verified: false`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_set_reject_unverified", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern void chat_xdk_set_reject_unverified(ChatHandle* handle, int reject);
+        internal static extern FfiResult chat_xdk_set_reject_unverified(ChatHandle* handle, int reject);
 
         /// <summary>
         ///  Set the session identity from a params JSON document:
@@ -153,20 +167,20 @@ namespace ChatXdk
         ///  defaults wherever a params document omits `sender_id` /
         ///  `signing_key_version`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_set_identity_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_set_identity_params(ChatHandle* handle, byte* params_json);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_set_identity", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_set_identity(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Enable (non-zero) or disable (0) the conversation-key cache (off by
         ///  default).
         ///
-        ///  While enabled, `chat_xdk_decrypt_events_params` caches each conversation's
+        ///  While enabled, `chat_xdk_decrypt_events` caches each conversation's
         ///  verified latest key and the encrypt functions resolve an omitted
         ///  `conversation_key`/`conversation_key_version` pair from it. Disabling
         ///  clears the cache.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_set_cache_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern void chat_xdk_set_cache_keys(ChatHandle* handle, int enabled);
+        internal static extern FfiResult chat_xdk_set_cache_keys(ChatHandle* handle, int enabled);
 
         /// <summary>
         ///  Internal, for this repository's bindings; not part of the API.
@@ -213,7 +227,7 @@ namespace ChatXdk
         ///  `signing_keys_json`.
         ///
         ///  `signing_keys_json` takes the same array shape as
-        ///  `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this
+        ///  `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
         ///  call populates the store — keys carried inside events are never trusted.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_set_signing_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -223,7 +237,7 @@ namespace ChatXdk
         ///  Lock the SDK, clearing keys from memory.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_lock", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern void chat_xdk_lock(ChatHandle* handle);
+        internal static extern FfiResult chat_xdk_lock(ChatHandle* handle);
 
         /// <summary>
         ///  Generate new keypairs and return the registration payload as JSON.
@@ -251,10 +265,9 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_get_public_key_fingerprint(ChatHandle* handle);
 
         /// <summary>
-        ///  Export private keys as a base64 string.
-        ///
-        ///  Returns base64-encoded private key bytes (32 or 64), or NULL data if no
-        ///  identity key is loaded.
+        ///  Export the loaded private keys as a base64 string: 32 bytes for the
+        ///  identity key, 64 with the signing key. Errors when no identity key is
+        ///  loaded.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_export_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_export_keys(ChatHandle* handle);
@@ -267,8 +280,8 @@ namespace ChatXdk
         ///  keys were registered under. The key bytes stay out of the JSON so they are
         ///  never copied into a string; NULL with length 0 is an empty blob.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_import_keys_params(ChatHandle* handle, byte* keys, nuint keys_len, byte* params_json);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_import_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_import_keys(ChatHandle* handle, byte* keys, nuint keys_len, byte* params_json);
 
         /// <summary>
         ///  `events_json`: JSON array of base64-encoded event strings.
@@ -285,8 +298,8 @@ namespace ChatXdk
         ///  "identity_public_key","identity_public_key_signature"},...]`); absent or
         ///  empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_events_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_decrypt_events_params(ChatHandle* handle, byte* params_json);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_events", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_decrypt_events(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Prepare a signed conversation-key change.
@@ -538,18 +551,18 @@ namespace ChatXdk
         ///
         ///  `params_json` — single JSON document: `event_b64` (the base64 event),
         ///  `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
-        ///  `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
+        ///  `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
         ///  for events without message contents, which also falls back to the opt-in
         ///  key cache), plus optional `signing_keys` (as for
-        ///  `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
+        ///  `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
         ///  events fail decryption under the default reject-unverified policy
         ///  (disable it via `chat_xdk_set_reject_unverified` to have them returned
         ///  with `verified: false` instead).
         ///
         ///  Returns JSON representation of the decrypted Event.
         /// </summary>
-        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_event_params", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_decrypt_event_params(ChatHandle* handle, byte* params_json);
+        [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_event", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_decrypt_event(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Encrypt a message for the X API.
@@ -750,31 +763,28 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_sign(ChatHandle* handle, byte* data, nuint data_len);
 
         /// <summary>
-        ///  Verify a signature.
-        ///
-        ///  Returns 1 if valid, 0 if invalid, -1 on error.
+        ///  Verify a raw r||s signature over `data` with a base64 P-256 public key:
+        ///  `true` or `false`. A malformed public key or signature is an error.
+        ///  Needs no loaded keys.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_verify", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_verify(ChatHandle* handle, byte* public_key_b64, byte* signature_b64, byte* data, nuint data_len);
+        internal static extern FfiResult chat_xdk_verify(ChatHandle* handle, byte* public_key_b64, byte* signature_b64, byte* data, nuint data_len);
 
         /// <summary>
-        ///  Verify that a signing key is authentically bound to an identity key.
-        ///
-        ///  All three arguments are base64 strings. Returns 1 if the binding is
-        ///  valid, 0 if it is not, and -1 on error (e.g. malformed input).
+        ///  Verify that a signing key is authentically bound to an identity key:
+        ///  `true` or `false`. All three arguments are base64 strings; a malformed
+        ///  one is an error.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_verify_key_binding", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_verify_key_binding(ChatHandle* handle, byte* identity_public_key_b64, byte* signing_public_key_b64, byte* identity_public_key_signature_b64);
+        internal static extern FfiResult chat_xdk_verify_key_binding(ChatHandle* handle, byte* identity_public_key_b64, byte* signing_public_key_b64, byte* identity_public_key_signature_b64);
 
         /// <summary>
-        ///  Report whether the loaded identity public key is the key in
-        ///  `public_key_b64` (raw SEC1 point or SPKI/DER, base64-encoded).
-        ///
-        ///  Returns 1 on a match, 0 on a mismatch, and -1 on error (no identity
-        ///  keypair loaded or malformed input).
+        ///  Whether the loaded identity public key is the key in `public_key_b64`
+        ///  (raw SEC1 point or SPKI/DER, base64-encoded): `true` or `false`. Errors
+        ///  when no identity key is loaded or the input is not base64.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_matches_registered_key", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int chat_xdk_matches_registered_key(ChatHandle* handle, byte* public_key_b64);
+        internal static extern FfiResult chat_xdk_matches_registered_key(ChatHandle* handle, byte* public_key_b64);
 
 
     }
@@ -784,7 +794,12 @@ namespace ChatXdk
     ///
     ///  On success: `data` contains the result (may be NULL for void operations),
     ///              `error` is NULL.
-    ///  On error:   `data` is NULL, `error` contains the error message.
+    ///  On error:   `data` is NULL, `error` is a JSON error document:
+    ///              `{"kind": "...", "message": "..."}`, with
+    ///              `"guesses_remaining": N` added to an `invalid_pin` error when
+    ///              Juicebox reports the attempts left. `kind` is one of
+    ///              `invalid_input`, `invalid_state`, `parse`, `decryption`,
+    ///              `verification`, `invalid_pin`, `juicebox` and `internal`.
     ///
     ///  Both fields must be freed with `chat_xdk_free_string` when non-NULL.
     /// </summary>

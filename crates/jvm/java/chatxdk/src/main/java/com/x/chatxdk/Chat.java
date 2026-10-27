@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
+import com.sun.jna.ptr.PointerByReference;
 import com.x.chatxdk.Types.*;
 
 import java.lang.ref.Cleaner;
@@ -16,6 +17,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.function.Function;
 
 /**
  * The main X Chat encryption SDK (JNA &#8594; {@code chat_xdk_ffi}).
@@ -26,7 +30,7 @@ import java.util.Objects;
  *   <li>Key generation and Juicebox-backed storage ({@link #generateKeypairs}, {@link #setup}, {@link #unlock})</li>
  *   <li>Event decryption ({@link #extractConversationKeys}, {@link #decryptEvents}, {@link #decryptEvent})</li>
  *   <li>Signed conversation-key changes ({@link #prepareConversationKeyChange}, {@link #prepareGroupCreate}, {@link #prepareGroupMembersChange})</li>
- *   <li>UTF-8 metadata encryption with the conversation key ({@link #encrypt}, {@link #decrypt})</li>
+ *   <li>Group metadata decryption with the conversation key ({@link #decrypt})</li>
  *   <li>Message / reaction / reply encryption ({@link #encryptMessage}, etc.)</li>
  *   <li>File encryption ({@link #encryptFile}, {@link #decryptFile}, {@link #fileEncryptor}, {@link #fileDecryptor})</li>
  *   <li>Stateless helpers on {@link ChatXdkUtilities} (base64/hex, MIME, image dimensions)</li>
@@ -34,11 +38,7 @@ import java.util.Objects;
  *
  * <p>Always {@link #close} the instance when finished to release native resources.
  *
- * <p>Not thread-safe: do not share one instance across threads without external synchronization.
- * Mutating operations ({@link #setup}, {@link #unlock}, {@link #delete}, {@link #changePin},
- * {@link #updateConfig}, {@link #setRejectUnverified},
- * {@link #setIdentity}, {@link #setCacheKeys}, {@link #setSigningKeys}) must not race
- * decrypt or any other call on the same instance.
+ * <p>Its methods may be called from several threads at once; {@link #close} must not race them.
  */
 public final class Chat implements AutoCloseable {
 
@@ -79,13 +79,22 @@ public final class Chat implements AutoCloseable {
     private final Cleaner.Cleanable cleanable;
 
     /**
-     * Create a new Chat SDK instance.
-     *
-     * @throws IllegalStateException if the native library fails to initialise
-     *     (e.g. the shared library is not on {@code jna.library.path}).
+     * Create a Chat SDK instance that manages its keys with {@link #importKeys} and
+     * {@link #generateKeypairs} alone.
      */
     public Chat() {
-        this(null, null);
+        this(null, null, null);
+    }
+
+    /**
+     * Create a Chat SDK instance that keeps its keys in Juicebox, with the Juicebox configuration
+     * JSON the X API returns. {@link #setup}, {@link #unlock}, {@link #changePin} and
+     * {@link #delete} use it; {@link #updateConfig} replaces it.
+     *
+     * @throws ChatXdkException if the configuration is not a Juicebox config.
+     */
+    public Chat(String juiceboxConfigJson) {
+        this(Objects.requireNonNull(juiceboxConfigJson, "juiceboxConfigJson"), null, null);
     }
 
     /**
@@ -93,12 +102,16 @@ public final class Chat implements AutoCloseable {
      * {@code featureEndpoint} within {@code featureTimeout}, or from the default endpoint when
      * it is null.
      */
-    Chat(String featureEndpoint, Duration featureTimeout) {
-        handle = ChatNative.INSTANCE.chat_xdk_new();
-        if (handle == null) {
-            throw new IllegalStateException(
-                    "chat_xdk_new() returned null — ensure libchat_xdk_ffi is on jna.library.path.");
+    Chat(String juiceboxConfigJson, String featureEndpoint, Duration featureTimeout) {
+        PointerByReference out = new PointerByReference();
+        if (juiceboxConfigJson == null) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_new(null, out));
+        } else {
+            try (Memory config = FfiStrings.utf8(juiceboxConfigJson)) {
+                FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_new(config, out));
+            }
         }
+        handle = out.getValue();
         cleanable = CLEANER.register(this, new FreeHandle(handle));
         if (featureEndpoint != null) {
             configureFeatures(featureEndpoint, featureTimeout);
@@ -130,7 +143,7 @@ public final class Chat implements AutoCloseable {
     public boolean isUnlocked() {
         throwIfDisposed();
         try {
-            return ChatNative.INSTANCE.chat_xdk_is_unlocked(handle) == 1;
+            return FfiStrings.consumeBool(ChatNative.INSTANCE.chat_xdk_is_unlocked(handle));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -142,7 +155,7 @@ public final class Chat implements AutoCloseable {
     public boolean hasIdentityKey() {
         throwIfDisposed();
         try {
-            return ChatNative.INSTANCE.chat_xdk_has_identity_key(handle) == 1;
+            return FfiStrings.consumeBool(ChatNative.INSTANCE.chat_xdk_has_identity_key(handle));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -159,7 +172,7 @@ public final class Chat implements AutoCloseable {
     public void setRejectUnverified(boolean reject) {
         throwIfDisposed();
         try {
-            ChatNative.INSTANCE.chat_xdk_set_reject_unverified(handle, reject ? 1 : 0);
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_reject_unverified(handle, reject ? 1 : 0));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -180,7 +193,7 @@ public final class Chat implements AutoCloseable {
         n.put("user_id", parameters.userId);
         n.put("signing_key_version", parameters.signingKeyVersion);
         try (Memory j = FfiStrings.utf8(n.toString())) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_identity_params(handle, j));
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_identity(handle, j));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -196,7 +209,7 @@ public final class Chat implements AutoCloseable {
     public void setCacheKeys(boolean enabled) {
         throwIfDisposed();
         try {
-            ChatNative.INSTANCE.chat_xdk_set_cache_keys(handle, enabled ? 1 : 0);
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_cache_keys(handle, enabled ? 1 : 0));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -242,14 +255,14 @@ public final class Chat implements AutoCloseable {
     public void lock() {
         throwIfDisposed();
         try {
-            ChatNative.INSTANCE.chat_xdk_lock(handle);
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_lock(handle));
         } finally {
             Reference.reachabilityFence(this);
         }
     }
 
     /**
-     * Update the Juicebox configuration — call this whenever the X API
+     * Replace the Juicebox configuration — call this whenever the X API
      * issues fresh short-lived auth tokens.
      *
      * @param configJson Juicebox configuration JSON from the X API.
@@ -264,19 +277,40 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Register the SDK's keys with Juicebox (first-time setup).
+     * Pass {@code bytes} to {@code call} in native memory that is wiped once the call returns:
+     * the copy of a PIN never outlives the call.
+     */
+    private static <T> T withSecret(byte[] bytes, Function<Memory, T> call) {
+        Objects.requireNonNull(bytes, "pin");
+        if (bytes.length == 0) {
+            // A zero-length Memory cannot be allocated; the native side treats
+            // NULL with length 0 as an empty PIN.
+            return call.apply(null);
+        }
+        try (Memory m = new Memory(bytes.length)) {
+            m.write(0, bytes, 0, bytes.length);
+            try {
+                return call.apply(m);
+            } finally {
+                m.clear();
+            }
+        }
+    }
+
+    /**
+     * Register the SDK's keys with Juicebox under {@code pin} (first-time setup).
      * Call {@link #generateKeypairs} and POST the result to the X API first,
-     * then call this to persist the keys under the user's PIN.
+     * then call this to persist the keys under the user's PIN. Needs a chat created
+     * with a Juicebox configuration.
      *
-     * @param pin User-chosen PIN.
-     * @param configJson Juicebox configuration JSON from the X API.
+     * @param pin The user's PIN as bytes, which you can zero once the call returns.
      * @return The user's public keys to upload to the X API.
      */
-    public PublicKeys setup(String pin, String configJson) throws Exception {
+    public PublicKeys setup(byte[] pin) throws Exception {
         throwIfDisposed();
-        try (Memory pinM = FfiStrings.utf8(pin);
-                Memory cfg = FfiStrings.utf8(configJson)) {
-            String json = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_setup(handle, pinM, cfg));
+        try {
+            String json = FfiStrings.consume(withSecret(pin,
+                    p -> ChatNative.INSTANCE.chat_xdk_setup(handle, p, pin.length)));
             return ChatJson.MAPPER.readValue(json, PublicKeys.class);
         } finally {
             Reference.reachabilityFence(this);
@@ -284,17 +318,17 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Recover keys from Juicebox and load them into memory.
-     * Call on every startup after the user enters their PIN.
+     * Recover keys from Juicebox with {@code pin} and load them into memory.
+     * Call on every startup after the user enters their PIN. A wrong PIN throws a
+     * {@link ChatXdkException} of kind {@link ChatXdkException.Kind#INVALID_PIN}.
      *
-     * @param pin The user's PIN.
-     * @param configJson Juicebox configuration JSON from the X API.
+     * @param pin The user's PIN as bytes, which you can zero once the call returns.
      */
-    public void unlock(String pin, String configJson) {
+    public void unlock(byte[] pin) {
         throwIfDisposed();
-        try (Memory pinM = FfiStrings.utf8(pin);
-                Memory cfg = FfiStrings.utf8(configJson)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_unlock(handle, pinM, cfg));
+        try {
+            FfiStrings.consume(withSecret(pin,
+                    p -> ChatNative.INSTANCE.chat_xdk_unlock(handle, p, pin.length)));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -313,15 +347,47 @@ public final class Chat implements AutoCloseable {
         }
     }
 
-    /** Re-register keys under a new PIN. */
-    public void changePin(String oldPin, String newPin) {
+    /**
+     * Re-register keys under a new PIN, unlocking with the old one first. Both PINs are bytes
+     * you can zero once the call returns.
+     */
+    public void changePin(byte[] oldPin, byte[] newPin) {
         throwIfDisposed();
-        try (Memory o = FfiStrings.utf8(oldPin);
-                Memory n = FfiStrings.utf8(newPin)) {
-            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_change_pin(handle, o, n));
+        Objects.requireNonNull(newPin, "newPin");
+        try {
+            FfiStrings.consume(withSecret(oldPin, o -> withSecret(newPin,
+                    n -> ChatNative.INSTANCE.chat_xdk_change_pin(handle, o, oldPin.length, n, newPin.length))));
         } finally {
             Reference.reachabilityFence(this);
         }
+    }
+
+    /** {@link #setup} on the common fork-join pool. */
+    public CompletableFuture<PublicKeys> setupAsync(byte[] pin) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return setup(pin);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        });
+    }
+
+    /** {@link #unlock} on the common fork-join pool. */
+    public CompletableFuture<Void> unlockAsync(byte[] pin) {
+        return CompletableFuture.runAsync(() -> unlock(pin));
+    }
+
+    /** {@link #delete} on the common fork-join pool. */
+    public CompletableFuture<Void> deleteAsync() {
+        return CompletableFuture.runAsync(this::delete);
+    }
+
+    /** {@link #changePin} on the common fork-join pool. */
+    public CompletableFuture<Void> changePinAsync(byte[] oldPin, byte[] newPin) {
+        return CompletableFuture.runAsync(() -> changePin(oldPin, newPin));
     }
 
     /**
@@ -367,22 +433,15 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Export private keys as raw bytes for a secure backup.
-     * Returns {@code null} if the SDK is locked.
+     * Export private keys as raw bytes for a secure backup: 32 bytes for the identity key, 64 with
+     * the signing key. Throws a {@link ChatXdkException} of kind
+     * {@link ChatXdkException.Kind#INVALID_STATE} when no identity key is loaded.
      * These are raw secret key bytes — store with extreme care.
      */
     public byte[] exportKeys() {
         throwIfDisposed();
-        // Mirrors core's export requirement: identity key present (signing
-        // key optional, giving a 32-byte export).
-        if (!hasIdentityKey()) {
-            return null;
-        }
         try {
             String b64 = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_export_keys(handle));
-            if (b64.isEmpty()) {
-                return null;
-            }
             return Base64.getDecoder().decode(b64);
         } finally {
             Reference.reachabilityFence(this);
@@ -409,12 +468,12 @@ public final class Chat implements AutoCloseable {
             if (keys.length == 0) {
                 // A zero-length Memory cannot be allocated; the native side
                 // treats NULL + length 0 as an empty key blob.
-                r = ChatNative.INSTANCE.chat_xdk_import_keys_params(handle, null, 0, j);
+                r = ChatNative.INSTANCE.chat_xdk_import_keys(handle, null, 0, j);
             } else {
                 try (Memory m = new Memory(keys.length)) {
                     m.write(0, keys, 0, keys.length);
                     try {
-                        r = ChatNative.INSTANCE.chat_xdk_import_keys_params(handle, m, keys.length, j);
+                        r = ChatNative.INSTANCE.chat_xdk_import_keys(handle, m, keys.length, j);
                     } finally {
                         m.clear();
                     }
@@ -466,7 +525,7 @@ public final class Chat implements AutoCloseable {
             n.set("signing_keys", ChatJson.MAPPER.valueToTree(parameters.signingKeys));
         }
         try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(n))) {
-            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_event_params(handle, j));
+            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_event(handle, j));
             return ChatJson.MAPPER.readTree(resultJson);
         } finally {
             Reference.reachabilityFence(this);
@@ -486,7 +545,7 @@ public final class Chat implements AutoCloseable {
             n.set("signing_keys", ChatJson.MAPPER.valueToTree(parameters.signingKeys));
         }
         try (Memory j = FfiStrings.utf8(ChatJson.MAPPER.writeValueAsString(n))) {
-            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events_params(handle, j));
+            String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events(handle, j));
             JsonNode root = ChatJson.MAPPER.readTree(resultJson);
             DecryptEventsResult out = new DecryptEventsResult();
             List<DecryptedEvent> events = new ArrayList<>();
@@ -1013,8 +1072,8 @@ public final class Chat implements AutoCloseable {
      * @param signature Raw signature bytes from {@link #sign}.
      * @param data The original signed data.
      * @return {@code true} if the signature is valid, {@code false} if invalid.
-     * @throws ChatXdkException when the SDK returns an error (e.g. keys not loaded, malformed
-     *     public key). An SDK error is always thrown, never returned as a {@code false} result.
+     * @throws ChatXdkException of kind {@link ChatXdkException.Kind#INVALID_INPUT} for a malformed
+     *     public key or signature. Verifying needs no loaded keys.
      */
     public boolean verify(String publicKeyB64, byte[] signature, byte[] data) {
         throwIfDisposed();
@@ -1023,21 +1082,13 @@ public final class Chat implements AutoCloseable {
         String sigB64 = Base64.getEncoder().encodeToString(signature);
         try (Memory pk = FfiStrings.utf8(publicKeyB64);
                 Memory sig = FfiStrings.utf8(sigB64)) {
-            int rc;
             if (data.length == 0) {
-                rc = ChatNative.INSTANCE.chat_xdk_verify(handle, pk, sig, null, 0);
-            } else {
-                try (Memory dm = new Memory(data.length)) {
-                    dm.write(0, data, 0, data.length);
-                    rc = ChatNative.INSTANCE.chat_xdk_verify(handle, pk, sig, dm, data.length);
-                }
+                return FfiStrings.consumeBool(ChatNative.INSTANCE.chat_xdk_verify(handle, pk, sig, null, 0));
             }
-            return switch (rc) {
-                case 1 -> true;
-                case 0 -> false;
-                default -> throw new ChatXdkException(
-                        "Signature verification error — ensure the SDK is unlocked and the public key is valid.");
-            };
+            try (Memory dm = new Memory(data.length)) {
+                dm.write(0, data, 0, data.length);
+                return FfiStrings.consumeBool(ChatNative.INSTANCE.chat_xdk_verify(handle, pk, sig, dm, data.length));
+            }
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -1053,13 +1104,8 @@ public final class Chat implements AutoCloseable {
         try (Memory identity = FfiStrings.utf8(identityPublicKeyB64);
                 Memory signing = FfiStrings.utf8(signingPublicKeyB64);
                 Memory sig = FfiStrings.utf8(identityPublicKeySignatureB64)) {
-            int rc = ChatNative.INSTANCE.chat_xdk_verify_key_binding(handle, identity, signing, sig);
-            return switch (rc) {
-                case 1 -> true;
-                case 0 -> false;
-                default -> throw new ChatXdkException(
-                        "Key binding verification error — ensure the inputs are valid base64.");
-            };
+            return FfiStrings.consumeBool(
+                    ChatNative.INSTANCE.chat_xdk_verify_key_binding(handle, identity, signing, sig));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -1075,13 +1121,7 @@ public final class Chat implements AutoCloseable {
     public boolean matchesRegisteredKey(String publicKeyB64) {
         throwIfDisposed();
         try (Memory publicKey = FfiStrings.utf8(publicKeyB64)) {
-            int rc = ChatNative.INSTANCE.chat_xdk_matches_registered_key(handle, publicKey);
-            return switch (rc) {
-                case 1 -> true;
-                case 0 -> false;
-                default -> throw new ChatXdkException(
-                        "Registered key match error — ensure keys are loaded and the input is valid base64.");
-            };
+            return FfiStrings.consumeBool(ChatNative.INSTANCE.chat_xdk_matches_registered_key(handle, publicKey));
         } finally {
             Reference.reachabilityFence(this);
         }

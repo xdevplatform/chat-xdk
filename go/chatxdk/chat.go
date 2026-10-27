@@ -45,18 +45,14 @@ package chatxdk
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"runtime"
 )
 
 // Chat is the main X Chat encryption SDK interface.
 //
-// Create with New(), free with Close(). A Chat is NOT safe for unsynchronized
-// concurrent use: mutating operations (Setup, Unlock, Delete, ChangePin,
-// UpdateConfig, SetRejectUnverified, SetIdentity,
-// SetCacheKeys, SetSigningKeys) must not race decrypt or any other call on
-// the same instance. Callers must serialize access externally (e.g. with a
-// sync.Mutex) or confine each instance to one goroutine.
+// Create with New() (or NewWithJuiceboxConfig() to keep the keys in
+// Juicebox), free with Close(). Its methods may be called from several
+// goroutines at once; Close must not race them.
 type Chat struct {
 	h handle
 }
@@ -66,18 +62,21 @@ type Chat struct {
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func New() *Chat {
-	c := newChat()
-	if c != nil {
-		c.startFeatures()
+	c, err := newChat("")
+	if err != nil {
+		return nil
 	}
+	c.startFeatures()
 	return c
 }
 
-// newChat creates a Chat that has not started reading its feature switches.
-func newChat() *Chat {
-	h := ffiNew()
-	if h == nil {
-		return nil
+// newChat creates a Chat, with a Juicebox configuration unless
+// juiceboxConfigJSON is empty, that has not started reading its feature
+// switches.
+func newChat(juiceboxConfigJSON string) (*Chat, error) {
+	h, err := ffiNew(juiceboxConfigJSON)
+	if err != nil {
+		return nil, err
 	}
 	c := &Chat{h: h}
 	// GC backstop for instances never explicitly Closed. A receiver becomes
@@ -86,7 +85,7 @@ func newChat() *Chat {
 	// c.h to cgo defers runtime.KeepAlive(c), keeping this finalizer from
 	// freeing the handle mid-call.
 	runtime.SetFinalizer(c, func(c *Chat) { c.Close() })
-	return c
+	return c, nil
 }
 
 // Close frees the Chat SDK instance and its resources.
@@ -103,13 +102,15 @@ func (c *Chat) Close() {
 // IsUnlocked returns true if both identity and signing keys are loaded.
 func (c *Chat) IsUnlocked() bool {
 	defer runtime.KeepAlive(c)
-	return ffiIsUnlocked(c.h) == 1
+	unlocked, _ := ffiIsUnlocked(c.h)
+	return unlocked
 }
 
 // HasIdentityKey returns true if the identity key is loaded (sufficient for decryption).
 func (c *Chat) HasIdentityKey() bool {
 	defer runtime.KeepAlive(c)
-	return ffiHasIdentityKey(c.h) == 1
+	loaded, _ := ffiHasIdentityKey(c.h)
+	return loaded
 }
 
 // SetRejectUnverified enables or disables rejection of unverified events.
@@ -118,7 +119,7 @@ func (c *Chat) HasIdentityKey() bool {
 // signing key) instead of returning it with Verified=false.
 func (c *Chat) SetRejectUnverified(reject bool) {
 	defer runtime.KeepAlive(c)
-	ffiSetRejectUnverified(c.h, reject)
+	_ = ffiSetRejectUnverified(c.h, reject)
 }
 
 // SetIdentity sets the session identity: the owner's user ID and signing-key
@@ -133,7 +134,7 @@ func (c *Chat) SetIdentity(params SetIdentityParams) error {
 	if err != nil {
 		return err
 	}
-	return ffiSetIdentityParams(c.h, string(j))
+	return ffiSetIdentity(c.h, string(j))
 }
 
 // SetCacheKeys enables or disables the conversation-key cache (off by
@@ -144,7 +145,7 @@ func (c *Chat) SetIdentity(params SetIdentityParams) error {
 // cache.
 func (c *Chat) SetCacheKeys(enabled bool) {
 	defer runtime.KeepAlive(c)
-	ffiSetCacheKeys(c.h, enabled)
+	_ = ffiSetCacheKeys(c.h, enabled)
 }
 
 // SetSigningKeys stores signing keys to use when a decrypt call passes nil
@@ -166,7 +167,7 @@ func (c *Chat) SetSigningKeys(keys []SigningKeyEntry) error {
 // Lock clears keys from memory.
 func (c *Chat) Lock() {
 	defer runtime.KeepAlive(c)
-	ffiLock(c.h)
+	_ = ffiLock(c.h)
 }
 
 // GenerateKeypairs generates new identity + signing keypairs.
@@ -208,18 +209,15 @@ func (c *Chat) GetPublicKeyFingerprint() (string, error) {
 	return ffiGetPublicKeyFingerprint(c.h)
 }
 
-// ExportKeys exports raw private key bytes (32 or 64) for backup, or nil
-// when no identity key is loaded. Unlike a string, the byte slice can be
-// zeroed once persisted.
+// ExportKeys exports raw private key bytes (32 or 64) for backup. It fails
+// with an *Error of kind ErrorKindInvalidState when no identity key is
+// loaded. Unlike a string, the byte slice can be zeroed once persisted.
 // Warning: Handle with care — these are your secret keys!
 func (c *Chat) ExportKeys() ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	keysB64, err := ffiExportKeys(c.h)
 	if err != nil {
 		return nil, err
-	}
-	if keysB64 == "" {
-		return nil, nil
 	}
 	return base64.StdEncoding.DecodeString(keysB64)
 }
@@ -237,7 +235,7 @@ func (c *Chat) ImportKeys(params ImportKeysParams) error {
 	if err != nil {
 		return err
 	}
-	_, err = ffiImportKeysParams(c.h, params.Keys, string(j))
+	_, err = ffiImportKeys(c.h, params.Keys, string(j))
 	return err
 }
 
@@ -896,21 +894,11 @@ func (c *Chat) Sign(data []byte) ([]byte, error) {
 }
 
 // Verify verifies a raw signature (from Sign) against a base64-encoded
-// signing public key.
+// signing public key. A malformed public key or signature is an error of
+// kind ErrorKindInvalidInput. Needs no loaded keys.
 func (c *Chat) Verify(publicKeyB64 string, signature, data []byte) (bool, error) {
 	defer runtime.KeepAlive(c)
-	rc, err := ffiVerify(c.h, publicKeyB64, base64.StdEncoding.EncodeToString(signature), data)
-	if err != nil {
-		return false, err
-	}
-	switch rc {
-	case 1:
-		return true, nil
-	case 0:
-		return false, nil
-	default:
-		return false, errors.New("verification error")
-	}
+	return ffiVerify(c.h, publicKeyB64, base64.StdEncoding.EncodeToString(signature), data)
 }
 
 // VerifyKeyBinding verifies that a signing key is authentically bound to an
@@ -919,14 +907,7 @@ func (c *Chat) Verify(publicKeyB64 string, signature, data []byte) (bool, error)
 // base64-encoded.
 func (c *Chat) VerifyKeyBinding(identityPublicKeyB64, signingPublicKeyB64, identityPublicKeySignatureB64 string) (bool, error) {
 	defer runtime.KeepAlive(c)
-	switch ffiVerifyKeyBinding(c.h, identityPublicKeyB64, signingPublicKeyB64, identityPublicKeySignatureB64) {
-	case 1:
-		return true, nil
-	case 0:
-		return false, nil
-	default:
-		return false, errors.New("key binding verification error")
-	}
+	return ffiVerifyKeyBinding(c.h, identityPublicKeyB64, signingPublicKeyB64, identityPublicKeySignatureB64)
 }
 
 // MatchesRegisteredKey reports whether the loaded identity public key is the
@@ -936,12 +917,5 @@ func (c *Chat) VerifyKeyBinding(identityPublicKeyB64, signingPublicKeyB64, ident
 // to a key registered to the account.
 func (c *Chat) MatchesRegisteredKey(publicKeyB64 string) (bool, error) {
 	defer runtime.KeepAlive(c)
-	switch ffiMatchesRegisteredKey(c.h, publicKeyB64) {
-	case 1:
-		return true, nil
-	case 0:
-		return false, nil
-	default:
-		return false, errors.New("registered key match error")
-	}
+	return ffiMatchesRegisteredKey(c.h, publicKeyB64)
 }

@@ -51,7 +51,7 @@ public sealed class ChatCore : IDisposable
     public (PublicKeyRegistrationPayload Registration, string PrivateKeysB64) GenerateAndRegister()
     {
         var payload = _chat.GenerateKeypairs();
-        var exported = _chat.ExportKeys() ?? Array.Empty<byte>();
+        var exported = _chat.ExportKeys();
         return (payload, Convert.ToBase64String(exported));
     }
 

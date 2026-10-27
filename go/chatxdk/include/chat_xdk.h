@@ -9,6 +9,13 @@
 #include <stdlib.h>
 
 /**
+ * The version of this C ABI: the functions and the shapes of their
+ * arguments and results. A header and a library with different versions
+ * don't match; compare it with [`chat_xdk_abi_version`] at startup.
+ */
+#define CHAT_XDK_ABI_VERSION 1
+
+/**
  * Opaque handle to a Chat SDK instance.
  *
  * Created by [`chat_xdk_new`], freed by [`chat_xdk_free`].
@@ -36,7 +43,12 @@ typedef struct FileEncryptorHandle FileEncryptorHandle;
  *
  * On success: `data` contains the result (may be NULL for void operations),
  *             `error` is NULL.
- * On error:   `data` is NULL, `error` contains the error message.
+ * On error:   `data` is NULL, `error` is a JSON error document:
+ *             `{"kind": "...", "message": "..."}`, with
+ *             `"guesses_remaining": N` added to an `invalid_pin` error when
+ *             Juicebox reports the attempts left. `kind` is one of
+ *             `invalid_input`, `invalid_state`, `parse`, `decryption`,
+ *             `verification`, `invalid_pin`, `juicebox` and `internal`.
  *
  * Both fields must be freed with `chat_xdk_free_string` when non-NULL.
  */
@@ -48,6 +60,12 @@ typedef struct FfiResult {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+/**
+ * The version of this C ABI, [`CHAT_XDK_ABI_VERSION`] when the library
+ * matches the header it was built with.
+ */
+uint32_t chat_xdk_abi_version(void);
 
 /**
  * Encode bytes to standard base64.
@@ -86,43 +104,64 @@ struct FfiResult chat_xdk_detect_mime_type(const uint8_t *data, uintptr_t data_l
 struct FfiResult chat_xdk_detect_image_dimensions(const uint8_t *data, uintptr_t data_len);
 
 /**
- * Create a new Chat SDK instance.
+ * Create a new Chat SDK instance and write its handle to `out_chat`.
  *
- * Returns an opaque handle that must be freed with [`chat_xdk_free`].
- * Returns NULL on failure.
+ * `juicebox_config_json` is the Juicebox configuration JSON the X API
+ * returns, which `chat_xdk_setup`, `chat_xdk_unlock`,
+ * `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL or an empty string
+ * for a chat that manages its keys with `chat_xdk_import_keys` alone. On
+ * failure `out_chat` is set to NULL. Free the handle with [`chat_xdk_free`].
  */
-struct ChatHandle *chat_xdk_new(void);
+struct FfiResult chat_xdk_new(const char *juicebox_config_json, struct ChatHandle **out_chat);
 
+#if defined(CHAT_XDK_JUICEBOX)
 /**
- * Update the Juicebox configuration (e.g., to refresh auth tokens).
+ * Replace the Juicebox configuration (e.g., to refresh auth tokens).
  */
-struct FfiResult chat_xdk_update_config(struct ChatHandle *handle, const char *config_json);
+struct FfiResult chat_xdk_update_config(const struct ChatHandle *handle, const char *config_json);
+#endif
 
+#if defined(CHAT_XDK_JUICEBOX)
 /**
- * Register existing keys with Juicebox (first-time setup).
+ * Register the loaded keys with Juicebox under `pin` (first-time setup) and
+ * return the public keys as JSON. `pin` / `pin_len` are the PIN's bytes,
+ * which the caller can wipe once the call returns.
  */
-struct FfiResult chat_xdk_setup(struct ChatHandle *handle,
-                                const char *pin,
-                                const char *config_json);
+struct FfiResult chat_xdk_setup(const struct ChatHandle *handle,
+                                const uint8_t *pin,
+                                uintptr_t pin_len);
+#endif
 
+#if defined(CHAT_XDK_JUICEBOX)
 /**
- * Unlock the SDK by recovering keys from Juicebox.
+ * Recover the keys from Juicebox with `pin` and load them. `pin` /
+ * `pin_len` are the PIN's bytes, which the caller can wipe once the call
+ * returns.
  */
-struct FfiResult chat_xdk_unlock(struct ChatHandle *handle,
-                                 const char *pin,
-                                 const char *config_json);
+struct FfiResult chat_xdk_unlock(const struct ChatHandle *handle,
+                                 const uint8_t *pin,
+                                 uintptr_t pin_len);
+#endif
 
+#if defined(CHAT_XDK_JUICEBOX)
 /**
  * Delete keys from Juicebox and clear from memory.
  */
-struct FfiResult chat_xdk_delete(struct ChatHandle *handle);
+struct FfiResult chat_xdk_delete(const struct ChatHandle *handle);
+#endif
 
+#if defined(CHAT_XDK_JUICEBOX)
 /**
- * Change the PIN protecting keys in Juicebox.
+ * Re-register the keys in Juicebox under a new PIN, after unlocking with
+ * the old one. Both PINs are bytes the caller can wipe once the call
+ * returns.
  */
-struct FfiResult chat_xdk_change_pin(struct ChatHandle *handle,
-                                     const char *old_pin,
-                                     const char *new_pin);
+struct FfiResult chat_xdk_change_pin(const struct ChatHandle *handle,
+                                     const uint8_t *old_pin,
+                                     uintptr_t old_pin_len,
+                                     const uint8_t *new_pin,
+                                     uintptr_t new_pin_len);
+#endif
 
 /**
  * Free a Chat SDK instance.
@@ -144,27 +183,25 @@ void chat_xdk_free(struct ChatHandle *handle);
 void chat_xdk_free_string(char *s);
 
 /**
- * Check if the SDK is unlocked (both identity and signing keys loaded).
- *
- * Returns 1 if unlocked, 0 if locked, -1 if handle is NULL.
+ * Whether both the identity and the signing key are loaded: `true` or
+ * `false`.
  */
-int32_t chat_xdk_is_unlocked(const struct ChatHandle *handle);
+struct FfiResult chat_xdk_is_unlocked(const struct ChatHandle *handle);
 
 /**
- * Check if the identity key is loaded (sufficient for decryption).
- *
- * Returns 1 if identity key loaded, 0 if not, -1 if handle is NULL.
+ * Whether the identity key is loaded (sufficient for decryption): `true`
+ * or `false`.
  */
-int32_t chat_xdk_has_identity_key(const struct ChatHandle *handle);
+struct FfiResult chat_xdk_has_identity_key(const struct ChatHandle *handle);
 
 /**
- * Enable or disable rejection of unverified events.
+ * Enable (non-zero) or disable (0) rejection of unverified events.
  *
- * When enabled — the default — `chat_xdk_decrypt_event_params` returns an error for
+ * When enabled — the default — `chat_xdk_decrypt_event` returns an error for
  * any signed event whose signature cannot be verified (invalid, missing, or
  * no matching signing key) instead of returning it with `verified: false`.
  */
-void chat_xdk_set_reject_unverified(struct ChatHandle *handle, int32_t reject);
+struct FfiResult chat_xdk_set_reject_unverified(const struct ChatHandle *handle, int32_t reject);
 
 /**
  * Set the session identity from a params JSON document:
@@ -172,26 +209,25 @@ void chat_xdk_set_reject_unverified(struct ChatHandle *handle, int32_t reject);
  * defaults wherever a params document omits `sender_id` /
  * `signing_key_version`.
  */
-struct FfiResult chat_xdk_set_identity_params(const struct ChatHandle *handle,
-                                              const char *params_json);
+struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle, const char *params_json);
 
 /**
  * Enable (non-zero) or disable (0) the conversation-key cache (off by
  * default).
  *
- * While enabled, `chat_xdk_decrypt_events_params` caches each conversation's
+ * While enabled, `chat_xdk_decrypt_events` caches each conversation's
  * verified latest key and the encrypt functions resolve an omitted
  * `conversation_key`/`conversation_key_version` pair from it. Disabling
  * clears the cache.
  */
-void chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
+struct FfiResult chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
 
 /**
  * Store signing keys used when a decrypt call passes an empty
  * `signing_keys_json`.
  *
  * `signing_keys_json` takes the same array shape as
- * `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this
+ * `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
  * call populates the store — keys carried inside events are never trusted.
  */
 struct FfiResult chat_xdk_set_signing_keys(const struct ChatHandle *handle,
@@ -200,7 +236,7 @@ struct FfiResult chat_xdk_set_signing_keys(const struct ChatHandle *handle,
 /**
  * Lock the SDK, clearing keys from memory.
  */
-void chat_xdk_lock(const struct ChatHandle *handle);
+struct FfiResult chat_xdk_lock(const struct ChatHandle *handle);
 
 /**
  * Generate new keypairs and return the registration payload as JSON.
@@ -225,10 +261,9 @@ struct FfiResult chat_xdk_get_public_keys(const struct ChatHandle *handle);
 struct FfiResult chat_xdk_get_public_key_fingerprint(const struct ChatHandle *handle);
 
 /**
- * Export private keys as a base64 string.
- *
- * Returns base64-encoded private key bytes (32 or 64), or NULL data if no
- * identity key is loaded.
+ * Export the loaded private keys as a base64 string: 32 bytes for the
+ * identity key, 64 with the signing key. Errors when no identity key is
+ * loaded.
  */
 struct FfiResult chat_xdk_export_keys(const struct ChatHandle *handle);
 
@@ -240,10 +275,10 @@ struct FfiResult chat_xdk_export_keys(const struct ChatHandle *handle);
  * keys were registered under. The key bytes stay out of the JSON so they are
  * never copied into a string; NULL with length 0 is an empty blob.
  */
-struct FfiResult chat_xdk_import_keys_params(const struct ChatHandle *handle,
-                                             const uint8_t *keys,
-                                             uintptr_t keys_len,
-                                             const char *params_json);
+struct FfiResult chat_xdk_import_keys(const struct ChatHandle *handle,
+                                      const uint8_t *keys,
+                                      uintptr_t keys_len,
+                                      const char *params_json);
 
 /**
  * `events_json`: JSON array of base64-encoded event strings.
@@ -260,8 +295,7 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
  * "identity_public_key","identity_public_key_signature"},...]`); absent or
  * empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
  */
-struct FfiResult chat_xdk_decrypt_events_params(const struct ChatHandle *handle,
-                                                const char *params_json);
+struct FfiResult chat_xdk_decrypt_events(const struct ChatHandle *handle, const char *params_json);
 
 /**
  * Prepare a signed conversation-key change.
@@ -513,18 +547,17 @@ struct FfiResult chat_xdk_prepare_mark_conversation_read(const struct ChatHandle
  *
  * `params_json` — single JSON document: `event_b64` (the base64 event),
  * `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
- * `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
+ * `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
  * for events without message contents, which also falls back to the opt-in
  * key cache), plus optional `signing_keys` (as for
- * `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
+ * `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
  * events fail decryption under the default reject-unverified policy
  * (disable it via `chat_xdk_set_reject_unverified` to have them returned
  * with `verified: false` instead).
  *
  * Returns JSON representation of the decrypted Event.
  */
-struct FfiResult chat_xdk_decrypt_event_params(const struct ChatHandle *handle,
-                                               const char *params_json);
+struct FfiResult chat_xdk_decrypt_event(const struct ChatHandle *handle, const char *params_json);
 
 /**
  * Encrypt a message for the X API.
@@ -720,36 +753,33 @@ struct FfiResult chat_xdk_sign(const struct ChatHandle *handle,
                                uintptr_t data_len);
 
 /**
- * Verify a signature.
- *
- * Returns 1 if valid, 0 if invalid, -1 on error.
+ * Verify a raw r||s signature over `data` with a base64 P-256 public key:
+ * `true` or `false`. A malformed public key or signature is an error.
+ * Needs no loaded keys.
  */
-int32_t chat_xdk_verify(const struct ChatHandle *handle,
-                        const char *public_key_b64,
-                        const char *signature_b64,
-                        const uint8_t *data,
-                        uintptr_t data_len);
+struct FfiResult chat_xdk_verify(const struct ChatHandle *handle,
+                                 const char *public_key_b64,
+                                 const char *signature_b64,
+                                 const uint8_t *data,
+                                 uintptr_t data_len);
 
 /**
- * Verify that a signing key is authentically bound to an identity key.
- *
- * All three arguments are base64 strings. Returns 1 if the binding is
- * valid, 0 if it is not, and -1 on error (e.g. malformed input).
+ * Verify that a signing key is authentically bound to an identity key:
+ * `true` or `false`. All three arguments are base64 strings; a malformed
+ * one is an error.
  */
-int32_t chat_xdk_verify_key_binding(const struct ChatHandle *handle,
-                                    const char *identity_public_key_b64,
-                                    const char *signing_public_key_b64,
-                                    const char *identity_public_key_signature_b64);
+struct FfiResult chat_xdk_verify_key_binding(const struct ChatHandle *handle,
+                                             const char *identity_public_key_b64,
+                                             const char *signing_public_key_b64,
+                                             const char *identity_public_key_signature_b64);
 
 /**
- * Report whether the loaded identity public key is the key in
- * `public_key_b64` (raw SEC1 point or SPKI/DER, base64-encoded).
- *
- * Returns 1 on a match, 0 on a mismatch, and -1 on error (no identity
- * keypair loaded or malformed input).
+ * Whether the loaded identity public key is the key in `public_key_b64`
+ * (raw SEC1 point or SPKI/DER, base64-encoded): `true` or `false`. Errors
+ * when no identity key is loaded or the input is not base64.
  */
-int32_t chat_xdk_matches_registered_key(const struct ChatHandle *handle,
-                                        const char *public_key_b64);
+struct FfiResult chat_xdk_matches_registered_key(const struct ChatHandle *handle,
+                                                 const char *public_key_b64);
 
 #ifdef __cplusplus
 }  // extern "C"

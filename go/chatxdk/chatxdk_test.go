@@ -474,13 +474,11 @@ func TestExportImportRoundtrip(t *testing.T) {
 	chat := New()
 	defer chat.Close()
 
-	// Locked: ExportKeys returns nil without an error.
+	// Locked: ExportKeys fails, as the core does with no identity key.
 	locked, err := chat.ExportKeys()
-	if err != nil {
-		t.Fatalf("ExportKeys (locked) failed: %v", err)
-	}
-	if locked != nil {
-		t.Fatal("expected nil exported keys while locked")
+	var chatErr *Error
+	if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidState || locked != nil {
+		t.Fatalf("ExportKeys (locked): %v, %v", locked, err)
 	}
 
 	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
@@ -2415,37 +2413,44 @@ func TestUpdateConfigInvalid(t *testing.T) {
 	}
 }
 
-// TestGuessesRemaining pins the parsing of the stable "guesses_remaining=N"
-// token the core emits on invalid-PIN unlock failures; 0 means the guess
-// budget is exhausted. Errors without the token report ok=false.
-func TestGuessesRemaining(t *testing.T) {
-	if n, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN: guesses_remaining=3")); !ok || n != 3 {
-		t.Errorf("expected (3, true), got (%d, %v)", n, ok)
-	}
-	if n, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN: guesses_remaining=0")); !ok || n != 0 {
-		t.Errorf("expected (0, true), got (%d, %v)", n, ok)
-	}
-	if _, ok := GuessesRemaining(errors.New("Juicebox error: Invalid PIN")); ok {
-		t.Error("expected ok=false without the token")
-	}
-	// The count is read only from the invalid-PIN form, not from unrelated
-	// messages that happen to contain the token.
-	if _, ok := GuessesRemaining(errors.New("Delete failed: guesses_remaining=7")); ok {
-		t.Error("expected ok=false for a non-PIN message carrying the token")
-	}
-	if _, ok := GuessesRemaining(nil); ok {
-		t.Error("expected ok=false for nil error")
-	}
-
-	// A real error from the binding's own path carries no count.
+// TestErrorsCarryTheirKind checks that every failure is an *Error with the
+// kind the core reports, and that an invalid-PIN error document's count
+// reaches GuessesRemaining.
+func TestErrorsCarryTheirKind(t *testing.T) {
 	chat := New()
 	defer chat.Close()
-	err := chat.UpdateConfig("not-valid-json")
-	if err == nil {
-		t.Fatal("expected error for invalid JSON config")
+	kindOf := func(err error) ErrorKind {
+		t.Helper()
+		var chatErr *Error
+		if !errors.As(err, &chatErr) {
+			t.Fatalf("expected an *Error, got %v", err)
+		}
+		return chatErr.Kind
 	}
-	if _, ok := GuessesRemaining(err); ok {
-		t.Error("expected ok=false for a non-PIN error")
+
+	if kind := kindOf(chat.UpdateConfig("not-valid-json")); kind != ErrorKindInvalidInput {
+		t.Errorf("UpdateConfig: %s", kind)
+	}
+	if _, err := chat.Setup([]byte("123")); kindOf(err) != ErrorKindInvalidInput {
+		t.Errorf("weak PIN: %v", err)
+	}
+	if _, err := chat.DecryptEvent(DecryptEventParams{EventB64: "not base64!"}); kindOf(err) != ErrorKindParse {
+		t.Errorf("garbage event: %v", err)
+	}
+	if _, err := chat.Verify("not base64!", make([]byte, 64), []byte("data")); kindOf(err) != ErrorKindInvalidInput {
+		t.Errorf("malformed public key: %v", err)
+	}
+	if _, err := chat.Sign([]byte("data")); kindOf(err) != ErrorKindInvalidState {
+		t.Errorf("sign while locked: %v", err)
+	}
+
+	wrongPin := errorFromDocument(`{"kind":"invalid_pin","message":"Juicebox error: Invalid PIN: guesses_remaining=3","guesses_remaining":3}`)
+	if wrongPin.Kind != ErrorKindInvalidPin || wrongPin.GuessesRemaining == nil || *wrongPin.GuessesRemaining != 3 {
+		t.Errorf("invalid PIN document: %+v", wrongPin)
+	}
+	noCount := errorFromDocument(`{"kind":"invalid_pin","message":"Juicebox error: Invalid PIN"}`)
+	if noCount.GuessesRemaining != nil || noCount.Error() != "Juicebox error: Invalid PIN" {
+		t.Errorf("invalid PIN without a count: %+v", noCount)
 	}
 }
 

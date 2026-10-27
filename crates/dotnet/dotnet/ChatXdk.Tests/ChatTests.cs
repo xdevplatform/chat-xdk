@@ -264,26 +264,32 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
-        public void GuessesRemaining_ParsedFromInvalidPinMessage()
+        public void Errors_CarryTheirKind()
         {
-            // The core's invalid-PIN unlock error carries the stable
-            // "guesses_remaining=N" token in the message; 0 means exhausted.
-            Assert.Equal(3,
-                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=3").GuessesRemaining);
-            Assert.Equal(0,
-                new ChatXdkException("Juicebox error: Invalid PIN: guesses_remaining=0").GuessesRemaining);
-            Assert.Null(new ChatXdkException("Juicebox error: Invalid PIN").GuessesRemaining);
-            // The count is read only from the invalid-PIN form, not from
-            // unrelated messages that happen to contain the token.
-            Assert.Null(new ChatXdkException("Delete failed: guesses_remaining=7").GuessesRemaining);
+            using var chat = new Chat();
+            var config = Assert.Throws<ChatXdkException>(() => chat.UpdateConfig("not json"));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, config.Kind);
+            Assert.Null(config.GuessesRemaining);
+            Assert.Equal(ChatXdkErrorKind.InvalidInput,
+                Assert.Throws<ChatXdkException>(() => chat.Setup(System.Text.Encoding.UTF8.GetBytes("123"))).Kind);
+            Assert.Equal(ChatXdkErrorKind.Parse,
+                Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(new DecryptEventParams("not base64!"))).Kind);
+            Assert.Equal(ChatXdkErrorKind.InvalidState,
+                Assert.Throws<ChatXdkException>(() => chat.Sign(new byte[] { 1 })).Kind);
+            Assert.Throws<ArgumentNullException>(() => new Chat(null!));
         }
 
         [Fact]
-        public void GuessesRemaining_NullOnNonPinErrors()
+        public void Errors_ReadTheInvalidPinCount()
         {
-            using var chat = new Chat();
-            var ex = Assert.Throws<ChatXdkException>(() => chat.UpdateConfig("not json"));
-            Assert.Null(ex.GuessesRemaining);
+            var wrongPin = ChatXdkException.FromDocument(
+                "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN: guesses_remaining=3\",\"guesses_remaining\":3}");
+            Assert.Equal(ChatXdkErrorKind.InvalidPin, wrongPin.Kind);
+            Assert.Equal(3, wrongPin.GuessesRemaining);
+            Assert.Equal("Juicebox error: Invalid PIN: guesses_remaining=3", wrongPin.Message);
+            var noCount = ChatXdkException.FromDocument(
+                "{\"kind\":\"invalid_pin\",\"message\":\"Juicebox error: Invalid PIN\"}");
+            Assert.Null(noCount.GuessesRemaining);
         }
 
         // Key generation
@@ -324,7 +330,7 @@ namespace ChatXdk.Tests
 
             // Restored keys carry the version passed to ImportKeys, and none
             // without it.
-            var keys = chat.ExportKeys()!;
+            var keys = chat.ExportKeys();
             using var restored = new Chat();
             restored.ImportKeys(new ImportKeysParams(keys) { SigningKeyVersion = "1700000000456" });
             Assert.Equal(
@@ -401,7 +407,7 @@ namespace ChatXdk.Tests
         public void ExportKeys_IdentityOnly_Returns32Bytes()
         {
             using var source = CreateUnlocked();
-            var identityOnly = source.ExportKeys()!.Take(32).ToArray();
+            var identityOnly = source.ExportKeys().Take(32).ToArray();
 
             // Identity-only sessions can export (32 bytes), matching core;
             // only a session with no identity key at all returns null.
@@ -1393,8 +1399,8 @@ namespace ChatXdk.Tests
             using var chat = new Chat();
             Assert.Throws<ChatXdkException>(() => chat.GetPublicKeys());
             Assert.Throws<ChatXdkException>(() => chat.Sign(new byte[] { 1, 2, 3 }));
-            // ExportKeys returns null (not throws) when locked
-            Assert.Null(chat.ExportKeys());
+            Assert.Equal(ChatXdkErrorKind.InvalidState,
+                Assert.Throws<ChatXdkException>(() => chat.ExportKeys()).Kind);
         }
 
         // P/Invoke plumbing smoke only: the flag crosses the boundary without a

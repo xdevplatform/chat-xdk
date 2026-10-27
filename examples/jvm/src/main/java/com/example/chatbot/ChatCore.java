@@ -67,8 +67,7 @@ public final class ChatCore implements AutoCloseable {
     /** Generate a fresh identity to register with the X API. */
     public Generated generateAndRegister() throws Exception {
         PublicKeyRegistrationPayload payload = chat.generateKeypairs();
-        byte[] exported = chat.exportKeys();
-        String blob = exported == null ? "" : Base64.getEncoder().encodeToString(exported);
+        String blob = Base64.getEncoder().encodeToString(chat.exportKeys());
         return new Generated(payload, blob);
     }
 

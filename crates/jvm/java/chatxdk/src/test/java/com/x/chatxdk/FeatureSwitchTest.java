@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +28,7 @@ class FeatureSwitchTest {
 
     /** A keyed chat that reads its feature switches from {@code endpoint}. */
     private static Chat newChat(String endpoint, long timeoutMs) throws Exception {
-        Chat chat = new Chat(endpoint, Duration.ofMillis(timeoutMs));
+        Chat chat = new Chat(null, endpoint, Duration.ofMillis(timeoutMs));
         chat.generateKeypairs();
         chat.setIdentity(new SetIdentityParams("1001", "1"));
         return chat;
@@ -65,7 +66,15 @@ class FeatureSwitchTest {
         for (Method method : Chat.class.getMethods()) {
             assertFalse(method.getName().toLowerCase().contains("feature"), method.getName());
         }
-        assertEquals(1, Chat.class.getConstructors().length);
+        // The public constructors take no feature endpoint: Chat() and Chat(juiceboxConfigJson).
+        assertEquals(
+                List.of("", "String"),
+                Arrays.stream(Chat.class.getConstructors())
+                        .map(c -> Arrays.stream(c.getParameterTypes())
+                                .map(Class::getSimpleName)
+                                .collect(Collectors.joining(",")))
+                        .sorted()
+                        .collect(Collectors.toList()));
         for (Class<?> type : Types.class.getClasses()) {
             assertFalse(type.getSimpleName().contains("Feature"), type.getSimpleName());
         }

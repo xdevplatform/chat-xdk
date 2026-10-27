@@ -14,35 +14,38 @@ public interface ChatNative extends Library {
 
     ChatNative INSTANCE = NativeLoader.load(ChatNative.class);
 
-    Pointer chat_xdk_new();
+    int chat_xdk_abi_version();
+
+    FfiResult.ByValue chat_xdk_new(Pointer juiceboxConfigJson, PointerByReference outChat);
 
     void chat_xdk_free(Pointer handle);
 
     void chat_xdk_free_string(Pointer s);
 
-    int chat_xdk_is_unlocked(Pointer handle);
+    FfiResult.ByValue chat_xdk_is_unlocked(Pointer handle);
 
-    int chat_xdk_has_identity_key(Pointer handle);
+    FfiResult.ByValue chat_xdk_has_identity_key(Pointer handle);
 
-    void chat_xdk_set_reject_unverified(Pointer handle, int reject);
+    FfiResult.ByValue chat_xdk_set_reject_unverified(Pointer handle, int reject);
 
-    FfiResult.ByValue chat_xdk_set_identity_params(Pointer handle, Pointer paramsJson);
+    FfiResult.ByValue chat_xdk_set_identity(Pointer handle, Pointer paramsJson);
 
-    void chat_xdk_set_cache_keys(Pointer handle, int enabled);
+    FfiResult.ByValue chat_xdk_set_cache_keys(Pointer handle, int enabled);
 
     FfiResult.ByValue chat_xdk_set_signing_keys(Pointer handle, Pointer signingKeysJson);
 
-    void chat_xdk_lock(Pointer handle);
+    FfiResult.ByValue chat_xdk_lock(Pointer handle);
 
     FfiResult.ByValue chat_xdk_update_config(Pointer handle, Pointer configJson);
 
-    FfiResult.ByValue chat_xdk_setup(Pointer handle, Pointer pin, Pointer configJson);
+    FfiResult.ByValue chat_xdk_setup(Pointer handle, Pointer pin, long pinLen);
 
-    FfiResult.ByValue chat_xdk_unlock(Pointer handle, Pointer pin, Pointer configJson);
+    FfiResult.ByValue chat_xdk_unlock(Pointer handle, Pointer pin, long pinLen);
 
     FfiResult.ByValue chat_xdk_delete(Pointer handle);
 
-    FfiResult.ByValue chat_xdk_change_pin(Pointer handle, Pointer oldPin, Pointer newPin);
+    FfiResult.ByValue chat_xdk_change_pin(
+            Pointer handle, Pointer oldPin, long oldPinLen, Pointer newPin, long newPinLen);
 
     FfiResult.ByValue chat_xdk_generate_keypairs(Pointer handle);
 
@@ -52,12 +55,12 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_export_keys(Pointer handle);
 
-    FfiResult.ByValue chat_xdk_import_keys_params(
+    FfiResult.ByValue chat_xdk_import_keys(
             Pointer handle, Pointer keys, long keysLen, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_extract_conversation_keys(Pointer handle, Pointer eventsJson);
 
-    FfiResult.ByValue chat_xdk_decrypt_events_params(Pointer handle, Pointer paramsJson);
+    FfiResult.ByValue chat_xdk_decrypt_events(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_prepare_conversation_key_change(Pointer handle, Pointer paramsJson);
 
@@ -97,7 +100,7 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_mark_conversation_read(Pointer handle, Pointer paramsJson);
 
-    FfiResult.ByValue chat_xdk_decrypt_event_params(Pointer handle, Pointer paramsJson);
+    FfiResult.ByValue chat_xdk_decrypt_event(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_message(Pointer handle, Pointer paramsJson);
 
@@ -137,11 +140,11 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_sign(Pointer handle, Pointer data, long dataLen);
 
-    int chat_xdk_verify(Pointer handle, Pointer publicKeyB64, Pointer signatureB64, Pointer data, long dataLen);
+    FfiResult.ByValue chat_xdk_verify(Pointer handle, Pointer publicKeyB64, Pointer signatureB64, Pointer data, long dataLen);
 
-    int chat_xdk_verify_key_binding(Pointer handle, Pointer identityPublicKeyB64, Pointer signingPublicKeyB64, Pointer identityPublicKeySignatureB64);
+    FfiResult.ByValue chat_xdk_verify_key_binding(Pointer handle, Pointer identityPublicKeyB64, Pointer signingPublicKeyB64, Pointer identityPublicKeySignatureB64);
 
-    int chat_xdk_matches_registered_key(Pointer handle, Pointer publicKeyB64);
+    FfiResult.ByValue chat_xdk_matches_registered_key(Pointer handle, Pointer publicKeyB64);
 
     FfiResult.ByValue chat_xdk_encrypted_file_size(long plaintextSize);
 

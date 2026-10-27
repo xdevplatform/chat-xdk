@@ -2,14 +2,12 @@
 //! bindings. Go links it as a static archive; .NET (P/Invoke) and the JVM
 //! (JNA) load it as a shared library.
 //!
-//! Complex values cross the boundary as JSON strings. All `*mut c_char`
-//! must be freed via `chat_xdk_free_string`. The opaque `ChatHandle` must be
-//! freed via `chat_xdk_free`.
-//!
-//! `ChatHandle` crosses the boundary as a raw pointer, so nothing on the
-//! caller's side enforces exclusive access: calls that take the handle as
-//! `*mut` (setup, unlock, delete, change_pin, update_config,
-//! set_reject_unverified) must not race any other call on the same handle.
+//! Every function returns an [`FfiResult`], apart from
+//! [`chat_xdk_abi_version`] and the `_free` functions. Complex values cross
+//! the boundary as JSON strings, booleans as `true` / `false`. All
+//! `*mut c_char` must be freed via `chat_xdk_free_string`. The opaque
+//! `ChatHandle` must be freed via `chat_xdk_free`, after every call on it
+//! has returned; until then calls on one handle may run on any thread.
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
@@ -24,6 +22,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
+use chat_xdk_core::error::{ErrorKind, SdkError};
 #[cfg(feature = "juicebox")]
 use chat_xdk_core::keys::juicebox::{JuiceboxClient, JuiceboxConfig};
 use chat_xdk_core::{
@@ -39,19 +38,36 @@ use chat_xdk_core::{
     SetIdentityParams, SigningKeyEntry,
 };
 
+/// The version of this C ABI: the functions and the shapes of their
+/// arguments and results. A header and a library with different versions
+/// don't match; compare it with [`chat_xdk_abi_version`] at startup.
+pub const CHAT_XDK_ABI_VERSION: u32 = 1;
+
 // FFI result type
 
 /// Result type returned by FFI functions.
 ///
 /// On success: `data` contains the result (may be NULL for void operations),
 ///             `error` is NULL.
-/// On error:   `data` is NULL, `error` contains the error message.
+/// On error:   `data` is NULL, `error` is a JSON error document:
+///             `{"kind": "...", "message": "..."}`, with
+///             `"guesses_remaining": N` added to an `invalid_pin` error when
+///             Juicebox reports the attempts left. `kind` is one of
+///             `invalid_input`, `invalid_state`, `parse`, `decryption`,
+///             `verification`, `invalid_pin`, `juicebox` and `internal`.
 ///
 /// Both fields must be freed with `chat_xdk_free_string` when non-NULL.
 #[repr(C)]
 pub struct FfiResult {
     pub data: *mut c_char,
     pub error: *mut c_char,
+}
+
+/// The version of this C ABI, [`CHAT_XDK_ABI_VERSION`] when the library
+/// matches the header it was built with.
+#[no_mangle]
+pub extern "C" fn chat_xdk_abi_version() -> u32 {
+    CHAT_XDK_ABI_VERSION
 }
 
 // Opaque handle
@@ -116,26 +132,35 @@ fn ok_void() -> FfiResult {
     }
 }
 
-fn err_result(msg: &str) -> FfiResult {
+fn ok_bool(value: bool) -> FfiResult {
+    ok_data(if value { "true" } else { "false" })
+}
+
+fn error_result(document: String) -> FfiResult {
     FfiResult {
         data: std::ptr::null_mut(),
-        error: to_c_string(msg),
+        error: to_c_string(&document),
     }
 }
 
-fn format_error(e: &dyn std::error::Error) -> String {
-    let mut msg = e.to_string();
-    let mut source = e.source();
-    while let Some(err) = source {
-        msg.push_str("\ncaused by: ");
-        msg.push_str(&err.to_string());
-        source = err.source();
-    }
-    msg
+/// An error of the given kind that arises in this layer rather than in the
+/// core, such as a NULL handle or a params document that doesn't parse.
+fn kind_error(kind: ErrorKind, msg: &str) -> FfiResult {
+    error_result(serde_json::json!({ "kind": kind.as_str(), "message": msg }).to_string())
 }
 
-fn err_from(e: impl std::error::Error) -> FfiResult {
-    err_result(&format_error(&e))
+/// An invalid argument passed across the boundary.
+fn err_result(msg: &str) -> FfiResult {
+    kind_error(ErrorKind::InvalidInput, msg)
+}
+
+/// A result that failed to serialize.
+fn internal_error(e: impl std::fmt::Display) -> FfiResult {
+    kind_error(ErrorKind::Internal, &e.to_string())
+}
+
+fn err_from(e: impl Into<SdkError>) -> FfiResult {
+    error_result(bindings::error_document(&e.into()))
 }
 
 /// Best-effort text for a panic payload (typically `&str` or `String`).
@@ -151,8 +176,12 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 /// unwind never crosses the `extern "C"` boundary (which would abort the host
 /// process).
 fn catch_ffi(body: impl FnOnce() -> FfiResult) -> FfiResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(body))
-        .unwrap_or_else(|p| err_result(&format!("Internal panic: {}", panic_message(p.as_ref()))))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or_else(|p| {
+        kind_error(
+            ErrorKind::Internal,
+            &format!("Internal panic: {}", panic_message(p.as_ref())),
+        )
+    })
 }
 
 /// [`catch_ffi`] for entry points that cannot carry an error message: a panic
@@ -268,111 +297,121 @@ pub extern "C" fn chat_xdk_detect_image_dimensions(data: *const u8, data_len: us
 
 // Lifecycle functions
 
-/// Create a new Chat SDK instance.
+/// Create a new Chat SDK instance and write its handle to `out_chat`.
 ///
-/// Returns an opaque handle that must be freed with [`chat_xdk_free`].
-/// Returns NULL on failure.
+/// `juicebox_config_json` is the Juicebox configuration JSON the X API
+/// returns, which `chat_xdk_setup`, `chat_xdk_unlock`,
+/// `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL or an empty string
+/// for a chat that manages its keys with `chat_xdk_import_keys` alone. On
+/// failure `out_chat` is set to NULL. Free the handle with [`chat_xdk_free`].
 #[no_mangle]
-pub extern "C" fn chat_xdk_new() -> *mut ChatHandle {
-    catch_ffi_or(std::ptr::null_mut(), || {
+pub extern "C" fn chat_xdk_new(
+    juicebox_config_json: *const c_char,
+    out_chat: *mut *mut ChatHandle,
+) -> FfiResult {
+    catch_ffi(|| {
+        if out_chat.is_null() {
+            return err_result("Null out_chat");
+        }
+        unsafe { *out_chat = std::ptr::null_mut() };
+        let config_json = try_str!(juicebox_config_json);
         #[cfg(feature = "juicebox")]
-        {
+        let handle = {
+            let config = if config_json.is_empty() {
+                JuiceboxConfig::from_json("{}".to_string())
+            } else {
+                match parse_juicebox_config(config_json) {
+                    Ok(c) => c,
+                    Err(e) => return e,
+                }
+            };
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
-                Err(_) => return std::ptr::null_mut(),
+                Err(e) => return internal_error(e),
             };
-            let config = JuiceboxConfig::from_json("{}".to_string());
             let inner = chat_xdk_core::Chat::with_juicebox(config, Arc::new(JuiceboxClient::new()));
-            Box::into_raw(Box::new(ChatHandle { inner, runtime }))
-        }
+            ChatHandle { inner, runtime }
+        };
         #[cfg(not(feature = "juicebox"))]
-        {
-            Box::into_raw(Box::new(ChatHandle {
+        let handle = {
+            if !config_json.is_empty() {
+                return err_result(
+                    "this library is built without Juicebox: pass no Juicebox config",
+                );
+            }
+            ChatHandle {
                 inner: chat_xdk_core::ChatCore::new(),
-            }))
-        }
+            }
+        };
+        unsafe { *out_chat = Box::into_raw(Box::new(handle)) };
+        ok_void()
     })
 }
 
-/// Update the Juicebox configuration (e.g., to refresh auth tokens).
+/// Replace the Juicebox configuration (e.g., to refresh auth tokens).
 #[cfg(feature = "juicebox")]
 #[no_mangle]
 pub extern "C" fn chat_xdk_update_config(
-    handle: *mut ChatHandle,
+    handle: *const ChatHandle,
     config_json: *const c_char,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
-        let h = unsafe { &mut *handle };
-        let config_json = try_str!(config_json);
-        let config = match parse_juicebox_config(config_json) {
+        let h = unsafe { &*handle };
+        let config = match parse_juicebox_config(try_str!(config_json)) {
             Ok(c) => c,
-            Err(e) => return err_result(&e),
+            Err(e) => return e,
         };
         h.inner.update_config(config);
         ok_void()
     })
 }
 
-/// Register existing keys with Juicebox (first-time setup).
+/// Register the loaded keys with Juicebox under `pin` (first-time setup) and
+/// return the public keys as JSON. `pin` / `pin_len` are the PIN's bytes,
+/// which the caller can wipe once the call returns.
 #[cfg(feature = "juicebox")]
 #[no_mangle]
 pub extern "C" fn chat_xdk_setup(
-    handle: *mut ChatHandle,
-    pin: *const c_char,
-    config_json: *const c_char,
+    handle: *const ChatHandle,
+    pin: *const u8,
+    pin_len: usize,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
-        let h = unsafe { &mut *handle };
-        let pin = try_str!(pin);
-        let config_json = try_str!(config_json);
-        let config = match parse_juicebox_config(config_json) {
-            Ok(c) => c,
-            Err(e) => return err_result(&e),
-        };
-        h.inner.update_config(config);
-        match h
-            .runtime
-            .block_on(async { h.inner.setup(pin.as_bytes()).await })
-        {
+        let h = unsafe { &*handle };
+        let pin = unsafe { bytes_from_ffi_ptr(pin, pin_len) };
+        match h.runtime.block_on(h.inner.setup(pin)) {
             Ok(keys) => match serde_json::to_string(&keys) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
     })
 }
 
-/// Unlock the SDK by recovering keys from Juicebox.
+/// Recover the keys from Juicebox with `pin` and load them. `pin` /
+/// `pin_len` are the PIN's bytes, which the caller can wipe once the call
+/// returns.
 #[cfg(feature = "juicebox")]
 #[no_mangle]
 pub extern "C" fn chat_xdk_unlock(
-    handle: *mut ChatHandle,
-    pin: *const c_char,
-    config_json: *const c_char,
+    handle: *const ChatHandle,
+    pin: *const u8,
+    pin_len: usize,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
-        let h = unsafe { &mut *handle };
-        let pin = try_str!(pin);
-        let config_json = try_str!(config_json);
-        let config = match parse_juicebox_config(config_json) {
-            Ok(c) => c,
-            Err(e) => return err_result(&e),
-        };
-        h.inner.update_config(config);
-        match h
-            .runtime
-            .block_on(async { h.inner.unlock(pin.as_bytes()).await })
-        {
+        let h = unsafe { &*handle };
+        let pin = unsafe { bytes_from_ffi_ptr(pin, pin_len) };
+        match h.runtime.block_on(h.inner.unlock(pin)) {
             Ok(()) => ok_void(),
             Err(e) => err_from(e),
         }
@@ -382,39 +421,39 @@ pub extern "C" fn chat_xdk_unlock(
 /// Delete keys from Juicebox and clear from memory.
 #[cfg(feature = "juicebox")]
 #[no_mangle]
-pub extern "C" fn chat_xdk_delete(handle: *mut ChatHandle) -> FfiResult {
+pub extern "C" fn chat_xdk_delete(handle: *const ChatHandle) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
-        let h = unsafe { &mut *handle };
-        match h.runtime.block_on(async { h.inner.delete().await }) {
+        let h = unsafe { &*handle };
+        match h.runtime.block_on(h.inner.delete()) {
             Ok(()) => ok_void(),
             Err(e) => err_from(e),
         }
     })
 }
 
-/// Change the PIN protecting keys in Juicebox.
+/// Re-register the keys in Juicebox under a new PIN, after unlocking with
+/// the old one. Both PINs are bytes the caller can wipe once the call
+/// returns.
 #[cfg(feature = "juicebox")]
 #[no_mangle]
 pub extern "C" fn chat_xdk_change_pin(
-    handle: *mut ChatHandle,
-    old_pin: *const c_char,
-    new_pin: *const c_char,
+    handle: *const ChatHandle,
+    old_pin: *const u8,
+    old_pin_len: usize,
+    new_pin: *const u8,
+    new_pin_len: usize,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
             return err_result("Null handle");
         }
-        let h = unsafe { &mut *handle };
-        let old_pin = try_str!(old_pin);
-        let new_pin = try_str!(new_pin);
-        match h.runtime.block_on(async {
-            h.inner
-                .change_pin(old_pin.as_bytes(), new_pin.as_bytes())
-                .await
-        }) {
+        let h = unsafe { &*handle };
+        let old_pin = unsafe { bytes_from_ffi_ptr(old_pin, old_pin_len) };
+        let new_pin = unsafe { bytes_from_ffi_ptr(new_pin, new_pin_len) };
+        match h.runtime.block_on(h.inner.change_pin(old_pin, new_pin)) {
             Ok(()) => ok_void(),
             Err(e) => err_from(e),
         }
@@ -422,8 +461,9 @@ pub extern "C" fn chat_xdk_change_pin(
 }
 
 #[cfg(feature = "juicebox")]
-fn parse_juicebox_config(config_json: &str) -> Result<JuiceboxConfig, String> {
+fn parse_juicebox_config(config_json: &str) -> Result<JuiceboxConfig, FfiResult> {
     JuiceboxConfig::from_x_api_json(config_json)
+        .map_err(|e| err_result(&format!("Invalid Juicebox config: {e}")))
 }
 
 /// Free a Chat SDK instance.
@@ -461,55 +501,46 @@ pub extern "C" fn chat_xdk_free_string(s: *mut c_char) {
 
 // Simple state functions
 
-/// Check if the SDK is unlocked (both identity and signing keys loaded).
-///
-/// Returns 1 if unlocked, 0 if locked, -1 if handle is NULL.
+/// Whether both the identity and the signing key are loaded: `true` or
+/// `false`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_is_unlocked(handle: *const ChatHandle) -> i32 {
-    catch_ffi_or(-1, || {
+pub extern "C" fn chat_xdk_is_unlocked(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return -1;
+            return err_result("Null handle");
         }
-        let h = unsafe { &*handle };
-        if h.inner.is_unlocked() {
-            1
-        } else {
-            0
-        }
+        ok_bool(unsafe { &*handle }.inner.is_unlocked())
     })
 }
 
-/// Check if the identity key is loaded (sufficient for decryption).
-///
-/// Returns 1 if identity key loaded, 0 if not, -1 if handle is NULL.
+/// Whether the identity key is loaded (sufficient for decryption): `true`
+/// or `false`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_has_identity_key(handle: *const ChatHandle) -> i32 {
-    catch_ffi_or(-1, || {
+pub extern "C" fn chat_xdk_has_identity_key(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return -1;
+            return err_result("Null handle");
         }
-        let h = unsafe { &*handle };
-        if h.inner.has_identity_key() {
-            1
-        } else {
-            0
-        }
+        ok_bool(unsafe { &*handle }.inner.has_identity_key())
     })
 }
 
-/// Enable or disable rejection of unverified events.
+/// Enable (non-zero) or disable (0) rejection of unverified events.
 ///
-/// When enabled — the default — `chat_xdk_decrypt_event_params` returns an error for
+/// When enabled — the default — `chat_xdk_decrypt_event` returns an error for
 /// any signed event whose signature cannot be verified (invalid, missing, or
 /// no matching signing key) instead of returning it with `verified: false`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_set_reject_unverified(handle: *mut ChatHandle, reject: i32) {
-    catch_ffi_or((), || {
+pub extern "C" fn chat_xdk_set_reject_unverified(
+    handle: *const ChatHandle,
+    reject: i32,
+) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return;
+            return err_result("Null handle");
         }
-        let h = unsafe { &mut *handle };
-        h.inner.set_reject_unverified(reject != 0);
+        unsafe { &*handle }.inner.set_reject_unverified(reject != 0);
+        ok_void()
     })
 }
 
@@ -518,7 +549,7 @@ pub extern "C" fn chat_xdk_set_reject_unverified(handle: *mut ChatHandle, reject
 /// defaults wherever a params document omits `sender_id` /
 /// `signing_key_version`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_set_identity_params(
+pub extern "C" fn chat_xdk_set_identity(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {
@@ -544,18 +575,18 @@ pub extern "C" fn chat_xdk_set_identity_params(
 /// Enable (non-zero) or disable (0) the conversation-key cache (off by
 /// default).
 ///
-/// While enabled, `chat_xdk_decrypt_events_params` caches each conversation's
+/// While enabled, `chat_xdk_decrypt_events` caches each conversation's
 /// verified latest key and the encrypt functions resolve an omitted
 /// `conversation_key`/`conversation_key_version` pair from it. Disabling
 /// clears the cache.
 #[no_mangle]
-pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i32) {
-    catch_ffi_or((), || {
+pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i32) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return;
+            return err_result("Null handle");
         }
-        let h = unsafe { &*handle };
-        h.inner.set_cache_keys(enabled != 0);
+        unsafe { &*handle }.inner.set_cache_keys(enabled != 0);
+        ok_void()
     })
 }
 
@@ -574,7 +605,7 @@ pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> 
         match unsafe { &*handle }.inner.start_features() {
             Some(fetch) => match serde_json::to_string(&fetch) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_from(e),
+                Err(e) => internal_error(e),
             },
             None => ok_void(),
         }
@@ -648,7 +679,7 @@ pub extern "C" fn chat_xdk_internal_feature_set_default_endpoint(
 /// `signing_keys_json`.
 ///
 /// `signing_keys_json` takes the same array shape as
-/// `chat_xdk_decrypt_events_params`. Each call replaces the previous set; only this
+/// `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
 /// call populates the store — keys carried inside events are never trusted.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_signing_keys(
@@ -671,13 +702,13 @@ pub extern "C" fn chat_xdk_set_signing_keys(
 
 /// Lock the SDK, clearing keys from memory.
 #[no_mangle]
-pub extern "C" fn chat_xdk_lock(handle: *const ChatHandle) {
-    catch_ffi_or((), || {
+pub extern "C" fn chat_xdk_lock(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return;
+            return err_result("Null handle");
         }
-        let h = unsafe { &*handle };
-        h.inner.lock();
+        unsafe { &*handle }.inner.lock();
+        ok_void()
     })
 }
 
@@ -696,7 +727,7 @@ pub extern "C" fn chat_xdk_generate_keypairs(handle: *const ChatHandle) -> FfiRe
         match h.inner.generate_keypairs() {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -716,7 +747,7 @@ pub extern "C" fn chat_xdk_get_public_keys(handle: *const ChatHandle) -> FfiResu
         match h.inner.get_public_keys() {
             Ok(keys) => match serde_json::to_string(&keys) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -741,10 +772,9 @@ pub extern "C" fn chat_xdk_get_public_key_fingerprint(handle: *const ChatHandle)
     })
 }
 
-/// Export private keys as a base64 string.
-///
-/// Returns base64-encoded private key bytes (32 or 64), or NULL data if no
-/// identity key is loaded.
+/// Export the loaded private keys as a base64 string: 32 bytes for the
+/// identity key, 64 with the signing key. Errors when no identity key is
+/// loaded.
 #[no_mangle]
 pub extern "C" fn chat_xdk_export_keys(handle: *const ChatHandle) -> FfiResult {
     catch_ffi(|| {
@@ -752,11 +782,6 @@ pub extern "C" fn chat_xdk_export_keys(handle: *const ChatHandle) -> FfiResult {
             return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        // Mirror core's export requirement: identity key present (signing key
-        // optional, giving a 32-byte export). NULL data = no identity key.
-        if !h.inner.has_identity_key() {
-            return ok_void();
-        }
         match h.inner.export_keys() {
             // Both the raw exported bytes and their base64 re-encoding are
             // private key material; wipe both on drop. The C-string copy handed
@@ -779,7 +804,7 @@ pub extern "C" fn chat_xdk_export_keys(handle: *const ChatHandle) -> FfiResult {
 /// keys were registered under. The key bytes stay out of the JSON so they are
 /// never copied into a string; NULL with length 0 is an empty blob.
 #[no_mangle]
-pub extern "C" fn chat_xdk_import_keys_params(
+pub extern "C" fn chat_xdk_import_keys(
     handle: *const ChatHandle,
     keys: *const u8,
     keys_len: usize,
@@ -882,9 +907,9 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
         match json_conversation_key_bundle(&keys) {
             Ok(v) => match serde_json::to_string(&v) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
-            Err(e) => err_result(&e.to_string()),
+            Err(e) => internal_error(e),
         }
     })
 }
@@ -896,7 +921,7 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
 /// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
 #[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_events_params(
+pub extern "C" fn chat_xdk_decrypt_events(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {
@@ -915,7 +940,7 @@ pub extern "C" fn chat_xdk_decrypt_events_params(
 
         match json_decrypt_events_result(&result) {
             Ok(json) => ok_data(&json),
-            Err(e) => err_result(&e.to_string()),
+            Err(e) => internal_error(e),
         }
     })
 }
@@ -1405,7 +1430,7 @@ pub extern "C" fn chat_xdk_prepare_conversation_key_change(
         match h.inner.prepare_conversation_key_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -1459,7 +1484,7 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
         match h.inner.prepare_group_members_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -1500,7 +1525,7 @@ pub extern "C" fn chat_xdk_prepare_group_create(
         match h.inner.prepare_group_create(&params) {
             Ok(res) => match json_prepared_change(&res) {
                 Ok(s) => ok_data(&s),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -1540,7 +1565,7 @@ pub extern "C" fn chat_xdk_prepare_message_delete(
         match h.inner.prepare_message_delete(&params) {
             Ok(prepared) => match serde_json::to_string(&prepared) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -1553,7 +1578,7 @@ fn ffi_prepared_action(
     match prepared {
         Ok(prepared) => match serde_json::to_string(&prepared) {
             Ok(json) => ok_data(&json),
-            Err(e) => err_result(&e.to_string()),
+            Err(e) => internal_error(e),
         },
         Err(e) => err_from(e),
     }
@@ -1565,7 +1590,7 @@ fn ffi_prepared_metadata_change(
     match prepared {
         Ok(prepared) => match serde_json::to_string(&prepared) {
             Ok(json) => ok_data(&json),
-            Err(e) => err_result(&e.to_string()),
+            Err(e) => internal_error(e),
         },
         Err(e) => err_from(e),
     }
@@ -1577,7 +1602,7 @@ fn ffi_prepared_change(
     match prepared {
         Ok(res) => match json_prepared_change(&res) {
             Ok(s) => ok_data(&s),
-            Err(e) => err_result(&e.to_string()),
+            Err(e) => internal_error(e),
         },
         Err(e) => err_from(e),
     }
@@ -2041,7 +2066,7 @@ pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
         match h.inner.prepare_mark_conversation_read(&params) {
             Ok(prepared) => match serde_json::to_string(&prepared) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -2052,17 +2077,17 @@ pub extern "C" fn chat_xdk_prepare_mark_conversation_read(
 ///
 /// `params_json` — single JSON document: `event_b64` (the base64 event),
 /// `conversation_keys` (`{"version": "base64 raw 32-byte key", ...}`, from
-/// `chat_xdk_decrypt_events_params` or `chat_xdk_extract_conversation_keys`; `{}`
+/// `chat_xdk_decrypt_events` or `chat_xdk_extract_conversation_keys`; `{}`
 /// for events without message contents, which also falls back to the opt-in
 /// key cache), plus optional `signing_keys` (as for
-/// `chat_xdk_decrypt_events_params`). With no signing keys passed or stored, signed
+/// `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
 /// events fail decryption under the default reject-unverified policy
 /// (disable it via `chat_xdk_set_reject_unverified` to have them returned
 /// with `verified: false` instead).
 ///
 /// Returns JSON representation of the decrypted Event.
 #[no_mangle]
-pub extern "C" fn chat_xdk_decrypt_event_params(
+pub extern "C" fn chat_xdk_decrypt_event(
     handle: *const ChatHandle,
     params_json: *const c_char,
 ) -> FfiResult {
@@ -2085,7 +2110,7 @@ pub extern "C" fn chat_xdk_decrypt_event_params(
         match h.inner.decrypt_event(&params) {
             Ok(event) => match serde_json::to_string(&event) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -2164,7 +2189,7 @@ pub extern "C" fn chat_xdk_encrypt_message(
         match h.inner.encrypt_message(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -2258,7 +2283,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         match h.inner.encrypt_reply(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -2333,7 +2358,7 @@ fn encrypt_reaction_impl(
     match result {
         Ok(payload) => match serde_json::to_string(&payload) {
             Ok(json) => ok_data(&json),
-            Err(e) => err_result(&e.to_string()),
+            Err(e) => internal_error(e),
         },
         Err(e) => err_from(e),
     }
@@ -2385,7 +2410,7 @@ pub extern "C" fn chat_xdk_encrypt_edit(
         match h.inner.encrypt_edit(&params) {
             Ok(payload) => match serde_json::to_string(&payload) {
                 Ok(json) => ok_data(&json),
-                Err(e) => err_result(&e.to_string()),
+                Err(e) => internal_error(e),
             },
             Err(e) => err_from(e),
         }
@@ -2433,13 +2458,11 @@ pub extern "C" fn chat_xdk_decrypt(
         let ciphertext_b64 = try_str!(ciphertext_b64);
         let ckey_b64 = try_str!(conversation_key_b64);
 
-        let ckey_bytes = match BASE64.decode(ckey_b64) {
-            Ok(b) => b,
-            Err(e) => return err_result(&format!("Base64 error: {}", e)),
-        };
-        let ckey = match chat_xdk_core::crypto::keys::XChatConversationKey::from_bytes(ckey_bytes) {
-            Some(k) => k,
-            None => return err_result("Invalid conversation key"),
+        let ckey = match bytes_from_b64("conversation_key", ckey_b64)
+            .and_then(|bytes| bindings::conversation_key(&bytes).map_err(err_from))
+        {
+            Ok(k) => k,
+            Err(e) => return e,
         };
 
         match h.inner.decrypt(ciphertext_b64, &ckey) {
@@ -2449,28 +2472,23 @@ pub extern "C" fn chat_xdk_decrypt(
     })
 }
 
-/// Decode a params document's `conversation_keys`. An entry that is not a
-/// base64 32-byte key is an error.
+/// Decode a params document's `conversation_keys`: base64 raw 32-byte keys
+/// by key version.
 fn conversation_keys_from_b64(
     entries: HashMap<String, String>,
 ) -> Result<HashMap<String, XChatConversationKey>, FfiResult> {
-    entries
+    let raw = entries
         .into_iter()
         .map(|(version, key_b64)| {
-            let key = BASE64
-                .decode(&key_b64)
-                .ok()
-                .and_then(XChatConversationKey::from_bytes)
-                .ok_or_else(|| {
-                    err_result(&format!(
-                        "the key for version '{}' in the conversation key map is not 32 bytes: \
-                         pass the raw 32-byte conversation keys",
-                        version
-                    ))
-                })?;
-            Ok((version, key))
+            let bytes = BASE64.decode(&key_b64).map_err(|e| {
+                err_result(&format!(
+                    "the key for version '{version}' in the conversation key map is not base64: {e}"
+                ))
+            })?;
+            Ok((version, bytes))
         })
-        .collect()
+        .collect::<Result<HashMap<_, _>, FfiResult>>()?;
+    bindings::conversation_keys(raw).map_err(err_from)
 }
 
 /// Decode a params document's base64 byte field.
@@ -2810,9 +2828,9 @@ pub extern "C" fn chat_xdk_sign(
     })
 }
 
-/// Verify a signature.
-///
-/// Returns 1 if valid, 0 if invalid, -1 on error.
+/// Verify a raw r||s signature over `data` with a base64 P-256 public key:
+/// `true` or `false`. A malformed public key or signature is an error.
+/// Needs no loaded keys.
 #[no_mangle]
 pub extern "C" fn chat_xdk_verify(
     handle: *const ChatHandle,
@@ -2820,104 +2838,67 @@ pub extern "C" fn chat_xdk_verify(
     signature_b64: *const c_char,
     data: *const u8,
     data_len: usize,
-) -> i32 {
-    catch_ffi_or(-1, || {
+) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return -1;
+            return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let pk_b64 = match unsafe { from_c_str(public_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-        let sig_b64 = match unsafe { from_c_str(signature_b64) } {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-
-        let sig = match BASE64.decode(sig_b64) {
+        let public_key_b64 = try_str!(public_key_b64);
+        let signature = match bytes_from_b64("signature", try_str!(signature_b64)) {
             Ok(b) => b,
-            Err(_) => return -1,
+            Err(e) => return e,
         };
-
-        let bytes = if data_len == 0 || data.is_null() {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(data, data_len) }
-        };
-
-        match h.inner.verify(pk_b64, &sig, bytes) {
-            Ok(true) => 1,
-            Ok(false) => 0,
-            Err(_) => -1,
+        let data = unsafe { bytes_from_ffi_ptr(data, data_len) };
+        match h.inner.verify(public_key_b64, &signature, data) {
+            Ok(valid) => ok_bool(valid),
+            Err(e) => err_from(e),
         }
     })
 }
 
-/// Verify that a signing key is authentically bound to an identity key.
-///
-/// All three arguments are base64 strings. Returns 1 if the binding is
-/// valid, 0 if it is not, and -1 on error (e.g. malformed input).
+/// Verify that a signing key is authentically bound to an identity key:
+/// `true` or `false`. All three arguments are base64 strings; a malformed
+/// one is an error.
 #[no_mangle]
 pub extern "C" fn chat_xdk_verify_key_binding(
     handle: *const ChatHandle,
     identity_public_key_b64: *const c_char,
     signing_public_key_b64: *const c_char,
     identity_public_key_signature_b64: *const c_char,
-) -> i32 {
-    catch_ffi_or(-1, || {
+) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return -1;
+            return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let identity_b64 = match unsafe { from_c_str(identity_public_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-        let signing_b64 = match unsafe { from_c_str(signing_public_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-        let signature_b64 = match unsafe { from_c_str(identity_public_key_signature_b64) } {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-
-        match h
-            .inner
-            .verify_key_binding(identity_b64, signing_b64, signature_b64)
-        {
-            Ok(true) => 1,
-            Ok(false) => 0,
-            Err(_) => -1,
+        match h.inner.verify_key_binding(
+            try_str!(identity_public_key_b64),
+            try_str!(signing_public_key_b64),
+            try_str!(identity_public_key_signature_b64),
+        ) {
+            Ok(valid) => ok_bool(valid),
+            Err(e) => err_from(e),
         }
     })
 }
 
-/// Report whether the loaded identity public key is the key in
-/// `public_key_b64` (raw SEC1 point or SPKI/DER, base64-encoded).
-///
-/// Returns 1 on a match, 0 on a mismatch, and -1 on error (no identity
-/// keypair loaded or malformed input).
+/// Whether the loaded identity public key is the key in `public_key_b64`
+/// (raw SEC1 point or SPKI/DER, base64-encoded): `true` or `false`. Errors
+/// when no identity key is loaded or the input is not base64.
 #[no_mangle]
 pub extern "C" fn chat_xdk_matches_registered_key(
     handle: *const ChatHandle,
     public_key_b64: *const c_char,
-) -> i32 {
-    catch_ffi_or(-1, || {
+) -> FfiResult {
+    catch_ffi(|| {
         if handle.is_null() {
-            return -1;
+            return err_result("Null handle");
         }
         let h = unsafe { &*handle };
-        let pk_b64 = match unsafe { from_c_str(public_key_b64) } {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-
-        match h.inner.matches_registered_key(pk_b64) {
-            Ok(true) => 1,
-            Ok(false) => 0,
-            Err(_) => -1,
+        match h.inner.matches_registered_key(try_str!(public_key_b64)) {
+            Ok(matches) => ok_bool(matches),
+            Err(e) => err_from(e),
         }
     })
 }
