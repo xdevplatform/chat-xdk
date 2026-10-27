@@ -1088,7 +1088,7 @@ mod tests {
             .collect();
 
         let batch =
-            core.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys));
+            core.decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys));
         assert!(batch.errors.is_empty(), "{:?}", batch.errors);
         let titles: Vec<GroupText> = batch
             .messages
@@ -1373,7 +1373,7 @@ mod tests {
 
             let change = decrypted_change(
                 core.decrypt_event(
-                    DecryptEventParams::new(
+                    &DecryptEventParams::new(
                         signed_event_b64(signature, &sender, "g100"),
                         keys.clone(),
                     )
@@ -1414,7 +1414,7 @@ mod tests {
         // encrypted under, whether or not they hold that key.
         let change = decrypted_change(
             core.decrypt_event(
-                DecryptEventParams::new(
+                &DecryptEventParams::new(
                     signed_event_b64(signature, &sender, "g100"),
                     HashMap::new(),
                 )
@@ -1453,7 +1453,7 @@ mod tests {
             .prepare_conversation_key_change_with_version(&key_change, "42")
             .unwrap();
         let batch = core.decrypt_events(
-            DecryptEventsParams::new(vec![signed_event_b64(
+            &DecryptEventsParams::new(vec![signed_event_b64(
                 &rotated.action_signatures[0],
                 &sender,
                 "g100",
@@ -1466,7 +1466,7 @@ mod tests {
         assert_eq!(title.conversation_key_version, "42");
         let change = decrypted_change(
             core.decrypt_event(
-                DecryptEventParams::new(
+                &DecryptEventParams::new(
                     signed_event_b64(&title.action_signatures[0], &sender, "g100"),
                     HashMap::new(),
                 )
@@ -1493,7 +1493,7 @@ mod tests {
             .unwrap();
         let change = decrypted_change(
             core.decrypt_event(
-                DecryptEventParams::new(
+                &DecryptEventParams::new(
                     signed_event_b64(&description.action_signatures[0], &sender, "g100"),
                     HashMap::new(),
                 )
@@ -1553,7 +1553,7 @@ mod tests {
         let decrypt = |index: usize| {
             decrypted_change(
                 core.decrypt_event(
-                    DecryptEventParams::new(
+                    &DecryptEventParams::new(
                         signed_event_b64(&prepared.action_signatures[index], &sender, "g100"),
                         keys.clone(),
                     )

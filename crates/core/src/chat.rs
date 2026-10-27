@@ -12,10 +12,10 @@
 //! chat.unlock(b"2580").await?;
 //! chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version)).unwrap();
 //! chat.set_cache_keys(true);
-//! chat.set_signing_keys(signing_keys);
+//! chat.set_signing_keys(&signing_keys);
 //!
 //! // Decrypt incoming events; verified conversation keys are cached
-//! let result = chat.decrypt_events(DecryptEventsParams::new(events));
+//! let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 //!
 //! // Send messages. The SDK generates the message id and returns it in the
 //! // payload (payload.message_id); sender, signing-key version, and the
@@ -109,10 +109,10 @@ use zeroize::Zeroize;
 /// chat.unlock(b"2580").await?;
 /// chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version)).unwrap();
 /// chat.set_cache_keys(true);
-/// chat.set_signing_keys(signing_keys);
+/// chat.set_signing_keys(&signing_keys);
 ///
 /// // Handle incoming webhook (signatures verify with the stored signing keys)
-/// let event = chat.decrypt_event(DecryptEventParams::new(event_b64, conversation_keys))?;
+/// let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, conversation_keys))?;
 /// if let Event::Message(msg) = event {
 ///     println!("{}: {}", msg.meta.sender_id.unwrap_or_default(), msg.text().unwrap_or(""));
 /// }
@@ -210,7 +210,7 @@ impl Chat {
     /// Store signing keys to use when a decrypt call omits its `signing_keys`
     /// argument. Only this call populates the store; each call replaces the
     /// previous set.
-    pub fn set_signing_keys(&self, entries: Vec<SigningKeyEntry>) {
+    pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.set_signing_keys(entries);
     }
     /// The engine underneath, for the language bindings (see
@@ -323,13 +323,13 @@ impl Chat {
 
     /// Decrypt a raw webhook event payload; see
     /// [`crate::ChatCore::decrypt_event`].
-    pub fn decrypt_event(&self, params: DecryptEventParams) -> Result<Event, SdkError> {
+    pub fn decrypt_event(&self, params: &DecryptEventParams) -> Result<Event, SdkError> {
         self.inner.decrypt_event(params)
     }
 
     /// Decrypt multiple events in batch; see
     /// [`crate::ChatCore::decrypt_events`].
-    pub fn decrypt_events(&self, params: DecryptEventsParams) -> DecryptEventsResult {
+    pub fn decrypt_events(&self, params: &DecryptEventsParams) -> DecryptEventsResult {
         self.inner.decrypt_events(params)
     }
 
@@ -396,7 +396,7 @@ impl Chat {
     }
 
     /// Decrypt a file; see [`crate::ChatCore::decrypt_file`].
-    pub fn decrypt_file(&self, params: DecryptFileParams) -> Result<Vec<u8>, SdkError> {
+    pub fn decrypt_file(&self, params: &DecryptFileParams) -> Result<Vec<u8>, SdkError> {
         self.inner.decrypt_file(params)
     }
 
@@ -404,7 +404,7 @@ impl Chat {
     /// [`crate::ChatCore::file_decryptor`].
     pub fn file_decryptor(
         &self,
-        params: FileDecryptorParams,
+        params: &FileDecryptorParams,
     ) -> Result<crate::FileDecryptor, SdkError> {
         self.inner.file_decryptor(params)
     }
@@ -1500,7 +1500,7 @@ mod tests {
         assert!(encrypted.len() > plaintext.len()); // overhead from nonce, tag, header
 
         let decrypted = chat
-            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
+            .decrypt_file(&DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert_eq!(decrypted, plaintext);
     }
@@ -1533,7 +1533,7 @@ mod tests {
 
         for encrypted in [&encrypted, &incremental_encrypted] {
             let decrypted = chat
-                .decrypt_file(DecryptFileParams::new(
+                .decrypt_file(&DecryptFileParams::new(
                     encrypted.clone(),
                     event.clone(),
                     keys.clone(),
@@ -1544,7 +1544,7 @@ mod tests {
         }
 
         let mut decryptor = chat
-            .file_decryptor(FileDecryptorParams::new(event, keys, "hash-1"))
+            .file_decryptor(&FileDecryptorParams::new(event, keys, "hash-1"))
             .unwrap();
         let mut incremental = Vec::new();
         for chunk in encrypted.chunks(700) {
@@ -1576,7 +1576,7 @@ mod tests {
             )
             .unwrap();
         assert!(chat
-            .decrypt_file(DecryptFileParams::new(
+            .decrypt_file(&DecryptFileParams::new(
                 encrypted, event, wrong_keys, "hash-1"
             ))
             .is_err());

@@ -173,7 +173,7 @@ impl ChatCore {
         signing_keys: &[SigningKeyEntry],
     ) -> DecryptEventsResult {
         self.inner.decrypt_events(
-            DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
+            &DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
                 .with_signing_keys(signing_keys.to_vec()),
         )
     }
@@ -186,7 +186,7 @@ impl ChatCore {
         signing_keys: &[SigningKeyEntry],
     ) -> Result<Event, SdkError> {
         self.inner.decrypt_event(
-            DecryptEventParams::new(event_b64, conversation_keys.clone())
+            &DecryptEventParams::new(event_b64, conversation_keys.clone())
                 .with_signing_keys(signing_keys.to_vec()),
         )
     }
@@ -388,7 +388,7 @@ impl ChatCore {
         conversation_keys: &HashMap<String, XChatConversationKey>,
         media_hash_key: &str,
     ) -> Result<Vec<u8>, SdkError> {
-        let mut dec = self.inner.file_decryptor(FileDecryptorParams::new(
+        let mut dec = self.inner.file_decryptor(&FileDecryptorParams::new(
             event_b64,
             conversation_keys.clone(),
             media_hash_key,

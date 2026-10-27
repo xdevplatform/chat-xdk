@@ -17,12 +17,12 @@
 //! chat.unlock(b"2580").await?;
 //! chat.set_identity(&SetIdentityParams::new("1876543210", signing_key_version))?;
 //! chat.set_cache_keys(true);
-//! chat.set_signing_keys(signing_keys);
+//! chat.set_signing_keys(&signing_keys);
 //!
 //! // Handle webhook events (signatures verify with the stored signing keys).
-//! let result = chat.decrypt_events(DecryptEventsParams::new(events));
+//! let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 //! let keys = result.conversation_keys.keys.clone();
-//! let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys.clone()))?;
+//! let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, keys.clone()))?;
 //! match event {
 //!     Event::Message(msg) => println!("{}", msg.text().unwrap_or("")),
 //!     Event::KeyChange(kc) => { /* key cached automatically */ }

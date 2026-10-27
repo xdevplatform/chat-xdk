@@ -17,7 +17,7 @@ change.
 - [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
 - [ ] [Pass a `DecryptEventsParams` to `decrypt_events`](#decrypt_events-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `decrypt_event`](#decrypt_event-takes-decrypteventparams)
-- [ ] [Pass params by reference to every encrypt and prepare method](#encrypt-and-prepare-methods-take-params-by-reference)
+- [ ] [Pass params by reference to every method](#methods-take-params-by-reference)
 - [ ] [Build params with `new` and `with_*`, and give matches on SDK enums a wildcard arm](#types-are-non_exhaustive)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
@@ -186,7 +186,7 @@ signing keys with `with_signing_keys`. Without signing keys, the ones
 let result = chat.decrypt_events(&events, &signing_keys);
 
 // 0.6.0
-let result = chat.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys));
+let result = chat.decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys));
 ```
 
 ## `decrypt_event` takes `DecryptEventParams`
@@ -201,29 +201,33 @@ the ones `set_signing_keys` stored verify the event.
 let event = chat.decrypt_event(event_b64, &keys, &signing_keys)?;
 
 // 0.6.0
-let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?;
+let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?;
 ```
 
-## Encrypt and prepare methods take params by reference
+## Methods take params by reference
 
-Every encrypt and prepare method takes its params by reference. Add `&` to
-`encrypt_message`, `encrypt_reply`, `prepare_conversation_key_change`,
-`prepare_group_create` and `prepare_group_members_change`, and to the
-`ChatCore` methods' `_with_version` forms. Calls to `encrypt_add_reaction`,
+Every method takes its params by reference. Add `&` to `encrypt_message`,
+`encrypt_reply`, `prepare_conversation_key_change`, `prepare_group_create`
+and `prepare_group_members_change`, and to the `ChatCore` methods'
+`_with_version` forms. Calls to `encrypt_add_reaction`,
 `encrypt_remove_reaction`, `encrypt_edit` and `prepare_message_delete` stay
-as they are, and `encrypt_file`, `file_encryptor` and
-`prepare_mark_conversation_read` take `&params` too.
+as they are; `decrypt_events`, `decrypt_event`, `encrypt_file`,
+`file_encryptor`, `decrypt_file`, `file_decryptor` and
+`prepare_mark_conversation_read` take `&params` too, and
+`set_signing_keys` takes a slice.
 
 ```rust
 // 0.5.x
 let payload = chat.encrypt_message(EncryptMessageParams::new(conversation_id, "hello"))?;
 let reply = chat.encrypt_reply(EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
 let prepared = chat.prepare_conversation_key_change(key_change)?;
+chat.set_signing_keys(signing_keys);
 
 // 0.6.0
 let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "hello"))?;
 let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
 let prepared = chat.prepare_conversation_key_change(&key_change)?;
+chat.set_signing_keys(&signing_keys);
 ```
 
 ## Types are `#[non_exhaustive]`
@@ -382,7 +386,7 @@ signature: use `verified` from `decrypt_event` for that.
 let plaintext = chat.decrypt_stream(&downloaded, &keys[conversation_key_version])?;
 
 // 0.6.0
-let plaintext = chat.decrypt_file(DecryptFileParams::new(downloaded, file_event_b64, keys, file_hash_key))?;
+let plaintext = chat.decrypt_file(&DecryptFileParams::new(downloaded, file_event_b64, keys, file_hash_key))?;
 ```
 
 ## Encrypt and decrypt large files in chunks
@@ -401,7 +405,7 @@ let decryptor = chat.stream_decryptor(&keys[conversation_key_version])?;
 // 0.6.0
 let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64);
 let encryptor = chat.file_encryptor(&FileEncryptorParams::new(&payload.event_b64, &media_hash_key))?;
-let decryptor = chat.file_decryptor(FileDecryptorParams::new(file_event_b64, keys, file_hash_key))?;
+let decryptor = chat.file_decryptor(&FileDecryptorParams::new(file_event_b64, keys, file_hash_key))?;
 ```
 
 The functions in `crypto::encryption` that take a conversation key directly

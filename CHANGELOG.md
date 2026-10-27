@@ -394,10 +394,10 @@ Migration:
 ```rust
 // Rust
 let plaintext = chat.decrypt_stream(&encrypted, &conversation_key)?;                 // before
-let plaintext = chat.decrypt_file(DecryptFileParams::new(
+let plaintext = chat.decrypt_file(&DecryptFileParams::new(
     encrypted, event_b64, conversation_keys, media_hash_key,
 ))?;                                                                                 // after
-let decryptor = chat.file_decryptor(FileDecryptorParams::new(event_b64, conversation_keys, media_hash_key))?;
+let decryptor = chat.file_decryptor(&FileDecryptorParams::new(event_b64, conversation_keys, media_hash_key))?;
 ```
 
 ```python
@@ -453,9 +453,9 @@ and `decrypt_event` throws on failure.
 ```rust
 // Rust
 let result = chat.decrypt_events(&events, &signing_keys); // before
-let result = chat.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys)); // after
+let result = chat.decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys)); // after
 let event = chat.decrypt_event(event_b64, &keys, &signing_keys)?; // before
-let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?; // after
+let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?; // after
 ```
 
 ```python
@@ -623,12 +623,14 @@ prepared = chat.prepare_conversation_key_change(
   its `conversation_key_version`. `decrypt` opens the encrypted
   `group_name` and `group_description` the X API returns with a
   conversation.
-- Rust: every encrypt and prepare method takes its params by reference:
+- Rust: every method takes its params by reference:
   `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
-  edit, delete and mark-read methods, and also `encrypt_file`,
-  `file_encryptor`, `prepare_conversation_key_change`, `prepare_group_create`
-  and `prepare_group_members_change` (and their `_with_version` forms). Add
-  `&` at each call.
+  edit, delete and mark-read methods, and also `decrypt_events`,
+  `decrypt_event`, `encrypt_file`, `file_encryptor`, `decrypt_file`,
+  `file_decryptor`, `prepare_conversation_key_change`,
+  `prepare_group_create` and `prepare_group_members_change` (and their
+  `_with_version` forms). Add `&` at each call. `set_signing_keys` takes a
+  slice.
 - `set_identity` and `import_keys` take a params object, as every call with
   more than one input does: `SetIdentityParams` (`user_id`,
   `signing_key_version`) and `ImportKeysParams` (`keys`, optional

@@ -65,14 +65,14 @@ fuzz_target!(|data: &[u8]| {
     // Well-formed base64 over arbitrary bytes drives the parse + crypto path …
     let encoded = B64.encode(data);
     let _ = f.core.decrypt_event(
-        DecryptEventParams::new(encoded, f.conversation_keys.clone())
+        &DecryptEventParams::new(encoded, f.conversation_keys.clone())
             .with_signing_keys(f.signing_keys.clone()),
     );
 
     // … and the raw input, when it is a string, drives the base64 error path.
     if let Ok(s) = std::str::from_utf8(data) {
         let _ = f.core.decrypt_event(
-            DecryptEventParams::new(s, f.conversation_keys.clone())
+            &DecryptEventParams::new(s, f.conversation_keys.clone())
                 .with_signing_keys(f.signing_keys.clone()),
         );
     }

@@ -664,7 +664,7 @@ pub extern "C" fn chat_xdk_set_signing_keys(
             Ok(keys) => keys,
             Err(e) => return err_result(&e),
         };
-        h.inner.set_signing_keys(signing_keys);
+        h.inner.set_signing_keys(&signing_keys);
         ok_void()
     })
 }
@@ -911,7 +911,7 @@ pub extern "C" fn chat_xdk_decrypt_events_params(
         };
         let mut params = DecryptEventsParams::new(p.events);
         params.signing_keys = p.signing_keys;
-        let result = h.inner.decrypt_events(params);
+        let result = h.inner.decrypt_events(&params);
 
         match json_decrypt_events_result(&result) {
             Ok(json) => ok_data(&json),
@@ -2082,7 +2082,7 @@ pub extern "C" fn chat_xdk_decrypt_event_params(
         let mut params = DecryptEventParams::new(p.event_b64, conversation_keys);
         params.signing_keys = p.signing_keys;
 
-        match h.inner.decrypt_event(params) {
+        match h.inner.decrypt_event(&params) {
             Ok(event) => match serde_json::to_string(&event) {
                 Ok(json) => ok_data(&json),
                 Err(e) => err_result(&e.to_string()),
@@ -2558,7 +2558,7 @@ pub extern "C" fn chat_xdk_decrypt_file(
         };
         let params =
             DecryptFileParams::new(encrypted, p.event_b64, conversation_keys, p.media_hash_key);
-        match h.inner.decrypt_file(params) {
+        match h.inner.decrypt_file(&params) {
             Ok(output) => ok_data(&BASE64.encode(&output)),
             Err(e) => err_from(e),
         }
@@ -2713,7 +2713,7 @@ pub extern "C" fn chat_xdk_file_decryptor_new(
             Err(e) => return e,
         };
         let params = FileDecryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
-        match h.inner.file_decryptor(params) {
+        match h.inner.file_decryptor(&params) {
             Ok(dec) => {
                 let boxed = Box::new(FileDecryptorHandle { inner: Some(dec) });
                 unsafe { *out_decryptor = Box::into_raw(boxed) };

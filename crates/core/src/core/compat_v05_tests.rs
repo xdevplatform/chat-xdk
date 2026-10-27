@@ -83,7 +83,7 @@ fn sends_from_0_5_decrypt_and_verify() {
             assert_eq!(text(send, "signature_version"), "7", "{version} {kind}");
             let event = ChatCore::new()
                 .decrypt_event(
-                    DecryptEventParams::new(
+                    &DecryptEventParams::new(
                         frame(&relayed(&fixture, send)),
                         conversation_keys(&fixture),
                     )

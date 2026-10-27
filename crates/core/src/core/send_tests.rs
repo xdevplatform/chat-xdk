@@ -134,7 +134,7 @@ fn open_file(
     media_hash_key: &str,
     encrypted: &[u8],
 ) -> Result<Vec<u8>, SdkError> {
-    ChatCore::new().decrypt_file(DecryptFileParams::new(
+    ChatCore::new().decrypt_file(&DecryptFileParams::new(
         encrypted.to_vec(),
         frame(event),
         keys(KEY_VERSION, ckey),
@@ -239,7 +239,7 @@ fn the_signature_covers_the_contents_encryption_version() {
 
     let receive = |event: &ThriftEvent| {
         ChatCore::new().decrypt_event(
-            DecryptEventParams::new(frame(event), keys(KEY_VERSION, &ckey))
+            &DecryptEventParams::new(frame(event), keys(KEY_VERSION, &ckey))
                 .with_signing_keys(vec![author.entry.clone()]),
         )
     };
@@ -306,7 +306,7 @@ fn event_b64_is_the_sent_message_as_recipients_receive_it() {
 
         let Event::Message(message) = ChatCore::new()
             .decrypt_event(
-                DecryptEventParams::new(payload.event_b64.clone(), keys(KEY_VERSION, &ckey))
+                &DecryptEventParams::new(payload.event_b64.clone(), keys(KEY_VERSION, &ckey))
                     .with_signing_keys(vec![author.entry.clone()]),
             )
             .unwrap()
@@ -559,7 +559,7 @@ fn the_file_encryptor_and_decryptor_match_the_one_shot_calls() {
     assert_eq!(open_file(&event, &ckey, "second", &one_shot).unwrap(), file);
 
     let mut decryptor = ChatCore::new()
-        .file_decryptor(FileDecryptorParams::new(
+        .file_decryptor(&FileDecryptorParams::new(
             frame(&event),
             keys(KEY_VERSION, &ckey),
             "second",
@@ -988,7 +988,7 @@ fn a_send_takes_its_identity_from_the_params_then_the_session() {
             if has_file {
                 let encrypted = encrypt_file(&payload, &ckey, "photo", b"photo").unwrap();
                 let opened = ChatCore::new()
-                    .decrypt_file(DecryptFileParams::new(
+                    .decrypt_file(&DecryptFileParams::new(
                         encrypted,
                         frame(&event),
                         keys(KEY_VERSION, &ckey),

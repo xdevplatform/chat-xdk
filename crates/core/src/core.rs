@@ -244,11 +244,11 @@ impl ChatCore {
     /// Only this explicit call populates the store — a key carried inside an
     /// event is never trusted for verification. Each call replaces the
     /// previous set.
-    pub fn set_signing_keys(&self, entries: Vec<SigningKeyEntry>) {
+    pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         *self
             .signing_key_cache
             .write()
-            .unwrap_or_else(|e| e.into_inner()) = entries;
+            .unwrap_or_else(|e| e.into_inner()) = entries.to_vec();
     }
 
     /// Resolve the effective `sender_id`: the explicit override when present,
@@ -1431,7 +1431,7 @@ impl ChatCore {
     ///   lifetime; `None` until a key change verifies. A key from a key change
     ///   that did not verify still decrypts but never becomes the latest.
     /// * `errors` - Map of event index → error message for failed decryptions
-    pub fn decrypt_events(&self, params: DecryptEventsParams) -> DecryptEventsResult {
+    pub fn decrypt_events(&self, params: &DecryptEventsParams) -> DecryptEventsResult {
         let events: Vec<&str> = params.events.iter().map(String::as_str).collect();
         self.decrypt_events_with(&events, params.signing_keys.as_deref().unwrap_or_default())
     }
@@ -1543,7 +1543,7 @@ impl ChatCore {
     /// policy, no matching key makes every signed event fail; only after
     /// [`Self::set_reject_unverified`]`(false)` are such events returned with
     /// `verified: false`.
-    pub fn decrypt_event(&self, params: DecryptEventParams) -> Result<Event, SdkError> {
+    pub fn decrypt_event(&self, params: &DecryptEventParams) -> Result<Event, SdkError> {
         self.decrypt_event_with(
             &params.event_b64,
             &params.conversation_keys,
@@ -3095,7 +3095,7 @@ impl ChatCore {
     /// media hash key is not in it, or `params.encrypted` is not the
     /// complete encrypted file. Signatures are not checked here; use the
     /// `verified` flag from [`Self::decrypt_event`].
-    pub fn decrypt_file(&self, params: DecryptFileParams) -> Result<Vec<u8>, SdkError> {
+    pub fn decrypt_file(&self, params: &DecryptFileParams) -> Result<Vec<u8>, SdkError> {
         let key = media::media_key(
             &params.event_b64,
             &params.conversation_keys,
@@ -3112,7 +3112,7 @@ impl ChatCore {
     /// memory. Takes the params of [`Self::decrypt_file`] apart from the
     /// encrypted file, which is fed to the decryptor; its errors say which
     /// file failed and what to pass.
-    pub fn file_decryptor(&self, params: FileDecryptorParams) -> Result<FileDecryptor, SdkError> {
+    pub fn file_decryptor(&self, params: &FileDecryptorParams) -> Result<FileDecryptor, SdkError> {
         let key = media::media_key(
             &params.event_b64,
             &params.conversation_keys,
@@ -7861,7 +7861,7 @@ mod tests {
 
         match core
             .decrypt_event(
-                DecryptEventParams::new(event_b64, Default::default())
+                &DecryptEventParams::new(event_b64, Default::default())
                     .with_signing_keys(signing_keys),
             )
             .unwrap()
@@ -8197,7 +8197,7 @@ mod tests {
         assert_ne!(&encrypted[..], plaintext);
 
         let decrypted = core
-            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
+            .decrypt_file(&DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert_eq!(&decrypted[..], plaintext);
     }
@@ -8215,7 +8215,7 @@ mod tests {
             )
             .unwrap();
         let decrypted = core
-            .decrypt_file(DecryptFileParams::new(encrypted, event, keys, "hash-1"))
+            .decrypt_file(&DecryptFileParams::new(encrypted, event, keys, "hash-1"))
             .unwrap();
         assert!(decrypted.is_empty());
     }
@@ -9739,7 +9739,7 @@ mod tests {
             .unwrap();
         let keys = [("1001".to_string(), ckey.clone())].into_iter().collect();
         let decrypted = core
-            .decrypt_file(DecryptFileParams::new(
+            .decrypt_file(&DecryptFileParams::new(
                 encrypted,
                 payload.event_b64.clone(),
                 keys,
@@ -9867,7 +9867,7 @@ mod tests {
         // Without stored keys an empty slice still fails verification.
         assert!(core.decrypt_event_with(&msg_b64, &conv_keys, &[]).is_err());
 
-        core.set_signing_keys(vec![signing_key_entry_for(&reg, "4001")]);
+        core.set_signing_keys(&[signing_key_entry_for(&reg, "4001")]);
         match core.decrypt_event_with(&msg_b64, &conv_keys, &[]).unwrap() {
             Event::Message(msg) => {
                 assert!(msg.verified);

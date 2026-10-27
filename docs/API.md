@@ -177,7 +177,7 @@ from the session identity set via `set_identity`.
 |---|--------|------|-----|--------|-----|------|------|
 | 21 | **extract_conversation_keys** | `(events: &[&str]) → ConversationKeyResult` | `extractConversationKeys(string[]) → ConversationKeyResult` | `extract_conversation_keys(list[str]) → dict` | `ExtractConversationKeys(events []string) (*ConversationKeyBundle, error)` | `extractConversationKeys(List<String>)` | `ExtractConversationKeys(IEnumerable<string>)` |
 | 22 | **set_cache_keys** | `set_cache_keys(enabled: bool)` | `setCacheKeys(enabled: boolean)` | `set_cache_keys(enabled: bool)` | `SetCacheKeys(enabled bool)` | `setCacheKeys(boolean)` | `SetCacheKeys(bool)` |
-| 23 | **set_signing_keys** | `set_signing_keys(Vec<SigningKeyEntry>)` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
+| 23 | **set_signing_keys** | `set_signing_keys(&[SigningKeyEntry])` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
 | 24 | **decrypt_events** | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `decryptEvents(params: DecryptEventsParams) → DecryptEventsResult` | `decrypt_events(DecryptEventsParams) → dict` | `DecryptEvents(DecryptEventsParams) (*DecryptEventsResult, error)` | `decryptEvents(DecryptEventsParams)` → `DecryptEventsResult` | `DecryptEvents(DecryptEventsParams)` → `DecryptEventsResult` |
 | 25 | **decrypt_event** | `decrypt_event(DecryptEventParams) → Event` | `decryptEvent(params: DecryptEventParams) → Event` | `decrypt_event(DecryptEventParams) → dict` | `DecryptEvent(DecryptEventParams) (*Event, error)` | `decryptEvent(DecryptEventParams)` → `JsonNode` | `DecryptEvent(DecryptEventParams)` → `JsonElement` |
 
@@ -1975,10 +1975,10 @@ chat.unlock(b"2580").await?;
 // ── Set the session once ──
 chat.set_identity(&SetIdentityParams::new(my_user_id, my_signing_key_version))?;
 chat.set_cache_keys(true);
-chat.set_signing_keys(signing_keys); // all participants
+chat.set_signing_keys(&signing_keys); // all participants
 
 // ── Initial load: use decrypt_events (unset signing keys = stored signing keys) ──
-let result = chat.decrypt_events(DecryptEventsParams::new(raw_events));
+let result = chat.decrypt_events(&DecryptEventsParams::new(raw_events));
 for dm in &result.messages {
     if let Event::Message(msg) = &dm.event {
         println!("{}: {}", msg.meta.sender_id.as_deref().unwrap_or("?"), msg.text().unwrap_or(""));
@@ -1988,7 +1988,7 @@ for dm in &result.messages {
 // ── New event arrives: use decrypt_event ──
 // The empty key map and unset signing keys resolve from the key cache and
 // the signing-key store.
-let event = chat.decrypt_event(DecryptEventParams::new(event_b64, HashMap::new()))?;
+let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, HashMap::new()))?;
 
 // ── Send: identity and conversation key resolve from the session ──
 let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "hi!"))?;
@@ -2001,7 +2001,7 @@ let group_name = chat.decrypt(&conversation.group_name, &conv_key)?;
 // ── Files: the message's event, its key map, the media hash key ──
 // (`media_hash_key` from the decrypted message's `media_hashes`)
 let keys = result.conversation_keys.keys.clone();
-let decrypted = chat.decrypt_file(DecryptFileParams::new(
+let decrypted = chat.decrypt_file(&DecryptFileParams::new(
     encrypted_bytes,
     event_b64,
     keys.clone(),

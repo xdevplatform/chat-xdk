@@ -291,7 +291,7 @@ impl Chat {
     #[wasm_bindgen(js_name = setSigningKeys)]
     pub fn set_signing_keys(&self, signing_keys: JsValue) -> Result<(), JsError> {
         self.inner
-            .set_signing_keys(js_to_signing_keys(signing_keys)?);
+            .set_signing_keys(&js_to_signing_keys(signing_keys)?);
         Ok(())
     }
 
@@ -407,7 +407,7 @@ impl Chat {
             .signing_keys
             .map(|keys| keys.into_iter().map(Into::into).collect());
 
-        let result = self.inner.decrypt_events(core_params);
+        let result = self.inner.decrypt_events(&core_params);
 
         // Build JS result object
         let obj = js_sys::Object::new();
@@ -500,7 +500,7 @@ impl Chat {
 
         let event = self
             .inner
-            .decrypt_event(core_params)
+            .decrypt_event(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
 
         // Convert to camelCase JS type
@@ -901,7 +901,7 @@ impl Chat {
             p.media_hash_key,
         );
         self.inner
-            .decrypt_file(core_params)
+            .decrypt_file(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))
     }
 
@@ -918,7 +918,7 @@ impl Chat {
         );
         let inner = self
             .inner
-            .file_decryptor(core_params)
+            .file_decryptor(&core_params)
             .map_err(|e| JsError::new(&format!("{}", e)))?;
         Ok(FileDecryptor { inner })
     }

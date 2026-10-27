@@ -2300,7 +2300,7 @@ impl Chat {
     ///         the store — keys carried inside events are never trusted.
     fn set_signing_keys(&self, signing_keys: Vec<HashMap<String, String>>) -> PyResult<()> {
         self.inner
-            .set_signing_keys(parse_signing_key_entries(signing_keys)?);
+            .set_signing_keys(&parse_signing_key_entries(signing_keys)?);
         Ok(())
     }
 
@@ -2485,7 +2485,7 @@ impl Chat {
         let params = params.to_core(py)?;
         // Release the GIL for the batch crypto so other Python threads keep
         // running; only Rust data crosses into the closure.
-        let result = py.detach(|| self.inner.decrypt_events(params));
+        let result = py.detach(|| self.inner.decrypt_events(&params));
 
         let outer = pyo3::types::PyDict::new(py);
 
@@ -2546,7 +2546,7 @@ impl Chat {
     ) -> PyResult<Py<PyAny>> {
         let event = self
             .inner
-            .decrypt_event(params.to_core(py)?)
+            .decrypt_event(&params.to_core(py)?)
             .map_err(to_py_err)?;
         let json_str = serde_json::to_string(&event).map_err(to_py_err)?;
         let dict = py.import("json")?.call_method1("loads", (json_str,))?;
@@ -2749,7 +2749,7 @@ impl Chat {
         // Release the GIL for the file crypto; only Rust data crosses into
         // the closure.
         let output = py
-            .detach(|| self.inner.decrypt_file(params))
+            .detach(|| self.inner.decrypt_file(&params))
             .map_err(to_py_err)?;
         Ok(PyBytes::new(py, &output))
     }
@@ -2764,7 +2764,7 @@ impl Chat {
     ) -> PyResult<FileDecryptor> {
         let inner = self
             .inner
-            .file_decryptor(params.to_core(py)?)
+            .file_decryptor(&params.to_core(py)?)
             .map_err(to_py_err)?;
         Ok(FileDecryptor { inner: Some(inner) })
     }
