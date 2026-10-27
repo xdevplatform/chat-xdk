@@ -3467,6 +3467,28 @@ func TestEncryptMessageRejectsInvalidOffsetsLinksPostsAndDimensions(t *testing.T
 	}
 }
 
+// TestAnEmptyJuiceboxConfigFailsWithTheNoConfigError checks that an empty or
+// blank config fails as a chat without one does, at creation and in
+// UpdateConfig.
+func TestAnEmptyJuiceboxConfigFailsWithTheNoConfigError(t *testing.T) {
+	const want = "Invalid state: no Juicebox config: pass the juicebox_config the X API returns " +
+		"when you create the chat, or call update_config() first"
+	noConfig := func(err error) bool {
+		var chatErr *Error
+		return errors.As(err, &chatErr) && chatErr.Kind == ErrorKindInvalidState && chatErr.Message == want
+	}
+	for _, empty := range []string{"", "  "} {
+		if chat, err := NewWithJuiceboxConfig(empty); chat != nil || !noConfig(err) {
+			t.Errorf("NewWithJuiceboxConfig(%q): %v", empty, err)
+		}
+	}
+	chat := New()
+	defer chat.Close()
+	if err := chat.UpdateConfig(""); !noConfig(err) {
+		t.Errorf("UpdateConfig(\"\"): %v", err)
+	}
+}
+
 func TestNewEntityHelper(t *testing.T) {
 	e := NewEntity(0, 5, "bold")
 	if e[0] != 0 || e[1] != 5 || e[2] != "bold" {

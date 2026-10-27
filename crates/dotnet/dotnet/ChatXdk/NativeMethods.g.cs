@@ -73,11 +73,11 @@ namespace ChatXdk
         ///
         ///  `juicebox_config_json` is the Juicebox configuration JSON the X API
         ///  returns, which `chat_xdk_setup`, `chat_xdk_unlock`,
-        ///  `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL or an empty string
-        ///  for a chat without one, which manages its keys with
-        ///  `chat_xdk_import_keys` or takes its config later with
-        ///  `chat_xdk_update_config`. Until then those four calls fail with an
-        ///  `invalid_state` error. On failure `out_chat` is set to NULL. Free the
+        ///  `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL for a chat without
+        ///  one, which manages its keys with `chat_xdk_import_keys` or takes its
+        ///  config later with `chat_xdk_update_config`. Until then those four calls
+        ///  fail with an `invalid_state` error, and so does an empty or blank
+        ///  `juicebox_config_json`. On failure `out_chat` is set to NULL. Free the
         ///  handle with [`chat_xdk_free`].
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

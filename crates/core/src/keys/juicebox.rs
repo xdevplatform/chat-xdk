@@ -83,8 +83,8 @@ pub(crate) fn validate_pin_strength(pin: &[u8]) -> Result<(), crate::error::SdkE
 }
 
 /// The error a Juicebox call fails with on a chat that has no Juicebox
-/// config, before `update_config` gives it one.
-#[cfg_attr(not(any(feature = "juicebox", feature = "bindings")), allow(dead_code))]
+/// config, before `update_config` gives it one, and the error an empty
+/// config string fails with.
 pub(crate) fn no_config_error() -> crate::error::SdkError {
     crate::error::SdkError::InvalidState(
         "no Juicebox config: pass the juicebox_config the X API returns when you create the \
@@ -138,8 +138,13 @@ impl JuiceboxConfig {
     /// `key_store_token_map_json` shapes and 5 for the bare `token_map` shape
     /// when the field is absent or not a count.
     ///
-    /// Returns an error describing the first missing or malformed field.
-    pub fn from_x_api_json(config_json: &str) -> Result<Self, String> {
+    /// An empty or blank string is no config: it fails with the
+    /// [`SdkError::InvalidState`](crate::error::SdkError::InvalidState) error
+    /// a chat without a config gives its Juicebox calls. Any other string
+    /// that isn't one of the shapes fails with an
+    /// [`SdkError::InvalidInput`](crate::error::SdkError::InvalidInput) error
+    /// describing the first missing or malformed field.
+    pub fn from_x_api_json(config_json: &str) -> Result<Self, crate::error::SdkError> {
         Self::parse_x_api_json(config_json, TokenSource::Config)
     }
 
@@ -147,11 +152,25 @@ impl JuiceboxConfig {
     /// auth tokens from a callback: the config need carry none, and a raw
     /// Juicebox SDK config (an object with `realms`) is used verbatim.
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn from_x_api_json_without_tokens(config_json: &str) -> Result<Self, String> {
+    pub(crate) fn from_x_api_json_without_tokens(
+        config_json: &str,
+    ) -> Result<Self, crate::error::SdkError> {
         Self::parse_x_api_json(config_json, TokenSource::Callback)
     }
 
-    fn parse_x_api_json(config_json: &str, token_source: TokenSource) -> Result<Self, String> {
+    fn parse_x_api_json(
+        config_json: &str,
+        token_source: TokenSource,
+    ) -> Result<Self, crate::error::SdkError> {
+        if config_json.trim().is_empty() {
+            return Err(no_config_error());
+        }
+        Self::parse_x_api_shapes(config_json, token_source).map_err(|e| {
+            crate::error::SdkError::InvalidInput(format!("Invalid Juicebox config: {e}"))
+        })
+    }
+
+    fn parse_x_api_shapes(config_json: &str, token_source: TokenSource) -> Result<Self, String> {
         let parsed: serde_json::Value =
             serde_json::from_str(config_json).map_err(|e| format!("Invalid JSON: {}", e))?;
         let tokens_required = token_source == TokenSource::Config;
@@ -913,8 +932,10 @@ mod tests {
         assert_eq!(realms.max_guess_count, 5);
 
         assert_eq!(
-            JuiceboxConfig::from_x_api_json_without_tokens("{}").unwrap_err(),
-            "Missing token_map or sdk_config"
+            JuiceboxConfig::from_x_api_json_without_tokens("{}")
+                .unwrap_err()
+                .to_string(),
+            "Invalid Juicebox config: Missing token_map or sdk_config"
         );
         let huge = JuiceboxConfig::from_x_api_json_without_tokens(
             r#"{"sdk_config": "{}", "max_guess_count": 70000}"#,
@@ -982,7 +1003,10 @@ mod tests {
         })
         .to_string();
         let err = JuiceboxConfig::from_x_api_json(&json).unwrap_err();
-        assert!(err.contains("Invalid key_store_token_map_json"), "{err}");
+        assert!(
+            err.to_string().contains("Invalid key_store_token_map_json"),
+            "{err}"
+        );
 
         let json = serde_json::json!({
             "key_store_token_map_json": 42,
@@ -990,7 +1014,7 @@ mod tests {
         })
         .to_string();
         let err = JuiceboxConfig::from_x_api_json(&json).unwrap_err();
-        assert!(err.contains("must be a string"), "{err}");
+        assert!(err.to_string().contains("must be a string"), "{err}");
 
         // Syntactically valid JSON that is not an object is rejected too,
         // rather than handed to the Juicebox SDK to fail obscurely at
@@ -1003,7 +1027,8 @@ mod tests {
             .to_string();
             let err = JuiceboxConfig::from_x_api_json(&json).unwrap_err();
             assert!(
-                err.contains("Invalid key_store_token_map_json: not a JSON object"),
+                err.to_string()
+                    .contains("Invalid key_store_token_map_json: not a JSON object"),
                 "{err}"
             );
         }
@@ -1016,13 +1041,32 @@ mod tests {
         })
         .to_string();
         let err = JuiceboxConfig::from_x_api_json(&json).unwrap_err();
-        assert!(err.contains("Missing token_map"), "{err}");
+        assert!(err.to_string().contains("Missing token_map"), "{err}");
     }
 
     #[test]
     fn test_from_x_api_json_missing_fields() {
-        assert!(JuiceboxConfig::from_x_api_json("not json").is_err());
-        assert!(JuiceboxConfig::from_x_api_json(r#"{"foo": 1}"#).is_err());
+        for malformed in ["not json", r#"{"foo": 1}"#] {
+            let err = JuiceboxConfig::from_x_api_json(malformed).unwrap_err();
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput);
+            assert!(
+                err.to_string().starts_with("Invalid Juicebox config: "),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_config_string_is_no_config() {
+        for empty in ["", "  ", "\n"] {
+            for err in [
+                JuiceboxConfig::from_x_api_json(empty).unwrap_err(),
+                JuiceboxConfig::from_x_api_json_without_tokens(empty).unwrap_err(),
+            ] {
+                assert_eq!(err.kind(), crate::error::ErrorKind::InvalidState);
+                assert_eq!(err.to_string(), no_config_error().to_string());
+            }
+        }
     }
 
     #[test]

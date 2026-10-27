@@ -113,10 +113,10 @@ func ffiDetectImageDimensions(data []byte) (string, error) {
 
 // lifecycle / state
 
-func ffiNew(juiceboxConfigJSON string) (handle, error) {
+func ffiNew(juiceboxConfigJSON *string) (handle, error) {
 	var cfg *C.char
-	if juiceboxConfigJSON != "" {
-		cfg = C.CString(juiceboxConfigJSON)
+	if juiceboxConfigJSON != nil {
+		cfg = C.CString(*juiceboxConfigJSON)
 		defer C.free(unsafe.Pointer(cfg))
 	}
 	var out handle

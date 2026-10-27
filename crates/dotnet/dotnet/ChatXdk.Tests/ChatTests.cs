@@ -556,6 +556,23 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public void Chat_EmptyJuiceboxConfig_FailsWithTheNoConfigError()
+        {
+            const string want = "Invalid state: no Juicebox config: pass the juicebox_config the X API "
+                + "returns when you create the chat, or call update_config() first";
+            foreach (var empty in new[] { "", "  " })
+            {
+                var e = Assert.Throws<ChatXdkException>(() => new Chat(empty));
+                Assert.Equal(ChatXdkErrorKind.InvalidState, e.Kind);
+                Assert.Equal(want, e.Message);
+            }
+            using var chat = new Chat();
+            var update = Assert.Throws<ChatXdkException>(() => chat.UpdateConfig(""));
+            Assert.Equal(ChatXdkErrorKind.InvalidState, update.Kind);
+            Assert.Equal(want, update.Message);
+        }
+
+        [Fact]
         public void EncryptMessage_UnknownOrEmptyEntityType_FailsWithInvalidInput()
         {
             using var chat = CreateUnlocked();

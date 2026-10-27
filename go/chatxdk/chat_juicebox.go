@@ -9,12 +9,14 @@ import (
 
 // NewWithJuiceboxConfig creates a Chat that keeps its keys in Juicebox, with
 // the Juicebox configuration JSON the X API returns. Setup, Unlock,
-// ChangePin and Delete use it; UpdateConfig replaces it. Like New, it reads
-// the X API's feature switches once, in the background.
+// ChangePin and Delete use it; UpdateConfig replaces it. An empty or blank
+// configJSON returns the ErrorKindInvalidState error a chat without a config
+// gives those calls; New creates a chat without one. Like New, it reads the
+// X API's feature switches once, in the background.
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func NewWithJuiceboxConfig(configJSON string) (*Chat, error) {
-	c, err := newChat(configJSON)
+	c, err := newChat(&configJSON)
 	if err != nil {
 		return nil, err
 	}

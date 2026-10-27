@@ -489,6 +489,22 @@ class ChatTest {
     }
 
     @Test
+    void anEmptyJuiceboxConfigFailsWithTheNoConfigError() throws Exception {
+        String want = "Invalid state: no Juicebox config: pass the juicebox_config the X API returns "
+                + "when you create the chat, or call update_config() first";
+        for (String empty : new String[] {"", "  "}) {
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> new Chat(empty));
+            assertEquals(ChatXdkException.Kind.INVALID_STATE, e.getKind());
+            assertEquals(want, e.getMessage());
+        }
+        try (Chat chat = new Chat()) {
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.updateConfig(""));
+            assertEquals(ChatXdkException.Kind.INVALID_STATE, e.getKind());
+            assertEquals(want, e.getMessage());
+        }
+    }
+
+    @Test
     void anUnknownOrEmptyEntityTypeFailsWithInvalidInput() throws Exception {
         try (Chat chat = createUnlocked()) {
             chat.setIdentity(new SetIdentityParams("1001", "66"));

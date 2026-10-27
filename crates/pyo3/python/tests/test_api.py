@@ -1621,6 +1621,22 @@ class TestApiShapes(unittest.TestCase):
         # Offsets count UTF-8 bytes: "é @bob" is 7 bytes, and "@bob" is bytes 3..7.
         send(text="é @bob", entities=[(3, 7, "mention")])
 
+    def test_an_empty_juicebox_config_fails_with_the_no_config_error(self):
+        from chat_xdk import Chat, InvalidStateError
+
+        want = (
+            "Invalid state: no Juicebox config: pass the juicebox_config the X API returns "
+            "when you create the chat, or call update_config() first"
+        )
+        for empty in ("", "  "):
+            with self.assertRaises(InvalidStateError) as ctx:
+                Chat(empty)
+            self.assertEqual(str(ctx.exception), want)
+        chat = Chat()
+        with self.assertRaises(InvalidStateError) as ctx:
+            chat.update_config("")
+        self.assertEqual(str(ctx.exception), want)
+
     def test_an_unknown_or_empty_entity_type_fails_with_invalid_input(self):
         from chat_xdk import EncryptMessageParams, InvalidInputError
 

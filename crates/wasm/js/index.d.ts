@@ -1153,7 +1153,9 @@ export interface CreateChatOptions {
    * (converted to a realms config with majority recover threshold — no
    * realm public keys, so only suitable for realms that don't require
    * them), or a raw realms config. Realm auth tokens always come from
-   * `getAuthToken`, not the config.
+   * `getAuthToken`, not the config. An empty or blank string throws the
+   * `ChatXdkError` of kind `invalidState` a chat without a config gives its
+   * Juicebox calls; omit the option instead on first boot.
    */
   juiceboxConfig?: string;
   

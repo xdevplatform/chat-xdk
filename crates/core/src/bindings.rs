@@ -70,8 +70,7 @@ pub fn validate_new_pin(pin: &[u8]) -> Result<(), SdkError> {
 /// config, for a binding that runs the Juicebox client itself and supplies
 /// the realms' auth tokens from a callback (the JS binding).
 pub fn juicebox_client_config(config_json: &str) -> Result<(String, u16), SdkError> {
-    let config = JuiceboxConfig::from_x_api_json_without_tokens(config_json)
-        .map_err(|e| SdkError::InvalidInput(format!("Invalid Juicebox config: {e}")))?;
+    let config = JuiceboxConfig::from_x_api_json_without_tokens(config_json)?;
     Ok((config.config_json, config.max_guess_count))
 }
 

@@ -78,7 +78,11 @@ namespace ChatXdk
         /// <see cref="ChangePin"/> and <see cref="Delete"/> use it; <see cref="UpdateConfig"/>
         /// replaces it.
         /// </summary>
-        /// <exception cref="ChatXdkException">The configuration is not a Juicebox config.</exception>
+        /// <exception cref="ChatXdkException">
+        /// The configuration is not a Juicebox config (kind <see cref="ChatXdkErrorKind.InvalidInput"/>),
+        /// or is empty or blank (kind <see cref="ChatXdkErrorKind.InvalidState"/>, the error a chat
+        /// without a config gives its Juicebox calls).
+        /// </exception>
         public Chat(string juiceboxConfigJson) : this(juiceboxConfigJson, null, TimeSpan.Zero)
         {
             ArgumentNullException.ThrowIfNull(juiceboxConfigJson);

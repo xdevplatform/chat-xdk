@@ -132,8 +132,7 @@ fn internal_err(e: impl std::fmt::Display) -> PyErr {
 
 /// Parse the X API Juicebox config JSON into a [`JuiceboxConfig`].
 fn parse_juicebox_config(config_json: &str) -> PyResult<JuiceboxConfig> {
-    JuiceboxConfig::from_x_api_json(config_json)
-        .map_err(|e| invalid_input(format!("Invalid Juicebox config: {e}")))
+    JuiceboxConfig::from_x_api_json(config_json).map_err(to_py_err)
 }
 
 /// Extract a PIN from `str`, `bytes`, or `bytearray` into a buffer that is

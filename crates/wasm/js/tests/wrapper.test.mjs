@@ -677,6 +677,22 @@ async function firstBootTests() {
   }
   assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
 
+  // An empty or blank config is no config: createChat and updateConfig fail
+  // with the same error and build no client.
+  const noConfig = (err) => {
+    chatXdkError("invalidState", /./)(err);
+    assert.equal(err.message, NO_JUICEBOX_CONFIG);
+    return true;
+  };
+  for (const empty of ["", "  "]) {
+    await assert.rejects(
+      createChat({ juiceboxConfig: empty, getAuthToken: async () => "stub-token", juiceboxModule }),
+      noConfig,
+    );
+    assert.throws(() => chat.updateConfig(empty), noConfig);
+  }
+  assert.equal(StubJuiceboxClient.instances.length, clientsBefore);
+
   // updateConfig with the real (post-POST) config enables setup: exactly one
   // register call, on the client built from that config.
   chat.updateConfig(JSON.stringify({ realms: [], max_guess_count: 6 }));
@@ -694,17 +710,6 @@ async function firstBootTests() {
   assert.equal(chat.isUnlocked(), true);
   assert.equal(chat.getPublicKeys().identity, keys.identity);
 
-  // A present-but-empty config is a caller bug, not first boot: it fails at
-  // createChat rather than deferring to a missing-config error at setup.
-  await assert.rejects(
-    () =>
-      createChat({
-        juiceboxConfig: "",
-        getAuthToken: async () => "stub-token",
-        juiceboxModule,
-      }),
-    chatXdkError("invalidInput", /^Invalid Juicebox config: Invalid JSON/),
-  );
   assert.throws(
     () => chat.updateConfig({ realms: [] }),
     chatXdkError("invalidInput", /juiceboxConfig must be the Juicebox config JSON string/),

@@ -32,7 +32,7 @@ func TestMain(m *testing.M) {
 // within timeout; for tests only.
 func newChatReading(t *testing.T, endpoint string, timeout time.Duration) *Chat {
 	t.Helper()
-	chat, err := newChat("")
+	chat, err := newChat(nil)
 	if err != nil {
 		t.Fatalf("newChat failed: %v", err)
 	}

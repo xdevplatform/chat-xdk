@@ -610,8 +610,8 @@ export async function createChat(options = {}) {
   // by the public-key POST), so no Juicebox Configuration/Client is built;
   // updateConfig() constructs them once the real config exists. Crypto
   // methods and generateKeypairs need neither. Only an absent config means
-  // first boot — a present-but-empty value is a caller bug and fails here
-  // rather than surfacing later as a missing-config error.
+  // first boot: the core fails an empty one here with the missing-config
+  // error, as every binding's constructor does.
   let juiceboxClient = null;
   let numGuesses;
   if (juiceboxConfig != null) {

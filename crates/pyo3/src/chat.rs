@@ -59,7 +59,8 @@ impl Chat {
     ///         chat without one, which manages its keys with ``import_keys``
     ///         or takes its config later from ``update_config``; until then
     ///         ``setup``, ``unlock``, ``change_pin`` and ``delete`` raise
-    ///         ``InvalidStateError``.
+    ///         ``InvalidStateError``. An empty or blank string raises that
+    ///         ``InvalidStateError`` here.
     #[new]
     #[pyo3(signature = (config_json=None))]
     pub(crate) fn new(py: Python<'_>, config_json: Option<&str>) -> PyResult<Self> {

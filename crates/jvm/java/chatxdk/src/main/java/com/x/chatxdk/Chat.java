@@ -94,7 +94,9 @@ public final class Chat implements AutoCloseable {
      * JSON the X API returns. {@link #setup}, {@link #unlock}, {@link #changePin} and
      * {@link #delete} use it; {@link #updateConfig} replaces it.
      *
-     * @throws ChatXdkException if the configuration is not a Juicebox config.
+     * @throws ChatXdkException if the configuration is not a Juicebox config (kind
+     *     {@code INVALID_INPUT}), or is empty or blank (kind {@code INVALID_STATE}, the error a chat
+     *     without a config gives its Juicebox calls).
      */
     public Chat(String juiceboxConfigJson) {
         this(Objects.requireNonNull(juiceboxConfigJson, "juiceboxConfigJson"), null, null);

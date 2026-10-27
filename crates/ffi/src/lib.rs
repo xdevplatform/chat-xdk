@@ -306,11 +306,11 @@ pub extern "C" fn chat_xdk_detect_image_dimensions(data: *const u8, data_len: us
 ///
 /// `juicebox_config_json` is the Juicebox configuration JSON the X API
 /// returns, which `chat_xdk_setup`, `chat_xdk_unlock`,
-/// `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL or an empty string
-/// for a chat without one, which manages its keys with
-/// `chat_xdk_import_keys` or takes its config later with
-/// `chat_xdk_update_config`. Until then those four calls fail with an
-/// `invalid_state` error. On failure `out_chat` is set to NULL. Free the
+/// `chat_xdk_change_pin` and `chat_xdk_delete` use; NULL for a chat without
+/// one, which manages its keys with `chat_xdk_import_keys` or takes its
+/// config later with `chat_xdk_update_config`. Until then those four calls
+/// fail with an `invalid_state` error, and so does an empty or blank
+/// `juicebox_config_json`. On failure `out_chat` is set to NULL. Free the
 /// handle with [`chat_xdk_free`].
 #[no_mangle]
 pub extern "C" fn chat_xdk_new(
@@ -322,16 +322,19 @@ pub extern "C" fn chat_xdk_new(
             return err_result("Null out_chat");
         }
         unsafe { *out_chat = std::ptr::null_mut() };
-        let config_json = try_str!(juicebox_config_json);
+        let config_json = if juicebox_config_json.is_null() {
+            None
+        } else {
+            Some(try_str!(juicebox_config_json))
+        };
         #[cfg(feature = "juicebox")]
         let handle = {
-            let inner = if config_json.is_empty() {
-                chat_xdk_core::Chat::default()
-            } else {
-                match parse_juicebox_config(config_json) {
+            let inner = match config_json {
+                None => chat_xdk_core::Chat::default(),
+                Some(json) => match parse_juicebox_config(json) {
                     Ok(config) => chat_xdk_core::Chat::new(config),
                     Err(e) => return e,
-                }
+                },
             };
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
@@ -341,7 +344,7 @@ pub extern "C" fn chat_xdk_new(
         };
         #[cfg(not(feature = "juicebox"))]
         let handle = {
-            if !config_json.is_empty() {
+            if config_json.is_some() {
                 return err_result(
                     "this library is built without Juicebox: pass no Juicebox config",
                 );
@@ -470,8 +473,7 @@ pub extern "C" fn chat_xdk_change_pin(
 
 #[cfg(feature = "juicebox")]
 fn parse_juicebox_config(config_json: &str) -> Result<JuiceboxConfig, FfiResult> {
-    JuiceboxConfig::from_x_api_json(config_json)
-        .map_err(|e| err_result(&format!("Invalid Juicebox config: {e}")))
+    JuiceboxConfig::from_x_api_json(config_json).map_err(err_from)
 }
 
 /// Free a Chat SDK instance.

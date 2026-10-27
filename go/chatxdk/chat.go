@@ -62,7 +62,7 @@ type Chat struct {
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func New() *Chat {
-	c, err := newChat("")
+	c, err := newChat(nil)
 	if err != nil {
 		return nil
 	}
@@ -73,7 +73,9 @@ func New() *Chat {
 // newChat creates a Chat, with a Juicebox configuration unless
 // juiceboxConfigJSON is empty, that has not started reading its feature
 // switches.
-func newChat(juiceboxConfigJSON string) (*Chat, error) {
+// newChat creates a Chat with juiceboxConfigJSON, or with no Juicebox config
+// when it is nil.
+func newChat(juiceboxConfigJSON *string) (*Chat, error) {
 	h, err := ffiNew(juiceboxConfigJSON)
 	if err != nil {
 		return nil, err

@@ -226,6 +226,29 @@ fn invalid_entities_and_attachments_fail_with_invalid_input() {
 
 #[cfg(feature = "juicebox")]
 #[test]
+fn an_empty_juicebox_config_fails_with_the_no_config_error() {
+    let no_config = serde_json::json!({
+        "kind": "invalid_state",
+        "message": "Invalid state: no Juicebox config: pass the juicebox_config the X API \
+                    returns when you create the chat, or call update_config() first",
+    });
+    for empty in ["", "  "] {
+        let config = c(empty);
+        let mut chat = std::ptr::null_mut();
+        assert_eq!(error(chat_xdk_new(config.as_ptr(), &mut chat)), no_config);
+        assert!(chat.is_null());
+    }
+    let chat = new_chat();
+    let empty = c("");
+    assert_eq!(
+        error(chat_xdk_update_config(chat, empty.as_ptr())),
+        no_config
+    );
+    chat_xdk_free(chat);
+}
+
+#[cfg(feature = "juicebox")]
+#[test]
 fn juicebox_calls_without_a_config_fail_with_the_cores_invalid_state_error() {
     let chat = new_chat();
     let (pin, new_pin) = (b"2580", b"1359");
