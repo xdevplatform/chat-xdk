@@ -362,6 +362,43 @@ async function main() {
     conversationKeyVersion: v.event_conversation_key_version,
   });
 
+  // A group removal flow: decrypt keeps the removal, its key change and a
+  // later rename, and drops the title and description the removal
+  // re-encrypts under the new key, on both paths.
+  {
+    const receiver = new Chat();
+    receiver.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64), signingKeyVersion: v.event_recipient_key_version });
+    const flow = v.event_group_removal_flow_b64;
+    const version = v.event_group_removal_conversation_key_version;
+    const result = receiver.decryptEvents({ events: flow, signingKeys });
+    assert.deepEqual(Object.keys(result.errors).sort(), v.event_group_removal_dropped_indices.map(String));
+    assert.equal(result.conversationKeys.latestVersion, version);
+    const kept = result.events.map((decrypted) => decrypted.event);
+    assert.equal(kept.length, 3);
+    assert.deepEqual(kept[0].change, {
+      changeType: "membersRemoved",
+      memberIds: [v.event_group_removed_member_id],
+    });
+    assert.equal(kept[1].type, "keyChange");
+    assert.equal(kept[1].conversationKeyVersion, version);
+    assert.deepEqual(kept[2].change, {
+      changeType: "titleChanged",
+      newTitle: { kind: "text", text: v.event_group_renamed_title },
+    });
+    assert.ok(kept.every((event) => event.verified));
+    for (const index of v.event_group_removal_dropped_indices) {
+      assert.throws(
+        () =>
+          receiver.decryptEvent({
+            eventB64: flow[index],
+            conversationKeys: result.conversationKeys.keys,
+            signingKeys,
+          }),
+        (err) => err.kind === "invalidInput" && err.message === result.errors[String(index)],
+      );
+    }
+  }
+
   // A signed group create: decryptEvent returns its title decrypted under
   // the key the create seeded. Without that key the create still decrypts,
   // on both paths, with its title unavailable as the ciphertext it carries.

@@ -1463,6 +1463,55 @@ class ChatTest {
     }
 
     @Test
+    void vectorsGroupRemovalDropsTheTitleAndDescriptionReencryptions() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) { // default reject-unverified policy
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64"), v.get("event_recipient_key_version").asText()));
+            List<String> flow = new ArrayList<>();
+            v.get("event_group_removal_flow_b64").forEach(event -> flow.add(event.asText()));
+            List<String> dropped = new ArrayList<>();
+            v.get("event_group_removal_dropped_indices").forEach(index -> dropped.add(index.asText()));
+            String version = v.get("event_group_removal_conversation_key_version").asText();
+
+            // Decrypt keeps the removal, its key change and a later rename, and
+            // drops the title and description the removal re-encrypts.
+            DecryptEventsParams batch = new DecryptEventsParams(flow);
+            batch.signingKeys = eventSigningKeys(v);
+            DecryptEventsResult result = chat.decryptEvents(batch);
+            List<String> errors = new ArrayList<>(result.errors.keySet());
+            errors.sort(null);
+            assertEquals(dropped, errors);
+            assertEquals(version, result.conversationKeys.latestVersion);
+            assertEquals(3, result.events.size());
+            for (DecryptedEvent kept : result.events) {
+                assertTrue(kept.event.path("verified").asBoolean(), kept.event.toString());
+            }
+            JsonNode removal = result.events.get(0).event.path("change");
+            assertEquals("MembersRemoved", removal.path("change_type").asText());
+            assertEquals(1, removal.path("member_ids").size());
+            assertEquals(v.get("event_group_removed_member_id").asText(), removal.path("member_ids").get(0).asText());
+            JsonNode keyChange = result.events.get(1).event;
+            assertEquals("KeyChange", keyChange.path("type").asText());
+            assertEquals(version, keyChange.path("conversation_key_version").asText());
+            JsonNode rename = result.events.get(2).event.path("change");
+            assertEquals("TitleChanged", rename.path("change_type").asText());
+            GroupText title = new ObjectMapper().treeToValue(rename.path("new_title"), GroupText.class);
+            assertEquals("Text", title.kind);
+            assertEquals(v.get("event_group_renamed_title").asText(), title.text);
+
+            // The single-event path drops the same events, as invalid input.
+            for (String index : dropped) {
+                DecryptEventParams single =
+                        new DecryptEventParams(flow.get(Integer.parseInt(index)), result.conversationKeys.keys);
+                single.signingKeys = eventSigningKeys(v);
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.decryptEvent(single));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals(result.errors.get(index), e.getMessage());
+            }
+        }
+    }
+
+    @Test
     void vectorsGroupCreateDecryptsItsTitleOnReceive() throws Exception {
         JsonNode v = loadVectors();
         try (Chat chat = new Chat()) {

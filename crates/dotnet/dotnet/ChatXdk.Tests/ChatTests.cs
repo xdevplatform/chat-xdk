@@ -49,6 +49,11 @@ namespace ChatXdk.Tests
             [JsonPropertyName("event_group_title")] public string EventGroupTitle { get; init; } = "";
             [JsonPropertyName("event_group_avatar_change_b64")] public string EventGroupAvatarChangeB64 { get; init; } = "";
             [JsonPropertyName("event_group_avatar_url")] public string EventGroupAvatarUrl { get; init; } = "";
+            [JsonPropertyName("event_group_removal_flow_b64")] public string[] EventGroupRemovalFlowB64 { get; init; } = Array.Empty<string>();
+            [JsonPropertyName("event_group_removal_dropped_indices")] public int[] EventGroupRemovalDroppedIndices { get; init; } = Array.Empty<int>();
+            [JsonPropertyName("event_group_removal_conversation_key_version")] public string EventGroupRemovalConversationKeyVersion { get; init; } = "";
+            [JsonPropertyName("event_group_removed_member_id")] public string EventGroupRemovedMemberId { get; init; } = "";
+            [JsonPropertyName("event_group_renamed_title")] public string EventGroupRenamedTitle { get; init; } = "";
             [JsonPropertyName("event_key_change_b64")] public string EventKeyChangeB64 { get; init; } = "";
             [JsonPropertyName("event_message_b64")] public string EventMessageB64 { get; init; } = "";
             [JsonPropertyName("event_reply_valid_b64")] public string EventReplyValidB64 { get; init; } = "";
@@ -1918,6 +1923,45 @@ namespace ChatXdk.Tests
             Assert.Equal("AvatarChanged", change.GetProperty("change_type").GetString());
             Assert.Equal(v.EventGroupAvatarUrl, change.GetProperty("new_avatar_url").GetString());
             Assert.Equal(v.EventConversationKeyVersion, change.GetProperty("conversation_key_version").GetString());
+        }
+
+        [Fact]
+        public void Vectors_GroupRemoval_DropsTheTitleAndDescriptionReencryptions()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)) { SigningKeyVersion = v.EventRecipientKeyVersion });
+            var flow = v.EventGroupRemovalFlowB64;
+
+            // Decrypt keeps the removal, its key change and a later rename, and
+            // drops the title and description the removal re-encrypts.
+            var result = chat.DecryptEvents(new DecryptEventsParams(flow) { SigningKeys = EventSigningKeys(v) });
+            Assert.Equal(
+                v.EventGroupRemovalDroppedIndices.Select(index => index.ToString()).ToArray(),
+                result.Errors.Keys.OrderBy(int.Parse).ToArray());
+            Assert.Equal(v.EventGroupRemovalConversationKeyVersion, result.ConversationKeys.LatestVersion);
+            Assert.Equal(3, result.Events.Count);
+            Assert.All(result.Events, e => Assert.True(e.Event.GetProperty("verified").GetBoolean()));
+            var removal = result.Events[0].Event.GetProperty("change");
+            Assert.Equal("MembersRemoved", removal.GetProperty("change_type").GetString());
+            Assert.Equal(new[] { v.EventGroupRemovedMemberId }, removal.GetProperty("member_ids").Deserialize<string[]>());
+            var keyChange = result.Events[1].Event;
+            Assert.Equal("KeyChange", keyChange.GetProperty("type").GetString());
+            Assert.Equal(v.EventGroupRemovalConversationKeyVersion, keyChange.GetProperty("conversation_key_version").GetString());
+            var rename = result.Events[2].Event.GetProperty("change");
+            Assert.Equal("TitleChanged", rename.GetProperty("change_type").GetString());
+            var title = rename.GetProperty("new_title").Deserialize<GroupText>()!;
+            Assert.Equal("Text", title.Kind);
+            Assert.Equal(v.EventGroupRenamedTitle, title.Text);
+
+            // The single-event path drops the same events, as invalid input.
+            foreach (var index in v.EventGroupRemovalDroppedIndices)
+            {
+                var ex = Assert.Throws<ChatXdkException>(() => chat.DecryptEvent(
+                    new DecryptEventParams(flow[index], result.ConversationKeys.Keys) { SigningKeys = EventSigningKeys(v) }));
+                Assert.Equal(ChatXdkErrorKind.InvalidInput, ex.Kind);
+                Assert.Equal(result.Errors[index.ToString()], ex.Message);
+            }
         }
 
         [Fact]

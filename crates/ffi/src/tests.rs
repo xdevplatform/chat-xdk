@@ -224,6 +224,95 @@ fn invalid_entities_and_attachments_fail_with_invalid_input() {
     chat_xdk_free(chat);
 }
 
+#[test]
+fn a_group_removal_drops_the_title_and_description_reencryptions() {
+    let v: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/sdk_vectors.json")).unwrap();
+    let text = |key: &str| v[key].as_str().unwrap().to_string();
+    let mut chat = std::ptr::null_mut();
+    data(chat_xdk_new(std::ptr::null(), &mut chat));
+    let keys = BASE64.decode(text("private_keys_concat_b64")).unwrap();
+    let import = c(&serde_json::json!({
+        "signing_key_version": text("event_recipient_key_version"),
+    })
+    .to_string());
+    data(chat_xdk_import_keys(
+        chat,
+        keys.as_ptr(),
+        keys.len(),
+        import.as_ptr(),
+    ));
+    let signing_keys = serde_json::json!([{
+        "user_id": text("event_sender_id"),
+        "public_key_version": text("event_signing_key_version"),
+        "public_key": text("signing_public_b64"),
+        "identity_public_key": text("identity_public_b64"),
+        "identity_public_key_signature": text("identity_public_key_signature_b64"),
+    }]);
+    let flow = v["event_group_removal_flow_b64"].as_array().unwrap();
+    let params =
+        c(&serde_json::json!({ "events": flow, "signing_keys": signing_keys }).to_string());
+    let result: serde_json::Value =
+        serde_json::from_str(&data(chat_xdk_decrypt_events(chat, params.as_ptr())).unwrap())
+            .unwrap();
+
+    let mut dropped: Vec<u64> = result["errors"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|index| index.parse().unwrap())
+        .collect();
+    dropped.sort_unstable();
+    let expected: Vec<u64> = v["event_group_removal_dropped_indices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|index| index.as_u64().unwrap())
+        .collect();
+    assert_eq!(dropped, expected);
+    let version = text("event_group_removal_conversation_key_version");
+    assert_eq!(result["conversation_keys"]["latest_version"], version);
+    let kept: Vec<&serde_json::Value> = result["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| &event["event"])
+        .collect();
+    assert_eq!(kept.len(), 3, "{kept:?}");
+    assert_eq!(kept[0]["change"]["change_type"], "MembersRemoved");
+    assert_eq!(
+        kept[0]["change"]["member_ids"],
+        serde_json::json!([text("event_group_removed_member_id")])
+    );
+    assert_eq!(kept[1]["type"], "KeyChange");
+    assert_eq!(kept[1]["conversation_key_version"], version);
+    assert_eq!(kept[2]["change"]["change_type"], "TitleChanged");
+    assert_eq!(
+        kept[2]["change"]["new_title"],
+        serde_json::json!({ "kind": "Text", "text": text("event_group_renamed_title") })
+    );
+    for event in &kept {
+        assert_eq!(event["verified"], true, "{event}");
+    }
+
+    for index in expected {
+        let params = c(&serde_json::json!({
+            "event_b64": flow[index as usize],
+            "conversation_keys": result["conversation_keys"]["keys"],
+            "signing_keys": signing_keys,
+        })
+        .to_string());
+        assert_eq!(
+            error(chat_xdk_decrypt_event(chat, params.as_ptr())),
+            serde_json::json!({
+                "kind": "invalid_input",
+                "message": result["errors"][index.to_string()],
+            })
+        );
+    }
+    chat_xdk_free(chat);
+}
+
 #[cfg(feature = "juicebox")]
 #[test]
 fn an_empty_juicebox_config_fails_with_the_no_config_error() {
