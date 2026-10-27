@@ -2,11 +2,11 @@
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-10-26
+## [0.7.0] - 2026-10-27
 
 To move code from 0.5.x, follow your binding's guide in
-[docs/migrating-0.6](docs/migrating-0.6/README.md): each lists its changes
-with before/after code, and [Why 0.6.0 changes](docs/migrating-0.6/why.md)
+[docs/migrating-0.7](docs/migrating-0.7/README.md): each lists its changes
+with before/after code, and [Why 0.7.0 changes](docs/migrating-0.7/why.md)
 explains why each change was made. API.md, the guides, the READMEs and the
 doc comments in every binding describe this API: their code examples compile
 against it, and the Rust crate's examples build as doctests.
@@ -179,7 +179,7 @@ chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_versio
 
 Go, .NET, JVM and Rust call `SetIdentity` / `setIdentity` / `set_identity`
 the same way; each binding's guide in
-[docs/migrating-0.6](docs/migrating-0.6/README.md) shows its request and the
+[docs/migrating-0.7](docs/migrating-0.7/README.md) shows its request and the
 0.5.x code to change.
 
 #### A message with files is built before its files are encrypted
@@ -527,7 +527,7 @@ prepared = chat.prepare_conversation_key_change(
   document), `chat_xdk_decrypt_events`, `chat_xdk_decrypt_event`, the
   encrypt and prepare calls, and the file calls;
   `chat_xdk_file_encryptor_new` and `chat_xdk_file_decryptor_new` write the
-  handle to an out-parameter. [C ABI](docs/migrating-0.6/c-abi.md) lists
+  handle to an out-parameter. [C ABI](docs/migrating-0.7/c-abi.md) lists
   the calls whose arguments or results differ from 0.5.x.
 
 #### Errors carry their kind
@@ -807,5 +807,5 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/xdevplatform/chat-xdk/compare/v0.5.2...v0.6.0
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/xdevplatform/chat-xdk/compare/v0.5.2...v0.7.0
