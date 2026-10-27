@@ -33,13 +33,13 @@ ABI make no requests: a Rust app, or code that calls the C ABI directly,
 makes the one request itself and hands the chat its answer, under the same
 rules the bindings follow, so it sends v1 when the switch says so too.
 Upgrade the apps that read your conversations first:
-[Rust](rust.md#upgrade-readers-before-v1-sends-start),
-[Python](python.md#upgrade-readers-before-v1-sends-start),
-[JavaScript](javascript.md#upgrade-readers-before-v1-sends-start),
-[Go](go.md#upgrade-readers-before-v1-sends-start),
-[JVM](jvm.md#upgrade-readers-before-v1-sends-start),
-[.NET](dotnet.md#upgrade-readers-before-v1-sends-start),
-[C ABI](c-abi.md#upgrade-readers-before-v1-sends-start).
+[Rust](rust.md#upgrade-readers-first),
+[Python](python.md#upgrade-readers-first),
+[JavaScript](javascript.md#upgrade-readers-first),
+[Go](go.md#upgrade-readers-first),
+[JVM](jvm.md#upgrade-readers-first),
+[.NET](dotnet.md#upgrade-readers-first),
+[C ABI](c-abi.md#upgrade-readers-first).
 
 ## The feature-switch request
 
@@ -253,6 +253,26 @@ Received keys:
 [.NET](dotnet.md#received-participant-keys-take-the-same-names),
 [C ABI](c-abi.md#received-participant-keys-take-the-same-names).
 
+## A prepared change's JSON leaves out its key
+
+A prepared change carries the new conversation key, which the app stores,
+next to the participant keys, key version and action signatures its request
+sends. No request takes the key itself, and a type that serializes the key
+with the rest writes it into whatever it's serialized for: a request body,
+a log, a queue. So the Go, JavaScript, JVM and .NET types keep the key on
+the object and leave it out of their JSON (`json:"-"`, a `toJSON` without
+it, `WRITE_ONLY` and `[JsonIgnore]`), as the Rust type does. Code that
+stored a prepared change as JSON stores the key from the object instead.
+Python returns the key in its dict, and the C ABI in its result document,
+the only way the key reaches a C caller:
+[Rust](rust.md#a-prepared-changes-json-leaves-out-its-key),
+[Python](python.md#a-prepared-changes-json-leaves-out-its-key),
+[JavaScript](javascript.md#a-prepared-changes-json-leaves-out-its-key),
+[Go](go.md#a-prepared-changes-json-leaves-out-its-key),
+[JVM](jvm.md#a-prepared-changes-json-leaves-out-its-key),
+[.NET](dotnet.md#a-prepared-changes-json-leaves-out-its-key),
+[C ABI](c-abi.md#a-prepared-changes-json-keeps-its-key).
+
 ## Public key inputs name the identity key and its version
 
 The public keys a key change or group change encrypts a new conversation
@@ -304,32 +324,35 @@ sends it signs at 10 and the member adds with a description it signs at 8.
 Versions above 11 are rejected, since their layout is unknown
 ([CRYPTO.md](../CRYPTO.md#verifying-newer-versions)). There's no code to
 change to read them. 0.5.x readers rebuild the layouts up to 7 only, so they
-can't verify v1 sends, member removals, or member adds with a description:
-each guide says to upgrade readers first.
+can't verify v1 sends, member removals and leaves, or member adds with a
+description: each guide says to upgrade readers first.
 
-## Read receipts should be signed
+## Read receipts are signed
 
-Recipients on the default policy reject an unsigned read receipt, so apps
-should sign one. `prepare_mark_conversation_read` signs it: send the
+Recipients on the default policy drop an unsigned read receipt, as 0.5.x
+recipients did, so a receipt the X API sends without a signature never
+reaches them. `prepare_mark_conversation_read` signs it: send the
 `PreparedAction`'s `action_signatures` on
 `POST /2/chat/conversations/{id}/read`, and a recipient's `decrypt_event`
 returns the receipt as a verified `ReadReceipt`:
-[Rust](rust.md#read-receipts-should-be-signed),
-[Python](python.md#read-receipts-should-be-signed),
-[JavaScript](javascript.md#read-receipts-should-be-signed),
-[Go](go.md#read-receipts-should-be-signed),
-[JVM](jvm.md#read-receipts-should-be-signed),
-[.NET](dotnet.md#read-receipts-should-be-signed),
-[C ABI](c-abi.md#read-receipts-should-be-signed).
+[Rust](rust.md#read-receipts-are-signed),
+[Python](python.md#read-receipts-are-signed),
+[JavaScript](javascript.md#read-receipts-are-signed),
+[Go](go.md#read-receipts-are-signed),
+[JVM](jvm.md#read-receipts-are-signed),
+[.NET](dotnet.md#read-receipts-are-signed),
+[C ABI](c-abi.md#read-receipts-are-signed).
 
-## Group actions should be signed
+## Group changes are signed
 
-Apps should sign a group update with the signatures of the actions it
-performs. Removing members rotates the conversation key, so the members
-removed don't receive the key the group encrypts under next:
-`prepare_group_members_remove` takes the public keys of the members who stay
-and returns a `PreparedConversationChange` with the new key, and
-`POST /2/chat/conversations/{id}/members/remove` sends
+Recipients on the default policy drop a group change that isn't signed, as
+0.5.x recipients did, so each group change carries the signatures of the
+actions it performs, and each guide gives every change's request, with its
+X API method, path and body. Removing members rotates the conversation key,
+so the members removed don't receive the key the group encrypts under next:
+`prepare_group_members_remove` takes the public keys of every member who
+stays, the remover's included, and returns a `PreparedConversationChange`
+with the new key, and `POST /2/chat/conversations/{id}/members/remove` sends
 `group_key_rotation_data` with its signatures. Leaving signs the sender's
 removal, then an admin add when `promote_admin_id` is set, then a
 conversation delete, and does not rotate the key. Admin, invite, and join
@@ -347,8 +370,10 @@ removal rotate the key, so each re-encrypts the title and description the
 app passes under the new key. An add signs both in the member add, so the
 new members can read them, and returns the title for its request. A removal
 signs each between the removal and the key change, marked as a key-rotation
-re-encryption so X clients don't show it as a change; it leaves the avatar
-alone.
+re-encryption, which decrypt drops (see [Decrypt drops a removal's title and
+description
+re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions));
+it leaves the avatar alone.
 
 An avatar is an image, and X clients encrypt the image, not its URL: the app
 encrypts the image under the conversation key and uploads it to the group's
@@ -366,13 +391,69 @@ the rest of the event, such as a create's members and admins, still reads.
 0.5.x apps signed titles as plaintext while naming a key version, so an app
 shows the raw value when a title isn't decryptable. Each guide shows the
 calls and how to read a `GroupText`:
-[Rust](rust.md#group-actions-should-be-signed),
-[Python](python.md#group-actions-should-be-signed),
-[JavaScript](javascript.md#group-actions-should-be-signed),
-[Go](go.md#group-actions-should-be-signed),
-[JVM](jvm.md#group-actions-should-be-signed),
-[.NET](dotnet.md#group-actions-should-be-signed), [C
-ABI](c-abi.md#group-actions-should-be-signed).
+[Rust](rust.md#group-changes-are-signed),
+[Python](python.md#group-changes-are-signed),
+[JavaScript](javascript.md#group-changes-are-signed),
+[Go](go.md#group-changes-are-signed),
+[JVM](jvm.md#group-changes-are-signed),
+[.NET](dotnet.md#group-changes-are-signed), [C
+ABI](c-abi.md#group-changes-are-signed).
+
+## Decrypt drops a removal's title and description re-encryptions
+
+A member removal rotates the conversation key, and the remover re-encrypts
+the group's title and description under the new key, so the members who
+stay can still read them. Each re-encryption is a title or description
+change that carries the same text as before, marked `for_key_rotation`. It
+isn't a change, and an app that shows every title change would show each
+removal as a rename, so `decrypt_events` and `decrypt_event` drop these
+events the way they drop an unverified one: `decrypt_events` leaves each
+out of `events` and records it in `errors`, and `decrypt_event` fails with
+an invalid-input error that says why. Nothing else is dropped: the removal
+itself, the key change that carries the new key and moves the version to
+encrypt with, avatar changes, and every title or description change without
+the mark decrypt as before.
+
+The mark sits outside the signed payload: a group change's signature covers
+its event name, message id, sender, conversation, key version and encrypted
+value, not `for_key_rotation`. Dropping on it is still safe. Decrypt
+verifies an event before it reads the mark, so an event that doesn't verify
+fails as unverified. A relay that sets the mark on a real title change only
+hides that change, which it can do anyway by not delivering the event, and
+a relay that clears it on a re-encryption makes the event show as a title
+change to the same text, as 0.5.x showed it. The drop applies under either
+`reject_unverified` setting, since it concerns what the event is rather
+than whether it verified:
+[Rust](rust.md#decrypt-drops-a-removals-title-and-description-re-encryptions),
+[Python](python.md#decrypt-drops-a-removals-title-and-description-re-encryptions),
+[JavaScript](javascript.md#decrypt-drops-a-removals-title-and-description-re-encryptions),
+[Go](go.md#decrypt-drops-a-removals-title-and-description-re-encryptions),
+[JVM](jvm.md#decrypt-drops-a-removals-title-and-description-re-encryptions),
+[.NET](dotnet.md#decrypt-drops-a-removals-title-and-description-re-encryptions),
+[C ABI](c-abi.md#decrypt-drops-a-removals-title-and-description-re-encryptions).
+
+## The app passes a new key until its key change returns
+
+A call that rotates the conversation key (a member removal, a member add, a
+group create or a key change) returns the new key, and the app sends the
+key change in its request. The key cache (`set_cache_keys`) holds only the
+key of a key change that verified, at the newest version that verified, so
+a key change from someone who can't sign for the conversation, or an older
+one replayed, can't steer a chat's sends to a key they chose. A prepare
+call's key is in no verified key change yet: it reaches the conversation
+once the X API accepts the request, and the chat's cache adopts it once
+`decrypt_events` decrypts that key change and verifies it. Until then an
+encrypt call that leaves out the key resolves the old one, which the
+members a removal removed still hold. So each guide stores the new key and
+version and passes them to the encrypt and prepare calls until the cache
+holds them:
+[Rust](rust.md#removing-members),
+[Python](python.md#removing-members),
+[JavaScript](javascript.md#removing-members),
+[Go](go.md#removing-members),
+[JVM](jvm.md#removing-members),
+[.NET](dotnet.md#removing-members),
+[C ABI](c-abi.md#removing-members).
 
 ## Errors carry their kind
 
@@ -400,6 +481,25 @@ report the core's error too, rather than a generic failure or no value:
 [.NET](dotnet.md#errors-carry-their-kind),
 [C ABI](c-abi.md#errors-carry-their-kind).
 
+## `sign` refuses data only the SDK signs
+
+The signing key signs every event an app sends: messages, key changes,
+group and conversation changes, deletes and read receipts. A recipient
+verifies each by rebuilding its payload from the event and checking the
+signature over those bytes. A signature that `sign` returned over bytes
+that read as such a payload would verify as that event, and one over a
+P-256 public key would bind it as an identity key, the binding recipients
+check before they trust a key pair. So `sign` refuses both with an
+invalid-input error and signs any other data as before; the SDK signs
+events on its own path:
+[Rust](rust.md#sign-refuses-data-only-the-sdk-signs),
+[Python](python.md#sign-refuses-data-only-the-sdk-signs),
+[JavaScript](javascript.md#sign-refuses-data-only-the-sdk-signs),
+[Go](go.md#sign-refuses-data-only-the-sdk-signs),
+[JVM](jvm.md#sign-refuses-data-only-the-sdk-signs),
+[.NET](dotnet.md#sign-refuses-data-only-the-sdk-signs),
+[C ABI](c-abi.md#chat_xdk_sign-refuses-data-only-the-sdk-signs).
+
 ## Smaller changes
 
 - The TypeScript typings declare only what the package exports, so a type
@@ -417,7 +517,9 @@ report the core's error too, rather than a generic failure or no value:
   `TypedDict`s, so a type checker reads them
   ([Python](python.md#key-entries-and-results-have-named-types)).
 - .NET params documents omit a field left `null`, so a missing value fails
-  with an error that names it, and .NET and JVM descriptors and the JVM's
+  with an error that names it
+  ([.NET](dotnet.md#a-params-property-left-null-is-left-out)), and .NET and
+  JVM descriptors and the JVM's
   key entries take their required values in their constructors, so leaving
   one out doesn't compile: no stand-in `""` or `0` reaches the core
   ([JVM](jvm.md#descriptors-and-key-entries-take-their-values-in-constructors),
