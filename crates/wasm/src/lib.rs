@@ -18,8 +18,8 @@
 //!
 //! // Batch decrypt — handles key extraction + signing key matching
 //! const result = chat.decryptEvents({ events: rawEvents, signingKeys });
-//! for (const dm of result.messages) {
-//!   console.log(dm.event.type, dm.event.content?.text);
+//! for (const { event } of result.events) {
+//!   console.log(event.type, event.content?.text);
 //! }
 //!
 //! // Single event with cached keys
@@ -398,7 +398,7 @@ impl Chat {
     /// through). Omitting `signingKeys` falls back to the keys stored via
     /// `setSigningKeys`.
     ///
-    /// Returns `{ messages, conversationKeys, errors }`.
+    /// Returns `{ events, conversationKeys, errors }`.
     #[wasm_bindgen(js_name = decryptEvents)]
     pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsError> {
         let p: JsDecryptEventsParams = from_js_params("decryptEvents", params)?;
@@ -412,22 +412,21 @@ impl Chat {
         // Build JS result object
         let obj = js_sys::Object::new();
 
-        // Convert messages
-        let messages_arr = js_sys::Array::new();
-        for dm in result.messages {
-            let msg_obj = js_sys::Object::new();
-            let js_event: JsEvent = dm.event.into();
+        let events = js_sys::Array::new();
+        for decrypted in result.events {
+            let entry = js_sys::Object::new();
+            let js_event: JsEvent = decrypted.event.into();
             let event_val = to_js_value(&js_event)?;
-            js_sys::Reflect::set(&msg_obj, &"event".into(), &event_val)
+            js_sys::Reflect::set(&entry, &"event".into(), &event_val)
                 .map_err(|_| JsError::new("Failed to set event"))?;
-            if let Some(b64) = dm.original_b64 {
-                js_sys::Reflect::set(&msg_obj, &"originalB64".into(), &JsValue::from_str(&b64))
+            if let Some(b64) = decrypted.original_b64 {
+                js_sys::Reflect::set(&entry, &"originalB64".into(), &JsValue::from_str(&b64))
                     .map_err(|_| JsError::new("Failed to set originalB64"))?;
             }
-            messages_arr.push(&msg_obj);
+            events.push(&entry);
         }
-        js_sys::Reflect::set(&obj, &"messages".into(), &messages_arr.into())
-            .map_err(|_| JsError::new("Failed to set messages"))?;
+        js_sys::Reflect::set(&obj, &"events".into(), &events.into())
+            .map_err(|_| JsError::new("Failed to set events"))?;
 
         // Convert conversation keys
         let conv_keys_obj = js_sys::Object::new();

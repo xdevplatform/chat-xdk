@@ -82,7 +82,7 @@ async function main() {
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   const decryptedKey = chat.decryptConversationKey(prep.conversationParticipantKeys[0].encryptedConversationKey);
@@ -267,7 +267,7 @@ async function main() {
     batch.conversationKeys.keys[v.event_conversation_key_version],
     b64ToBytes(v.conversation_key_b64),
   );
-  const keyChanges = batch.messages.filter((m) => m.event.type === "keyChange");
+  const keyChanges = batch.events.filter((m) => m.event.type === "keyChange");
   assert.equal(keyChanges.length, 1);
   assert.equal(keyChanges[0].event.verified, true);
   assert.equal(keyChanges[0].event.conversationKeyVersion, v.event_conversation_key_version);
@@ -275,7 +275,7 @@ async function main() {
   for (const key of keyChanges[0].event.conversationParticipantKeys) {
     assert.deepEqual(Object.keys(key).sort(), ["encryptedConversationKey", "publicKeyVersion", "userId"]);
   }
-  const messages = batch.messages.filter((m) => m.event.type === "message");
+  const messages = batch.events.filter((m) => m.event.type === "message");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].event.content.text, v.event_message_text);
   assert.equal(messages[0].event.verified, true);
@@ -308,7 +308,7 @@ async function main() {
     signingKeys,
   });
   assert.deepEqual(Object.keys(replyBatch.errors), []);
-  const replies = replyBatch.messages.filter((m) => m.event.type === "message");
+  const replies = replyBatch.events.filter((m) => m.event.type === "message");
   assert.equal(replies.length, 2);
   const [validReply, forgedReply] = replies;
   assert.equal(validReply.event.content.text, v.event_reply_text);
@@ -385,7 +385,7 @@ async function main() {
   assert.deepEqual(keylessCreate.change.title, unavailableTitle);
   const createBatch = chat.decryptEvents({ events: [v.event_group_create_b64], signingKeys });
   assert.deepEqual(createBatch.errors, {});
-  assert.deepEqual(createBatch.messages[0].event.change.title, unavailableTitle);
+  assert.deepEqual(createBatch.events[0].event.change.title, unavailableTitle);
 
   // Failure events are unsigned by protocol: the fixture failure decodes with
   // no keys, and JS camelCases the discriminator values and the tier field.
@@ -619,7 +619,7 @@ async function main() {
     assert.deepEqual(Object.keys(mkBatch.errors), []);
     assert.deepEqual(mkBatch.conversationKeys.keys[mkVersion], mkKey);
     assert.deepEqual(
-      mkBatch.messages.filter((m) => m.event.type === "message").map((m) => m.event.content.text),
+      mkBatch.events.filter((m) => m.event.type === "message").map((m) => m.event.content.text),
       [v.event_message_key_text],
     );
     assert.deepEqual(

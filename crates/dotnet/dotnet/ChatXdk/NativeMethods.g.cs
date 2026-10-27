@@ -236,7 +236,7 @@ namespace ChatXdk
         /// <summary>
         ///  Get the user's public keys as JSON.
         ///
-        ///  Returns JSON `{"identity":"...","signing":"...","version":"..."}`.
+        ///  Returns JSON `{"identity":"...","signing":"..."}`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_get_public_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_get_public_keys(ChatHandle* handle);
@@ -292,7 +292,7 @@ namespace ChatXdk
         ///  Prepare a signed conversation-key change.
         ///
         ///  `params_json` — single JSON document: `public_keys`
-        ///  (`[{"user_id","public_key","key_version"},...]`), plus optional
+        ///  (`[{"user_id","identity_public_key","public_key_version"},...]`), plus optional
         ///  `sender_id` / `signing_key_version` (unset resolves from the session
         ///  identity) and `conversation_id` (absent or empty derives the one-to-one
         ///  id).

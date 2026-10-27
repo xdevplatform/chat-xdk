@@ -135,7 +135,7 @@ fn decrypt_batch_empty_is_safe() {
     let v = load_vectors();
     let core = loaded_core(&v);
     let result = core.decrypt_batch(&[], &[]);
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
 }
 
 #[test]

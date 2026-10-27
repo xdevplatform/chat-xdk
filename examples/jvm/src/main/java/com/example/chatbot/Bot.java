@@ -111,7 +111,7 @@ public final class Bot {
         st.latestKeyVersion = result.conversationKeys.latestVersion;
         st.paginationToken = nextToken(page);
         System.out.printf("backlog_loaded conv=%s messages=%d keys=%d%n",
-                conversationId, result.messages.size(), result.conversationKeys.keys.size());
+                conversationId, result.events.size(), result.conversationKeys.keys.size());
     }
 
     /** Poll for new events; reply to each new message (decryptEvent path). */

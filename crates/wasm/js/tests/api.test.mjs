@@ -226,7 +226,7 @@ async function main() {
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.ok(prep.conversationKey instanceof Uint8Array);
@@ -249,7 +249,7 @@ async function main() {
   const prep2 = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.notDeepEqual(prep.conversationKey, prep2.conversationKey);
@@ -259,7 +259,7 @@ async function main() {
   const groupPrep = chat.prepareGroupCreate({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     memberIds: ["910002", "910005"],
     adminIds: ["910002"],
@@ -281,7 +281,7 @@ async function main() {
   const commaPrep = chat.prepareGroupCreate({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     memberIds: ["910002"],
     adminIds: ["910002"],
@@ -295,7 +295,7 @@ async function main() {
     const p = chat.prepareGroupCreate({
       senderId: "910002",
       signingKeyVersion: "1",
-      publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+      publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
       conversationId: "g-1",
       memberIds: ["910002", "910005"],
       adminIds: ["910002"],
@@ -659,7 +659,7 @@ async function main() {
   // URL as is, and the other prepares sign one version-7 payload.
   const identity = { senderId: "111", signingKeyVersion: "1" };
   const keys = chat.getPublicKeys();
-  const remaining = [{ userId: "111", publicKey: keys.identity, keyVersion: "1" }];
+  const remaining = [{ userId: "111", identityPublicKey: keys.identity, publicKeyVersion: "1" }];
   const rotated = chat.prepareGroupMembersRemove({
     senderId: "111",
     signingKeyVersion: "1",
@@ -829,7 +829,7 @@ async function main() {
   const membersPrep = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],
@@ -856,7 +856,7 @@ async function main() {
   const describedPrep = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],
@@ -884,7 +884,7 @@ async function main() {
   const membersPrepScb = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],
@@ -903,8 +903,8 @@ async function main() {
     senderId: "1491585161162473473",
     signingKeyVersion: "1",
     publicKeys: [
-      { userId: "1491585161162473473", publicKey: v.identity_public_b64, keyVersion: "1" },
-      { userId: "17380288", publicKey: v.identity_public_b64, keyVersion: "1" },
+      { userId: "1491585161162473473", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" },
+      { userId: "17380288", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" },
     ],
   });
   assert.equal(derivedPrep.conversationId, "17380288:1491585161162473473");

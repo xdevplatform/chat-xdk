@@ -91,7 +91,7 @@ export class ChatBot {
     // The XDK response model may expose either casing for the token.
     st.paginationToken = page.meta?.nextToken ?? page.meta?.next_token;
     console.log(
-      `backlog_loaded conv=${conversationId} messages=${batch.messages.length} keys=${
+      `backlog_loaded conv=${conversationId} messages=${batch.events.length} keys=${
         Object.keys(batch.conversationKeys.keys ?? {}).length
       }`,
     );

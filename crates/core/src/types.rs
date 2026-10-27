@@ -1446,10 +1446,6 @@ pub struct PublicKeys {
 
     /// Base64-encoded signing public key (P-256, for ECDSA).
     pub signing: String,
-
-    /// Key version identifier.
-    #[serde(default)]
-    pub version: String,
 }
 
 /// Public key registration payload for the X API.
@@ -1571,11 +1567,11 @@ impl ConversationKeyResult {
     }
 }
 
-/// A decrypted message with its verification status.
+/// One event `decrypt_events` decrypted, of any event type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[non_exhaustive]
-pub struct DecryptedMessage {
+pub struct DecryptedEvent {
     /// The decrypted event.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub event: Event,
@@ -1589,9 +1585,9 @@ pub struct DecryptedMessage {
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[non_exhaustive]
 pub struct DecryptEventsResult {
-    /// Successfully decrypted messages.
+    /// The events that decrypted, in batch order, of every event type.
     #[cfg_attr(feature = "js", js_camel(wrap))]
-    pub messages: Vec<DecryptedMessage>,
+    pub events: Vec<DecryptedEvent>,
     /// Conversation keys extracted from key events.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub conversation_keys: ConversationKeyResult,
@@ -1611,23 +1607,24 @@ pub struct DecryptEventsResult {
 pub struct PublicKeyInput {
     /// The user's ID.
     pub user_id: String,
-    /// Base64-encoded identity public key (SEC1 or SPKI).
-    pub public_key: String,
-    /// Key version string from the X API.
-    pub key_version: String,
+    /// Base64-encoded identity public key (SEC1 or SPKI): the X API's
+    /// `public_key`.
+    pub identity_public_key: String,
+    /// The key's version, as the X API returns it.
+    pub public_key_version: String,
 }
 
 impl PublicKeyInput {
     /// A public key as the X API returns it for `user_id`.
     pub fn new(
         user_id: impl Into<String>,
-        public_key: impl Into<String>,
-        key_version: impl Into<String>,
+        identity_public_key: impl Into<String>,
+        public_key_version: impl Into<String>,
     ) -> Self {
         Self {
             user_id: user_id.into(),
-            public_key: public_key.into(),
-            key_version: key_version.into(),
+            identity_public_key: identity_public_key.into(),
+            public_key_version: public_key_version.into(),
         }
     }
 }

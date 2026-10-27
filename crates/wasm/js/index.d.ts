@@ -10,11 +10,6 @@ export interface PublicKeys {
   identity: string;
   /** Base64-encoded signing public key */
   signing: string;
-  /**
-   * Always the empty string; reserved. The registered key version is
-   * tracked internally and not surfaced here.
-   */
-  version: string;
 }
 
 /**
@@ -152,9 +147,9 @@ export interface ConversationKeyResult {
 }
 
 /**
- * A single decrypted message from decryptEvents.
+ * One event decryptEvents decrypted, of any event type.
  */
-export interface DecryptedMessage {
+export interface DecryptedEvent {
   /** The decrypted event. */
   event: Event;
   /** Original base64 event string (for reference). */
@@ -165,8 +160,8 @@ export interface DecryptedMessage {
  * Result from decryptEvents batch API.
  */
 export interface DecryptEventsResult {
-  /** Successfully decrypted messages. */
-  messages: DecryptedMessage[];
+  /** The events that decrypted, in batch order, of every event type. */
+  events: DecryptedEvent[];
   /** Extracted conversation keys (for caching). */
   conversationKeys: ConversationKeyResult;
   /** Errors encountered during decryption (event index, as a string key → error message). */
@@ -205,10 +200,10 @@ export interface ConversationParticipantKey {
 export interface PublicKeyInput {
   /** The user's user ID (snowflake string). */
   userId: string;
-  /** Base64-encoded identity public key (SEC1 or SPKI). */
-  publicKey: string;
-  /** Key version string from the X API. */
-  keyVersion: string;
+  /** Base64-encoded identity public key (SEC1 or SPKI): the X API's `public_key`. */
+  identityPublicKey: string;
+  /** The key's version, as the X API returns it. */
+  publicKeyVersion: string;
 }
 
 /**

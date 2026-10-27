@@ -489,19 +489,19 @@ public final class Chat implements AutoCloseable {
             String resultJson = FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_decrypt_events_params(handle, j));
             JsonNode root = ChatJson.MAPPER.readTree(resultJson);
             DecryptEventsResult out = new DecryptEventsResult();
-            List<DecryptedMessage> messages = new ArrayList<>();
-            JsonNode arr = root.get("messages");
+            List<DecryptedEvent> events = new ArrayList<>();
+            JsonNode arr = root.get("events");
             if (arr != null && arr.isArray()) {
                 for (JsonNode el : arr) {
-                    DecryptedMessage dm = new DecryptedMessage();
-                    dm.event = el.get("event");
+                    DecryptedEvent decrypted = new DecryptedEvent();
+                    decrypted.event = el.get("event");
                     if (el.hasNonNull("original_b64")) {
-                        dm.originalB64 = el.get("original_b64").asText();
+                        decrypted.originalB64 = el.get("original_b64").asText();
                     }
-                    messages.add(dm);
+                    events.add(decrypted);
                 }
             }
-            out.messages = messages;
+            out.events = events;
             out.conversationKeys = parseConversationKeyBundle(root.get("conversation_keys"));
             Map<String, String> errors = new HashMap<>();
             JsonNode errNode = root.get("errors");

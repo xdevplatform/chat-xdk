@@ -14,9 +14,6 @@ namespace ChatXdk
 
         [JsonPropertyName("signing")]
         public string Signing { get; init; } = "";
-
-        [JsonPropertyName("version")]
-        public string Version { get; init; } = "";
     }
 
     /// <summary>
@@ -234,11 +231,13 @@ namespace ChatXdk
         [JsonPropertyName("user_id")]
         public required string UserId { get; init; }
 
-        [JsonPropertyName("public_key")]
-        public required string PublicKey { get; init; }
+        /// <summary>The base64 identity public key (SEC1 or SPKI): the X API's <c>public_key</c>.</summary>
+        [JsonPropertyName("identity_public_key")]
+        public required string IdentityPublicKey { get; init; }
 
-        [JsonPropertyName("key_version")]
-        public required string KeyVersion { get; init; }
+        /// <summary>The key's version, as the X API returns it.</summary>
+        [JsonPropertyName("public_key_version")]
+        public required string PublicKeyVersion { get; init; }
     }
 
     /// <summary>
@@ -319,8 +318,8 @@ namespace ChatXdk
         public uint Height { get; init; }
     }
 
-    /// <summary>One decrypted event from <see cref="Chat.DecryptEvents"/>.</summary>
-    public sealed class DecryptedMessage
+    /// <summary>One event <see cref="Chat.DecryptEvents"/> decrypted, of any event type.</summary>
+    public sealed class DecryptedEvent
     {
         /// <summary>The decrypted event JSON (<c>type</c>, …).</summary>
         public JsonElement Event { get; init; }
@@ -332,8 +331,8 @@ namespace ChatXdk
     /// <summary>Result of <see cref="Chat.DecryptEvents"/>.</summary>
     public sealed class DecryptEventsResult
     {
-        /// <summary>The successfully decrypted events, in input order.</summary>
-        public IReadOnlyList<DecryptedMessage> Messages { get; init; } = Array.Empty<DecryptedMessage>();
+        /// <summary>The events that decrypted, in batch order, of every event type.</summary>
+        public IReadOnlyList<DecryptedEvent> Events { get; init; } = Array.Empty<DecryptedEvent>();
 
         /// <summary>Extracted keys and <see cref="ConversationKeyBundle.LatestVersion"/>.</summary>
         public ConversationKeyBundle ConversationKeys { get; init; } = new();

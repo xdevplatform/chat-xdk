@@ -137,7 +137,7 @@ func TestE2ELive(t *testing.T) {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
 	decrypted := 0
-	for _, m := range batch.Messages {
+	for _, m := range batch.Events {
 		if MessageText(&m.Event) != "" {
 			decrypted++
 		}
@@ -153,7 +153,7 @@ func TestE2ELive(t *testing.T) {
 	canonicalConv := conv
 	lastInboundEvent := ""
 	var ckces []string
-	for _, m := range batch.Messages {
+	for _, m := range batch.Events {
 		var meta chatxdk.EventMeta
 		_ = json.Unmarshal(m.Event.Raw(), &meta)
 		if meta.ConversationID != nil && *meta.ConversationID != "" {
@@ -229,7 +229,7 @@ func TestE2ELive(t *testing.T) {
 	if !ok {
 		t.Fatalf("own rotated CKCE (version %s) did not decrypt+verify", kv)
 	}
-	for _, m := range batch.Messages {
+	for _, m := range batch.Events {
 		if m.Event.Type == "KeyChange" && m.OriginalB64 != "" {
 			ckces = append(ckces, m.OriginalB64)
 		}
@@ -481,9 +481,9 @@ func keyEntries(pks []map[string]any, userID string) []chatxdk.PublicKeyInput {
 	for _, pk := range pks {
 		version := str(pk["public_key_version"])
 		entries = append(entries, chatxdk.PublicKeyInput{
-			UserID:     userID,
-			PublicKey:  str(pk["public_key"]),
-			KeyVersion: version,
+			UserID:            userID,
+			IdentityPublicKey: str(pk["public_key"]),
+			PublicKeyVersion:  version,
 		})
 	}
 	return entries

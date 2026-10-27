@@ -152,8 +152,8 @@ class ChatTest {
     private static byte[] newConvKey(Chat chat) throws Exception {
         PublicKeyInput input = new PublicKeyInput();
         input.userId = "910002";
-        input.publicKey = chat.getPublicKeys().identity;
-        input.keyVersion = "1";
+        input.identityPublicKey = chat.getPublicKeys().identity;
+        input.publicKeyVersion = "1";
         ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
         params.senderId = "910002";
         params.signingKeyVersion = "1";
@@ -619,8 +619,8 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             PublicKeyInput key = new PublicKeyInput();
             key.userId = "111";
-            key.publicKey = chat.getPublicKeys().identity;
-            key.keyVersion = "1";
+            key.identityPublicKey = chat.getPublicKeys().identity;
+            key.publicKeyVersion = "1";
             GroupMembersRemoveParams removal =
                     new GroupMembersRemoveParams(List.of(key), "g100", List.of("910007"));
             removal.senderId = "111";
@@ -839,8 +839,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
             params.senderId = "910002";
             params.signingKeyVersion = "1";
@@ -878,8 +878,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
             p.senderId = "910002";
@@ -910,8 +910,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             String avatarUrl = "https://ton.x.com/xchat_media/g123/avatar";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
@@ -938,8 +938,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
             p.senderId = "910002";
@@ -961,8 +961,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             GroupCreateParams p = new GroupCreateParams(
                     List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
             p.senderId = "910002";
@@ -990,12 +990,12 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput a = new PublicKeyInput();
             a.userId = "1491585161162473473";
-            a.publicKey = keys.identity;
-            a.keyVersion = "1";
+            a.identityPublicKey = keys.identity;
+            a.publicKeyVersion = "1";
             PublicKeyInput b = new PublicKeyInput();
             b.userId = "17380288";
-            b.publicKey = keys.identity;
-            b.keyVersion = "1";
+            b.identityPublicKey = keys.identity;
+            b.publicKeyVersion = "1";
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(a, b));
             params.senderId = "1491585161162473473";
             params.signingKeyVersion = "1";
@@ -1013,12 +1013,12 @@ class ChatTest {
             // participant key decrypts locally.
             PublicKeyInput a = new PublicKeyInput();
             a.userId = "17380288";
-            a.publicKey = keys.identity;
-            a.keyVersion = "1";
+            a.identityPublicKey = keys.identity;
+            a.publicKeyVersion = "1";
             PublicKeyInput b = new PublicKeyInput();
             b.userId = "1491585161162473473";
-            b.publicKey = keys.identity;
-            b.keyVersion = "1";
+            b.identityPublicKey = keys.identity;
+            b.publicKeyVersion = "1";
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(a, b));
             params.senderId = "17380288";
             params.signingKeyVersion = "1";
@@ -1051,7 +1051,7 @@ class ChatTest {
         try (Chat chat = createUnlocked()) {
             DecryptEventsResult result = chat.decryptEvents(new DecryptEventsParams(List.of()));
             assertNotNull(result);
-            assertTrue(result.messages.isEmpty());
+            assertTrue(result.events.isEmpty());
             assertTrue(result.errors.isEmpty());
         }
     }
@@ -1126,7 +1126,7 @@ class ChatTest {
 
             List<JsonNode> keyChanges = new ArrayList<>();
             List<JsonNode> messages = new ArrayList<>();
-            for (DecryptedMessage dm : result.messages) {
+            for (DecryptedEvent dm : result.events) {
                 if ("KeyChange".equals(dm.event.path("type").asText())) keyChanges.add(dm.event);
                 if ("Message".equals(dm.event.path("type").asText())) messages.add(dm.event);
             }
@@ -1302,7 +1302,7 @@ class ChatTest {
             DecryptEventsResult result = chat.decryptEvents(batch);
             assertTrue(result.errors.isEmpty(), result.errors.toString());
             GroupText batched = mapper.treeToValue(
-                    result.messages.get(0).event.path("change").path("title"), GroupText.class);
+                    result.events.get(0).event.path("change").path("title"), GroupText.class);
             assertEquals("Unavailable", batched.kind);
             assertEquals(ciphertext, batched.raw);
         }
@@ -1432,7 +1432,7 @@ class ChatTest {
             assertTrue(result.errors.isEmpty(), "errors: " + result.errors);
 
             List<JsonNode> messages = new ArrayList<>();
-            for (DecryptedMessage dm : result.messages) {
+            for (DecryptedEvent dm : result.events) {
                 if ("Message".equals(dm.event.path("type").asText())) messages.add(dm.event);
             }
             assertEquals(2, messages.size());
@@ -1566,7 +1566,7 @@ class ChatTest {
             byte[] key = result.conversationKeys.keys.get(v.get("message_key_conversation_key_version").asText());
             assertArrayEquals(ChatXdkUtilities.hexToBytes(v.get("message_key_conversation_key_hex").asText()), key);
             List<String> texts = new ArrayList<>();
-            for (DecryptedMessage dm : result.messages) {
+            for (DecryptedEvent dm : result.events) {
                 if ("Message".equals(dm.event.path("type").asText())) {
                     texts.add(dm.event.path("content").path("text").asText());
                 }
@@ -1980,8 +1980,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             for (String title : new String[] {"", null}) {
                 GroupCreateParams p = new GroupCreateParams(
                         List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
@@ -2008,8 +2008,8 @@ class ChatTest {
             PublicKeys keys = chat.getPublicKeys();
             PublicKeyInput input = new PublicKeyInput();
             input.userId = "910002";
-            input.publicKey = keys.identity;
-            input.keyVersion = "1";
+            input.identityPublicKey = keys.identity;
+            input.publicKeyVersion = "1";
             GroupCreateParams p = new GroupCreateParams(
                     List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
             p.senderId = "910002";

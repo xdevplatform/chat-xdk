@@ -90,8 +90,8 @@ class TestChatCore(unittest.TestCase):
         public_keys = [
             {
                 "user_id": "910002",
-                "public_key": self.vectors["identity_public_b64"],
-                "key_version": "1",
+                "identity_public_key": self.vectors["identity_public_b64"],
+                "public_key_version": "1",
             }
         ]
         prepared = core.prepare_conversation_key_change(public_keys, "conv-1")
@@ -138,7 +138,7 @@ class TestChatCore(unittest.TestCase):
         # batch yields no messages and no errors.
         core = self._loaded_core()
         result = core.decrypt_batch([], signing_keys=[])
-        self.assertEqual(result["messages"], [])
+        self.assertEqual(result["events"], [])
         self.assertEqual(result.get("errors") or {}, {})
 
     def test_decrypt_one_rejects_garbage(self):
@@ -171,8 +171,8 @@ class TestPreparedChanges(unittest.TestCase):
         keys = [
             {
                 "user_id": "1000",
-                "public_key": self.vectors["identity_public_b64"],
-                "key_version": "1",
+                "identity_public_key": self.vectors["identity_public_b64"],
+                "public_key_version": "1",
             }
         ]
         return core, keys

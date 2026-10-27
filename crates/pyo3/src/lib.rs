@@ -220,7 +220,8 @@ fn conversation_keys_field(
         .collect()
 }
 
-/// Convert a list of ``{user_id, public_key, key_version}`` dicts into core inputs.
+/// Convert a list of ``{user_id, identity_public_key, public_key_version}``
+/// dicts into core inputs.
 fn public_keys_field(
     py: Python<'_>,
     value: &Py<PyAny>,
@@ -235,8 +236,8 @@ fn public_keys_field(
             };
             Ok(chat_xdk_core::PublicKeyInput::new(
                 take("user_id")?,
-                take("public_key")?,
-                take("key_version")?,
+                take("identity_public_key")?,
+                take("public_key_version")?,
             ))
         })
         .collect()
@@ -396,9 +397,6 @@ pub struct PublicKeys {
     /// Base64-encoded signing public key (P-256, for ECDSA).
     #[pyo3(get)]
     pub signing: String,
-    /// Key version identifier.
-    #[pyo3(get)]
-    pub version: String,
 }
 
 /// Public key registration payload returned by generate_keypairs().
@@ -878,7 +876,7 @@ impl EncryptEditParams {
 /// Parameters for ``Chat.prepare_conversation_key_change``.
 #[pyclass(get_all, set_all)]
 pub struct ConversationKeyChangeParams {
-    /// ``{"user_id", "public_key", "key_version"}`` dicts for every
+    /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for every
     /// participant the new key is encrypted for.
     public_keys: Py<PyAny>,
     /// Your user ID; defaults to the ``set_identity`` value.
@@ -930,7 +928,7 @@ impl ConversationKeyChangeParams {
 /// ``current_avatar_url`` is the avatar's media URL, signed as is.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersChangeParams {
-    /// ``{"user_id", "public_key", "key_version"}`` dicts for the updated
+    /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for the updated
     /// roster.
     public_keys: Py<PyAny>,
     /// ID of the group conversation.
@@ -1028,7 +1026,7 @@ impl GroupMembersChangeParams {
 /// Parameters for ``Chat.prepare_group_create``.
 #[pyclass(get_all, set_all)]
 pub struct GroupCreateParams {
-    /// ``{"user_id", "public_key", "key_version"}`` dicts for the new roster.
+    /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for the new roster.
     public_keys: Py<PyAny>,
     /// ID of the group conversation, as the initialize endpoint minted it.
     conversation_id: String,
@@ -2335,7 +2333,6 @@ impl Chat {
         Ok(PublicKeys {
             identity: keys.identity,
             signing: keys.signing,
-            version: keys.version,
         })
     }
 
@@ -2408,7 +2405,6 @@ impl Chat {
         Ok(PublicKeys {
             identity: keys.identity,
             signing: keys.signing,
-            version: keys.version,
         })
     }
 
@@ -2467,7 +2463,8 @@ impl Chat {
     ///
     /// Returns:
     ///     A dict with:
-    ///     - ``messages``: List of ``{"event": dict, "original_b64": str}``
+    ///     - ``events``: List of ``{"event": dict, "original_b64": str}``, one
+    ///       per event that decrypted, of every event type
     ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str}``;
     ///       ``latest_version`` is the newest version whose key change
     ///       verified, ``None`` until one verifies
@@ -2484,20 +2481,19 @@ impl Chat {
 
         let outer = pyo3::types::PyDict::new(py);
 
-        // Convert messages
-        let messages = pyo3::types::PyList::empty(py);
+        let events = pyo3::types::PyList::empty(py);
         let json_module = py.import("json")?;
-        for dm in result.messages {
-            let msg_dict = pyo3::types::PyDict::new(py);
-            let event_json = serde_json::to_string(&dm.event).map_err(to_py_err)?;
+        for decrypted in result.events {
+            let entry = pyo3::types::PyDict::new(py);
+            let event_json = serde_json::to_string(&decrypted.event).map_err(to_py_err)?;
             let event_dict = json_module.call_method1("loads", (event_json,))?;
-            msg_dict.set_item("event", event_dict)?;
-            if let Some(b64) = dm.original_b64 {
-                msg_dict.set_item("original_b64", b64)?;
+            entry.set_item("event", event_dict)?;
+            if let Some(b64) = decrypted.original_b64 {
+                entry.set_item("original_b64", b64)?;
             }
-            messages.append(msg_dict)?;
+            events.append(entry)?;
         }
-        outer.set_item("messages", messages)?;
+        outer.set_item("events", events)?;
 
         // Convert conversation keys
         let conv_keys_dict = pyo3::types::PyDict::new(py);

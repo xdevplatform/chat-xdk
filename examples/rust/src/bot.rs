@@ -93,7 +93,7 @@ impl<A: ChatApi> Bot<A> {
         st.pagination_token = next;
         println!(
             "backlog_loaded conv={conversation_id} messages={} keys={key_count}",
-            result.messages.len()
+            result.events.len()
         );
         Ok(())
     }

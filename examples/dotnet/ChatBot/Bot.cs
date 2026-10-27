@@ -116,7 +116,7 @@ public sealed class Bot
             st.ConversationKeys[version] = key;
         st.LatestKeyVersion = result.ConversationKeys.LatestVersion;
         st.PaginationToken = NextToken(page);
-        Console.WriteLine($"backlog_loaded conv={conversationId} messages={result.Messages.Count} keys={result.ConversationKeys.Keys.Count}");
+        Console.WriteLine($"backlog_loaded conv={conversationId} messages={result.Events.Count} keys={result.ConversationKeys.Keys.Count}");
     }
 
     /// <summary>Poll for new events; reply to each new message (DecryptEvent path).</summary>

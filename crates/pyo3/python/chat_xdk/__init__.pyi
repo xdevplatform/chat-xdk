@@ -69,7 +69,6 @@ class GroupText(TypedDict, total=False):
 class PublicKeys:
     identity: str
     signing: str
-    version: str
 
 class PublicKeyRegistration:
     identity_public_key_signature: str

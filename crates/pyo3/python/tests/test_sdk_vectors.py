@@ -103,7 +103,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         keys = chat.get_public_keys()
         self.assertEqual(keys.identity, v["identity_public_b64"])
         self.assertEqual(keys.signing, v["signing_public_b64"])
-        self.assertIsInstance(keys.version, str)
+        self.assertFalse(hasattr(keys, "version"))
 
         sig_bytes = chat.sign(v["message_utf8"].encode("utf-8"))
         sig_b64 = base64.b64encode(sig_bytes).decode("ascii")
@@ -119,7 +119,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         chat = Chat()
         chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"])))
 
-        public_keys = [{"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}]
+        public_keys = [{"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
                 public_keys, conversation_id="conv-1", sender_id="910002", signing_key_version="1"
@@ -186,7 +186,7 @@ class TestPythonSdkVectors(unittest.TestCase):
             base64.b64decode(v["conversation_key_b64"]),
         )
 
-        key_changes = [m["event"] for m in result["messages"] if m["event"]["type"] == "KeyChange"]
+        key_changes = [m["event"] for m in result["events"] if m["event"]["type"] == "KeyChange"]
         self.assertEqual(len(key_changes), 1)
         self.assertTrue(key_changes[0]["verified"])
         self.assertEqual(key_changes[0]["conversation_key_version"], ck_version)
@@ -195,7 +195,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         for key in participant_keys:
             self.assertEqual(set(key), {"user_id", "encrypted_conversation_key", "public_key_version"})
 
-        messages = [m["event"] for m in result["messages"] if m["event"]["type"] == "Message"]
+        messages = [m["event"] for m in result["events"] if m["event"]["type"] == "Message"]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["content"]["text"], v["event_message_text"])
         self.assertTrue(messages[0]["verified"])
@@ -314,7 +314,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
         self.assertEqual(result["errors"], {})
 
-        messages = [m["event"] for m in result["messages"] if m["event"]["type"] == "Message"]
+        messages = [m["event"] for m in result["events"] if m["event"]["type"] == "Message"]
         self.assertEqual(len(messages), 2)
         # Both replies decrypt; the derived preview validates against the
         # embedded raw original, the forged preview text is flagged.
@@ -422,7 +422,7 @@ class TestPythonSdkVectors(unittest.TestCase):
             )
         )
         self.assertEqual(result["errors"], {})
-        self.assertEqual(result["messages"][0]["event"]["change"]["title"], unavailable)
+        self.assertEqual(result["events"][0]["event"]["change"]["title"], unavailable)
 
     def test_reactions_and_edits_name_their_target_by_sequence_id(self):
         from chat_xdk import (
@@ -792,7 +792,7 @@ class TestPythonSdkVectors(unittest.TestCase):
         self.assertEqual(ckey, hex_to_bytes(v["message_key_conversation_key_hex"]))
         texts = [
             m["event"]["content"]["text"]
-            for m in result["messages"]
+            for m in result["events"]
             if m["event"]["type"] == "Message"
         ]
         self.assertEqual(texts, [v["event_message_key_text"]])

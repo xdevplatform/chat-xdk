@@ -22,10 +22,6 @@ public final class Types {
         /** Base64-encoded signing public key. */
         @JsonProperty("signing")
         public String signing = "";
-
-        /** Version assigned to this set of public keys. */
-        @JsonProperty("version")
-        public String version = "";
     }
 
     /**
@@ -239,13 +235,13 @@ public final class Types {
         @JsonProperty("user_id")
         public String userId;
 
-        /** Base64-encoded identity public key (SEC1 or SPKI). */
-        @JsonProperty("public_key")
-        public String publicKey;
+        /** Base64-encoded identity public key (SEC1 or SPKI): the X API's {@code public_key}. */
+        @JsonProperty("identity_public_key")
+        public String identityPublicKey;
 
-        /** Version of the user's public key as returned by the X API. */
-        @JsonProperty("key_version")
-        public String keyVersion;
+        /** The key's version, as the X API returns it. */
+        @JsonProperty("public_key_version")
+        public String publicKeyVersion;
     }
 
     /**
@@ -327,8 +323,8 @@ public final class Types {
         public ImageDimensions() {}
     }
 
-    /** One decrypted event from {@link Chat#decryptEvents}. */
-    public static final class DecryptedMessage {
+    /** One event {@link Chat#decryptEvents} decrypted, of any event type. */
+    public static final class DecryptedEvent {
         /** The decrypted event JSON ({@code type}, &#8230;). */
         public JsonNode event;
 
@@ -338,8 +334,8 @@ public final class Types {
 
     /** Result of {@link Chat#decryptEvents}. */
     public static final class DecryptEventsResult {
-        /** The successfully decrypted events. */
-        public List<DecryptedMessage> messages = Collections.emptyList();
+        /** The events that decrypted, in batch order, of every event type. */
+        public List<DecryptedEvent> events = Collections.emptyList();
 
         /** Extracted keys and {@link ConversationKeyBundle#latestVersion}. */
         public ConversationKeyBundle conversationKeys = new ConversationKeyBundle();

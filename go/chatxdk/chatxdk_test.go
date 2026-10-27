@@ -305,7 +305,7 @@ func TestECIESConversationKeyRoundtrip(t *testing.T) {
 	}
 
 	// Prepare a key change for ourselves, then decrypt our own participant key.
-	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
@@ -523,7 +523,7 @@ func TestPrepareConversationKeyChangeGeneratesRandomKey(t *testing.T) {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
 
-	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
@@ -928,11 +928,11 @@ func TestGroupCreateFixtureVector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptEvents failed: %v", err)
 	}
-	if len(batch.Errors) != 0 || len(batch.Messages) != 1 {
+	if len(batch.Errors) != 0 || len(batch.Events) != 1 {
 		t.Fatalf("unexpected batch: %+v", batch)
 	}
 	var batched createdChange
-	if err := json.Unmarshal(batch.Messages[0].Event.AsGroupChange().Change, &batched); err != nil {
+	if err := json.Unmarshal(batch.Events[0].Event.AsGroupChange().Change, &batched); err != nil {
 		t.Fatalf("decode change: %v", err)
 	}
 	if batched.Title == nil || *batched.Title != unavailable {
@@ -1544,7 +1544,7 @@ func TestGroupActionSignatures(t *testing.T) {
 
 	rotated, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
 		PublicKeys: []PublicKeyInput{{
-			UserID: "111", PublicKey: keys.Identity, KeyVersion: "1",
+			UserID: "111", IdentityPublicKey: keys.Identity, PublicKeyVersion: "1",
 		}},
 		ConversationID:    "g100",
 		UserIDs:           []string{"910007"},
@@ -1647,7 +1647,7 @@ func TestGroupActionSignatures(t *testing.T) {
 	}
 	withTitle, err := chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
 		PublicKeys: []PublicKeyInput{{
-			UserID: "111", PublicKey: keys.Identity, KeyVersion: "1",
+			UserID: "111", IdentityPublicKey: keys.Identity, PublicKeyVersion: "1",
 		}},
 		ConversationID:    "g100",
 		UserIDs:           []string{"910007"},
@@ -1790,7 +1790,7 @@ func TestPrepareConversationKeyChange(t *testing.T) {
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "910002",
@@ -1866,8 +1866,8 @@ func TestPrepareConversationKeyChangeDerivesOneToOneID(t *testing.T) {
 
 	// Numeric ids sort numerically; omitting conversation_id derives "min:max".
 	publicKeys := []PublicKeyInput{
-		{UserID: "1491585161162473473", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
-		{UserID: "17380288", PublicKey: payload2.PublicKey.PublicKey, KeyVersion: "1"},
+		{UserID: "1491585161162473473", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
+		{UserID: "17380288", IdentityPublicKey: payload2.PublicKey.PublicKey, PublicKeyVersion: "1"},
 	}
 
 	prepared, err := chat1.PrepareConversationKeyChange(ConversationKeyChangeParams{
@@ -1899,8 +1899,8 @@ func TestConversationKeyChangeParamsDeriveAndDecryptRoundTrip(t *testing.T) {
 	// two participants. Both entries reuse our identity key so every
 	// participant key decrypts locally.
 	publicKeys := []PublicKeyInput{
-		{UserID: "17380288", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
-		{UserID: "1491585161162473473", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "17380288", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
+		{UserID: "1491585161162473473", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "17380288",
@@ -1938,7 +1938,7 @@ func TestPrepareGroupMembersChange(t *testing.T) {
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
 		SenderID:          "910002",
@@ -2028,7 +2028,7 @@ func TestPrepareGroupCreate(t *testing.T) {
 	}
 
 	publicKeys := []PublicKeyInput{
-		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
 		SenderID:          "910002",
@@ -2089,7 +2089,7 @@ func TestPrepareGroupCreateEmptyTitleSignsNullSentinel(t *testing.T) {
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
-		PublicKeys:        []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
+		PublicKeys:        []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}},
 		ConversationID:    "g123",
 		MemberIDs:         []string{"910002", "910005"},
 		AdminIDs:          []string{"910002"},
@@ -2125,7 +2125,7 @@ func TestPrepareGroupCreateEncryptsACommaTitle(t *testing.T) {
 	prepared, err := chat.PrepareGroupCreate(GroupCreateParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
-		PublicKeys:        []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}},
+		PublicKeys:        []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}},
 		ConversationID:    "g123",
 		MemberIDs:         []string{"910002", "910005"},
 		AdminIDs:          []string{"910002"},
@@ -2193,8 +2193,8 @@ func TestDecryptEventsInvalidEvent(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if len(result.Messages) != 0 {
-		t.Errorf("expected 0 messages, got %d", len(result.Messages))
+	if len(result.Events) != 0 {
+		t.Errorf("expected 0 messages, got %d", len(result.Events))
 	}
 	if len(result.Errors) != 1 {
 		t.Fatalf("expected exactly 1 error, got %v", result.Errors)
@@ -2251,11 +2251,11 @@ func TestDecryptEventsFixtureVectors(t *testing.T) {
 	// fixture text.
 	var keyChanges []*KeyChangeEvent
 	var messages []*Message
-	for i := range result.Messages {
-		if kc := result.Messages[i].Event.AsKeyChange(); kc != nil {
+	for i := range result.Events {
+		if kc := result.Events[i].Event.AsKeyChange(); kc != nil {
 			keyChanges = append(keyChanges, kc)
 		}
-		if msg := result.Messages[i].Event.AsMessage(); msg != nil {
+		if msg := result.Events[i].Event.AsMessage(); msg != nil {
 			messages = append(messages, msg)
 		}
 	}
@@ -2496,7 +2496,7 @@ func TestGroupTitleDecryptsWithAGeneratedKey(t *testing.T) {
 
 	// Get a fresh conversation key from a prepared key change and encrypt a
 	// group title under it.
-	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}}
 	prep, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
@@ -2689,7 +2689,7 @@ func TestDecryptWithWrongKey(t *testing.T) {
 	ciphertextB64 := title.EncryptedValue
 
 	// Decrypt with a different key should fail
-	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}}
 	wrong, err := chat.PrepareConversationKeyChange(ConversationKeyChangeParams{
 		SenderID:          "910002",
 		SigningKeyVersion: "1",
@@ -2838,7 +2838,7 @@ func TestPrepareGroupMembersChangeWithOptionalFields(t *testing.T) {
 	}
 
 	ttl := int64(86400000)
-	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
 		SenderID:                "910002",
 		SigningKeyVersion:       "1",
@@ -2880,7 +2880,7 @@ func TestPrepareGroupMembersChangeScreenCaptureBlocking(t *testing.T) {
 	}
 
 	enabled := true
-	publicKeys := []PublicKeyInput{{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"}}
+	publicKeys := []PublicKeyInput{{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"}}
 	prepared, err := chat.PrepareGroupMembersChange(GroupMembersChangeParams{
 		SenderID:                            "910002",
 		SigningKeyVersion:                   "1",
@@ -3123,12 +3123,12 @@ func TestReadReceiptEventVerified(t *testing.T) {
 	}
 }
 
-// TestDecryptEventsResultTypedMessages drives the same JSON decode path
-// DecryptEvents uses and asserts batch messages carry the typed Event (with
+// TestDecryptEventsResultTypedEvents drives the same JSON decode path
+// DecryptEvents uses and asserts batch events carry the typed Event (with
 // working accessors and raw JSON retained), matching DecryptEvent's shape.
-func TestDecryptEventsResultTypedMessages(t *testing.T) {
+func TestDecryptEventsResultTypedEvents(t *testing.T) {
 	resultJSON := `{
-		"messages": [
+		"events": [
 			{
 				"event": {
 					"type": "Message",
@@ -3145,10 +3145,10 @@ func TestDecryptEventsResultTypedMessages(t *testing.T) {
 	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
 		t.Fatalf("DecryptEventsResult unmarshal failed: %v", err)
 	}
-	if len(result.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(result.Messages))
+	if len(result.Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(result.Events))
 	}
-	event := result.Messages[0].Event
+	event := result.Events[0].Event
 	if event.Type != "Message" {
 		t.Errorf("expected type 'Message', got %q", event.Type)
 	}
@@ -3165,8 +3165,8 @@ func TestDecryptEventsResultTypedMessages(t *testing.T) {
 	if event.Raw() == nil {
 		t.Error("expected the batch event to retain its raw JSON")
 	}
-	if result.Messages[0].OriginalB64 != "b3JpZ2luYWw=" {
-		t.Errorf("unexpected original_b64: %q", result.Messages[0].OriginalB64)
+	if result.Events[0].OriginalB64 != "b3JpZ2luYWw=" {
+		t.Errorf("unexpected original_b64: %q", result.Events[0].OriginalB64)
 	}
 }
 
@@ -3815,8 +3815,8 @@ func TestReplyPreviewValidationFixtureVectors(t *testing.T) {
 	}
 
 	var replies []*Message
-	for i := range result.Messages {
-		if msg := result.Messages[i].Event.AsMessage(); msg != nil {
+	for i := range result.Events {
+		if msg := result.Events[i].Event.AsMessage(); msg != nil {
 			replies = append(replies, msg)
 		}
 	}
@@ -4203,7 +4203,7 @@ func TestMessageKeyEventDecryptsInABatchWithItsKeyChange(t *testing.T) {
 		t.Fatal("conversation key not adopted from the key change")
 	}
 	var texts []string
-	for _, m := range result.Messages {
+	for _, m := range result.Events {
 		if msg := m.Event.AsMessage(); msg != nil {
 			texts = append(texts, msg.Text())
 		}

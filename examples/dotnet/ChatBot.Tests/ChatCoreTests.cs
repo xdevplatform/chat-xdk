@@ -114,7 +114,7 @@ public class ChatCoreTests
         core.SetIdentity("910002");
         var prepared = core.PrepareConversationKeyChange(new[]
         {
-            new PublicKeyInput { UserId = "910002", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "910002", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "conv-1");
         Assert.Single(prepared.ConversationParticipantKeys);
         var decrypted = core.DecryptConversationKey(prepared.ConversationParticipantKeys[0].EncryptedConversationKey);
@@ -141,7 +141,7 @@ public class ChatCoreTests
         var v = LoadVectors();
         using var core = LoadedCore(v);
         var result = core.DecryptBatch(Array.Empty<string>());
-        Assert.Empty(result.Messages);
+        Assert.Empty(result.Events);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class ChatCoreTests
         core.SetIdentity("1000");
         var prep = core.PrepareConversationKeyChange(new[]
         {
-            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "1000:2000");
         var signingPub = core.PublicKeys().Signing;
 
@@ -194,7 +194,7 @@ public class ChatCoreTests
         core.SetIdentity("1000");
         var prep = core.PrepareGroupMembersRemove(new[]
         {
-            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "g123", new[] { "2000" });
 
         using var doc = JsonDocument.Parse(
@@ -223,7 +223,7 @@ public class ChatCoreTests
         const string title = "hello from the dotnet example";
         var prep = core.PrepareGroupCreate(new[]
         {
-            new PublicKeyInput { UserId = "1000", PublicKey = v.IdentityPublicB64, KeyVersion = "1" },
+            new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "g123", new[] { "1000" }, new[] { "1000" }, title);
         Assert.Equal(2, prep.ActionSignatures.Count);
         Assert.NotNull(prep.ConversationKey);

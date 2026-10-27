@@ -719,7 +719,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_conversation_key_change(
             ConversationKeyChangeParams(
@@ -760,7 +760,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
@@ -807,7 +807,7 @@ class TestApiShapes(unittest.TestCase):
 
         chat, v = self._unlocked_chat()
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         avatar_url = "https://ton.x.com/xchat_media/g123/avatar"
         result = chat.prepare_group_members_change(
@@ -849,7 +849,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_members_change(
             GroupMembersChangeParams(
@@ -883,7 +883,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_create(
             GroupCreateParams(
@@ -924,7 +924,7 @@ class TestApiShapes(unittest.TestCase):
 
         chat, v = self._unlocked_chat()
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         result = chat.prepare_group_create(
             GroupCreateParams(
@@ -946,7 +946,7 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "910002", "public_key": v["identity_public_b64"], "key_version": "1"}
+            {"user_id": "910002", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"}
         ]
         # An empty string is the "not set" encoding: it must sign the null
         # sentinel, exactly like leaving the field None.
@@ -1006,8 +1006,8 @@ class TestApiShapes(unittest.TestCase):
         remaining = [
             {
                 "user_id": "910002",
-                "public_key": v["identity_public_b64"],
-                "key_version": "1",
+                "identity_public_key": v["identity_public_b64"],
+                "public_key_version": "1",
             }
         ]
         rotated = chat.prepare_group_members_remove(
@@ -1324,8 +1324,8 @@ class TestApiShapes(unittest.TestCase):
         chat, v = self._unlocked_chat()
 
         public_keys = [
-            {"user_id": "1491585161162473473", "public_key": v["identity_public_b64"], "key_version": "1"},
-            {"user_id": "17380288", "public_key": v["identity_public_b64"], "key_version": "1"},
+            {"user_id": "1491585161162473473", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"},
+            {"user_id": "17380288", "identity_public_key": v["identity_public_b64"], "public_key_version": "1"},
         ]
         # Leaving conversation_id None derives the canonical numeric-sorted id.
         result = chat.prepare_conversation_key_change(

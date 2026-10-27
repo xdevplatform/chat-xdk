@@ -82,8 +82,8 @@ public class E2ELiveTests
         pks.Select(pk => new PublicKeyInput
         {
             UserId = userId,
-            PublicKey = Str(pk, "public_key") ?? "",
-            KeyVersion = Str(pk, "public_key_version") ?? "",
+            IdentityPublicKey = Str(pk, "public_key") ?? "",
+            PublicKeyVersion = Str(pk, "public_key_version") ?? "",
         }).ToList();
 
     /// <summary>
@@ -189,7 +189,7 @@ public class E2ELiveTests
         }
 
         var batch = core.DecryptBatch(keyEventsB64.Concat(EventsB64(raw)).ToList(), signing);
-        var decrypted = batch.Messages.Count(m => !string.IsNullOrEmpty(EventHelpers.MessageText(m.Event)));
+        var decrypted = batch.Events.Count(m => !string.IsNullOrEmpty(EventHelpers.MessageText(m.Event)));
         var convKeys = new Dictionary<string, byte[]>(batch.ConversationKeys.Keys);
         Console.WriteLine($"live inbound messages decrypted: {decrypted}; conversation keys: {convKeys.Count}");
         Assert.True(decrypted > 0, "expected to decrypt at least one live message");
@@ -198,7 +198,7 @@ public class E2ELiveTests
         // thread the reply on, from the decrypted batch.
         var canonicalConv = conv;
         string? lastInboundEventB64 = null;
-        foreach (var m in batch.Messages)
+        foreach (var m in batch.Events)
         {
             var ev = m.Event;
             if (Str(ev, "conversation_id") is { Length: > 0 } cid) canonicalConv = cid;
@@ -241,7 +241,7 @@ public class E2ELiveTests
         // -- 3. Send under the rotated key; fetch back; single-event decrypt ----
         // The reply threads on the raw inbound event; its key version predates
         // the rotation, so its KeyChange events ride along for the preview.
-        var ckces = batch.Messages
+        var ckces = batch.Events
             .Where(m => Str(m.Event, "type") == "KeyChange" && m.OriginalB64 is { Length: > 0 })
             .Select(m => m.OriginalB64!)
             .ToList();

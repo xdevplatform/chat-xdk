@@ -131,7 +131,7 @@ export class ChatCore {
   /**
    * Generate, encrypt, and sign a conversation-key change.
    *
-   * `publicKeys` is `[{ userId, publicKey, keyVersion }, ...]`. Omit
+   * `publicKeys` is `[{ userId, identityPublicKey, publicKeyVersion }, ...]`. Omit
    * `conversationId` for a one-to-one to derive it; pass it for a group.
    */
   prepareConversationKeyChange({ publicKeys, conversationId }) {

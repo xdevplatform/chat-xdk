@@ -172,7 +172,7 @@ fn e2e_live() {
         .collect();
     let batch = core.decrypt_batch(&refs, &signing);
     let decrypted = batch
-        .messages
+        .events
         .iter()
         .filter(|m| message_text(&m.event).is_some())
         .count();
@@ -190,7 +190,7 @@ fn e2e_live() {
     let mut canonical_conv = conv.clone();
     let mut last_inbound_event: Option<String> = None;
     let mut key_change_events: Vec<String> = Vec::new();
-    for m in &batch.messages {
+    for m in &batch.events {
         if let Event::KeyChange(_) = &m.event {
             if let Some(raw) = &m.original_b64 {
                 key_change_events.push(raw.clone());

@@ -119,7 +119,7 @@ class ChatBot:
         logger.info(
             "backlog_loaded conv=%s messages=%d keys=%d",
             conversation_id,
-            len(batch["messages"]),
+            len(batch["events"]),
             len(keys),
         )
 

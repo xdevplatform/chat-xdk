@@ -1113,7 +1113,7 @@ fn every_key_version_input_takes_the_api_form() {
             .with_conversation_id(CONVERSATION);
     let err = error_text(author.core.prepare_conversation_key_change(&key_change));
     assert!(
-        err.starts_with("Invalid public_keys key_version 'v2'"),
+        err.starts_with("Invalid public_keys public_key_version 'v2'"),
         "{err}"
     );
 }

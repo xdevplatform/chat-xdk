@@ -1091,7 +1091,7 @@ mod tests {
             core.decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys));
         assert!(batch.errors.is_empty(), "{:?}", batch.errors);
         let titles: Vec<GroupText> = batch
-            .messages
+            .events
             .into_iter()
             .filter_map(|message| match message.event {
                 Event::GroupChange(change) => match change.change {

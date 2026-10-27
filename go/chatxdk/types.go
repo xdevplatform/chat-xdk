@@ -6,7 +6,6 @@ import "encoding/json"
 type PublicKeys struct {
 	Identity string `json:"identity"`
 	Signing  string `json:"signing"`
-	Version  string `json:"version,omitempty"`
 }
 
 // PublicKeyRegistration contains the fields expected by the X API
@@ -89,9 +88,12 @@ type SigningKeyEntry struct {
 
 // PublicKeyInput is one row from GET /2/dm/encryption/public_keys, passed to the prepare methods.
 type PublicKeyInput struct {
-	UserID     string `json:"user_id"`
-	PublicKey  string `json:"public_key"`
-	KeyVersion string `json:"key_version"`
+	UserID string `json:"user_id"`
+	// IdentityPublicKey is the base64 identity public key (SEC1 or SPKI):
+	// the X API's public_key.
+	IdentityPublicKey string `json:"identity_public_key"`
+	// PublicKeyVersion is the key's version, as the X API returns it.
+	PublicKeyVersion string `json:"public_key_version"`
 }
 
 // ConversationKeyBundle holds decrypted conversation key material keyed by version.
@@ -104,19 +106,19 @@ type ConversationKeyBundle struct {
 	LatestVersion *string           `json:"latest_version"`
 }
 
-// DecryptedEventMessage is one element of DecryptEventsResult.Messages.
+// DecryptedEvent is one event DecryptEvents decrypted, of any event type.
 // Event decodes to the same typed Event that DecryptEvent returns; use
 // Event.Raw() for the underlying JSON.
-type DecryptedEventMessage struct {
+type DecryptedEvent struct {
 	Event       Event  `json:"event"`
 	OriginalB64 string `json:"original_b64,omitempty"`
 }
 
 // DecryptEventsResult is the batch decrypt API.
 type DecryptEventsResult struct {
-	Messages         []DecryptedEventMessage `json:"messages"`
-	ConversationKeys ConversationKeyBundle   `json:"conversation_keys"`
-	Errors           map[string]string       `json:"errors"`
+	Events           []DecryptedEvent      `json:"events"`
+	ConversationKeys ConversationKeyBundle `json:"conversation_keys"`
+	Errors           map[string]string     `json:"errors"`
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,

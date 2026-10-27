@@ -196,7 +196,7 @@ pub mod js {
         JsConversationKeyResult,
         JsConversationParticipantKey,
         JsDecryptEventsResult,
-        JsDecryptedMessage,
+        JsDecryptedEvent,
         // Event hierarchy
         JsEvent,
         // Supporting types

@@ -135,7 +135,7 @@ namespace ChatXdk.Tests
         private static byte[] NewConvKey(Chat chat)
         {
             var prep = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = chat.GetPublicKeys().Identity, KeyVersion = "1" } })
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = chat.GetPublicKeys().Identity, PublicKeyVersion = "1" } })
             {
                 SenderId = "910002",
                 SigningKeyVersion = "1",
@@ -786,7 +786,7 @@ namespace ChatXdk.Tests
             var keys = chat.GetPublicKeys();
             var remaining = new[]
             {
-                new PublicKeyInput { UserId = "111", PublicKey = keys.Identity, KeyVersion = "1" },
+                new PublicKeyInput { UserId = "111", IdentityPublicKey = keys.Identity, PublicKeyVersion = "1" },
             };
             var rotated = chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(remaining, "g100", new[] { "910007" })
             {
@@ -971,7 +971,7 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } })
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } })
             {
                 SenderId = "910002",
                 SigningKeyVersion = "1",
@@ -1218,7 +1218,7 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } },
                 "g123",
                 new[] { "910006" },
                 new[] { "910002" },
@@ -1255,7 +1255,7 @@ namespace ChatXdk.Tests
             const string avatarUrl = "https://ton.x.com/xchat_media/g123/avatar";
 
             var prepared = chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } },
                 "g123",
                 new[] { "910006" },
                 new[] { "910002" },
@@ -1286,7 +1286,7 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } },
                 "g123",
                 new[] { "910006" },
                 new[] { "910002" },
@@ -1313,7 +1313,7 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupCreate(new GroupCreateParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } },
                 "g123",
                 new[] { "910002", "910005" },
                 new[] { "910002" })
@@ -1346,8 +1346,8 @@ namespace ChatXdk.Tests
 
             var prepared = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(new[]
             {
-                new PublicKeyInput { UserId = "1491585161162473473", PublicKey = publicKeys.Identity, KeyVersion = "1" },
-                new PublicKeyInput { UserId = "17380288", PublicKey = publicKeys.Identity, KeyVersion = "1" },
+                new PublicKeyInput { UserId = "1491585161162473473", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" },
+                new PublicKeyInput { UserId = "17380288", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" },
             })
             {
                 SenderId = "1491585161162473473",
@@ -1368,8 +1368,8 @@ namespace ChatXdk.Tests
             // participant key decrypts locally.
             var prepared = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(new[]
             {
-                new PublicKeyInput { UserId = "17380288", PublicKey = publicKeys.Identity, KeyVersion = "1" },
-                new PublicKeyInput { UserId = "1491585161162473473", PublicKey = publicKeys.Identity, KeyVersion = "1" },
+                new PublicKeyInput { UserId = "17380288", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" },
+                new PublicKeyInput { UserId = "1491585161162473473", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" },
             })
             {
                 SenderId = "17380288",
@@ -1499,7 +1499,7 @@ namespace ChatXdk.Tests
                 Convert.FromBase64String(v.ConversationKeyB64),
                 result.ConversationKeys.Keys[v.EventConversationKeyVersion]);
 
-            var keyChanges = result.Messages
+            var keyChanges = result.Events
                 .Where(m => m.Event.GetProperty("type").GetString() == "KeyChange")
                 .Select(m => m.Event)
                 .ToList();
@@ -1518,7 +1518,7 @@ namespace ChatXdk.Tests
                 Assert.False(string.IsNullOrEmpty(key.PublicKeyVersion));
             }
 
-            var messages = result.Messages
+            var messages = result.Events
                 .Where(m => m.Event.GetProperty("type").GetString() == "Message")
                 .Select(m => m.Event)
                 .ToList();
@@ -1679,7 +1679,7 @@ namespace ChatXdk.Tests
                 SigningKeys = EventSigningKeys(v),
             });
             Assert.Empty(batch.Errors);
-            var batched = batch.Messages[0].Event.GetProperty("change").GetProperty("title").Deserialize<GroupText>()!;
+            var batched = batch.Events[0].Event.GetProperty("change").GetProperty("title").Deserialize<GroupText>()!;
             Assert.Equal("Unavailable", batched.Kind);
             Assert.Equal(v.EventGroupCreateEncryptedTitle, batched.Raw);
         }
@@ -1801,7 +1801,7 @@ namespace ChatXdk.Tests
                 });
             Assert.Empty(result.Errors);
 
-            var messages = result.Messages
+            var messages = result.Events
                 .Where(m => m.Event.GetProperty("type").GetString() == "Message")
                 .Select(m => m.Event)
                 .ToList();
@@ -1956,7 +1956,7 @@ namespace ChatXdk.Tests
 
             var key = result.ConversationKeys.Keys[v.MessageKeyConversationKeyVersion];
             Assert.Equal(ChatXdkUtilities.HexToBytes(v.MessageKeyConversationKeyHex), key);
-            var texts = result.Messages
+            var texts = result.Events
                 .Where(m => m.Event.GetProperty("type").GetString() == "Message")
                 .Select(m => m.Event.GetProperty("content").GetProperty("text").GetString())
                 .ToList();
@@ -2034,7 +2034,7 @@ namespace ChatXdk.Tests
             foreach (var title in new string?[] { "", null })
             {
                 var prepared = chat.PrepareGroupCreate(new GroupCreateParams(
-                    new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                    new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } },
                     "g123",
                     new[] { "910002", "910005" },
                     new[] { "910002" })
@@ -2061,7 +2061,7 @@ namespace ChatXdk.Tests
             var publicKeys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareGroupCreate(new GroupCreateParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = publicKeys.Identity, KeyVersion = "1" } },
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = publicKeys.Identity, PublicKeyVersion = "1" } },
                 "g123",
                 new[] { "910002", "910005" },
                 new[] { "910002" })
@@ -2297,7 +2297,7 @@ namespace ChatXdk.Tests
             var keys = chat.GetPublicKeys();
 
             var prepared = chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(
-                new[] { new PublicKeyInput { UserId = "910002", PublicKey = keys.Identity, KeyVersion = "1" } })
+                new[] { new PublicKeyInput { UserId = "910002", IdentityPublicKey = keys.Identity, PublicKeyVersion = "1" } })
             {
                 SenderId = "910002",
                 SigningKeyVersion = "1",
@@ -2333,7 +2333,7 @@ namespace ChatXdk.Tests
             var result = chat.DecryptEvents(new DecryptEventsParams(Array.Empty<string>()));
 
             Assert.NotNull(result);
-            Assert.Empty(result.Messages);
+            Assert.Empty(result.Events);
             Assert.Empty(result.Errors);
         }
 

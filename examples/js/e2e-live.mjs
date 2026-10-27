@@ -54,8 +54,8 @@ function signingFrom(pk, userId) {
 function keyEntries(pks, userId) {
   return pks.map((pk) => ({
     userId,
-    publicKey: pk.publicKey ?? pk.public_key ?? "",
-    keyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
+    identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
+    publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
   }));
 }
 
@@ -150,7 +150,7 @@ const eventsB64 = [
   ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
 ];
 let batch = core.decryptBatch(eventsB64, signing);
-const decrypted = batch.messages.filter((m) => messageText(m.event)).length;
+const decrypted = batch.events.filter((m) => messageText(m.event)).length;
 let convKeys = { ...batch.conversationKeys.keys };
 console.log(
   `live inbound messages decrypted: ${decrypted}; conversation keys: ${Object.keys(convKeys).length}`,
@@ -161,7 +161,7 @@ assert(decrypted > 0, "expected to decrypt at least one live message");
 // b64, for the reply-by-event form below).
 let canonicalConv = conv;
 let lastInboundB64;
-for (const m of batch.messages) {
+for (const m of batch.events) {
   const ev = m.event ?? {};
   if (ev.conversationId) canonicalConv = ev.conversationId;
   if (ev.type === "message" && String(ev.senderId) !== myId && ev.sequenceId && m.originalB64) {

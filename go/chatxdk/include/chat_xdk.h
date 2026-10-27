@@ -212,7 +212,7 @@ struct FfiResult chat_xdk_generate_keypairs(const struct ChatHandle *handle);
 /**
  * Get the user's public keys as JSON.
  *
- * Returns JSON `{"identity":"...","signing":"...","version":"..."}`.
+ * Returns JSON `{"identity":"...","signing":"..."}`.
  */
 struct FfiResult chat_xdk_get_public_keys(const struct ChatHandle *handle);
 
@@ -267,7 +267,7 @@ struct FfiResult chat_xdk_decrypt_events_params(const struct ChatHandle *handle,
  * Prepare a signed conversation-key change.
  *
  * `params_json` — single JSON document: `public_keys`
- * (`[{"user_id","public_key","key_version"},...]`), plus optional
+ * (`[{"user_id","identity_public_key","public_key_version"},...]`), plus optional
  * `sender_id` / `signing_key_version` (unset resolves from the session
  * identity) and `conversation_id` (absent or empty derives the one-to-one
  * id).

@@ -216,7 +216,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
     );
 
     let key_changes: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::KeyChange(kc) => Some(kc),
@@ -249,7 +249,7 @@ fn vectors_decrypt_events_batch_and_single_event_contracts() {
 
     // Exactly one verified message with the fixture text.
     let messages: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::Message(msg) => Some(msg),
@@ -506,7 +506,7 @@ fn vectors_reply_preview_validation_accepts_genuine_and_rejects_forged() {
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 
     let messages: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::Message(msg) => Some(msg),
@@ -836,7 +836,7 @@ fn vectors_message_key_event_decrypts_in_a_batch_with_its_key_change() {
         v.message_key_conversation_key_hex
     );
     let texts: Vec<_> = result
-        .messages
+        .events
         .iter()
         .filter_map(|m| match &m.event {
             chat_xdk_core::Event::Message(msg) => msg.text().map(str::to_string),

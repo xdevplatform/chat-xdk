@@ -187,7 +187,7 @@ async function delegationTests() {
   });
   assert.deepEqual(Object.keys(batch.errors), ["2"]);
   assert.equal(batch.conversationKeys.latestVersion, v.event_conversation_key_version);
-  const verifiedMessages = batch.messages.filter((m) => m.event.type === "message");
+  const verifiedMessages = batch.events.filter((m) => m.event.type === "message");
   assert.equal(verifiedMessages.length, 1);
   assert.equal(verifiedMessages[0].event.content.text, v.event_message_text);
   assert.equal(verifiedMessages[0].event.verified, true);
@@ -244,7 +244,7 @@ async function delegationTests() {
   const prep = chat.prepareConversationKeyChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "conv-1",
   });
   assert.equal(prep.conversationKey.length, 32);
@@ -256,7 +256,7 @@ async function delegationTests() {
   const groupPrep = chat.prepareGroupCreate({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     memberIds: ["910002", "910005"],
     adminIds: ["910002"],
@@ -276,7 +276,7 @@ async function delegationTests() {
   const membersPrep = chat.prepareGroupMembersChange({
     senderId: "910002",
     signingKeyVersion: "1",
-    publicKeys: [{ userId: "910002", publicKey: v.identity_public_b64, keyVersion: "1" }],
+    publicKeys: [{ userId: "910002", identityPublicKey: v.identity_public_b64, publicKeyVersion: "1" }],
     conversationId: "g-1",
     newMemberIds: ["910005"],
     currentMemberIds: ["910002"],

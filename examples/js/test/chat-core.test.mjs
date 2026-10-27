@@ -73,8 +73,8 @@ test("conversation key prepare -> decrypt round-trip", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "conv-1",
@@ -119,7 +119,7 @@ test("session cache: decryptBatch feeds the key cache, encryptReply omits the ke
 test("decryptBatch on an empty list is safe", async () => {
   const core = await loadedCore();
   const result = core.decryptBatch([], []);
-  assert.equal(result.messages.length, 0);
+  assert.equal(result.events.length, 0);
 });
 
 test("decryptOne rejects garbage input", async () => {
@@ -147,8 +147,8 @@ test("prepToRequest maps the X API request shape", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "1000:2000",
@@ -177,8 +177,8 @@ test("removalToRequest rotates the key for the members who stay", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "g123",
@@ -212,8 +212,8 @@ test("prepareGroupCreate yields the two required signatures", async () => {
     publicKeys: [
       {
         userId: vectors.event_sender_id,
-        publicKey: vectors.identity_public_b64,
-        keyVersion: "1",
+        identityPublicKey: vectors.identity_public_b64,
+        publicKeyVersion: "1",
       },
     ],
     conversationId: "g123",

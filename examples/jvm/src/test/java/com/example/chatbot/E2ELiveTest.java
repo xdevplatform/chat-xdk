@@ -79,8 +79,8 @@ class E2ELiveTest {
         for (JsonNode pk : pks) {
             PublicKeyInput input = new PublicKeyInput();
             input.userId = userId;
-            input.publicKey = pk.path("public_key").asText("");
-            input.keyVersion = pk.path("public_key_version").asText("");
+            input.identityPublicKey = pk.path("public_key").asText("");
+            input.publicKeyVersion = pk.path("public_key_version").asText("");
             out.add(input);
         }
         return out;
@@ -223,7 +223,7 @@ class E2ELiveTest {
                 }
             }
             DecryptEventsResult batch = core.decryptBatch(eventsB64, signing);
-            long decrypted = batch.messages.stream()
+            long decrypted = batch.events.stream()
                     .filter(m -> ChatCore.messageText(m.event) != null)
                     .count();
             Map<String, byte[]> convKeys = new HashMap<>(batch.conversationKeys.keys);
@@ -235,7 +235,7 @@ class E2ELiveTest {
             // to thread the reply on, from the decrypted batch.
             String canonicalConv = conv;
             String lastInboundEventB64 = null;
-            for (var m : batch.messages) {
+            for (var m : batch.events) {
                 JsonNode ev = m.event;
                 if (ev == null) {
                     continue;
@@ -297,7 +297,7 @@ class E2ELiveTest {
             // predates the rotation, so its KeyChange events ride along for
             // the preview.
             List<String> ckces = new ArrayList<>();
-            for (var m : batch.messages) {
+            for (var m : batch.events) {
                 if (m.event != null
                         && "KeyChange".equals(m.event.path("type").asText())
                         && m.originalB64 != null) {

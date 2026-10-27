@@ -560,14 +560,14 @@ namespace ChatXdk
             using var doc = JsonDocument.Parse(resultJson);
             var root = doc.RootElement;
 
-            var messages = new List<DecryptedMessage>();
-            foreach (var el in root.GetProperty("messages").EnumerateArray())
+            var events = new List<DecryptedEvent>();
+            foreach (var el in root.GetProperty("events").EnumerateArray())
             {
                 var eventEl = el.GetProperty("event");
                 string? orig = null;
                 if (el.TryGetProperty("original_b64", out var ob) && ob.ValueKind == JsonValueKind.String)
                     orig = ob.GetString();
-                messages.Add(new DecryptedMessage
+                events.Add(new DecryptedEvent
                 {
                     Event = eventEl.Clone(),
                     OriginalB64 = orig,
@@ -582,7 +582,7 @@ namespace ChatXdk
 
             return new DecryptEventsResult
             {
-                Messages = messages,
+                Events = events,
                 ConversationKeys = bundle,
                 Errors = errors,
             };

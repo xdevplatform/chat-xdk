@@ -169,7 +169,6 @@ impl ChatCore {
         Ok(PublicKeys {
             identity: base64_encode(identity.public.encoded()),
             signing: base64_encode(signing.public.encoded()),
-            version: String::new(),
         })
     }
 
@@ -581,7 +580,10 @@ impl ChatCore {
         }
         for pk in public_keys {
             crate::pipeline::validate_user_id("public_keys user_id", &pk.user_id)?;
-            crate::pipeline::validate_key_version("public_keys key_version", &pk.key_version)?;
+            crate::pipeline::validate_key_version(
+                "public_keys public_key_version",
+                &pk.public_key_version,
+            )?;
         }
 
         let mut best_by_user: HashMap<String, &PublicKeyInput> = HashMap::new();
@@ -589,11 +591,11 @@ impl ChatCore {
             let is_newer = match best_by_user.get(&pk.user_id) {
                 None => true,
                 Some(current) => match (
-                    pk.key_version.parse::<u64>(),
-                    current.key_version.parse::<u64>(),
+                    pk.public_key_version.parse::<u64>(),
+                    current.public_key_version.parse::<u64>(),
                 ) {
                     (Ok(new_ver), Ok(cur_ver)) => new_ver > cur_ver,
-                    _ => pk.key_version > current.key_version,
+                    _ => pk.public_key_version > current.public_key_version,
                 },
             };
             if is_newer {
@@ -605,8 +607,8 @@ impl ChatCore {
             .values()
             .map(|pk| RecipientInput {
                 user_id: pk.user_id.clone(),
-                public_key: pk.public_key.clone(),
-                key_version: pk.key_version.clone(),
+                public_key: pk.identity_public_key.clone(),
+                key_version: pk.public_key_version.clone(),
             })
             .collect();
 
@@ -1424,7 +1426,7 @@ impl ChatCore {
     ///
     /// # Returns
     /// A `DecryptEventsResult` containing:
-    /// * `messages` - Successfully decrypted messages
+    /// * `events` - The events that decrypted, of every event type
     /// * `conversation_keys` - Extracted conversation keys (for caching). Its
     ///   `latest_version` is the newest version whose key change verified, for
     ///   the batch's conversations and held monotonic for this instance's
@@ -1472,7 +1474,7 @@ impl ChatCore {
         // a replayed older one cannot lower it.
         self.apply_ckey_freshness(events, &verified_signing_keys, &mut conv_keys_result);
 
-        let mut messages = Vec::new();
+        let mut decrypted = Vec::new();
         let mut errors = HashMap::new();
 
         // Second pass: decrypt each event
@@ -1501,7 +1503,7 @@ impl ChatCore {
                 &verified_signing_keys,
             ) {
                 Ok(event) => {
-                    messages.push(DecryptedMessage {
+                    decrypted.push(DecryptedEvent {
                         event,
                         original_b64: Some((*event_b64).to_string()),
                     });
@@ -1513,7 +1515,7 @@ impl ChatCore {
         }
 
         DecryptEventsResult {
-            messages,
+            events: decrypted,
             conversation_keys: conv_keys_result,
             errors,
         }
@@ -6924,12 +6926,12 @@ mod tests {
         let events: Vec<&str> = vec![&typing_b64, &failure_b64, &member_del_b64];
         let result = core.decrypt_events_with(&events, &[]);
 
-        assert_eq!(result.messages.len(), 3);
+        assert_eq!(result.events.len(), 3);
         assert!(result.errors.is_empty());
 
-        assert!(matches!(result.messages[0].event, Event::Typing(_)));
-        assert!(matches!(result.messages[1].event, Event::Failure(_)));
-        assert!(matches!(result.messages[2].event, Event::MemberDeleted(_)));
+        assert!(matches!(result.events[0].event, Event::Typing(_)));
+        assert!(matches!(result.events[1].event, Event::Failure(_)));
+        assert!(matches!(result.events[2].event, Event::MemberDeleted(_)));
     }
 
     #[test]
@@ -6943,7 +6945,7 @@ mod tests {
         let events: Vec<&str> = vec![&typing_b64, "!!!invalid-base64!!!"];
         let result = core.decrypt_events_with(&events, &[]);
 
-        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.events.len(), 1);
         assert!(result.errors.contains_key(&1));
     }
 
@@ -6958,9 +6960,9 @@ mod tests {
         let events: Vec<&str> = vec![&typing_b64];
         let result = core.decrypt_events_with(&events, &[]);
 
-        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.events.len(), 1);
         assert_eq!(
-            result.messages[0].original_b64.as_deref(),
+            result.events[0].original_b64.as_deref(),
             Some(typing_b64.as_str()),
         );
     }
@@ -8572,7 +8574,7 @@ mod tests {
         // With only the bad-binding key, it is dropped → message unverified.
         let result_bad = core.decrypt_events_with(&events, std::slice::from_ref(&bad_key));
         let msg_bad = result_bad
-            .messages
+            .events
             .iter()
             .find_map(|m| match &m.event {
                 Event::Message(b) => Some(b),
@@ -8588,7 +8590,7 @@ mod tests {
         // With the correct key, the same message verifies.
         let result_good = core.decrypt_events_with(&events, std::slice::from_ref(&good_key));
         let msg_good = result_good
-            .messages
+            .events
             .iter()
             .find_map(|m| match &m.event {
                 Event::Message(b) => Some(b),
@@ -8715,7 +8717,7 @@ mod tests {
         assert_eq!(result.conversation_keys.latest_version, None);
         // The message under it decrypts (its own signature verifies).
         let msg = result
-            .messages
+            .events
             .iter()
             .find_map(|m| match &m.event {
                 Event::Message(b) => Some(b),
@@ -8769,7 +8771,7 @@ mod tests {
             Some(ckey_version.to_string())
         );
         let msg = result
-            .messages
+            .events
             .iter()
             .find_map(|m| match &m.event {
                 Event::Message(b) => Some(b),

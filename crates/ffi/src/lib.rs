@@ -705,7 +705,7 @@ pub extern "C" fn chat_xdk_generate_keypairs(handle: *const ChatHandle) -> FfiRe
 
 /// Get the user's public keys as JSON.
 ///
-/// Returns JSON `{"identity":"...","signing":"...","version":"..."}`.
+/// Returns JSON `{"identity":"...","signing":"..."}`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_get_public_keys(handle: *const ChatHandle) -> FfiResult {
     catch_ffi(|| {
@@ -831,24 +831,24 @@ fn json_conversation_key_bundle(
 fn json_decrypt_events_result(
     r: &chat_xdk_core::DecryptEventsResult,
 ) -> Result<String, serde_json::Error> {
-    let mut messages = Vec::new();
-    for dm in &r.messages {
+    let mut events = Vec::new();
+    for decrypted in &r.events {
         let mut m = serde_json::Map::new();
-        m.insert("event".into(), serde_json::to_value(&dm.event)?);
-        if let Some(ref orig) = dm.original_b64 {
+        m.insert("event".into(), serde_json::to_value(&decrypted.event)?);
+        if let Some(ref orig) = decrypted.original_b64 {
             m.insert(
                 "original_b64".into(),
                 serde_json::Value::String(orig.clone()),
             );
         }
-        messages.push(serde_json::Value::Object(m));
+        events.push(serde_json::Value::Object(m));
     }
     let mut errors = serde_json::Map::new();
     for (k, v) in &r.errors {
         errors.insert(k.to_string(), serde_json::Value::String(v.clone()));
     }
     let mut root = serde_json::Map::new();
-    root.insert("messages".into(), serde_json::Value::Array(messages));
+    root.insert("events".into(), serde_json::Value::Array(events));
     root.insert(
         "conversation_keys".into(),
         json_conversation_key_bundle(&r.conversation_keys)?,
@@ -1377,7 +1377,7 @@ fn entity_tuples_to_descs(tuples: Vec<(i32, i32, String)>) -> Vec<EntityDescript
 /// Prepare a signed conversation-key change.
 ///
 /// `params_json` — single JSON document: `public_keys`
-/// (`[{"user_id","public_key","key_version"},...]`), plus optional
+/// (`[{"user_id","identity_public_key","public_key_version"},...]`), plus optional
 /// `sender_id` / `signing_key_version` (unset resolves from the session
 /// identity) and `conversation_id` (absent or empty derives the one-to-one
 /// id).

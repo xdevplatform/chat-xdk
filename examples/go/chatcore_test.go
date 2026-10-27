@@ -135,7 +135,7 @@ func TestConversationKeyRoundtrip(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
 	prepared, err := core.PrepareConversationKeyChange([]chatxdk.PublicKeyInput{
-		{UserID: "910002", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "910002", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}, "conv-1")
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
@@ -183,8 +183,8 @@ func TestDecryptBatchEmptyIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
-	if len(result.Messages) != 0 {
-		t.Errorf("expected no messages, got %d", len(result.Messages))
+	if len(result.Events) != 0 {
+		t.Errorf("expected no messages, got %d", len(result.Events))
 	}
 }
 
@@ -200,7 +200,7 @@ func TestDecryptOneRejectsGarbage(t *testing.T) {
 // built from the fixture identity key.
 func fixtureKeys(v vectors) []chatxdk.PublicKeyInput {
 	return []chatxdk.PublicKeyInput{
-		{UserID: "1000", PublicKey: v.IdentityPublicB64, KeyVersion: "1"},
+		{UserID: "1000", IdentityPublicKey: v.IdentityPublicB64, PublicKeyVersion: "1"},
 	}
 }
 

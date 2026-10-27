@@ -173,7 +173,7 @@ class ChatCore:
         """Generate, encrypt, and sign a conversation-key change.
 
         ``public_keys`` is the flat list returned by the X API's public-keys
-        endpoint: ``[{"user_id", "public_key", "key_version"}, ...]``. Omit
+        endpoint: ``[{"user_id", "identity_public_key", "public_key_version"}, ...]``. Omit
         ``conversation_id`` for a one-to-one to derive it; pass it for a group.
         The change is signed with the ``set_identity`` session identity.
         """
@@ -195,17 +195,17 @@ class ChatCore:
         """Batch path — used on initial conversation load.
 
         ``decrypt_events`` extracts conversation keys from any KeyChange events
-        in the batch, then decrypts every message. Returns the decrypted
-        messages plus the conversation-key cache to reuse for single events.
-        Omit ``signing_keys`` to verify with the ``set_signing_keys`` store.
+        in the batch, then decrypts every event. Returns the decrypted events
+        plus the conversation-key cache to reuse for single events. Omit
+        ``signing_keys`` to verify with the ``set_signing_keys`` store.
         """
         result = self.chat.decrypt_events(DecryptEventsParams(events_b64, signing_keys=signing_keys))
-        messages = [
-            {"event": _as_dict(m["event"]), "original_b64": m.get("original_b64")}
-            for m in result.get("messages", [])
+        events = [
+            {"event": _as_dict(e["event"]), "original_b64": e.get("original_b64")}
+            for e in result.get("events", [])
         ]
         return {
-            "messages": messages,
+            "events": events,
             "conversation_keys": result.get("conversation_keys", {}),
             "errors": result.get("errors", {}),
         }
