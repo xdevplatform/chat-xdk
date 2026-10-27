@@ -93,10 +93,7 @@ class ChatCoreTest {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
             core.setIdentity("910002");
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = v.get("identity_public_b64").asText();
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", v.get("identity_public_b64").asText(), "1");
             PreparedConversationChange prepared =
                     core.prepareConversationKeyChange(List.of(input), "conv-1");
             assertEquals(1, prepared.conversationParticipantKeys.size());
@@ -138,10 +135,7 @@ class ChatCoreTest {
     }
 
     private static List<PublicKeyInput> fixtureKeys(JsonNode v) {
-        PublicKeyInput input = new PublicKeyInput();
-        input.userId = "1000";
-        input.identityPublicKey = v.get("identity_public_b64").asText();
-        input.publicKeyVersion = "1";
+        PublicKeyInput input = new PublicKeyInput("1000", v.get("identity_public_b64").asText(), "1");
         return List.of(input);
     }
 

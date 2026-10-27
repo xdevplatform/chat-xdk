@@ -52,12 +52,12 @@ public final class Bot {
         for (String senderId : senders) {
             try {
                 for (JsonNode pk : api.getPublicKeys(senderId)) {
-                    SigningKeyEntry entry = new SigningKeyEntry();
-                    entry.userId = senderId;
-                    entry.publicKeyVersion = pk.path("public_key_version").asText("");
-                    entry.publicKey = pk.path("signing_public_key").asText("");
-                    entry.identityPublicKey = pk.path("public_key").asText("");
-                    entry.identityPublicKeySignature = pk.path("identity_public_key_signature").asText("");
+                    SigningKeyEntry entry = new SigningKeyEntry(
+                            senderId,
+                            pk.path("public_key_version").asText(""),
+                            pk.path("signing_public_key").asText(""),
+                            pk.path("public_key").asText(""),
+                            pk.path("identity_public_key_signature").asText(""));
                     keys.add(entry);
                 }
             } catch (Exception ex) {

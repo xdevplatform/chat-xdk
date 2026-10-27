@@ -64,12 +64,12 @@ class E2ELiveTest {
     }
 
     private static SigningKeyEntry signingFrom(JsonNode pk, String userId) {
-        SigningKeyEntry e = new SigningKeyEntry();
-        e.userId = userId;
-        e.publicKeyVersion = pk.path("public_key_version").asText("");
-        e.publicKey = pk.path("signing_public_key").asText("");
-        e.identityPublicKey = pk.path("public_key").asText("");
-        e.identityPublicKeySignature = pk.path("identity_public_key_signature").asText("");
+        SigningKeyEntry e = new SigningKeyEntry(
+                userId,
+                pk.path("public_key_version").asText(""),
+                pk.path("signing_public_key").asText(""),
+                pk.path("public_key").asText(""),
+                pk.path("identity_public_key_signature").asText(""));
         return e;
     }
 
@@ -77,10 +77,7 @@ class E2ELiveTest {
     private static List<PublicKeyInput> keyEntries(List<JsonNode> pks, String userId) {
         List<PublicKeyInput> out = new ArrayList<>();
         for (JsonNode pk : pks) {
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = userId;
-            input.identityPublicKey = pk.path("public_key").asText("");
-            input.publicKeyVersion = pk.path("public_key_version").asText("");
+            PublicKeyInput input = new PublicKeyInput(userId, pk.path("public_key").asText(""), pk.path("public_key_version").asText(""));
             out.add(input);
         }
         return out;

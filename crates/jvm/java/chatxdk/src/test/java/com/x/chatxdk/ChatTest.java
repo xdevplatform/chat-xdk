@@ -61,12 +61,12 @@ class ChatTest {
     private static List<SigningKeyEntry> signingKeysFor(JsonNode v, String... userIds) {
         List<SigningKeyEntry> entries = new ArrayList<>();
         for (String userId : userIds) {
-            SigningKeyEntry entry = new SigningKeyEntry();
-            entry.userId = userId;
-            entry.publicKeyVersion = v.get("event_signing_key_version").asText();
-            entry.publicKey = v.get("signing_public_b64").asText();
-            entry.identityPublicKey = v.get("identity_public_b64").asText();
-            entry.identityPublicKeySignature = v.get("identity_public_key_signature_b64").asText();
+            SigningKeyEntry entry = new SigningKeyEntry(
+                    userId,
+                    v.get("event_signing_key_version").asText(),
+                    v.get("signing_public_b64").asText(),
+                    v.get("identity_public_b64").asText(),
+                    v.get("identity_public_key_signature_b64").asText());
             entries.add(entry);
         }
         return entries;
@@ -150,10 +150,7 @@ class ChatTest {
 
     /** Produce a fresh conversation key via a prepared key change (for crypto tests). */
     private static byte[] newConvKey(Chat chat) throws Exception {
-        PublicKeyInput input = new PublicKeyInput();
-        input.userId = "910002";
-        input.identityPublicKey = chat.getPublicKeys().identity;
-        input.publicKeyVersion = "1";
+        PublicKeyInput input = new PublicKeyInput("910002", chat.getPublicKeys().identity, "1");
         ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
         params.senderId = "910002";
         params.signingKeyVersion = "1";
@@ -392,46 +389,32 @@ class ChatTest {
     }
 
     @Test
-    void encryptMessageMediaAttachmentMissingRequiredFieldThrows() throws Exception {
-        try (Chat chat = createUnlocked()) {
-            byte[] ckey = newConvKey(chat);
-            EncryptMessageParams p = new EncryptMessageParams("conv-1", "bad attachment");
-            p.senderId = "1001";
-            p.signingKeyVersion = "66";
-            p.conversationKey = ckey;
-            p.conversationKeyVersion = "1";
-            // Core requires the media fields; an attachment missing one is
-            // rejected rather than silently defaulted.
-            Types.AttachmentDescriptor bad = new Types.AttachmentDescriptor();
-            bad.attachmentType = "media";
-            bad.mediaHashKey = "h";
-            p.attachments = java.util.List.of(bad);
-            assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+    void descriptorsAndKeyEntriesTakeTheirRequiredValuesInConstructors() throws Exception {
+        assertEquals(0, Types.AttachmentDescriptor.class.getConstructors().length);
+        for (java.lang.reflect.Field field : Types.AttachmentDescriptor.class.getFields()) {
+            assertTrue(java.lang.reflect.Modifier.isFinal(field.getModifiers()), field.getName());
         }
-    }
-
-    @Test
-    void unsetRequiredDescriptorFieldsAreNamedNotDefaulted() throws Exception {
-        try (Chat chat = createUnlocked()) {
-            chat.setIdentity(new SetIdentityParams("1001", "66"));
-            byte[] ckey = newConvKey(chat);
-            EncryptMessageParams p = new EncryptMessageParams("conv-1", "unset fields");
-            p.conversationKey = ckey;
-            p.conversationKeyVersion = "1";
-            // A required field left unset is omitted, so the core names it.
-            p.attachments = java.util.List.of(new Types.AttachmentDescriptor());
-            ChatXdkException missingType = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
-            assertEquals(ChatXdkException.Kind.INVALID_INPUT, missingType.getKind());
-            assertTrue(missingType.getMessage().contains("attachment_type"), missingType.getMessage());
-
-            Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor();
-            banner.mediaHashKey = "banner-hash";
-            banner.filename = "banner.jpg";
-            p.attachments = java.util.List.of(
-                    Types.AttachmentDescriptor.urlCard("https://example.com", "Example", banner, null));
-            ChatXdkException missingSize = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
-            assertTrue(missingSize.getMessage().contains("filesize_bytes"), missingSize.getMessage());
+        Map<Class<?>, List<String>> required = Map.of(
+                EntityDescriptor.class, List.of("start", "end", "entityType"),
+                Types.UrlAttachmentImageDescriptor.class, List.of("mediaHashKey", "filesizeBytes", "filename"),
+                SigningKeyEntry.class,
+                List.of("userId", "publicKeyVersion", "publicKey", "identityPublicKey", "identityPublicKeySignature"),
+                PublicKeyInput.class, List.of("userId", "identityPublicKey", "publicKeyVersion"));
+        for (Map.Entry<Class<?>, List<String>> type : required.entrySet()) {
+            String name = type.getKey().getSimpleName();
+            java.lang.reflect.Constructor<?>[] constructors = type.getKey().getConstructors();
+            assertEquals(1, constructors.length, name);
+            assertEquals(type.getValue().size(), constructors[0].getParameterCount(), name);
+            for (String field : type.getValue()) {
+                assertTrue(java.lang.reflect.Modifier.isFinal(type.getKey().getField(field).getModifiers()),
+                        name + "." + field);
+            }
         }
+        assertThrows(NullPointerException.class, () -> new SigningKeyEntry(null, "1", "k", "i", "s"));
+        assertThrows(NullPointerException.class, () -> new PublicKeyInput("1", null, "1"));
+        assertThrows(NullPointerException.class, () -> new Types.UrlAttachmentImageDescriptor("b", 1, null));
+        assertThrows(NullPointerException.class, () -> new EntityDescriptor(0, 1, null));
+        assertThrows(NullPointerException.class, () -> Types.AttachmentDescriptor.urlCard(null, "Example"));
     }
 
     @Test
@@ -447,10 +430,10 @@ class ChatTest {
                     Map.entry(Types.AttachmentDescriptor.media("photo", 100, 100, 0, "photo.jpg", 1, null),
                             "media_hash_key 'photo' " + noSize),
                     Map.entry(Types.AttachmentDescriptor.urlCard("https://example.com", "Example",
-                                    Types.UrlAttachmentImageDescriptor.of("banner", 1000, ""), null),
+                                    new Types.UrlAttachmentImageDescriptor("banner", 1000, ""), null),
                             "media_hash_key 'banner' " + noName),
                     Map.entry(Types.AttachmentDescriptor.urlCard("https://example.com", "Example",
-                                    null, Types.UrlAttachmentImageDescriptor.of("favicon", 0, "favicon.png")),
+                                    null, new Types.UrlAttachmentImageDescriptor("favicon", 0, "favicon.png")),
                             "media_hash_key 'favicon' " + noSize))) {
                 EncryptMessageParams p = new EncryptMessageParams("conv-1", "a file");
                 p.conversationKey = ckey;
@@ -509,17 +492,15 @@ class ChatTest {
             EncryptMessageParams p = new EncryptMessageParams("conv-1", "Check this out");
             p.conversationKey = ckey;
             p.conversationKeyVersion = "1";
-            Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor();
-            banner.mediaHashKey = "banner-hash";
-            banner.filesizeBytes = 24_000L;
-            banner.filename = "banner.jpg";
+            Types.UrlAttachmentImageDescriptor banner =
+                    new Types.UrlAttachmentImageDescriptor("banner-hash", 24_000, "banner.jpg");
             banner.width = 1200L;
             banner.height = 630L;
             Types.AttachmentDescriptor attachment = Types.AttachmentDescriptor.urlCard(
                     "https://example.com/product",
                     "Example Product",
                     banner,
-                    Types.UrlAttachmentImageDescriptor.of("favicon-hash", 1_200L, "favicon.ico"));
+                    new Types.UrlAttachmentImageDescriptor("favicon-hash", 1_200L, "favicon.ico"));
 
             // ChatJson.MAPPER is the serializer the FFI uses to build the
             // params JSON, so confirm the banner reaches core under the
@@ -709,10 +690,7 @@ class ChatTest {
     @Test
     void groupActionsSignVerifierPayloads() throws Exception {
         try (Chat chat = createUnlocked()) {
-            PublicKeyInput key = new PublicKeyInput();
-            key.userId = "111";
-            key.identityPublicKey = chat.getPublicKeys().identity;
-            key.publicKeyVersion = "1";
+            PublicKeyInput key = new PublicKeyInput("111", chat.getPublicKeys().identity, "1");
             GroupMembersRemoveParams removal =
                     new GroupMembersRemoveParams(List.of(key), "g100", List.of("910007"));
             removal.senderId = "111";
@@ -929,10 +907,7 @@ class ChatTest {
     void prepareConversationKeyChangeReturnsExpectedShape() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(input));
             params.senderId = "910002";
             params.signingKeyVersion = "1";
@@ -968,10 +943,7 @@ class ChatTest {
     void prepareGroupMembersChangeReturnsSignedChange() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
             p.senderId = "910002";
@@ -1000,10 +972,7 @@ class ChatTest {
     void prepareGroupMembersChangeEncryptsTheDescription() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             String avatarUrl = "https://ton.x.com/xchat_media/g123/avatar";
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
@@ -1028,10 +997,7 @@ class ChatTest {
     void prepareGroupMembersChangeSignsScreenCaptureBlocking() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupMembersChangeParams p = new GroupMembersChangeParams(
                     List.of(input), "g123", List.of("910006"), List.of("910002"), List.of("910002"), List.of());
             p.senderId = "910002";
@@ -1051,10 +1017,7 @@ class ChatTest {
     void prepareGroupCreateReturnsSignedChange() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupCreateParams p = new GroupCreateParams(
                     List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
             p.senderId = "910002";
@@ -1080,14 +1043,8 @@ class ChatTest {
     void prepareConversationKeyChangeDerivesOneToOneId() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput a = new PublicKeyInput();
-            a.userId = "1491585161162473473";
-            a.identityPublicKey = keys.identity;
-            a.publicKeyVersion = "1";
-            PublicKeyInput b = new PublicKeyInput();
-            b.userId = "17380288";
-            b.identityPublicKey = keys.identity;
-            b.publicKeyVersion = "1";
+            PublicKeyInput a = new PublicKeyInput("1491585161162473473", keys.identity, "1");
+            PublicKeyInput b = new PublicKeyInput("17380288", keys.identity, "1");
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(a, b));
             params.senderId = "1491585161162473473";
             params.signingKeyVersion = "1";
@@ -1103,14 +1060,8 @@ class ChatTest {
             // No conversationId set: the canonical one-to-one id is derived from
             // the two participants. Both entries reuse our identity key so every
             // participant key decrypts locally.
-            PublicKeyInput a = new PublicKeyInput();
-            a.userId = "17380288";
-            a.identityPublicKey = keys.identity;
-            a.publicKeyVersion = "1";
-            PublicKeyInput b = new PublicKeyInput();
-            b.userId = "1491585161162473473";
-            b.identityPublicKey = keys.identity;
-            b.publicKeyVersion = "1";
+            PublicKeyInput a = new PublicKeyInput("17380288", keys.identity, "1");
+            PublicKeyInput b = new PublicKeyInput("1491585161162473473", keys.identity, "1");
             ConversationKeyChangeParams params = new ConversationKeyChangeParams(List.of(a, b));
             params.senderId = "17380288";
             params.signingKeyVersion = "1";
@@ -1145,22 +1096,6 @@ class ChatTest {
             assertNotNull(result);
             assertTrue(result.events.isEmpty());
             assertTrue(result.errors.isEmpty());
-        }
-    }
-
-    @Test
-    void decryptEventsMalformedSigningKeyEntryThrows() throws Exception {
-        try (Chat chat = createUnlocked()) {
-            // Null fields are omitted from the serialized JSON, so this entry is
-            // missing required fields. That must be surfaced rather than silently
-            // dropped (which would weaken verification by skipping it).
-            SigningKeyEntry malformed = new SigningKeyEntry();
-            malformed.publicKeyVersion = "1";
-            malformed.publicKey = "AA==";
-            DecryptEventsParams params = new DecryptEventsParams(List.of());
-            params.signingKeys = List.of(malformed);
-            ChatXdkException ex = assertThrows(ChatXdkException.class, () -> chat.decryptEvents(params));
-            assertTrue(ex.getMessage().contains("Invalid params JSON: missing field `user_id`"), ex.getMessage());
         }
     }
 
@@ -1877,8 +1812,8 @@ class ChatTest {
             SendPayload payload = sendFiles(chat, v, "a link", Types.AttachmentDescriptor.urlCard(
                     "https://example.com",
                     null,
-                    Types.UrlAttachmentImageDescriptor.of("banner", 12L, "banner.png"),
-                    Types.UrlAttachmentImageDescriptor.of("favicon", 13L, "favicon.png")));
+                    new Types.UrlAttachmentImageDescriptor("banner", 12L, "banner.png"),
+                    new Types.UrlAttachmentImageDescriptor("favicon", 13L, "favicon.png")));
             for (String name : new String[] {"banner", "favicon"}) {
                 byte[] encrypted = chat.encryptFile(encryptFileParams(
                         v, (name + " bytes").getBytes(StandardCharsets.UTF_8), payload.eventB64, name));
@@ -2070,10 +2005,7 @@ class ChatTest {
     void prepareGroupCreateEmptyTitleSignsNullSentinel() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             for (String title : new String[] {"", null}) {
                 GroupCreateParams p = new GroupCreateParams(
                         List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
@@ -2098,10 +2030,7 @@ class ChatTest {
     void prepareGroupCreateEncryptsACommaTitle() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();
-            PublicKeyInput input = new PublicKeyInput();
-            input.userId = "910002";
-            input.identityPublicKey = keys.identity;
-            input.publicKeyVersion = "1";
+            PublicKeyInput input = new PublicKeyInput("910002", keys.identity, "1");
             GroupCreateParams p = new GroupCreateParams(
                     List.of(input), "g123", List.of("910002", "910005"), List.of("910002"));
             p.senderId = "910002";

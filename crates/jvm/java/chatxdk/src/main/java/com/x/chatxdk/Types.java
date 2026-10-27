@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /** Data types for the Chat SDK public API. */
 public final class Types {
@@ -207,41 +208,63 @@ public final class Types {
     public static final class SigningKeyEntry {
         /** ID of the user this signing key belongs to. */
         @JsonProperty("user_id")
-        public String userId;
+        public final String userId;
 
         /** Version of the user's signing public key as returned by the X API. */
         @JsonProperty("public_key_version")
-        public String publicKeyVersion;
+        public final String publicKeyVersion;
 
         /** Base64-encoded signing public key (SEC1 or SPKI). */
         @JsonProperty("public_key")
-        public String publicKey;
+        public final String publicKey;
 
         /** Base64-encoded identity public key (SEC1 or SPKI) for this user. */
         @JsonProperty("identity_public_key")
-        public String identityPublicKey;
+        public final String identityPublicKey;
 
         /**
          * Base64-encoded raw r||s signature proving the signing key is bound to the
          * identity key. Returned by the X API on the public keys response.
          */
         @JsonProperty("identity_public_key_signature")
-        public String identityPublicKeySignature;
+        public final String identityPublicKeySignature;
+
+        /** A user's signing key, as the X API's public keys response carries it. */
+        public SigningKeyEntry(
+                String userId,
+                String publicKeyVersion,
+                String publicKey,
+                String identityPublicKey,
+                String identityPublicKeySignature) {
+            this.userId = Objects.requireNonNull(userId, "userId");
+            this.publicKeyVersion = Objects.requireNonNull(publicKeyVersion, "publicKeyVersion");
+            this.publicKey = Objects.requireNonNull(publicKey, "publicKey");
+            this.identityPublicKey = Objects.requireNonNull(identityPublicKey, "identityPublicKey");
+            this.identityPublicKeySignature =
+                    Objects.requireNonNull(identityPublicKeySignature, "identityPublicKeySignature");
+        }
     }
 
     /** Public key entry for the prepare methods ({@link Chat#prepareConversationKeyChange}). */
     public static final class PublicKeyInput {
         /** ID of the user this public key belongs to. */
         @JsonProperty("user_id")
-        public String userId;
+        public final String userId;
 
         /** Base64-encoded identity public key (SEC1 or SPKI): the X API's {@code public_key}. */
         @JsonProperty("identity_public_key")
-        public String identityPublicKey;
+        public final String identityPublicKey;
 
         /** The key's version, as the X API returns it. */
         @JsonProperty("public_key_version")
-        public String publicKeyVersion;
+        public final String publicKeyVersion;
+
+        /** A user's identity key and its version, as the X API returns them. */
+        public PublicKeyInput(String userId, String identityPublicKey, String publicKeyVersion) {
+            this.userId = Objects.requireNonNull(userId, "userId");
+            this.identityPublicKey = Objects.requireNonNull(identityPublicKey, "identityPublicKey");
+            this.publicKeyVersion = Objects.requireNonNull(publicKeyVersion, "publicKeyVersion");
+        }
     }
 
     /**
@@ -408,81 +431,117 @@ public final class Types {
          */
         public final String entityType;
 
+        /** Describe an entity of {@code entityType} spanning bytes {@code start} to {@code end}. */
         public EntityDescriptor(int start, int end, String entityType) {
             this.start = start;
             this.end = end;
-            this.entityType = entityType;
+            this.entityType = Objects.requireNonNull(entityType, "entityType");
         }
     }
 
     /**
-     * Attachment descriptor. Use the factory methods to create well-formed instances.
+     * Attachment descriptor, created by {@link #media}, {@link #urlCard} or {@link #post}.
+     *
+     * <p>A URL card with an empty {@code url}, or a post with neither {@code restId} nor
+     * {@code postUrl}, fails the send with a {@link ChatXdkException} of kind
+     * {@code INVALID_INPUT}.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class AttachmentDescriptor {
         /** Attachment kind: one of "media", "url", or "post". */
         @JsonProperty("attachment_type")
-        public String attachmentType;
+        public final String attachmentType;
 
         /** Media hash key identifying the uploaded media. */
         @JsonProperty("media_hash_key")
-        public String mediaHashKey;
+        public final String mediaHashKey;
 
-        /** Media width in pixels. */
+        /** Media width in pixels. A negative one fails the send with {@code INVALID_INPUT}. */
         @JsonProperty("width")
-        public Long width;
+        public final Long width;
 
-        /** Media height in pixels. */
+        /** Media height in pixels. A negative one fails the send with {@code INVALID_INPUT}. */
         @JsonProperty("height")
-        public Long height;
+        public final Long height;
 
         /**
          * Size of the encrypted media file in bytes: {@code encryptedFileSize} of its size. 0 or
          * less fails the send with a {@link ChatXdkException} of kind {@code INVALID_INPUT}.
          */
         @JsonProperty("filesize_bytes")
-        public Long filesizeBytes;
+        public final Long filesizeBytes;
 
         /**
          * Media file name. An empty one fails the send with a {@link ChatXdkException} of kind
          * {@code INVALID_INPUT}.
          */
         @JsonProperty("filename")
-        public String filename;
+        public final String filename;
 
         /** 1=image, 2=gif, 3=video, 4=audio, 5=file, 6=svg. */
         @JsonProperty("media_type")
-        public Integer mediaType;
+        public final Integer mediaType;
 
         /** Media duration in milliseconds (for audio/video). */
         @JsonProperty("duration_millis")
-        public Long durationMillis;
+        public final Long durationMillis;
 
         /** URL for a URL-card attachment. */
         @JsonProperty("url")
-        public String url;
+        public final String url;
 
         /** Display title for a URL-card attachment. */
         @JsonProperty("display_title")
-        public String displayTitle;
+        public final String displayTitle;
 
         /** Encrypted banner (preview) image for a URL-card attachment. */
         @JsonProperty("banner_image")
-        public UrlAttachmentImageDescriptor bannerImage;
+        public final UrlAttachmentImageDescriptor bannerImage;
 
         /** Encrypted favicon image for a URL-card attachment. */
         @JsonProperty("favicon_image")
-        public UrlAttachmentImageDescriptor faviconImage;
+        public final UrlAttachmentImageDescriptor faviconImage;
 
         /** Numeric post (tweet) ID for a post attachment. */
         @JsonProperty("rest_id")
-        public String restId;
+        public final String restId;
 
         /** Canonical post (tweet) URL for a post attachment. */
         @JsonProperty("post_url")
-        public String postUrl;
+        public final String postUrl;
 
-        /** Create a media attachment. */
+        private AttachmentDescriptor(
+                String attachmentType,
+                String mediaHashKey,
+                Long width,
+                Long height,
+                Long filesizeBytes,
+                String filename,
+                Integer mediaType,
+                Long durationMillis,
+                String url,
+                String displayTitle,
+                UrlAttachmentImageDescriptor bannerImage,
+                UrlAttachmentImageDescriptor faviconImage,
+                String restId,
+                String postUrl) {
+            this.attachmentType = attachmentType;
+            this.mediaHashKey = mediaHashKey;
+            this.width = width;
+            this.height = height;
+            this.filesizeBytes = filesizeBytes;
+            this.filename = filename;
+            this.mediaType = mediaType;
+            this.durationMillis = durationMillis;
+            this.url = url;
+            this.displayTitle = displayTitle;
+            this.bannerImage = bannerImage;
+            this.faviconImage = faviconImage;
+            this.restId = restId;
+            this.postUrl = postUrl;
+        }
+
+        /** Create a media attachment. {@code mediaType} and {@code durationMillis} may be null. */
         public static AttachmentDescriptor media(
                 String mediaHashKey,
                 long width,
@@ -491,52 +550,63 @@ public final class Types {
                 String filename,
                 Integer mediaType,
                 Long durationMillis) {
-            AttachmentDescriptor a = new AttachmentDescriptor();
-            a.attachmentType = "media";
-            a.mediaHashKey = mediaHashKey;
-            a.width = width;
-            a.height = height;
-            a.filesizeBytes = filesizeBytes;
-            a.filename = filename;
-            a.mediaType = mediaType;
-            a.durationMillis = durationMillis;
-            return a;
+            return new AttachmentDescriptor(
+                    "media",
+                    Objects.requireNonNull(mediaHashKey, "mediaHashKey"),
+                    width,
+                    height,
+                    filesizeBytes,
+                    Objects.requireNonNull(filename, "filename"),
+                    mediaType,
+                    durationMillis,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
         }
 
-        /** Create a URL card attachment. */
+        /** Create a URL card attachment. {@code displayTitle} may be null. */
         public static AttachmentDescriptor urlCard(String url, String displayTitle) {
-            AttachmentDescriptor a = new AttachmentDescriptor();
-            a.attachmentType = "url";
-            a.url = url;
-            a.displayTitle = displayTitle;
-            return a;
+            return urlCard(url, displayTitle, null, null);
         }
 
         /**
-         * Create a URL card attachment with encrypted preview images. Supplying a display
-         * title plus a banner image makes receiving clients render a full clickable preview
-         * card: start the image's upload to the conversation's media store, reference the
-         * media hash key it returns, then encrypt the image with {@link Chat#encryptFile} and
-         * the message's {@link SendPayload#eventB64} and finish the upload.
+         * Create a URL card attachment with encrypted preview images, either of which may be null.
+         * Supplying a display title plus a banner image makes receiving clients render a full
+         * clickable preview card: start the image's upload to the conversation's media store,
+         * reference the media hash key it returns, then encrypt the image with
+         * {@link Chat#encryptFile} and the message's {@link SendPayload#eventB64} and finish the
+         * upload.
          */
         public static AttachmentDescriptor urlCard(
                 String url,
                 String displayTitle,
                 UrlAttachmentImageDescriptor bannerImage,
                 UrlAttachmentImageDescriptor faviconImage) {
-            AttachmentDescriptor a = urlCard(url, displayTitle);
-            a.bannerImage = bannerImage;
-            a.faviconImage = faviconImage;
-            return a;
+            return new AttachmentDescriptor(
+                    "url",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Objects.requireNonNull(url, "url"),
+                    displayTitle,
+                    bannerImage,
+                    faviconImage,
+                    null,
+                    null);
         }
 
-        /** Create a post/tweet attachment. */
+        /** Create a post/tweet attachment from its {@code restId}, its {@code postUrl}, or both. */
         public static AttachmentDescriptor post(String restId, String postUrl) {
-            AttachmentDescriptor a = new AttachmentDescriptor();
-            a.attachmentType = "post";
-            a.restId = restId;
-            a.postUrl = postUrl;
-            return a;
+            return new AttachmentDescriptor(
+                    "post", null, null, null, null, null, null, null, null, null, null, null,
+                    restId, postUrl);
         }
     }
 
@@ -547,39 +617,40 @@ public final class Types {
      * <p>{@code filesizeBytes} and {@code filename} are required alongside
      * {@code mediaHashKey}: receiving clients' shared ingest silently discards
      * the whole preview image when either is missing on the wire, so a send fails
-     * with a {@link ChatXdkException} of kind {@code INVALID_INPUT} when either is
-     * unset, empty or not above 0.
+     * with a {@link ChatXdkException} of kind {@code INVALID_INPUT} when the filename
+     * is empty, the size isn't above 0, or a width or height is negative.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class UrlAttachmentImageDescriptor {
-        /** Media hash key the image's upload started with. Required. */
+        /** Media hash key the image's upload started with. */
         @JsonProperty("media_hash_key")
-        public String mediaHashKey;
+        public final String mediaHashKey;
 
-        /** Size of the encrypted image in bytes: {@code encryptedFileSize} of the image's size. Required. */
+        /** Size of the encrypted image in bytes: {@code encryptedFileSize} of the image's size. */
         @JsonProperty("filesize_bytes")
-        public Long filesizeBytes;
+        public final long filesizeBytes;
 
-        /** Original filename of the image. Required. */
+        /** Original filename of the image. */
         @JsonProperty("filename")
-        public String filename;
+        public final String filename;
 
-        /** Image width in pixels. */
+        /** Image width in pixels, or null when not known. */
         @JsonProperty("width")
         public Long width;
 
-        /** Image height in pixels. */
+        /** Image height in pixels, or null when not known. */
         @JsonProperty("height")
         public Long height;
 
-        /** Create an image descriptor with the required fields. */
-        public static UrlAttachmentImageDescriptor of(
-                String mediaHashKey, long filesizeBytes, String filename) {
-            UrlAttachmentImageDescriptor d = new UrlAttachmentImageDescriptor();
-            d.mediaHashKey = mediaHashKey;
-            d.filesizeBytes = filesizeBytes;
-            d.filename = filename;
-            return d;
+        /**
+         * Describe the image whose upload started with {@code mediaHashKey}: {@code filesizeBytes}
+         * is the encrypted image's size, {@code encryptedFileSize} of the image's size, and
+         * {@code filename} its original name. Set {@link #width} and {@link #height} when known.
+         */
+        public UrlAttachmentImageDescriptor(String mediaHashKey, long filesizeBytes, String filename) {
+            this.mediaHashKey = Objects.requireNonNull(mediaHashKey, "mediaHashKey");
+            this.filesizeBytes = filesizeBytes;
+            this.filename = Objects.requireNonNull(filename, "filename");
         }
     }
 
