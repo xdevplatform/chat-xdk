@@ -135,7 +135,13 @@ public final class Bot {
             String eventB64 = item.path("encoded_event").asText("");
             if (eventB64.isEmpty()) continue;
             // An empty key map: the conversation keys come from the cache.
-            JsonNode event = core.decryptOne(eventB64, Map.of(), signingKeys);
+            JsonNode event;
+            try {
+                event = core.decryptOne(eventB64, Map.of(), signingKeys);
+            } catch (ChatXdkException e) {
+                System.err.printf("decrypt_failed conv=%s err=%s%n", conversationId, e.getMessage());
+                continue;
+            }
 
             if ("KeyChange".equals(event.path("type").asText())) {
                 // Only the batch path adopts keys into the cache; replay the

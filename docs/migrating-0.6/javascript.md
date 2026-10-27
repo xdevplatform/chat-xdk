@@ -1,76 +1,159 @@
 # Migrating JavaScript and TypeScript code to chat-xdk 0.6.0
 
-This page lists every change that code written for `@xdevplatform/chat-xdk`
-0.5.x (0.5.0, 0.5.1 or 0.5.2) runs into in 0.6.0, each with the lines to
-change. It covers Node and browsers alike. [Why 0.6.0 changes](why.md)
-explains why each change was made, and the [index](README.md) lists the
-other bindings' pages. [API.md](../API.md) documents every call, and the
-[CHANGELOG](../../CHANGELOG.md) lists every change.
+This page moves code written for `@xdevplatform/chat-xdk` 0.5.x (0.5.0,
+0.5.1 or 0.5.2) to 0.6.0, in Node and browsers alike. Work through it top to
+bottom: [Before you start](#0-before-you-start) sets up the upgrade, the
+[symbol index](#1-symbol-index) maps every 0.5.x name to its 0.6.0 form,
+[Compile-time changes](#2-compile-time-changes) and [Runtime
+changes](#3-runtime-and-behavior-changes) show each line to change, [Group
+and receipt signing](#4-group-and-receipt-signing) gives every signed
+request, and [Verify](#5-verify) checks the result. [Why 0.6.0
+changes](why.md) explains each change, and the [index](README.md) lists the
+other bindings' pages. [API.md](../API.md) documents every call.
 
 ## Checklist
 
-- [ ] [Upgrade every app that reads your conversations first](#upgrade-readers-before-v1-sends-start)
-- [ ] [Allow or block the feature-switch request](#the-feature-switch-request)
-- [ ] [Register keys with the public key only](#register-keys-with-the-public-key-only)
-- [ ] [Put the PIN guess budget in the Juicebox config, and keep keys yourself with `importKeys` and `exportKeys`](#keys-stored-in-juicebox)
-- [ ] [Pass `{ userId, signingKeyVersion }` to `setIdentity`](#setidentity-takes-a-params-object)
-- [ ] [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
-- [ ] [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
-- [ ] [Pass a params object to `decryptEvents` and read its `events`](#decryptevents-takes-a-params-object)
-- [ ] [Pass a params object to `decryptEvent`](#decryptevent-takes-a-params-object)
-- [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
-- [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
-- [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
-- [ ] [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
-- [ ] [Pass action signatures through as returned](#action-signatures-come-nested)
-- [ ] [Name a public key input's fields `identityPublicKey` and `publicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
-- [ ] [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
-- [ ] [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
-- [ ] [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
-- [ ] [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
-- [ ] [Tell errors apart by `kind`, and read a wrong PIN's attempts from `guessesRemaining`](#errors-carry-their-kind)
-- [ ] [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
-- [ ] [Group actions should be signed](#group-actions-should-be-signed)
-- [ ] [Pass group titles and descriptions as plaintext, read them as `GroupText`, and sign an avatar by its media URL](#creating-a-group)
-- [ ] [Sign read receipts](#read-receipts-should-be-signed)
+Each item is tagged with what it takes: `[rollout]` is a deployment step,
+`[compile]` a change TypeScript reports (and plain JavaScript meets on the
+first call), `[runtime]` a change in behavior that nothing reports, and
+`[new]` a 0.6.0 call to adopt.
+
+- [ ] `[rollout]` [Install 0.6.0](#install-060)
+- [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
+- [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
+- [ ] `[compile]` [Put the PIN guess budget in the Juicebox config](#keys-stored-in-juicebox)
+- [ ] `[compile]` [Register keys with the public key only](#register-keys-with-the-public-key-only)
+- [ ] `[compile]` [Pass `{ userId, signingKeyVersion }` to `setIdentity`](#setidentity-takes-a-params-object)
+- [ ] `[new]` [Keep keys yourself with `importKeys` and `exportKeys`](#importkeys-and-exportkeys)
+- [ ] `[compile]` [Pass a params object to `decryptEvents` and read its `events`](#decryptevents-takes-a-params-object)
+- [ ] `[compile]` [Pass a params object to `decryptEvent`](#decryptevent-takes-a-params-object)
+- [ ] `[compile]` [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
+- [ ] `[compile]` [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
+- [ ] `[compile]` [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
+- [ ] `[compile]` [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
+- [ ] `[compile]` [Pass action signatures through as returned](#action-signatures-come-nested)
+- [ ] `[compile]` [Name a public key input's fields `identityPublicKey` and `publicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
+- [ ] `[compile]` [Pass participant keys through as returned](#participant-keys-take-the-key-requests-names)
+- [ ] `[compile]` [Read received participant keys under the same names](#received-participant-keys-take-the-same-names)
+- [ ] `[compile]` [Read a delete's signature from its `PreparedAction`](#deletes-return-a-preparedaction)
+- [ ] `[compile]` [Read decrypted events under the names the calls take](#decrypted-events-use-the-names-the-calls-take)
+- [ ] `[compile]` [Tell errors apart by `kind`, and read a wrong PIN's attempts from `guessesRemaining`](#errors-carry-their-kind)
+- [ ] `[compile]` [TypeScript: import the types the package exports](#typescript-import-the-types-the-package-exports)
+- [ ] `[runtime]` [Write every request body in snake_case](#request-bodies-take-snake_case)
+- [ ] `[runtime]` [Pass user ids as strings of digits](#user-ids-are-strings-of-digits)
+- [ ] `[runtime]` [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
+- [ ] `[runtime]` [Pass millisecond values as safe integers](#millisecond-values-are-safe-integers)
+- [ ] `[runtime]` [Pass entities, files, URL cards and posts the SDK accepts](#entities-files-url-cards-and-posts-are-checked)
+- [ ] `[runtime]` [Store every participant's signing keys, and handle a `latestVersion` of `null`](#latestversion-comes-from-a-verified-key-change)
+- [ ] `[runtime]` [Rename every read of `targetMessageId` to `targetMessageSequenceId`](#targetmessageid-holds-a-different-value)
+- [ ] `[runtime]` [Store a prepared change's key yourself, not through `JSON.stringify`](#a-prepared-changes-json-leaves-out-its-key)
+- [ ] `[runtime]` [Sign only your own data with `sign`](#sign-refuses-data-only-the-sdk-signs)
+- [ ] `[runtime]` [Skip the events `decryptEvent` drops](#decrypt-drops-a-removals-title-and-description-re-encryptions)
+- [ ] `[runtime]` [Check for keys before `exportKeys`](#exportkeys-throws-without-keys)
+- [ ] `[runtime]` [Expect an empty Juicebox config to fail](#an-empty-juicebox-config-fails)
+- [ ] `[runtime]` [Sign every group change and read receipt](#4-group-and-receipt-signing)
+- [ ] `[runtime]` [Send each delete's `action_signatures` as returned](#deleting-messages)
+- [ ] `[runtime]` [Sign read receipts](#read-receipts-are-signed)
+- [ ] `[runtime]` [Sign group creates, member adds, title, description and avatar changes](#group-changes-are-signed)
+- [ ] `[runtime]` [Remove members with a key rotation, and encrypt under the new key](#removing-members)
+- [ ] `[new]` [Sign leaves, admin, invite, join, message-TTL and screen-capture changes](#leaving-a-group)
+- [ ] `[rollout]` [Verify the migration](#5-verify)
 
 ## About the snippets
 
-Each snippet shows the lines that change, first as 0.5.x code writes them
-and then as 0.6.0 code writes them. `chat` is the `ChatWithJuicebox` that
-`createChat` returns, unlocked, and the other names stand for your own
-values: ids, versions, keys and events as the X API returns them, `keys` for
-the conversation key map `decryptEvents` returns, `payload` for a
-`SendPayload`, `prepared` for a `PreparedConversationChange`, and
-`keyChange`, `message`, `deleted`, `receipt` and `groupChange` for a
-decrypted keyChange, message, messageDeleted, readReceipt and groupChange
-event, and `err` for an error a call threw. `api.post(path, body)` stands for your HTTP client: it POSTs `body`
-as JSON to `https://api.x.com` + `path` with your user access token, writing
-every key in snake_case as the X API takes them (the package returns
-camelCase), and resolves to the parsed JSON response.
-`photoAttachment(mediaHashKey)` stands for your code that builds a photo's
-attachment descriptor, and `showEdit`, `showTitle`, `showDescription`,
-`showAvatar` and `showGuessesLeft` for your code that displays an edit, a
-group's title, description or avatar, or the PIN attempts left.
-`ChatXdkError` and functions such as `encryptedFileSize` and
+Each snippet shows the lines that change, first as 0.5.x code writes them,
+under `// 0.5.x`, and then as 0.6.0 code writes them, under `// 0.6.0`. A
+snippet with only a `// 0.6.0` half shows code 0.6.0 adds. CI type-checks
+the 0.6.0 half of every snippet on this page against the package's typings
+with `strict` on
+([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)).
+
+`chat` is the `ChatWithJuicebox` that `createChat` returns, unlocked, and
+the other names stand for your own values: ids, versions, keys and events as
+the X API returns them, `keys` for the conversation key map `decryptEvents`
+returns, `payload` for a `SendPayload`, `prepared` for a
+`PreparedConversationChange`, `keyChange`, `message`, `deleted`, `receipt`
+and `groupChange` for a decrypted keyChange, message, messageDeleted,
+readReceipt and groupChange event, `err` for an error a call threw, and
+`page` for a page of `GET /2/chat/conversations/{id}/events`.
+`api.post(path, body)`, `api.put(path, body)` and `api.delete(path, body)`
+stand for your HTTP client: each sends `body` as JSON to `https://api.x.com`
++ `path` with your user access token, and resolves to the parsed JSON
+response. `pathId` is the conversation id as a request path takes it: a
+group's `g…` id as is, and a one-to-one's in its hyphen form,
+`conversationId.replaceAll(":", "-")`. `photoAttachment(mediaHashKey)`
+stands for your code that builds a photo's attachment descriptor;
+`showEdit`, `showTitle`, `showDescription`, `showAvatar` and
+`showGuessesLeft` for your code that displays an edit, a group's title,
+description or avatar, or the PIN attempts left; `handle(event)` for your
+code that handles a decrypted event; `logSkipped(eventB64, err)` for your
+code that logs an event it skips; and `storeConversationKey(conversationId,
+version, key)` for your code that stores a conversation key.
+`ChatXdkError`, `createChat` and functions such as `encryptedFileSize` and
 `bytesToBase64` import from `@xdevplatform/chat-xdk`.
 
-## Upgrade readers before v1 sends start
+The package returns camelCase objects, and the X API takes snake_case keys.
+The snippets write each request body's own keys in snake_case and pass the
+objects the package returns through `toSnake`, the converter the
+[examples](../../examples/js/src/x-api.mjs) use:
+
+```js
+// 0.6.0
+/** CamelCase object keys to the snake_case the X API reads. */
+function toSnake(value) {
+  if (Array.isArray(value)) return value.map(toSnake);
+  if (value instanceof Uint8Array) return value;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`),
+        toSnake(item),
+      ]),
+    );
+  }
+  return value;
+}
+```
+
+## 0. Before you start
+
+### Install 0.6.0
+
+Pin the package at 0.6.0 in `package.json`, then install it:
+
+```sh
+npm install @xdevplatform/chat-xdk@0.6.0
+```
+
+It needs Node 18 or newer, or a browser bundler that loads WebAssembly.
+Every app that shares conversations with yours reads the formats 0.6.0 sends
+only once it runs 0.6.0 too, so plan the rollout below before you deploy.
+
+### Upgrade readers first
 
 0.6.0 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
-feature switch is on for it, and v0 otherwise (see
-[The feature-switch request](#the-feature-switch-request)).
+feature switch is on for it, and v0 otherwise (see [The feature-switch
+request](#the-feature-switch-request)). Two group changes also sign at
+versions 0.5.x can't verify: a member removal signs at version 11, and a
+member add that carries a description at version 8.
 
-0.5.x rejects every v1 send as a signature verification failure, so upgrade
-every app that reads your conversations to 0.6.0 before your senders can
-send v1. 0.6.0 reads both formats, including v1 reply previews, edits and
-files. There's no code to change: to see which format a send used, read
+0.5.x rejects each of these as a signature verification failure, so upgrade
+every app that reads your conversations to 0.6.0 before:
+
+- any of your senders can send v1, that is, before the X API turns
+  `v1_send` on for them;
+- you remove a member from a group with
+  [`prepareGroupMembersRemove`](#removing-members);
+- you pass a description to [`prepareGroupMembersChange`](#adding-members).
+
+0.6.0 reads both formats, including v1 reply previews, edits and files.
+There's no code to change: to see which format a send used, read
 `payload.signatureInfo.signatureVersion`, `"7"` for v0 and `"10"` for v1.
 
-## The feature-switch request
+### The feature-switch request
 
 Chats read the X API's feature switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, which runs in the background:
@@ -91,48 +174,62 @@ cross-origin `GET`, and a failed one keeps sends v0 too. The request never
 keeps a process alive, except in Node before 20.16, where one still in flight
 can delay exit until it ends, at most 2 seconds. There's no code to change.
 
-## Register keys with the public key only
+## 1. Symbol index
 
-`generateKeypairs()` returns a payload that holds only `publicKey`. Send it
-as the only field of the `POST /2/users/{id}/public_keys` body,
-`public_key`. 0.6.0 doesn't pick a signing-key version for new keys: call
-`setIdentity` with the `public_key_version` the request returns (see the
-next section). A signed call made without a version throws `Invalid state:
-signing_key_version is not set: pass it explicitly or call set_identity()
-first`.
+Every 0.5.x name that changes, with its 0.6.0 form and the section that
+shows the change. A name not listed here keeps its 0.5.x form. Search your
+code for each name in the first column; [Verify](#5-verify) gives the
+search as one command.
 
-```js
-// 0.5.x
-const registration = chat.generateKeypairs();
-const response = await api.post(`/2/users/${userId}/public_keys`, {
-  public_key: registration.publicKey,
-  version: registration.version,
-  generate_version: registration.generateVersion,
-});
-chat.setIdentity(userId, response.data.public_key_version);
+| 0.5.x | 0.6.0 | Section |
+|---|---|---|
+| `createChat({ ..., maxGuessCount })` | `max_guess_count` in the Juicebox config | [Juicebox](#keys-stored-in-juicebox) |
+| `guessesRemaining(err)` | `err.guessesRemaining` on a `ChatXdkError` | [Juicebox](#keys-stored-in-juicebox) |
+| `registration.version`, `registration.generateVersion` | Removed: the registration request returns the version (`public_key_version`) | [Registration](#register-keys-with-the-public-key-only) |
+| `PublicKeys.version` | Removed: the `public_key_version` the registration request returns | [Registration](#register-keys-with-the-public-key-only) |
+| `chat.setIdentity(userId, signingKeyVersion)` | `chat.setIdentity({ userId, signingKeyVersion })` | [setIdentity](#setidentity-takes-a-params-object) |
+| `chat.decryptEvents(events, signingKeys)` | `chat.decryptEvents({ events, signingKeys })` | [decryptEvents](#decryptevents-takes-a-params-object) |
+| `result.messages`, `DecryptedMessage` | `result.events`, `DecryptedEvent` | [decryptEvents](#decryptevents-takes-a-params-object) |
+| `chat.decryptEvent(eventB64, keys, signingKeys)` | `chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys })` | [decryptEvent](#decryptevent-takes-a-params-object) |
+| `payload.encryptedContent` | `payload.encodedMessageCreateEvent` | [SendPayload](#sendpayload-fields-take-the-send-requests-names) |
+| `payload.encodedEventSignature` | `payload.encodedMessageEventSignature` | [SendPayload](#sendpayload-fields-take-the-send-requests-names) |
+| `chat.encryptStream(plaintext, key)` | `chat.encryptFile({ file, eventB64, mediaHashKey })` | [Files](#encrypt-a-file-from-its-message) |
+| `chat.decryptStream(encrypted, key)` | `chat.decryptFile({ encrypted, eventB64, conversationKeys, mediaHashKey })` | [Files](#decrypt-a-file-with-its-messages-event) |
+| `chat.streamEncryptor(key)`, `chat.streamDecryptor(key)` | `chat.fileEncryptor({ eventB64, mediaHashKey })`, `chat.fileDecryptor({ eventB64, conversationKeys, mediaHashKey })` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `StreamEncryptor`, `StreamDecryptor` | `FileEncryptor`, `FileDecryptor` (interfaces) | [TypeScript](#typescript-import-the-types-the-package-exports) |
+| `encryptedStreamSize(n)` | `encryptedFileSize(n)` | [Files](#encrypt-a-file-from-its-message) |
+| `chat.encrypt(plaintext, key)` | Removed: titles and descriptions go through `prepareGroupTitleChange`, `prepareGroupDescriptionChange` and the group creates and member adds; avatar URLs aren't encrypted; files go through `encryptFile` | [Changing the title](#changing-the-title) |
+| Action signature `signature`, `signatureVersion`, `publicKeyVersion`, `signaturePayload` | Nested under `messageEventSignature`; pass `actionSignatures` as returned | [Action signatures](#action-signatures-come-nested) |
+| Public key input `publicKey`, `keyVersion` | `identityPublicKey`, `publicKeyVersion` | [Public key inputs](#public-key-inputs-name-the-identity-key-and-its-version) |
+| `prepared.participantKeys`, `EncryptedKeyForRecipient`, `encryptedKey` | `prepared.conversationParticipantKeys`, `ConversationParticipantKey`, `encryptedConversationKey` | [Participant keys](#participant-keys-take-the-key-requests-names) |
+| `keyChange.participantKeys`, `ParticipantKey`, `encryptedKey` | `keyChange.conversationParticipantKeys`, `ConversationParticipantKey`, `encryptedConversationKey` | [Received keys](#received-participant-keys-take-the-same-names) |
+| `prepareMessageDelete` returning an `ActionSignature` | Returns a `PreparedAction`: `deletion.actionSignatures[0]` | [Deletes](#deletes-return-a-preparedaction) |
+| `message.keyVersion`, `keyChange.keyVersion` | `conversationKeyVersion` | [Event names](#decrypted-events-use-the-names-the-calls-take) |
+| Reaction and edit `targetMessageId` | `targetMessageSequenceId` | [Event names](#decrypted-events-use-the-names-the-calls-take) |
+| Edit `newText` | `updatedText` | [Event names](#decrypted-events-use-the-names-the-calls-take) |
+| `deleted.messageIds` | `sequenceIds` | [Event names](#decrypted-events-use-the-names-the-calls-take) |
+| `receipt.seenUntilId` | `seenUntilSequenceId` | [Event names](#decrypted-events-use-the-names-the-calls-take) |
+| Group title and description strings (`title`, `newTitle`) | `GroupText` | [Creating a group](#creating-a-group) |
+| `prepareGroupCreate({ ..., avatarUrl })` | Removed: set the avatar with `prepareGroupAvatarChange` | [Creating a group](#creating-a-group) |
+| `replyToSenderId: 4201` (a number) | `replyToSenderId: "4201"` | [User ids](#user-ids-are-strings-of-digits) |
+| `err.message.startsWith("Invalid state:")` | `err instanceof ChatXdkError && err.kind === "invalidInput"` | [Errors](#errors-carry-their-kind) |
+| `import type { Chat }`, `import type { ChatCrypto }` | `import type { ChatWithJuicebox }` | [TypeScript](#typescript-import-the-types-the-package-exports) |
 
-// 0.6.0
-const registration = chat.generateKeypairs();
-const response = await api.post(`/2/users/${userId}/public_keys`, { public_key: registration.publicKey });
-chat.setIdentity({ userId, signingKeyVersion: response.data.public_key_version });
-```
+## 2. Compile-time changes
 
-The public keys `getPublicKeys()` and `setup()` return hold the two keys,
-`identity` and `signing`, and no `version`: their version is the
-`public_key_version` the registration request returns.
+These changes are in the order an app meets them: creating the chat,
+registering, loading keys, decrypting, encrypting and sending, files,
+prepared changes, decrypted events and errors. TypeScript reports each one;
+plain JavaScript meets most of them as a `ChatXdkError` or a `TypeError` on
+the first call.
 
-## Keys stored in Juicebox
+### Keys stored in Juicebox
 
 `createChat` keeps your keys in Juicebox when you pass `getAuthToken`, with
 the Juicebox config the X API returns as `juiceboxConfig`, or set later with
-`updateConfig` on first boot. Until it has one, `setup`, `unlock`,
-`changePin` and `delete` throw a `ChatXdkError` of kind `invalidState`,
-`Invalid state: no Juicebox config: pass the juicebox_config the X API
-returns when you create the chat, or call update_config() first`, the error
-every binding gives, and `createChat` and `updateConfig` throw it for an
-empty or blank `juiceboxConfig`. The PIN guess budget is the config's
-`max_guess_count`, as in every binding; `createChat` takes no
-`maxGuessCount`. To register under another budget, set it in the config:
+`updateConfig` on first boot. The PIN guess budget is the config's
+`max_guess_count`, as in every binding. To register under another budget,
+set it in the config:
 
 ```js
 // 0.5.x
@@ -170,19 +267,42 @@ try {
 }
 ```
 
-Without `getAuthToken`, `createChat()` returns a chat that keeps its keys
-outside Juicebox and loads no juicebox-sdk: `importKeys` loads the keys
-`exportKeys` returned, as in every binding. `exportKeys` returns the raw
-private keys, so store them only where private keys belong and zero the
-bytes once stored; it throws when no identity key is loaded:
+Until a chat has a config, the Juicebox calls throw (see [An empty Juicebox
+config fails](#an-empty-juicebox-config-fails)).
+
+### Register keys with the public key only
+
+`generateKeypairs()` returns a payload that holds only `publicKey`. Send it
+as the only field of the `POST /2/users/{id}/public_keys` body,
+`public_key`. 0.6.0 doesn't pick a signing-key version for new keys: call
+`setIdentity` with the `public_key_version` the request returns (see the
+next section). A signed call made without a version throws `Invalid state:
+signing_key_version is not set: pass it explicitly or call set_identity()
+first`.
 
 ```js
+// 0.5.x
+const registration = chat.generateKeypairs();
+const response = await api.post(`/2/users/${userId}/public_keys`, {
+  public_key: registration.publicKey,
+  version: registration.version,
+  generate_version: registration.generateVersion,
+});
+chat.setIdentity(userId, response.data.public_key_version);
+
 // 0.6.0
-const chat = await createChat();
-chat.importKeys({ keys: privateKeys, signingKeyVersion });
+const registration = chat.generateKeypairs();
+const response = await api.post(`/2/users/${userId}/public_keys`, {
+  public_key: toSnake(registration.publicKey),
+});
+chat.setIdentity({ userId, signingKeyVersion: response.data.public_key_version });
 ```
 
-## `setIdentity` takes a params object
+The public keys `getPublicKeys()` and `setup()` return hold the two keys,
+`identity` and `signing`, and no `version`: their version is the
+`public_key_version` the registration request returns.
+
+### `setIdentity` takes a params object
 
 Pass the user id and the signing-key version as `{ userId,
 signingKeyVersion }`. It throws when either value is invalid (see
@@ -197,47 +317,30 @@ chat.setIdentity(userId, signingKeyVersion);
 chat.setIdentity({ userId, signingKeyVersion });
 ```
 
-## User ids are strings of digits
+### `importKeys` and `exportKeys`
 
-Every user id is a string of digits: the `setIdentity` user id, `senderId`,
-`replyToSenderId`, the `userId` of each public key and signing key, and group
-member, admin and pending-member ids. Each must be a positive integer
-written without a sign or leading zeros; anything else throws an error that
-names the field, such as
-`Invalid sender_id 'user-1': pass a numeric user id (digits only)`.
-`replyToSenderId` takes a string and rejects a number, since ids pass 2^53,
-where JavaScript numbers stop being exact:
+Without `getAuthToken`, `createChat()` returns a chat that keeps its keys
+outside Juicebox and loads no juicebox-sdk: `importKeys` loads the keys
+`exportKeys` returned, as in every binding, with the signing-key version
+they were registered under. `exportKeys` returns the raw private keys, so
+store them only where private keys belong and zero the bytes once stored;
+it throws when no identity key is loaded (see [`exportKeys` throws without
+keys](#exportkeys-throws-without-keys)):
 
 ```js
-// 0.5.x
-const reply = chat.encryptReply({
-  conversationId, text: "pong", replyToSequenceId: "7", replyToSenderId: 4201, replyToText: "ping",
-});
-
 // 0.6.0
-const reply = chat.encryptReply({
-  conversationId, text: "pong", replyToSequenceId: "7", replyToSenderId: "4201", replyToText: "ping",
-});
+const chat = await createChat();
+chat.importKeys({ keys: privateKeys, signingKeyVersion });
 ```
 
-## Key versions are integers written as strings
-
-Every key version is a non-negative integer written as a string of digits,
-as the X API returns it: the signing-key version (in `setIdentity`, a call's
-`signingKeyVersion` and each public key's `publicKeyVersion`) and
-`conversationKeyVersion`. Anything else throws an error that names the
-field, such as `Invalid signing_key_version 'v1': pass the key version as
-the X API returns it, an integer in digits`. There's no code to change if
-you pass the versions the X API returns.
-
-## `decryptEvents` takes a params object
+### `decryptEvents` takes a params object
 
 Pass `{ events, signingKeys }`. `signingKeys` is optional; without it, the
-keys `setSigningKeys` stored verify the events. An event that fails is
-collected in the result's `errors` rather than thrown; the call throws only
-for invalid params, such as `events` that is not an array of strings or a
-malformed `signingKeys` entry. The result holds the decrypted events, of
-every event type, in `events`:
+keys `setSigningKeys` stored verify the events. An event that fails, or one
+decrypt drops, is collected in the result's `errors` rather than thrown;
+the call throws only for invalid params, such as `events` that is not an
+array of strings or a malformed `signingKeys` entry. The result holds the
+decrypted events, of every event type, in `events`:
 
 ```js
 // 0.5.x
@@ -249,20 +352,21 @@ const result = chat.decryptEvents({ events, signingKeys });
 const decrypted = result.events;
 ```
 
-`result.conversationKeys.latestVersion`, the version to encrypt with, is the
-newest version whose key change verified, and it never moves back for the
-chat's lifetime. It's `null` until a key change verifies: a key change the
-SDK can't verify still adds its key to `result.conversationKeys.keys`, for
-decrypting, but never becomes the version you encrypt with.
+The version to encrypt with, `result.conversationKeys.latestVersion`, comes
+only from a key change that verified (see [`latestVersion` comes from a
+verified key change](#latestversion-comes-from-a-verified-key-change)).
 
-## `decryptEvent` takes a params object
+### `decryptEvent` takes a params object
 
 Pass `{ eventB64, conversationKeys, signingKeys }`. Both key fields are
 optional: without them, the conversation keys come from the key cache
 (`setCacheKeys(true)`) and the signing keys from `setSigningKeys`. The call
-still throws on failure. A `conversationKeys` entry that is not a 32-byte
-`Uint8Array` throws an error naming its version, where 0.5.x skipped it:
-pass the `keys` map `decryptEvents` or `extractConversationKeys` returns.
+still throws on failure, and for an event decrypt drops (see [Decrypt drops
+a removal's title and description
+re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)).
+A `conversationKeys` entry that is not a 32-byte `Uint8Array` throws an
+error naming its version, where 0.5.x skipped it: pass the `keys` map
+`decryptEvents` or `extractConversationKeys` returns.
 
 ```js
 // 0.5.x
@@ -272,12 +376,14 @@ const event = chat.decryptEvent(eventB64, keys, signingKeys);
 const event = chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys });
 ```
 
-## `SendPayload` fields take the send request's names
+### `SendPayload` fields take the send request's names
 
 The two encoded fields carry the names of the fields of the send request,
 `POST /2/chat/conversations/{id}/messages`, camelCased, so the request takes
-them as they are. The request also takes the payload's `xdkVersion`, the
-version of the SDK that built it, as `xdk_version`:
+them as they are. Read them under those names wherever your code reads a
+payload, including code that stores payloads. The request also takes the
+payload's `xdkVersion`, the version of the SDK that built it, as
+`xdk_version`:
 
 ```js
 // 0.5.x
@@ -296,13 +402,11 @@ const body = {
 };
 ```
 
-Read them under those names wherever your code reads a payload, including
-code that stores payloads. A payload also carries `eventB64`, the message as
-recipients receive it. It isn't part of the send request: keep it to
-encrypt the message's files (see
+A payload also carries `eventB64`, the message as recipients receive it. It
+isn't part of the send request: keep it to encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
-## Encrypt a file from its message
+### Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
 message first:
@@ -363,13 +467,11 @@ is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
 the same message again gives the same id, so files you already encrypted for
 it stay valid, and a second message that reuses the first one's uploads gets
-the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected, and so is a
-file whose `filename` is empty or whose `filesize_bytes` is 0 or less, which
-receiving clients would discard, or whose `width` or `height` is negative: give
-each file its name and the encrypted size `encryptedFileSize` gives.
+the same id, so recipients drop it as a repeat. The file fields the SDK
+checks are listed under [Entities, files, URL cards and posts are
+checked](#entities-files-url-cards-and-posts-are-checked).
 
-## Decrypt a file with its message's event
+### Decrypt a file with its message's event
 
 Pass the downloaded bytes, the base64 event of the message that carries the
 file and the conversation key map (the values `decryptEvent` takes), and
@@ -389,12 +491,12 @@ const plaintext = chat.decryptFile({
 });
 ```
 
-## Encrypt and decrypt large files in chunks
+### Encrypt and decrypt large files in chunks
 
 `fileEncryptor` and `fileDecryptor` take the same values as `encryptFile`
 and `decryptFile`, without the file bytes, and return a `FileEncryptor` or a
-`FileDecryptor`; `push`, `finish` and `free` are unchanged. Size an upload
-with `encryptedFileSize`.
+`FileDecryptor`; `push`, `finish` and `free` keep their 0.5.x form. Size an
+upload with `encryptedFileSize`.
 
 ```js
 // 0.5.x
@@ -410,34 +512,35 @@ const decryptor = chat.fileDecryptor({
 });
 ```
 
-## Action signatures come nested
+### Action signatures come nested
 
 The prepare methods return each signed action in the shape a request's
 `action_signatures` takes, camelCased as everything the package returns is:
 `messageId`, `encodedMessageEventDetail`, the signature nested under
 `messageEventSignature` (with `signingPublicKey`, your signing public key as
 `getPublicKeys` returns it), and nothing else: the signed payload stays
-inside the SDK. Use them as returned, and write their keys in snake_case
-when you build the request body, as you do for the other fields:
+inside the SDK. Use them as returned, and convert them with `toSnake` when
+you build the request body (see [Request bodies take
+snake_case](#request-bodies-take-snake_case)):
 
 ```js
 // 0.5.x
 const actionSignatures = prepared.actionSignatures.map((sig) => ({
-  messageId: sig.messageId,
-  encodedMessageEventDetail: sig.encodedMessageEventDetail,
-  messageEventSignature: {
+  message_id: sig.messageId,
+  encoded_message_event_detail: sig.encodedMessageEventDetail,
+  message_event_signature: {
     signature: sig.signature,
-    signatureVersion: sig.signatureVersion,
-    publicKeyVersion: sig.publicKeyVersion,
-    signingPublicKey,
+    signature_version: sig.signatureVersion,
+    public_key_version: sig.publicKeyVersion,
+    signing_public_key: signingPublicKey,
   },
 }));
 
 // 0.6.0
-const actionSignatures = prepared.actionSignatures;
+const actionSignatures = toSnake(prepared.actionSignatures);
 ```
 
-## Public key inputs name the identity key and its version
+### Public key inputs name the identity key and its version
 
 Each public key the prepare params take, one participant a conversation key
 is encrypted to, names its key `identityPublicKey` and the key's version
@@ -452,32 +555,31 @@ const publicKeys = [{ userId, publicKey: identityPublicKey, keyVersion: publicKe
 const publicKeys = [{ userId, identityPublicKey, publicKeyVersion }];
 ```
 
-## Participant keys take the key requests' names
+### Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
 every request that takes them (`POST /2/chat/conversations/{id}/keys`,
 `/group` and `/{id}/members`, and `PUT /2/chat/conversations/{id}`),
 camelCased as everything the package returns is:
 `conversationParticipantKeys`, each entry a `ConversationParticipantKey`
-with `userId`, `encryptedConversationKey` and `publicKeyVersion`, the names a
-received keyChange event uses too
-(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
-and use them as returned, writing their keys in snake_case when you build
-the request body, as you do for the other fields:
+with `userId`, `encryptedConversationKey` and `publicKeyVersion`, the names
+a received keyChange event uses too (see [Received participant keys take
+the same names](#received-participant-keys-take-the-same-names)). Drop the
+renaming, and convert them with `toSnake` when you build the request body:
 
 ```js
 // 0.5.x
 const conversationParticipantKeys = prepared.participantKeys.map((key) => ({
-  userId: key.userId,
-  encryptedConversationKey: key.encryptedKey,
-  publicKeyVersion: key.publicKeyVersion,
+  user_id: key.userId,
+  encrypted_conversation_key: key.encryptedKey,
+  public_key_version: key.publicKeyVersion,
 }));
 
 // 0.6.0
-const conversationParticipantKeys = prepared.conversationParticipantKeys;
+const conversationParticipantKeys = toSnake(prepared.conversationParticipantKeys);
 ```
 
-## Received participant keys take the same names
+### Received participant keys take the same names
 
 A decrypted keyChange event carries its participant keys under the names
 Thrift's `ConversationKeyChangeEvent` gives them, camelCased, the same names
@@ -492,7 +594,7 @@ const encrypted = mine.encryptedKey;
 
 // 0.6.0
 const [mine] = keyChange.conversationParticipantKeys ?? [];
-const encrypted = mine.encryptedConversationKey;
+const encrypted = mine?.encryptedConversationKey;
 ```
 
 In TypeScript, received and prepared keys are one type,
@@ -510,7 +612,25 @@ const sent: ConversationParticipantKey[] = prepared.conversationParticipantKeys;
 const received: ConversationParticipantKey[] = keyChange.conversationParticipantKeys ?? [];
 ```
 
-## Decrypted events use the names the calls take
+### Deletes return a `PreparedAction`
+
+`prepareMessageDelete` returns a `PreparedAction` whose `actionSignatures`
+hold one entry, shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows. Read the action's `messageId`
+from that entry, and send `actionSignatures` as returned (see [Deleting
+messages](#deleting-messages) for the request):
+
+```js
+// 0.5.x
+const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: false });
+const messageId = deletion.messageId;
+
+// 0.6.0
+const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: false });
+const messageId = deletion.actionSignatures[0].messageId;
+```
+
+### Decrypted events use the names the calls take
 
 Decrypted message and keyChange events carry their conversation key version
 as `conversationKeyVersion`, the X API's `conversation_key_version`
@@ -533,8 +653,13 @@ messageDeleted event names its messages `sequenceIds`, as
 `prepareMessageDelete` does, and a readReceipt or markedUnread event names
 its position `seenUntilSequenceId`, as `prepareMarkConversationRead` does.
 An edit's text is `updatedText`, as `encryptEdit` names it, and a v1 edit
-carries the signed message id of the message it edits as
-`targetMessageId`, absent for a v0 edit:
+carries the signed message id of the message it edits as `targetMessageId`,
+absent for a v0 edit.
+
+**Rename every read of `targetMessageId` to `targetMessageSequenceId`.
+Don't keep `targetMessageId`: in 0.6.0 it names a different value, and
+reading it throws no error** (see [`targetMessageId` holds a different
+value](#targetmessageid-holds-a-different-value)).
 
 ```js
 // 0.5.x
@@ -545,31 +670,19 @@ const deletedSequenceIds = deleted.messageIds;
 const seenUntil = receipt.seenUntilId;
 
 // 0.6.0
-if (message.content.contentType === 'edit') {
-  showEdit(message.content.targetMessageSequenceId, message.content.updatedText);
+const content = message.content;
+if (content?.contentType === 'edit' && content.targetMessageSequenceId && content.updatedText) {
+  showEdit(content.targetMessageSequenceId, content.updatedText);
 }
 const deletedSequenceIds = deleted.sequenceIds;
 const seenUntil = receipt.seenUntilSequenceId;
 ```
 
-## Deletes return a `PreparedAction`
+A group create's `title`, and a title or description change's `newTitle`
+or `newDescription`, is a `GroupText` rather than a string (see [Creating a
+group](#creating-a-group)).
 
-`prepareMessageDelete` returns a `PreparedAction` whose `actionSignatures`
-hold one entry, shaped as [Action signatures come
-nested](#action-signatures-come-nested) shows. Read the action's `messageId`
-from that entry, and send `actionSignatures` as returned:
-
-```js
-// 0.5.x
-const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: false });
-const messageId = deletion.messageId;
-
-// 0.6.0
-const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: false });
-const messageId = deletion.actionSignatures[0].messageId;
-```
-
-## Errors carry their kind
+### Errors carry their kind
 
 Every call throws a `ChatXdkError`, an `Error` whose `kind` names the
 failure the same way in every binding: `invalidInput`, `invalidState`,
@@ -581,19 +694,12 @@ A missing or invalid parameter throws one of kind `invalidInput` whose
 message names the value, such as `Invalid sender_id 'user-1': pass a numeric
 user id (digits only)` or `too many attachments: at most 10 per message`,
 without an `Invalid state:` prefix. That covers a key or signature that
-`verify`, `verifyKeyBinding` or `matchesRegisteredKey` can't decode. An
-entity of a type the SDK doesn't know, an empty one included, fails the same
-way, with `Invalid entity_type 'user_mention': pass url, mention, hashtag,
-cashtag, email, address or phone_number`, where 0.5.x sent the message
-without that entity. Entity offsets count bytes of the text's UTF-8
-encoding, the start inclusive and the end exclusive, and an entity whose
-offsets are negative, end before they start or run past the end of the text
-fails the same way, such as `Invalid entity offsets 3..8: end is past the
-end of the text, which is 7 bytes of UTF-8`, where 0.5.x sent it. So do a
-URL card with an empty `url` and a post attachment with neither `rest_id`
-nor `post_url`. Errors about state the chat lacks, such as a missing session
-identity or an empty key cache, are of kind `invalidState` and keep their
-prefix. Tell failures apart by kind rather than by message:
+`verify`, `verifyKeyBinding` or `matchesRegisteredKey` can't decode. A
+params object the call can't read throws one that names the call, such as
+`Invalid encryptMessage params: ...`. Errors about state the chat lacks,
+such as a missing session identity or an empty key cache, are of kind
+`invalidState` and keep their prefix. Tell failures apart by kind rather
+than by message:
 
 ```js
 // 0.5.x
@@ -603,7 +709,7 @@ const invalidInput = !err.message.startsWith("Invalid state:");
 const invalidInput = err instanceof ChatXdkError && err.kind === "invalidInput";
 ```
 
-## TypeScript: import the types the package exports
+### TypeScript: import the types the package exports
 
 The typings declare only what the package exports. Type a chat as
 `ChatWithJuicebox`, the class `createChat` returns, and the file encryptors
@@ -611,13 +717,15 @@ as the `FileEncryptor` and `FileDecryptor` interfaces:
 
 ```ts
 // 0.5.x
-import type { Chat, StreamEncryptor } from "@xdevplatform/chat-xdk";
+import type { Chat, ChatCrypto, StreamEncryptor } from "@xdevplatform/chat-xdk";
 let session: Chat;
+let crypto: ChatCrypto;
 let encryptor: StreamEncryptor;
 
 // 0.6.0
 import type { ChatWithJuicebox, FileEncryptor } from "@xdevplatform/chat-xdk";
 let session: ChatWithJuicebox;
+let crypto: ChatWithJuicebox;
 let encryptor: FileEncryptor;
 ```
 
@@ -625,13 +733,377 @@ The typings also declare `ChatXdkError` with its `ChatXdkErrorKind`,
 `ImportKeysParams` for `importKeys`, and `DecryptedEvent` for each entry of
 a `decryptEvents` result.
 
-## Group actions should be signed
+## 3. Runtime and behavior changes
 
-Apps should sign each group update below. The sender comes from
-`setIdentity`. Each returns `actionSignatures` shaped as
-[Action signatures come nested](#action-signatures-come-nested) shows. Send
-those entries on the update's request, in snake_case, as this page's other
-`api.post` calls do.
+Nothing reports these changes before the code runs: each one is a value the
+SDK checks, a value with a new meaning, or an event handled differently.
+
+### Request bodies take snake_case
+
+The package returns camelCase objects, nested ones included: an action
+signature is `{ messageId, encodedMessageEventDetail, messageEventSignature:
+{ signature, signatureVersion, publicKeyVersion, signingPublicKey } }`. The
+X API reads snake_case keys at every level and rejects a body whose nested
+keys are camelCase. Write each body's own keys in snake_case, and pass every
+object the package returns through `toSnake` (see [About the
+snippets](#about-the-snippets)). Build each body field by field: a prepared
+change passed whole through `toSnake` would carry its `conversationKey`.
+
+```js
+// 0.6.0
+await api.post(`/2/chat/conversations/${pathId}/keys`, {
+  conversation_key_version: prepared.conversationKeyVersion,
+  conversation_participant_keys: toSnake(prepared.conversationParticipantKeys),
+  action_signatures: toSnake(prepared.actionSignatures),
+});
+```
+
+### User ids are strings of digits
+
+Every user id is a string of digits: the `setIdentity` user id, `senderId`,
+`replyToSenderId`, the `userId` of each public key and signing key, and the
+ids of a group's members and admins (`memberIds`, `adminIds`,
+`newMemberIds`, `currentMemberIds`, `currentAdminIds`,
+`currentPendingMemberIds` and `userIds`). Each must be a positive integer
+written without a sign or leading zeros; anything else throws an error that
+names the field, such as `Invalid sender_id 'user-1': pass a numeric user id
+(digits only)`. `replyToSenderId` takes a string and rejects a number, since
+ids pass 2^53, where JavaScript numbers stop being exact:
+
+```js
+// 0.5.x
+const reply = chat.encryptReply({
+  conversationId, text: "pong", replyToSequenceId: "7", replyToSenderId: 4201, replyToText: "ping",
+});
+
+// 0.6.0
+const reply = chat.encryptReply({
+  conversationId, text: "pong", replyToSequenceId: "7", replyToSenderId: "4201", replyToText: "ping",
+});
+```
+
+### Key versions are integers written as strings
+
+Every key version is a non-negative integer written as a string of digits,
+as the X API returns it: the signing-key version (in `setIdentity`, a call's
+`signingKeyVersion` and each public key's `publicKeyVersion`) and
+`conversationKeyVersion`. Anything else throws an error that names the
+field, such as `Invalid signing_key_version 'v1': pass the key version as
+the X API returns it, an integer in digits`. There's no code to change if
+you pass the versions the X API returns.
+
+### Millisecond values are safe integers
+
+A millisecond field (`ttlMsec`, `currentTtlMsec`, `seenAtMsec`,
+`expiresAtMsec`) takes a finite number within the safe integer range. NaN,
+an infinity or a number past that range names no instant or duration, so
+the call throws an `Invalid <method> params` error rather than signing some
+other value. A fraction is truncated toward zero.
+
+### Entities, files, URL cards and posts are checked
+
+The encrypt calls check what a message carries before they encrypt it, and
+throw a `ChatXdkError` of kind `invalidInput` naming the value, where 0.5.x
+sent it:
+
+- An entity of a type the SDK doesn't know, an empty one included, fails
+  with `Invalid entity_type 'user_mention': pass url, mention, hashtag,
+  cashtag, email, address or phone_number`, for a message's, a reply's, a
+  reply preview's and an edit's entities.
+- Entity offsets count bytes of the text's UTF-8 encoding, the start
+  inclusive and the end exclusive, not the UTF-16 units of a JavaScript
+  string. An entity whose offsets are negative, end before they start or
+  run past the end of the text fails, such as `Invalid entity offsets 3..8:
+  end is past the end of the text, which is 7 bytes of UTF-8`. A reply
+  preview's entities, which index the quoted message's text, are checked
+  for all but the end.
+- A file a message carries, a media attachment or a URL card's banner or
+  favicon, fails with an empty `filename`, a `filesize_bytes` of 0 or less,
+  or a negative `width` or `height`, since receiving clients discard such a
+  file. Give each file its name and the encrypted size `encryptedFileSize`
+  gives.
+- A message that lists an empty media hash key, or one media hash key in
+  two attachments, fails.
+- A URL card with an empty `url`, and a post attachment with neither
+  `rest_id` nor `post_url`, fail.
+
+Count an entity's offsets in bytes of UTF-8 when the text holds characters
+outside ASCII:
+
+```js
+// 0.6.0
+const utf8Length = (text) => new TextEncoder().encode(text).length;
+const text = "café @bob";
+const start = utf8Length(text.slice(0, text.indexOf("@bob")));
+const payload = chat.encryptMessage({
+  conversationId, text, entities: [[start, start + utf8Length("@bob"), "mention"]],
+});
+```
+
+### `latestVersion` comes from a verified key change
+
+`result.conversationKeys.latestVersion`, the version to encrypt with, is the
+newest version whose key change verified, and it never moves back for the
+chat's lifetime. A key change verifies only against its sender's signing
+key, so give the chat every participant's signing keys, your own included,
+before you decrypt. It's `null` until a key change verifies: a key change
+the SDK can't verify still adds its key to `result.conversationKeys.keys`,
+for decrypting, but never becomes the version you encrypt with. Where 0.5.x
+returned the batch's highest version, 0.6.0 can return `null`: fetch the
+missing signing keys or the conversation's key-change events and decrypt
+again, rather than encrypting under the highest key in `keys`:
+
+```js
+// 0.5.x
+const result = chat.decryptEvents(events, signingKeys);
+const version = result.conversationKeys.latestVersion;
+
+// 0.6.0
+chat.setSigningKeys(signingKeys);
+const result = chat.decryptEvents({ events });
+const version = result.conversationKeys.latestVersion;
+if (version === null) {
+  // No key change verified: fetch every participant's signing keys
+  // (GET /2/users/{id}/public_keys) and the conversation's key changes
+  // (meta.conversation_key_events of GET /2/chat/conversations/{id}/events),
+  // then decrypt again.
+}
+```
+
+### `targetMessageId` holds a different value
+
+**In 0.5.x a reaction's or edit's `targetMessageId` held the target's
+sequence id. In 0.6.0 that value is `targetMessageSequenceId`, and
+`targetMessageId` holds the edited message's signed message id, present
+only on a v1 edit.** Code that keeps reading `targetMessageId` throws no
+error, and TypeScript accepts it: it gets the wrong id, or none. Rename
+every read, as [Decrypted events use the names the calls
+take](#decrypted-events-use-the-names-the-calls-take) shows, and use
+`targetMessageId` only to match a v1 edit to the `messageId` you deduplicate
+on.
+
+### A prepared change's JSON leaves out its key
+
+`JSON.stringify` of a `PreparedConversationChange` leaves out its
+`conversationKey`, where 0.5.x serialized it. The key stays on the object,
+and keys, spreads and copies still carry it. Code that saved or queued a
+prepared change as JSON loses the key, and with it the conversation: store
+the key yourself, and serialize the rest:
+
+```js
+// 0.5.x
+const saved = JSON.stringify(prepared);
+
+// 0.6.0
+storeConversationKey(prepared.conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
+const saved = JSON.stringify(prepared);
+```
+
+The request bodies take only a change's participant keys, key version and
+action signatures, never the key itself.
+
+### `sign` refuses data only the SDK signs
+
+`sign` throws a `ChatXdkError` of kind `invalidInput` for a payload
+recipients would verify as a signed event (a message, conversation-key
+change, group or conversation-metadata change, delete or read receipt) and
+for a P-256 public key, whose signature by the signing key binds it as an
+identity key. Sign only your own application data with `sign`; the SDK
+signs events itself. Any other data signs as in 0.5.x:
+
+```js
+// 0.6.0
+function signOwnData(data) {
+  try {
+    return chat.sign(data);
+  } catch (err) {
+    // The data reads as an event or a public key, which only the SDK signs.
+    if (err instanceof ChatXdkError && err.kind === "invalidInput") return null;
+    throw err;
+  }
+}
+```
+
+### Decrypt drops a removal's title and description re-encryptions
+
+A member removal rotates the conversation key and re-encrypts the group's
+title and description under the new key, marked as key-rotation
+re-encryptions. They are the same text, not changes, so `decryptEvents`
+and `decryptEvent` drop them under either `setRejectUnverified` setting,
+the way they drop an unverified event: `decryptEvents` leaves each one out
+of `events` and records it in `errors`, and `decryptEvent` throws a
+`ChatXdkError` of kind `invalidInput`: `GroupChange re-encrypts the group's
+title for a key rotation (for_key_rotation), not a title change: decrypt
+does not return it`. The removal itself (`membersRemoved`), its key change,
+avatar changes and every title or description change without the mark
+decrypt as before. In 0.5.x, a removal by an X client arrived as a
+`titleChanged` carrying the group's unchanged title:
+
+```js
+// 0.5.x
+for (const { event } of result.messages) {
+  if (event.change?.changeType === "titleChanged") {
+    showTitle(chat.decrypt(event.change.newTitle, keys[conversationKeyVersion]));
+  }
+}
+
+// 0.6.0
+const result = chat.decryptEvents({ events });
+for (const { event } of result.events) {
+  if (event.change?.changeType === "titleChanged") {
+    const newTitle = event.change.newTitle;
+    showTitle(newTitle.kind === "text" ? newTitle.text : newTitle.raw);
+  }
+}
+```
+
+A loop over single events catches the error, as it catches an unverified
+event's, and moves on to the next event:
+
+```js
+// 0.6.0
+for (const item of page.data) {
+  let event;
+  try {
+    event = chat.decryptEvent({ eventB64: item.encoded_event, conversationKeys: keys });
+  } catch (err) {
+    logSkipped(item.encoded_event, err);
+    continue;
+  }
+  handle(event);
+}
+```
+
+### `exportKeys` throws without keys
+
+`exportKeys` throws a `ChatXdkError` of kind `invalidState` when no identity
+key is loaded:
+
+```js
+// 0.6.0
+const privateKeys = chat.hasIdentityKey() ? chat.exportKeys() : null;
+```
+
+### An empty Juicebox config fails
+
+Until a chat has a Juicebox config, `setup`, `unlock`, `changePin` and
+`delete` throw a `ChatXdkError` of kind `invalidState`, `Invalid state: no
+Juicebox config: pass the juicebox_config the X API returns when you create
+the chat, or call update_config() first`, the error every binding gives, and
+`createChat` and `updateConfig` throw it for an empty or blank
+`juiceboxConfig`, at once, rather than at the first Juicebox call.
+
+## 4. Group and receipt signing
+
+Recipients on the default `setRejectUnverified` policy drop a read receipt
+or group change that isn't signed, as 0.5.x recipients did: sign each one,
+or recipients never see it. The sender comes from `setIdentity`. Each
+prepare call returns `actionSignatures` shaped as [Action signatures come
+nested](#action-signatures-come-nested) shows; send them in the request
+through `toSnake`.
+
+### The requests
+
+Each request below takes the conversation id in its path as `pathId`, and
+the prepare call's `actionSignatures`, through `toSnake`, as
+`action_signatures`. The paths and body fields are the X API's, as its
+OpenAPI description (`https://api.x.com/2/openapi.json`) gives them.
+
+| Action | Call | Request | Body |
+|---|---|---|---|
+| Send a message, reply, reaction or edit | `encryptMessage`, `encryptReply`, `encryptAddReaction`, `encryptRemoveReaction`, `encryptEdit` | `POST /2/chat/conversations/{id}/messages` | `message_id`, `encoded_message_create_event`, `encoded_message_event_signature`, `xdk_version`: the payload's `messageId`, `encodedMessageCreateEvent`, `encodedMessageEventSignature` and `xdkVersion` |
+| Delete messages | `prepareMessageDelete` | `POST /2/chat/conversations/{id}/messages/delete` | `sequence_ids`; `delete_message_action`, `"delete_for_all"` or `"delete_for_self"` as the params' `deleteForAll` says; `action_signatures` |
+| Mark read | `prepareMarkConversationRead` | `POST /2/chat/conversations/{id}/read` | `action_signatures` |
+| Start a one-to-one or rotate its key | `prepareConversationKeyChange` | `POST /2/chat/conversations/{id}/keys` | `conversation_key_version`, `conversation_participant_keys`, `action_signatures` |
+| Create a group | `prepareGroupCreate` | `POST /2/chat/conversations/group` | `conversation_id`, `group_members`, `group_admins`, `group_name` (the result's `encryptedTitle`), `conversation_key_version`, `conversation_participant_keys`, `action_signatures` |
+| Add members | `prepareGroupMembersChange` | `POST /2/chat/conversations/{id}/members` | `user_ids`, `encrypted_title`, `conversation_key_version`, `conversation_participant_keys`, `action_signatures` |
+| Remove members | `prepareGroupMembersRemove` | `POST /2/chat/conversations/{id}/members/remove` | `user_ids`, `action_signatures`, `group_key_rotation_data` with `conversation_key_version` and `conversation_participant_keys` |
+| Leave | `prepareGroupLeave` | `POST /2/chat/conversations/{id}/members/remove` | `user_ids` (your own id), `action_signatures` |
+| Change the title | `prepareGroupTitleChange` | `PUT /2/chat/conversations/{id}` | `group_name` (the result's `encryptedValue`), `conversation_key_version`, `modified_fields: ["group_name"]`, `action_signatures` |
+| Change the description | `prepareGroupDescriptionChange` | `PUT /2/chat/conversations/{id}` | `group_description` (the result's `encryptedValue`), `conversation_key_version`, `modified_fields: ["group_description"]`, `action_signatures` |
+| Change the avatar | `prepareGroupAvatarChange` | `PUT /2/chat/conversations/{id}` | `group_avatar_url` (the media URL), `conversation_key_version`, `modified_fields: ["group_avatar_url"]`, `action_signatures` |
+| Add admins | `prepareGroupAdminsAdd` | `POST /2/chat/conversations/{id}/admins` | `user_ids`, `action_signatures` |
+| Remove admins | `prepareGroupAdminsRemove` | `POST /2/chat/conversations/{id}/admins/remove` | `user_ids`, `action_signatures` |
+| Turn the invite link on | `prepareGroupInviteEnable` | `POST /2/chat/conversations/{id}/invite` | `invite_url`; `validity_expiry_timestamp_msec` (the params' `expiresAtMsec`) and `affiliate_user_id` (the params' `affiliateId`) when set; `action_signatures` |
+| Turn the invite link off | `prepareGroupInviteDisable` | `DELETE /2/chat/conversations/{id}/invite` | `action_signatures` |
+| Ask to join | `prepareGroupJoinRequest` | `POST /2/chat/conversations/{id}/join_requests` | `token` (the invite link's last 10 characters), `action_signatures` |
+| Reject join requests | `prepareGroupJoinReject` | `POST /2/chat/conversations/{id}/join_requests/reject` | `user_ids`, `action_signatures` |
+| Set the message TTL | `prepareMessageTtlChange` | `PUT /2/chat/conversations/{id}/message_ttl` | `message_ttl_ms` (the params' `ttlMsec`, as a string), `action_signatures` |
+| Clear the message TTL | `prepareMessageTtlRemove` | `DELETE /2/chat/conversations/{id}/message_ttl` | `action_signatures` |
+| Change screen capture | `prepareScreenCapture` | `PUT /2/chat/conversations/{id}/screen_capture` | `blocking` (`true` for `"blockingEnabled"`, `false` for `"blockingDisabled"`) and `blocking_action_signatures`, or `detection` and `detection_action_signatures` |
+
+A group's `conversation_id` is the `g…` id that
+`POST /2/chat/conversations/group/initialize` returns as
+`data.conversation_id`.
+
+### Deleting messages
+
+`prepareMessageDelete` returns the action's signature nested, as every
+prepare call does: send its `actionSignatures` through `toSnake`, next to
+the sequence ids and the delete action the params signed.
+
+```js
+// 0.5.x
+const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: true });
+await api.post(`/2/chat/conversations/${pathId}/messages/delete`, {
+  sequence_ids: sequenceIds,
+  delete_message_action: "delete_for_all",
+  action_signatures: [{
+    message_id: deletion.messageId,
+    encoded_message_event_detail: deletion.encodedMessageEventDetail,
+    message_event_signature: {
+      signature: deletion.signature,
+      signature_version: deletion.signatureVersion,
+      public_key_version: deletion.publicKeyVersion,
+      signing_public_key: signingPublicKey,
+    },
+  }],
+});
+
+// 0.6.0
+const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: true });
+await api.post(`/2/chat/conversations/${pathId}/messages/delete`, {
+  sequence_ids: sequenceIds,
+  delete_message_action: "delete_for_all",
+  action_signatures: toSnake(deletion.actionSignatures),
+});
+```
+
+A recipient's `decryptEvent` returns the delete as a verified
+`messageDeleted` event with its `sequenceIds` and `deleteForAll`.
+
+### Read receipts are signed
+
+Sign a read receipt with `prepareMarkConversationRead` and send the
+`PreparedAction`'s `actionSignatures` as the `action_signatures` of
+`POST /2/chat/conversations/{id}/read`. It takes `{ conversationId,
+seenUntilSequenceId }` (the sequence id of the newest event read) and a
+`seenAtMsec` that defaults to now, and returns a `PreparedAction`, one
+entry. Without it the X API sends an unsigned receipt, which recipients
+drop.
+
+```js
+// 0.5.x
+await api.post(`/2/chat/conversations/${pathId}/read`, {});
+
+// 0.6.0
+const receipt = chat.prepareMarkConversationRead({ conversationId, seenUntilSequenceId });
+await api.post(`/2/chat/conversations/${pathId}/read`, {
+  action_signatures: toSnake(receipt.actionSignatures),
+});
+```
+
+A recipient's `decryptEvent` returns a signed receipt as a verified
+`readReceipt` event, its position in `seenUntilSequenceId`.
+
+### Group changes are signed
+
+Every group change below returns `actionSignatures` for its request in
+[The requests](#the-requests). A group's title and description travel
+encrypted under the conversation key, and the SDK encrypts them: the
+creates, member adds, removals and title and description changes take them
+as plaintext and return the encrypted values to send. An avatar is an image
+the app encrypts and uploads; its URL is signed as is.
 
 ### Creating a group
 
@@ -652,7 +1124,16 @@ const body = { group_name: title, group_avatar_url: avatarUrl };
 
 // 0.6.0
 const prepared = chat.prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title });
-const body = { group_name: prepared.encryptedTitle };
+await api.post("/2/chat/conversations/group", {
+  conversation_id: conversationId,
+  group_members: memberIds,
+  group_admins: adminIds,
+  group_name: prepared.encryptedTitle,
+  conversation_key_version: prepared.conversationKeyVersion,
+  conversation_participant_keys: toSnake(prepared.conversationParticipantKeys),
+  action_signatures: toSnake(prepared.actionSignatures),
+});
+storeConversationKey(conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
 ```
 
 `decryptEvent` returns a received group create with its title decrypted with
@@ -666,7 +1147,7 @@ passed it, so a 0.5.x app's create with a plaintext title arrives as
 `unavailable` with the title in `raw`: show `raw` when a title isn't
 decryptable. A create that names no key version carries its title as
 plaintext, and arrives as `text`. The encrypted `group_name` and
-`group_description` the X API returns with a conversation still open with
+`group_description` the X API returns with a conversation open with
 `decrypt`.
 
 ```js
@@ -694,7 +1175,8 @@ plaintext, as `currentTitle` and `currentDescription`, not as values your
 code encrypted. The result carries them encrypted, as `encryptedTitle` and
 `encryptedDescription` (absent when unset). Send `encryptedTitle` as the
 add-members request's `encrypted_title`; the description travels in the
-signed member add.
+signed member add. Encrypt under the new key from here on, as [Removing
+members](#removing-members) shows for a removal.
 
 ```js
 // 0.5.x
@@ -710,7 +1192,14 @@ const prepared = chat.prepareGroupMembersChange({
   currentMemberIds: memberIds, currentAdminIds: adminIds, currentPendingMemberIds: [],
   currentTitle: title, currentDescription: description,
 });
-const body = { encrypted_title: prepared.encryptedTitle };
+await api.post(`/2/chat/conversations/${pathId}/members`, {
+  user_ids: newMemberIds,
+  encrypted_title: prepared.encryptedTitle,
+  conversation_key_version: prepared.conversationKeyVersion,
+  conversation_participant_keys: toSnake(prepared.conversationParticipantKeys),
+  action_signatures: toSnake(prepared.actionSignatures),
+});
+storeConversationKey(conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
 ```
 
 Passing a description makes the add sign at signature version 8, the first
@@ -726,62 +1215,118 @@ with, which the new members never receive. To keep the avatar readable for
 them, encrypt the image under the key the add returns, upload it, and send
 an [avatar change](#changing-the-avatar) naming the new key version.
 
+A recipient's `decryptEvent` returns the add as a verified `membersAdded`
+change with `memberIds`, `currentMemberIds` and `currentAdminIds`.
+
 ### Removing members
 
 `prepareGroupMembersRemove` removes `userIds` and rotates the conversation
 key, so the members removed don't receive the key the group encrypts under
-next. `publicKeys` are the identity keys of the members who stay; a key for
-a member being removed throws. The group's title and description are
-encrypted under the conversation key: pass the ones the group has, as
-plaintext, as `title` and `description`, and the call encrypts each under
-the new key and signs it as a key-rotation re-encryption, which X clients
-don't show as a change. A rotation leaves the avatar alone: its image stays
-encrypted under the key it was uploaded with, which the members who stay
-hold.
+next. It takes:
 
-The result is a `PreparedConversationChange`: the new `conversationKey`,
-`conversationParticipantKeys` for the members who stay, and
-`actionSignatures` in request order — the removal, a title change and a
-description change for the ones passed, then the conversation-key change.
-Store the new key as you store the key a key change returns.
+- `publicKeys`: the identity key of every member who stays, yours included,
+  as `GET /2/users/{id}/public_keys` returns them. The SDK encrypts the new
+  key to each member's newest key version; a member left out, you included,
+  can't read what the group sends under the new key. The SDK doesn't check
+  that the list is complete. A key for a member being removed throws.
+- `conversationId` and `userIds`, the members to remove.
+- `title` and `description`: the group's current title and description, as
+  plaintext. Pass each one the group has; the call encrypts each under the
+  new key and signs it as a key-rotation re-encryption, which recipients'
+  decrypt drops rather than shows as a change. A rotation leaves the avatar
+  alone: its image stays encrypted under the key it was uploaded with,
+  which the members who stay hold.
 
-The removal signs at signature version 11, the first whose removal payload
-covers the key version, and 0.5.x readers can't verify it: upgrade every app
-that reads your groups before you remove members.
-
-POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, the
-signatures, and `group_key_rotation_data` holding the new
-`conversation_key_version` and `conversation_participant_keys`.
+The result is a `PreparedConversationChange`: the new `conversationKey` and
+`conversationKeyVersion`, `conversationParticipantKeys` for the members who
+stay, and `actionSignatures` in request order: the removal, a title change
+and a description change for the ones passed, then the conversation-key
+change. The removal signs at signature version 11, which 0.5.x readers
+can't verify (see [Upgrade readers first](#upgrade-readers-first)).
 
 ```js
+// 0.5.x
+await api.post(`/2/chat/conversations/${pathId}/members/remove`, { user_ids: userIds });
+
 // 0.6.0
 const prepared = chat.prepareGroupMembersRemove({
   publicKeys: remainingPublicKeys,
   conversationId,
   userIds,
   title,
+  description,
 });
-await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
+await api.post(`/2/chat/conversations/${pathId}/members/remove`, {
   user_ids: userIds,
-  action_signatures: prepared.actionSignatures,
+  action_signatures: toSnake(prepared.actionSignatures),
   group_key_rotation_data: {
     conversation_key_version: prepared.conversationKeyVersion,
-    conversation_participant_keys: prepared.conversationParticipantKeys,
+    conversation_participant_keys: toSnake(prepared.conversationParticipantKeys),
   },
 });
+```
+
+**Encrypt under the new key as soon as the request succeeds.** The removed
+members hold the old key, so a message encrypted under it is one they can
+read. The key cache (`setCacheKeys(true)`) adopts the new key only once
+`decryptEvents` decrypts the removal's key change from the conversation's
+events, and only if that key change verifies against your own signing key;
+until then an encrypt call that omits the key resolves the old one. Store
+the new key and version, and pass them to every encrypt and prepare call
+until the cache holds them:
+
+```js
+// 0.6.0
+storeConversationKey(conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
+const payload = chat.encryptMessage({
+  conversationId,
+  text: "hello",
+  conversationKey: prepared.conversationKey,
+  conversationKeyVersion: prepared.conversationKeyVersion,
+});
+```
+
+The same holds after any call that rotates the key:
+`prepareConversationKeyChange`, `prepareGroupCreate` and
+`prepareGroupMembersChange`.
+
+On the receiving side, `decryptEvents` returns the removal as a verified
+`membersRemoved` change with its `memberIds`, and the key change as a
+`keyChange` event that adds the new key to `conversationKeys` and moves
+`latestVersion` to it once it verifies. The title and description
+re-encryptions are in `errors`, not `events` (see [Decrypt drops a
+removal's title and description
+re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
+
+```js
+// 0.6.0
+const result = chat.decryptEvents({ events });
+for (const { event } of result.events) {
+  if (event.type === "groupChange" && event.change.changeType === "membersRemoved") {
+    const removed = event.change.memberIds;
+  }
+}
+const version = result.conversationKeys.latestVersion;
 ```
 
 ### Leaving a group
 
 `prepareGroupLeave` signs the sender's removal and does not rotate the
-conversation key. `actionSignatures` are the removal, then a
-`GroupAdminAddChange` when `promoteAdminId` is set, then a
-`ConversationDeleteEvent`. It returns a `PreparedAction`.
+conversation key. `actionSignatures` are the removal, at signature version
+11 as a member removal's, then a `GroupAdminAddChange` when `promoteAdminId`
+is set, then a `ConversationDeleteEvent`. It returns a `PreparedAction`.
+Send it as a removal of your own id:
 
 ```js
+// 0.5.x
+await api.post(`/2/chat/conversations/${pathId}/members/remove`, { user_ids: [myUserId] });
+
 // 0.6.0
 const left = chat.prepareGroupLeave({ conversationId, promoteAdminId });
-// left.actionSignatures: removal, GroupAdminAddChange, ConversationDeleteEvent
+await api.post(`/2/chat/conversations/${pathId}/members/remove`, {
+  user_ids: [myUserId],
+  action_signatures: toSnake(left.actionSignatures),
+});
 ```
 
 ### Changing the title
@@ -791,16 +1336,25 @@ under the conversation key and signs it. Like `encryptMessage`, it takes
 the key and its version as `conversationKey` and `conversationKeyVersion`,
 or resolves both from the key cache without them. The result is a
 `PreparedGroupMetadataChange`: the `encryptedValue` the request sends as
-the title, the `conversationKeyVersion` it's encrypted under, and the
+`group_name`, the `conversationKeyVersion` it's encrypted under, and the
 `actionSignatures` to send with it.
 
 ```js
 // 0.5.x
-const encryptedTitle = chat.encrypt(title, keys[conversationKeyVersion]);
+await api.put(`/2/chat/conversations/${pathId}`, {
+  group_name: chat.encrypt(title, keys[conversationKeyVersion]),
+  conversation_key_version: conversationKeyVersion,
+  modified_fields: ["group_name"],
+});
 
 // 0.6.0
 const prepared = chat.prepareGroupTitleChange({ conversationId, newTitle: title });
-const encryptedTitle = prepared.encryptedValue;
+await api.put(`/2/chat/conversations/${pathId}`, {
+  group_name: prepared.encryptedValue,
+  conversation_key_version: prepared.conversationKeyVersion,
+  modified_fields: ["group_name"],
+  action_signatures: toSnake(prepared.actionSignatures),
+});
 ```
 
 `decryptEvent` returns a received title change decrypted: the `newTitle` of
@@ -808,7 +1362,8 @@ a `titleChanged` change is a `GroupText`, as a create's `title` is. It
 decrypts with the key for the version the change names, from the call's key
 map or the key cache. Without that key, or when the value isn't ciphertext
 under it, as for a plaintext title an app signed with a key version, it is
-`unavailable` with the value as carried, and the event still decrypts.
+`unavailable` with the value as carried, and the event still decrypts. A
+removal's re-encrypted title never arrives as a `titleChanged`.
 
 ```js
 // 0.5.x
@@ -823,6 +1378,42 @@ if (changeType === 'titleChanged') {
 }
 ```
 
+### Changing the description
+
+`prepareGroupDescriptionChange` takes the new description as plaintext and
+returns a `PreparedGroupMetadataChange`, as the title change does; the
+request sends its `encryptedValue` as `group_description`.
+
+```js
+// 0.5.x
+await api.put(`/2/chat/conversations/${pathId}`, {
+  group_description: chat.encrypt(description, keys[conversationKeyVersion]),
+  conversation_key_version: conversationKeyVersion,
+  modified_fields: ["group_description"],
+});
+
+// 0.6.0
+const prepared = chat.prepareGroupDescriptionChange({ conversationId, newDescription: description });
+await api.put(`/2/chat/conversations/${pathId}`, {
+  group_description: prepared.encryptedValue,
+  conversation_key_version: prepared.conversationKeyVersion,
+  modified_fields: ["group_description"],
+  action_signatures: toSnake(prepared.actionSignatures),
+});
+```
+
+A received description change is a `descriptionChanged` change holding
+`newDescription` as a `GroupText`; read it as a title change's `newTitle`. A
+removal's re-encrypted description never arrives as one:
+
+```js
+// 0.6.0
+const { changeType, newDescription } = groupChange.change;
+if (changeType === 'descriptionChanged') {
+  showDescription(newDescription.kind === 'text' ? newDescription.text : newDescription.raw);
+}
+```
+
 ### Changing the avatar
 
 An avatar URL is not encrypted; the image is. Encrypt the image bytes under
@@ -834,13 +1425,23 @@ a comma is rejected, since signatures join their fields with commas.
 
 ```js
 // 0.5.x
-const encryptedAvatarUrl = chat.encrypt(avatarUrl, keys[conversationKeyVersion]);
+await api.put(`/2/chat/conversations/${pathId}`, {
+  group_avatar_url: chat.encrypt(avatarUrl, keys[conversationKeyVersion]),
+  conversation_key_version: conversationKeyVersion,
+  modified_fields: ["group_avatar_url"],
+});
 
 // 0.6.0
 const prepared = chat.prepareGroupAvatarChange({
   conversationId,
   newAvatarUrl: avatarUrl,
   conversationKeyVersion,
+});
+await api.put(`/2/chat/conversations/${pathId}`, {
+  group_avatar_url: avatarUrl,
+  conversation_key_version: conversationKeyVersion,
+  modified_fields: ["group_avatar_url"],
+  action_signatures: toSnake(prepared.actionSignatures),
 });
 ```
 
@@ -855,122 +1456,170 @@ if (groupChange.change.changeType === 'avatarChanged') {
 }
 ```
 
-### Changing the description
+### Admins, invites, join requests, message TTL and screen capture
 
-`prepareGroupDescriptionChange` takes the new description as plaintext and
-returns a `PreparedGroupMetadataChange`, as the title change does.
+Each of these calls returns a `PreparedAction` with one signature, at
+signature version 7, for the request [The requests](#the-requests) names.
+0.5.x apps sent these requests without signatures; recipients drop them
+unsigned. A recipient's `decryptEvent` returns admin, invite and join
+changes as verified `groupChange` events (`adminsAdded`, `adminsRemoved`,
+`inviteEnabled`, `inviteDisabled`, `joinRequested`, `joinRejected`) and TTL
+and screen-capture changes as verified `settingsChange` events.
 
 ```js
 // 0.5.x
-const encryptedDescription = chat.encrypt(description, keys[conversationKeyVersion]);
+await api.post(`/2/chat/conversations/${pathId}/admins`, { user_ids: userIds });
 
-// 0.6.0
-const prepared = chat.prepareGroupDescriptionChange({ conversationId, newDescription: description });
-const encryptedDescription = prepared.encryptedValue;
-```
-
-A received description change is a `descriptionChanged` change holding
-`newDescription` as a `GroupText`; read it as a title change's `newTitle`:
-
-```js
-// 0.6.0
-const { changeType, newDescription } = groupChange.change;
-if (changeType === 'descriptionChanged') {
-  showDescription(newDescription.kind === 'text' ? newDescription.text : newDescription.raw);
-}
-```
-
-### Adding admins
-
-```js
 // 0.6.0
 const added = chat.prepareGroupAdminsAdd({ conversationId, userIds });
-```
-
-### Removing admins
-
-```js
-// 0.6.0
+await api.post(`/2/chat/conversations/${pathId}/admins`, {
+  user_ids: userIds, action_signatures: toSnake(added.actionSignatures),
+});
 const removed = chat.prepareGroupAdminsRemove({ conversationId, userIds });
+await api.post(`/2/chat/conversations/${pathId}/admins/remove`, {
+  user_ids: userIds, action_signatures: toSnake(removed.actionSignatures),
+});
 ```
 
-### Enabling an invite
-
-An omitted `expiresAtMsec` or `affiliateId` signs `null`.
+An invite signs its URL, its expiry and its affiliate; an omitted
+`expiresAtMsec` or `affiliateId` signs `null`. The request sends the expiry
+as `validity_expiry_timestamp_msec`, and only with the same value the params
+signed:
 
 ```js
 // 0.6.0
 const invite = chat.prepareGroupInviteEnable({ conversationId, inviteUrl, expiresAtMsec });
-```
-
-### Disabling an invite
-
-`disabledBy` defaults to the sender.
-
-```js
-// 0.6.0
+await api.post(`/2/chat/conversations/${pathId}/invite`, {
+  invite_url: inviteUrl,
+  validity_expiry_timestamp_msec: String(expiresAtMsec),
+  action_signatures: toSnake(invite.actionSignatures),
+});
 const disabled = chat.prepareGroupInviteDisable({ conversationId });
+await api.delete(`/2/chat/conversations/${pathId}/invite`, {
+  action_signatures: toSnake(disabled.actionSignatures),
+});
 ```
 
-### Requesting to join
-
-`requestingUserId` defaults to the sender. An invite token is not part of
-the signature.
+A join request signs the requesting user, who defaults to the sender; the
+invite token travels in the request but not in the signature:
 
 ```js
 // 0.6.0
 const request = chat.prepareGroupJoinRequest({ conversationId });
-```
-
-### Rejecting join requests
-
-```js
-// 0.6.0
+await api.post(`/2/chat/conversations/${pathId}/join_requests`, {
+  token: inviteToken, action_signatures: toSnake(request.actionSignatures),
+});
 const rejected = chat.prepareGroupJoinReject({ conversationId, userIds });
+await api.post(`/2/chat/conversations/${pathId}/join_requests/reject`, {
+  user_ids: userIds, action_signatures: toSnake(rejected.actionSignatures),
+});
 ```
 
-### Changing the message TTL
-
-The signature covers `ttlMsec` only.
+A TTL change signs `ttlMsec` only; a negative one is rejected:
 
 ```js
 // 0.6.0
 const ttl = chat.prepareMessageTtlChange({ conversationId, ttlMsec });
-```
-
-### Removing the message TTL
-
-```js
-// 0.6.0
+await api.put(`/2/chat/conversations/${pathId}/message_ttl`, {
+  message_ttl_ms: String(ttlMsec), action_signatures: toSnake(ttl.actionSignatures),
+});
 const cleared = chat.prepareMessageTtlRemove({ conversationId });
+await api.delete(`/2/chat/conversations/${pathId}/message_ttl`, {
+  action_signatures: toSnake(cleared.actionSignatures),
+});
 ```
 
-### Changing screen capture
-
-`change` is a `ScreenCaptureChange`: `"blockingEnabled"`,
-`"blockingDisabled"`, `"detectionEnabled"`, or `"detectionDisabled"`.
+A screen-capture change is one of `"blockingEnabled"`,
+`"blockingDisabled"`, `"detectionEnabled"` or `"detectionDisabled"`. The
+request names its signatures after the setting,
+`blocking_action_signatures` or `detection_action_signatures`, not
+`action_signatures`:
 
 ```js
 // 0.6.0
 const capture = chat.prepareScreenCapture({ conversationId, change: "blockingEnabled" });
+await api.put(`/2/chat/conversations/${pathId}/screen_capture`, {
+  blocking: true, blocking_action_signatures: toSnake(capture.actionSignatures),
+});
 ```
 
-## Read receipts should be signed
+## 5. Verify
 
-Apps should sign a read receipt with `prepareMarkConversationRead` and send
-the `PreparedAction`'s `actionSignatures` as the `action_signatures` of
-`POST /2/chat/conversations/{id}/read`. Recipients on the default policy
-reject an unsigned receipt. It takes `{ conversationId, seenUntilSequenceId }`
-(the sequence id of the newest event read) and a `seenAtMsec` that defaults
-to now, and returns a `PreparedAction`, one entry shaped as
-[Action signatures come nested](#action-signatures-come-nested) shows. The
-path takes the conversation id in its hyphen form. A recipient's
-`decryptEvent` returns a signed receipt as a verified `readReceipt` event.
+### Type-check
+
+Run `tsc --noEmit` over a TypeScript app: the typings flag every call that
+still passes 0.5.x arguments and every renamed field. Then run your tests.
+
+### Find the 0.5.x names
+
+Search the app for the names in the symbol index's 0.5.x column. Each hit is
+a line to change, unless it is your own code that shares the name:
+
+```sh
+grep -rnE "encryptStream|decryptStream|stream(En|De)cryptor|Stream(En|De)cryptor|encryptedStreamSize|guessesRemaining\(|maxGuessCount|\.encrypt\(|encryptedContent|encodedEventSignature|generateVersion|newText|messageIds|seenUntilId\b|\.messages\b|\bparticipantKeys\b|\bencryptedKey\b|\bkeyVersion\b|DecryptedMessage|EncryptedKeyForRecipient|\bParticipantKey\b|ChatCrypto|import type \{[^}]*\bChat\b" --include='*.js' --include='*.mjs' --include='*.ts' --include='*.tsx' .
+grep -rn "targetMessageId" --include='*.js' --include='*.mjs' --include='*.ts' --include='*.tsx' .
+```
+
+Every `targetMessageId` the second search finds should read a v1 edit's
+signed message id; rename the rest to `targetMessageSequenceId`. Check every
+request body too: each object the package returns goes through `toSnake`.
+
+### Run a round trip
+
+This round trip runs offline, with two chats standing in for two users. It
+registers both, starts a conversation, sends a message and decrypts it with
+`setRejectUnverified` on, the default, so the signature has to verify:
 
 ```js
 // 0.6.0
-const receipt = chat.prepareMarkConversationRead({ conversationId, seenUntilSequenceId });
-await api.post(`/2/chat/conversations/${conversationId.replaceAll(":", "-")}/read`, {
-  action_signatures: receipt.actionSignatures,
+const alice = await createChat();
+const bob = await createChat();
+const aliceKeys = alice.generateKeypairs().publicKey;
+const bobKeys = bob.generateKeypairs().publicKey;
+alice.setIdentity({ userId: "1001", signingKeyVersion: "1" });
+bob.setIdentity({ userId: "1002", signingKeyVersion: "1" });
+
+const change = alice.prepareConversationKeyChange({
+  publicKeys: [
+    { userId: "1001", identityPublicKey: aliceKeys.publicKey, publicKeyVersion: "1" },
+    { userId: "1002", identityPublicKey: bobKeys.publicKey, publicKeyVersion: "1" },
+  ],
 });
+const payload = alice.encryptMessage({
+  conversationId: change.conversationId,
+  text: "hello",
+  conversationKey: change.conversationKey,
+  conversationKeyVersion: change.conversationKeyVersion,
+});
+
+const bobEntry = change.conversationParticipantKeys.find((key) => key.userId === "1002");
+if (!bobEntry) throw new Error("no key for bob");
+const bobKey = bob.decryptConversationKey(bobEntry.encryptedConversationKey);
+const event = bob.decryptEvent({
+  eventB64: payload.eventB64,
+  conversationKeys: { [change.conversationKeyVersion]: bobKey },
+  signingKeys: [{
+    userId: "1001",
+    publicKeyVersion: "1",
+    publicKey: aliceKeys.signingPublicKey,
+    identityPublicKey: aliceKeys.publicKey,
+    identityPublicKeySignature: aliceKeys.identityPublicKeySignature,
+  }],
+});
+if (!event.verified || event.content?.text !== "hello") throw new Error("round trip failed");
+if (!["7", "10"].includes(payload.signatureInfo.signatureVersion)) throw new Error("unknown format");
+if (payload.xdkVersion !== "0.6.0") throw new Error(`xdkVersion ${payload.xdkVersion}`);
 ```
+
+`signatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
+`v1_send` switch decides. `xdkVersion` is the version the X API receives
+with each send.
+
+Then run the same flows against a test conversation on the X API: send a
+text, a file, a reply, an edit and a delete, mark the conversation read,
+and create a group, add a member and remove one. Fetch the conversation's
+events with `GET /2/chat/conversations/{id}/events`, pass `data[].encoded_event`
+and `meta.conversation_key_events` to `decryptEvents` with every
+participant's signing keys, and check that every event in `events` has
+`verified` set and that `errors` holds only the removal's title and
+description re-encryptions.

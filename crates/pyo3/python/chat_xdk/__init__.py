@@ -271,7 +271,9 @@ class GroupText(TypedDict, total=False):
     key version carries. ``kind`` ``"Unavailable"`` carries ``raw``: a value
     the SDK could not decrypt, as the event carries it. 0.5.x apps sent
     titles as plaintext while naming a key version, so show ``raw`` when a
-    title isn't decryptable.
+    title isn't decryptable. A member removal re-encrypts the title and
+    description under the new key; those re-encryptions aren't changes, and
+    decrypt drops them.
     """
 
     kind: Literal["Text", "Unavailable"]

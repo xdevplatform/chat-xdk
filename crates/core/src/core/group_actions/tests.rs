@@ -66,6 +66,51 @@ fn decode_detail(b64: &str) -> MessageEventDetail {
     MessageEventDetail::read_from_in_protocol(&mut proto).unwrap()
 }
 
+/// `signature` with its event's `for_key_rotation` set to `flag`. The flag
+/// is outside the signed payload, so the signature still verifies.
+fn with_for_key_rotation(signature: &ActionSignature, flag: bool) -> ActionSignature {
+    let detail = match decode_detail(&signature.encoded_message_event_detail) {
+        MessageEventDetail::GroupChangeEvent(mut event) => {
+            event.for_key_rotation = Some(flag);
+            MessageEventDetail::GroupChangeEvent(event)
+        }
+        MessageEventDetail::ConversationKeyChangeEvent(mut event) => {
+            event.for_key_rotation = Some(flag);
+            MessageEventDetail::ConversationKeyChangeEvent(event)
+        }
+        other => panic!("expected a group or key change event, got {other:?}"),
+    };
+    let mut flagged = signature.clone();
+    flagged.encoded_message_event_detail = encode_detail(detail).unwrap();
+    flagged
+}
+
+/// The title or description a signed group change carries, decrypted
+/// under `keys`.
+fn reencrypted_text(
+    core: &ChatCore,
+    keys: &HashMap<String, XChatConversationKey>,
+    signature: &ActionSignature,
+) -> GroupText {
+    let (version, value) = match decode_detail(&signature.encoded_message_event_detail) {
+        MessageEventDetail::GroupChangeEvent(GroupChangeEvent {
+            group_change: Some(GroupChange::GroupTitleChange(change)),
+            ..
+        }) => (change.conversation_key_version, change.custom_title),
+        MessageEventDetail::GroupChangeEvent(GroupChangeEvent {
+            group_change: Some(GroupChange::GroupDescriptionChange(change)),
+            ..
+        }) => (change.conversation_key_version, change.custom_description),
+        other => panic!("expected a title or description change, got {other:?}"),
+    };
+    core.group_text(
+        None,
+        keys,
+        version.as_deref(),
+        value.as_deref().unwrap_or_default(),
+    )
+}
+
 /// The event recipients receive for a signed action.
 fn signed_event(
     signature: &ActionSignature,
@@ -718,26 +763,27 @@ fn member_remove_reencrypts_the_metadata_under_the_new_key() {
     assert_eq!(rotation, [Some(false), Some(true), Some(true)]);
 
     let keys = HashMap::from([("42".to_string(), prepared.conversation_key.clone().unwrap())]);
-    let decrypt = |index: usize| {
-        decrypted_change(
-            core.decrypt_event(
+    assert_eq!(
+        reencrypted_text(&core, &keys, &prepared.action_signatures[1]),
+        text("Board")
+    );
+    assert_eq!(
+        reencrypted_text(&core, &keys, &prepared.action_signatures[2]),
+        text("Rules: be kind")
+    );
+    // Recipients drop the re-encryptions, which still verify.
+    for index in [1, 2] {
+        let err = core
+            .decrypt_event(
                 &DecryptEventParams::new(
                     signed_event_b64(&prepared.action_signatures[index], &sender, "g100"),
                     keys.clone(),
                 )
                 .with_signing_keys(signing_keys.clone()),
             )
-            .unwrap(),
-        )
-    };
-    assert!(
-        matches!(decrypt(1), Change::TitleChanged { ref new_title } if *new_title == text("Board"))
-    );
-    assert!(matches!(
-        decrypt(2),
-        Change::DescriptionChanged { ref new_description }
-            if *new_description == text("Rules: be kind")
-    ));
+            .unwrap_err();
+        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput, "{err}");
+    }
     let ckey_b64 = STANDARD_NO_PAD.encode(prepared.conversation_key.as_ref().unwrap().encoded());
     assert_actions(
         &core,
@@ -745,6 +791,163 @@ fn member_remove_reencrypts_the_metadata_under_the_new_key() {
         &sender,
         "g100",
         Some(&ckey_b64),
+    );
+}
+
+/// A removal of 910007 with the group's title and description, under key
+/// version 42, as recipients receive it: the removal, the title and the
+/// description re-encryptions, then the key change.
+fn removal_events(core: &ChatCore, sender: &str, version: &str) -> Vec<String> {
+    let params =
+        GroupMembersRemoveParams::new(remaining_keys(core, sender), "g100", vec!["910007".into()])
+            .with_identity(sender, version)
+            .with_title("Board")
+            .with_description("Rules: be kind");
+    core.prepare_group_members_remove_with_version(&params, "42")
+        .unwrap()
+        .action_signatures
+        .iter()
+        .map(|signature| signed_event_b64(signature, sender, "g100"))
+        .collect()
+}
+
+#[test]
+fn decrypt_drops_the_metadata_a_member_remove_reencrypts() {
+    let (core, signing_keys) = ready_core_and_signing_keys();
+    let (sender, version) = identity();
+    let events = removal_events(&core, &sender, &version);
+    assert_eq!(events.len(), 4);
+
+    for reject_unverified in [true, false] {
+        core.set_reject_unverified(reject_unverified);
+        let batch = core.decrypt_events(
+            &DecryptEventsParams::new(events.clone()).with_signing_keys(signing_keys.clone()),
+        );
+        let kept: Vec<&Event> = batch.events.iter().map(|event| &event.event).collect();
+        assert_eq!(kept.len(), 2, "{kept:?}");
+        match kept[0] {
+            Event::GroupChange(change) => {
+                assert!(change.verified);
+                assert!(matches!(
+                    change.change,
+                    Change::MembersRemoved { ref member_ids } if member_ids == &["910007"]
+                ));
+            }
+            other => panic!("expected the removal, got {other:?}"),
+        }
+        match kept[1] {
+            Event::KeyChange(key_change) => {
+                assert!(key_change.verified);
+                assert_eq!(key_change.conversation_key_version, "42");
+            }
+            other => panic!("expected the key change, got {other:?}"),
+        }
+        let mut dropped: Vec<usize> = batch.errors.keys().copied().collect();
+        dropped.sort_unstable();
+        assert_eq!(dropped, [1, 2], "{:?}", batch.errors);
+        for (index, field) in [(1, "title"), (2, "description")] {
+            assert_eq!(
+                batch.errors[&index],
+                format!(
+                    "GroupChange re-encrypts the group's {field} for a key rotation \
+                     (for_key_rotation), not a {field} change: decrypt does not return it"
+                )
+            );
+        }
+        assert_eq!(
+            batch.conversation_keys.latest_version.as_deref(),
+            Some("42")
+        );
+        assert!(batch.conversation_keys.keys.contains_key("42"));
+
+        let keys = batch.conversation_keys.keys.clone();
+        for index in [1, 2] {
+            let err = core
+                .decrypt_event(
+                    &DecryptEventParams::new(events[index].clone(), keys.clone())
+                        .with_signing_keys(signing_keys.clone()),
+                )
+                .unwrap_err();
+            assert!(matches!(err, SdkError::InvalidInput(_)), "{err:?}");
+            assert_eq!(err.to_string(), batch.errors[&index]);
+        }
+    }
+}
+
+#[test]
+fn decrypt_verifies_a_reencryption_before_dropping_it() {
+    let (core, _) = ready_core_and_signing_keys();
+    let (sender, version) = identity();
+    let events = removal_events(&core, &sender, &version);
+    let err = core
+        .decrypt_event(&DecryptEventParams::new(events[1].clone(), HashMap::new()))
+        .unwrap_err();
+    assert_eq!(err.kind(), crate::error::ErrorKind::Verification, "{err}");
+}
+
+#[test]
+fn decrypt_keeps_changes_that_are_not_metadata_reencryptions() {
+    let (core, signing_keys) = ready_core_and_signing_keys();
+    let (sender, version) = identity();
+    let key = KeyFactory::generate_conversation_key().unwrap();
+    let keys = HashMap::from([("42".to_string(), key.clone())]);
+    let decrypt = |signature: &ActionSignature| {
+        core.decrypt_event(
+            &DecryptEventParams::new(signed_event_b64(signature, &sender, "g100"), keys.clone())
+                .with_signing_keys(signing_keys.clone()),
+        )
+    };
+
+    let rename = core
+        .prepare_group_title_change(
+            &GroupTitleChangeParams::new("g100", "Renamed")
+                .with_identity(&sender, &version)
+                .with_conversation_key(key.to_bytes(), "42"),
+        )
+        .unwrap();
+    assert!(matches!(
+        decrypted_change(decrypt(&rename.action_signatures[0]).unwrap()),
+        Change::TitleChanged { ref new_title } if *new_title == text("Renamed")
+    ));
+    // The flag alone makes a title a re-encryption, and the signature
+    // doesn't cover it: the flagged rename still verifies, and is dropped.
+    let flagged = with_for_key_rotation(&rename.action_signatures[0], true);
+    assert!(matches!(
+        decrypt(&flagged).unwrap_err(),
+        SdkError::InvalidInput(_)
+    ));
+
+    let avatar = core
+        .prepare_group_avatar_change(
+            &GroupAvatarChangeParams::new("g100", "https://ton.x.com/xchat_media/g100/a", "42")
+                .with_identity(&sender, &version),
+        )
+        .unwrap();
+    let flagged = with_for_key_rotation(&avatar.action_signatures[0], true);
+    assert!(matches!(
+        decrypted_change(decrypt(&flagged).unwrap()),
+        Change::AvatarChanged { .. }
+    ));
+
+    let mut key_change = ConversationKeyChangeParams::new(remaining_keys(&core, &sender))
+        .with_identity(&sender, &version);
+    key_change.conversation_id = Some("g100".into());
+    let rotated = core
+        .prepare_conversation_key_change_with_version(&key_change, "43")
+        .unwrap();
+    let flagged = with_for_key_rotation(&rotated.action_signatures[0], true);
+    let batch = core.decrypt_events(
+        &DecryptEventsParams::new(vec![signed_event_b64(&flagged, &sender, "g100")])
+            .with_signing_keys(signing_keys.clone()),
+    );
+    assert!(batch.errors.is_empty(), "{:?}", batch.errors);
+    assert!(matches!(
+        batch.events[0].event,
+        Event::KeyChange(ref change) if change.verified
+    ));
+    assert_eq!(
+        batch.conversation_keys.latest_version.as_deref(),
+        Some("43")
     );
 }
 

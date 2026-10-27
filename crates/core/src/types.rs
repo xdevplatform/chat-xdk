@@ -912,7 +912,8 @@ pub enum GroupChange {
         conversation_key_version: Option<String>,
     },
 
-    /// Group title changed.
+    /// Group title changed. A member removal's re-encryption of the title
+    /// under the new key isn't a change: decrypt drops it.
     #[non_exhaustive]
     TitleChanged {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -928,7 +929,8 @@ pub enum GroupChange {
         conversation_key_version: Option<String>,
     },
 
-    /// Group description changed.
+    /// Group description changed. A member removal's re-encryption of the
+    /// description under the new key isn't a change: decrypt drops it.
     #[non_exhaustive]
     DescriptionChanged {
         #[cfg_attr(feature = "js", js_camel(wrap))]
@@ -1619,7 +1621,9 @@ pub struct DecryptEventsResult {
     /// Conversation keys extracted from key events.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub conversation_keys: ConversationKeyResult,
-    /// Errors encountered during decryption (index → error message).
+    /// Index → error message for each event left out of `events`: one that
+    /// failed, or one decrypt drops, such as a member removal's title or
+    /// description re-encrypted under the new key.
     pub errors: std::collections::HashMap<usize, String>,
 }
 

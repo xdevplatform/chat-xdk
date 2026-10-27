@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from chat_core import ChatCore, message_text
+from chat_xdk import ChatXdkError
 from x_api import XChatClient
 
 logger = logging.getLogger("chatbot")
@@ -147,7 +148,11 @@ class ChatBot:
             event_b64 = item.get("encoded_event")
             if not event_b64:
                 continue
-            event = self.core.decrypt_one(event_b64, st.conversation_keys)
+            try:
+                event = self.core.decrypt_one(event_b64, st.conversation_keys)
+            except ChatXdkError as err:
+                logger.warning("decrypt_failed conv=%s err=%s", conversation_id, err)
+                continue
 
             # A KeyChange rotates the conversation key. Route it through the
             # batch path: that verifies the change, feeds the SDK's key cache

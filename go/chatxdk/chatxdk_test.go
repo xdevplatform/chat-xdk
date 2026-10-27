@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,39 +20,44 @@ import (
 )
 
 type sdkVectors struct {
-	IdentityPrivateB64             string `json:"identity_private_b64"`
-	SigningPrivateB64              string `json:"signing_private_b64"`
-	PrivateKeysConcatB64           string `json:"private_keys_concat_b64"`
-	MessageUTF8                    string `json:"message_utf8"`
-	ConversationKeyB64             string `json:"conversation_key_b64"`
-	PlaintextB64                   string `json:"plaintext_b64"`
-	IdentityPublicB64              string `json:"identity_public_b64"`
-	SigningPublicB64               string `json:"signing_public_b64"`
-	SignatureB64                   string `json:"signature_b64"`
-	IdentityPublicKeySignatureB64  string `json:"identity_public_key_signature_b64"`
-	EventFailureB64                string `json:"event_failure_b64"`
-	EventGroupDescriptionB64       string `json:"event_group_description_b64"`
-	EventGroupDescription          string `json:"event_group_description"`
-	EventGroupID                   string `json:"event_group_id"`
-	EventGroupCreateB64            string `json:"event_group_create_b64"`
-	EventGroupCreateKeyB64         string `json:"event_group_create_conversation_key_b64"`
-	EventGroupCreateKeyVersion     string `json:"event_group_create_conversation_key_version"`
-	EventGroupCreateEncryptedTitle string `json:"event_group_create_encrypted_title"`
-	EventGroupTitle                string `json:"event_group_title"`
-	EventGroupAvatarChangeB64      string `json:"event_group_avatar_change_b64"`
-	EventGroupAvatarURL            string `json:"event_group_avatar_url"`
-	EventKeyChangeB64              string `json:"event_key_change_b64"`
-	EventMessageB64                string `json:"event_message_b64"`
-	EventReplyValidB64             string `json:"event_reply_valid_b64"`
-	EventReplyForgedB64            string `json:"event_reply_forged_b64"`
-	EventGarbageB64                string `json:"event_garbage_b64"`
-	EventSenderID                  string `json:"event_sender_id"`
-	EventConversationID            string `json:"event_conversation_id"`
-	EventConversationKeyVersion    string `json:"event_conversation_key_version"`
-	EventSigningKeyVersion         string `json:"event_signing_key_version"`
-	EventRecipientKeyVersion       string `json:"event_recipient_key_version"`
-	EventMessageText               string `json:"event_message_text"`
-	EventReplyText                 string `json:"event_reply_text"`
+	IdentityPrivateB64             string   `json:"identity_private_b64"`
+	SigningPrivateB64              string   `json:"signing_private_b64"`
+	PrivateKeysConcatB64           string   `json:"private_keys_concat_b64"`
+	MessageUTF8                    string   `json:"message_utf8"`
+	ConversationKeyB64             string   `json:"conversation_key_b64"`
+	PlaintextB64                   string   `json:"plaintext_b64"`
+	IdentityPublicB64              string   `json:"identity_public_b64"`
+	SigningPublicB64               string   `json:"signing_public_b64"`
+	SignatureB64                   string   `json:"signature_b64"`
+	IdentityPublicKeySignatureB64  string   `json:"identity_public_key_signature_b64"`
+	EventFailureB64                string   `json:"event_failure_b64"`
+	EventGroupDescriptionB64       string   `json:"event_group_description_b64"`
+	EventGroupDescription          string   `json:"event_group_description"`
+	EventGroupID                   string   `json:"event_group_id"`
+	EventGroupCreateB64            string   `json:"event_group_create_b64"`
+	EventGroupCreateKeyB64         string   `json:"event_group_create_conversation_key_b64"`
+	EventGroupCreateKeyVersion     string   `json:"event_group_create_conversation_key_version"`
+	EventGroupCreateEncryptedTitle string   `json:"event_group_create_encrypted_title"`
+	EventGroupTitle                string   `json:"event_group_title"`
+	EventGroupAvatarChangeB64      string   `json:"event_group_avatar_change_b64"`
+	EventGroupAvatarURL            string   `json:"event_group_avatar_url"`
+	EventGroupRemovalFlowB64       []string `json:"event_group_removal_flow_b64"`
+	EventGroupRemovalDropped       []int    `json:"event_group_removal_dropped_indices"`
+	EventGroupRemovalKeyVersion    string   `json:"event_group_removal_conversation_key_version"`
+	EventGroupRemovedMemberID      string   `json:"event_group_removed_member_id"`
+	EventGroupRenamedTitle         string   `json:"event_group_renamed_title"`
+	EventKeyChangeB64              string   `json:"event_key_change_b64"`
+	EventMessageB64                string   `json:"event_message_b64"`
+	EventReplyValidB64             string   `json:"event_reply_valid_b64"`
+	EventReplyForgedB64            string   `json:"event_reply_forged_b64"`
+	EventGarbageB64                string   `json:"event_garbage_b64"`
+	EventSenderID                  string   `json:"event_sender_id"`
+	EventConversationID            string   `json:"event_conversation_id"`
+	EventConversationKeyVersion    string   `json:"event_conversation_key_version"`
+	EventSigningKeyVersion         string   `json:"event_signing_key_version"`
+	EventRecipientKeyVersion       string   `json:"event_recipient_key_version"`
+	EventMessageText               string   `json:"event_message_text"`
+	EventReplyText                 string   `json:"event_reply_text"`
 
 	MessageKeyConversationKeyHex          string `json:"message_key_conversation_key_hex"`
 	MessageKeyConversationKeyVersion      string `json:"message_key_conversation_key_version"`
@@ -916,6 +922,90 @@ func TestGroupAvatarChangeFixtureVector(t *testing.T) {
 	if avatar.ChangeType != "AvatarChanged" || avatar.NewAvatarURL != v.EventGroupAvatarURL ||
 		avatar.ConversationKeyVersion != v.EventConversationKeyVersion {
 		t.Errorf("unexpected change: %+v", avatar)
+	}
+}
+
+// A group removal flow: decrypt keeps the removal, its key change and a later
+// rename, and drops the title and description the removal re-encrypts under
+// the new key, on both paths.
+func TestGroupRemovalFixtureVector(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	flow := v.EventGroupRemovalFlowB64
+	result, err := chat.DecryptEvents(DecryptEventsParams{Events: flow, SigningKeys: v.eventSigningKeys()})
+	if err != nil {
+		t.Fatalf("DecryptEvents failed: %v", err)
+	}
+	var dropped []int
+	for index := range result.Errors {
+		i, err := strconv.Atoi(index)
+		if err != nil {
+			t.Fatalf("error index %q: %v", index, err)
+		}
+		dropped = append(dropped, i)
+	}
+	sort.Ints(dropped)
+	if !reflect.DeepEqual(dropped, v.EventGroupRemovalDropped) {
+		t.Fatalf("dropped %v, want %v: %v", dropped, v.EventGroupRemovalDropped, result.Errors)
+	}
+	latest := result.ConversationKeys.LatestVersion
+	if latest == nil || *latest != v.EventGroupRemovalKeyVersion {
+		t.Errorf("latest version %v, want %s", latest, v.EventGroupRemovalKeyVersion)
+	}
+	if len(result.Events) != 3 {
+		t.Fatalf("kept %d events, want 3", len(result.Events))
+	}
+	var removed struct {
+		ChangeType string   `json:"change_type"`
+		MemberIDs  []string `json:"member_ids"`
+	}
+	removal := result.Events[0].Event.AsGroupChange()
+	if removal == nil || !removal.Verified {
+		t.Fatalf("expected a verified removal, got %+v", result.Events[0].Event)
+	}
+	if err := json.Unmarshal(removal.Change, &removed); err != nil {
+		t.Fatalf("decode removal: %v", err)
+	}
+	if removed.ChangeType != "MembersRemoved" ||
+		!reflect.DeepEqual(removed.MemberIDs, []string{v.EventGroupRemovedMemberID}) {
+		t.Errorf("unexpected removal: %+v", removed)
+	}
+	keyChange := result.Events[1].Event.AsKeyChange()
+	if keyChange == nil || !keyChange.Verified || keyChange.ConversationKeyVersion != v.EventGroupRemovalKeyVersion {
+		t.Errorf("expected the verified key change, got %+v", result.Events[1].Event)
+	}
+	var renamed struct {
+		ChangeType string    `json:"change_type"`
+		NewTitle   GroupText `json:"new_title"`
+	}
+	rename := result.Events[2].Event.AsGroupChange()
+	if rename == nil || !rename.Verified {
+		t.Fatalf("expected a verified rename, got %+v", result.Events[2].Event)
+	}
+	if err := json.Unmarshal(rename.Change, &renamed); err != nil {
+		t.Fatalf("decode rename: %v", err)
+	}
+	if renamed.ChangeType != "TitleChanged" || renamed.NewTitle != (GroupText{Kind: "Text", Text: v.EventGroupRenamedTitle}) {
+		t.Errorf("unexpected rename: %+v", renamed)
+	}
+
+	// The single-event path drops the same events, as invalid input.
+	for _, index := range v.EventGroupRemovalDropped {
+		_, err := chat.DecryptEvent(DecryptEventParams{
+			EventB64:         flow[index],
+			ConversationKeys: result.ConversationKeys.Keys,
+			SigningKeys:      v.eventSigningKeys(),
+		})
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput ||
+			chatErr.Message != result.Errors[strconv.Itoa(index)] {
+			t.Errorf("event %d: got %v, want the invalid-input drop %q", index, err, result.Errors[strconv.Itoa(index)])
+		}
 	}
 }
 

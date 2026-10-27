@@ -351,7 +351,11 @@ namespace ChatXdk
         /// <summary>Extracted keys and <see cref="ConversationKeyBundle.LatestVersion"/>.</summary>
         public ConversationKeyBundle ConversationKeys { get; init; } = new();
 
-        /// <summary>String indices into the input batch for events that failed to decrypt.</summary>
+        /// <summary>
+        /// String indices into the input batch, with their errors, for the events left out of
+        /// <see cref="Events"/>: one that failed, or one decrypt drops, such as a member
+        /// removal's title or description re-encrypted under the new key.
+        /// </summary>
         public Dictionary<string, string> Errors { get; init; } = new();
     }
 
@@ -364,7 +368,8 @@ namespace ChatXdk
     /// that names no key version carries. <see cref="Kind"/> <c>"Unavailable"</c> carries
     /// <see cref="Raw"/>: a value the SDK could not decrypt, as the event carries it. 0.5.x
     /// apps sent titles as plaintext while naming a key version, so show <see cref="Raw"/>
-    /// when a title isn't decryptable.
+    /// when a title isn't decryptable. A member removal re-encrypts the title and description
+    /// under the new key; those re-encryptions aren't changes, and decrypt drops them.
     /// </summary>
     public sealed class GroupText
     {
@@ -1367,7 +1372,7 @@ namespace ChatXdk
     public sealed class GroupMembersRemoveParams
     {
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
-        /// <param name="publicKeys">Identity public keys of the members who stay.</param>
+        /// <param name="publicKeys">Identity public keys of the members who stay, yours included.</param>
         /// <param name="conversationId">ID of the group conversation.</param>
         /// <param name="userIds">User IDs being removed.</param>
         public GroupMembersRemoveParams(
@@ -1380,13 +1385,23 @@ namespace ChatXdk
             UserIds = userIds;
         }
 
-        /// <summary>Identity public keys of the members who stay; the new key is encrypted for them.</summary>
+        /// <summary>
+        /// Identity public keys of the members who stay, yours included; the new key is encrypted
+        /// for them, and a member left out can't read what the group sends under it.
+        /// </summary>
         public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
         public string ConversationId { get; }
         public IReadOnlyList<string> UserIds { get; }
-        /// <summary>The group's title, re-encrypted under the new conversation key; null leaves it out.</summary>
+        /// <summary>
+        /// The group's current title, re-encrypted under the new conversation key; recipients'
+        /// decrypt drops the re-encryption rather than show a change. Pass it when the group has
+        /// one; null leaves it out.
+        /// </summary>
         public string? Title { get; init; }
-        /// <summary>The group's description, re-encrypted under the new conversation key; null leaves it out.</summary>
+        /// <summary>
+        /// The group's current description, handled as <see cref="Title"/> is. Pass it when the
+        /// group has one; null leaves it out.
+        /// </summary>
         public string? Description { get; init; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }

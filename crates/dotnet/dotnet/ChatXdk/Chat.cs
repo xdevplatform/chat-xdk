@@ -528,7 +528,9 @@ namespace ChatXdk
         /// Under the default reject-unverified policy, a signed event with no usable signing
         /// key (passed or stored via <see cref="SetSigningKeys"/>) throws; only after
         /// <see cref="SetRejectUnverified"/>(false) are such events returned with
-        /// <c>verified: false</c>.
+        /// <c>verified: false</c>. A member removal's title and description, re-encrypted under
+        /// the new key, aren't changes: they throw a <see cref="ChatXdkException"/> of kind
+        /// <see cref="ChatXdkErrorKind.InvalidInput"/> under either policy.
         /// </summary>
         /// <returns>
         /// A <see cref="JsonElement"/> with a <c>"type"</c> field indicating the event kind
@@ -567,7 +569,9 @@ namespace ChatXdk
         /// <summary>
         /// Decrypt a batch of webhook events in one call.
         /// Keys are extracted from <c>KeyChange</c> events in the batch; failures are recorded
-        /// in <see cref="DecryptEventsResult.Errors"/> — this method never throws per-event.
+        /// in <see cref="DecryptEventsResult.Errors"/> — this method never throws per-event. A
+        /// member removal's title and description, re-encrypted under the new key, aren't
+        /// changes: they are recorded there too.
         /// </summary>
         public DecryptEventsResult DecryptEvents(DecryptEventsParams parameters)
         {

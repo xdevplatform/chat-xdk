@@ -215,14 +215,16 @@ pub(crate) fn ffi_prepared_change(
 /// members who stay.
 ///
 /// `params_json` — `public_keys` (the identity keys of the members who
-/// stay), `conversation_id`, `user_ids`, plus optional `title` and
-/// `description` (the group's plaintext metadata, re-encrypted under the
-/// new key) and `sender_id` / `signing_key_version`.
+/// stay, yours included: a member left out can't read what the group sends
+/// under the new key), `conversation_id`, `user_ids`, plus optional `title`
+/// and `description` (the group's current plaintext metadata, re-encrypted
+/// under the new key; pass each one the group has) and `sender_id` /
+/// `signing_key_version`.
 ///
 /// Returns JSON `PreparedConversationChange`: `conversation_key` is the new
 /// raw key base64, and `action_signatures` is the removal, a title and a
 /// description change for each one set, marked as key-rotation
-/// re-encryptions, then the key change.
+/// re-encryptions, which recipients' decrypt drops, then the key change.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_members_remove(
     handle: *const ChatHandle,

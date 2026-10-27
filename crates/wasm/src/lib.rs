@@ -490,7 +490,9 @@ impl Chat {
     /// through). Omitting `signingKeys` falls back to the keys stored via
     /// `setSigningKeys`.
     ///
-    /// Returns `{ events, conversationKeys, errors }`.
+    /// Returns `{ events, conversationKeys, errors }`. A member removal's
+    /// title and description, re-encrypted under the new key, aren't
+    /// changes: they land in `errors`.
     #[wasm_bindgen(js_name = decryptEvents)]
     pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventsParams = from_js_params("decryptEvents", params)?;
@@ -573,7 +575,9 @@ impl Chat {
     /// stored via `setSigningKeys`. Under the default reject-unverified
     /// policy no signing keys from either source makes every signed event
     /// throw; only after `setRejectUnverified(false)` are such events
-    /// returned with `verified: false`.
+    /// returned with `verified: false`. A member removal's title and
+    /// description, re-encrypted under the new key, aren't changes: they
+    /// throw an invalid-input error under either policy.
     #[wasm_bindgen(js_name = decryptEvent)]
     pub fn decrypt_event(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventParams = from_js_params("decryptEvent", params)?;

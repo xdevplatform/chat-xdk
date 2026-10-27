@@ -120,7 +120,13 @@ export class ChatBot {
       if (!eventB64) continue;
       // Both key arguments omitted: conversation keys resolve from the cache
       // and signing keys from the store.
-      const event = this.core.decryptOne(eventB64);
+      let event;
+      try {
+        event = this.core.decryptOne(eventB64);
+      } catch (err) {
+        console.warn(`decrypt_failed conv=${conversationId} err=${err.message}`);
+        continue;
+      }
 
       if (event.type === "keyChange") {
         // Only the batch path feeds the key cache, so route key changes back

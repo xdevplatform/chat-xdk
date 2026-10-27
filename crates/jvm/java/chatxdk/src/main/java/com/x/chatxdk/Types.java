@@ -367,7 +367,11 @@ public final class Types {
         /** Extracted keys and {@link ConversationKeyBundle#latestVersion}. */
         public ConversationKeyBundle conversationKeys = new ConversationKeyBundle();
 
-        /** String indices into the input batch for events that failed to decrypt. */
+        /**
+         * String indices into the input batch, with their errors, for the events left out of
+         * {@link #events}: one that failed, or one decrypt drops, such as a member removal's
+         * title or description re-encrypted under the new key.
+         */
         public Map<String, String> errors = Collections.emptyMap();
     }
 
@@ -381,7 +385,8 @@ public final class Types {
      * that names no key version carries. {@code kind} {@code "Unavailable"} carries
      * {@link #raw}: a value the SDK could not decrypt, as the event carries it. 0.5.x apps
      * sent titles as plaintext while naming a key version, so show {@link #raw} when a title
-     * isn't decryptable.
+     * isn't decryptable. A member removal re-encrypts the title and description under the new
+     * key; those re-encryptions aren't changes, and decrypt drops them.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class GroupText {
@@ -1510,15 +1515,25 @@ public final class Types {
      * conversation key for the members who stay.
      */
     public static final class GroupMembersRemoveParams {
-        /** Identity public keys of the members who stay; the new key is encrypted for them. */
+        /**
+         * Identity public keys of the members who stay, yours included; the new key is encrypted
+         * for them, and a member left out can't read what the group sends under it.
+         */
         public final List<PublicKeyInput> publicKeys;
         /** ID of the group conversation. */
         public final String conversationId;
         /** User IDs being removed. */
         public final List<String> userIds;
-        /** The group's title, re-encrypted under the new conversation key; null leaves it out. */
+        /**
+         * The group's current title, re-encrypted under the new conversation key; recipients'
+         * decrypt drops the re-encryption rather than show a change. Pass it when the group has
+         * one; null leaves it out.
+         */
         public String title;
-        /** The group's description, re-encrypted under the new conversation key; null leaves it out. */
+        /**
+         * The group's current description, handled as {@link #title} is. Pass it when the group
+         * has one; null leaves it out.
+         */
         public String description;
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;

@@ -167,7 +167,11 @@ export interface DecryptEventsResult {
   events: DecryptedEvent[];
   /** Extracted conversation keys (for caching). */
   conversationKeys: ConversationKeyResult;
-  /** Errors encountered during decryption (event index, as a string key → error message). */
+  /**
+   * Event index, as a string key → error message, for each event left out of
+   * `events`: one that failed, or one decrypt drops, such as a member
+   * removal's title or description re-encrypted under the new key.
+   */
   errors: { [index: string]: string };
 }
 
@@ -569,15 +573,23 @@ export type ScreenCaptureChange =
  * conversation key for the members who stay.
  */
 export interface GroupMembersRemoveParams {
-  /** Identity public keys of the members who stay; the new key is encrypted for them. */
+  /**
+   * Identity public keys of the members who stay, yours included; the new key
+   * is encrypted for them, and a member left out can't read what the group
+   * sends under it.
+   */
   publicKeys: PublicKeyInput[];
   /** ID of the group conversation. */
   conversationId: string;
   /** User IDs being removed. */
   userIds: string[];
-  /** The group's title, re-encrypted under the new conversation key and signed with the removal. */
+  /**
+   * The group's current title, re-encrypted under the new conversation key and
+   * signed with the removal; recipients' decrypt drops it rather than show a
+   * change. Pass it when the group has one.
+   */
   title?: string | null;
-  /** The group's description, re-encrypted under the new conversation key and signed with the removal. */
+  /** The group's current description, handled as `title` is. Pass it when the group has one. */
   description?: string | null;
   /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
@@ -1064,7 +1076,9 @@ export interface Event {
  * value decrypted, or the plaintext an event that names no key version
  * carries. 'unavailable' carries `raw`, a value the SDK could not decrypt, as
  * the event carries it. 0.5.x apps sent titles as plaintext while naming a
- * key version, so show `raw` when a title isn't decryptable.
+ * key version, so show `raw` when a title isn't decryptable. A member removal
+ * re-encrypts the title and description under the new key; those
+ * re-encryptions aren't changes, and decrypt drops them.
  */
 export type GroupText = { kind: 'text'; text: string } | { kind: 'unavailable'; raw: string };
 
@@ -1324,7 +1338,9 @@ interface ChatCrypto {
    * Under the default reject-unverified policy, no signing keys (passed or
    * stored via `setSigningKeys`) makes every signed event land in `errors`;
    * only after `setRejectUnverified(false)` are such events returned with
-   * `verified: false`.
+   * `verified: false`. A member removal's title and description,
+   * re-encrypted under the new key, aren't changes: they land in `errors`
+   * under either policy.
    */
   decryptEvents(params: DecryptEventsParams): DecryptEventsResult;
 
@@ -1334,7 +1350,9 @@ interface ChatCrypto {
    * Under the default reject-unverified policy, no signing keys (passed or
    * stored via `setSigningKeys`) makes every signed event throw; only after
    * `setRejectUnverified(false)` are such events returned with
-   * `verified: false`.
+   * `verified: false`. A member removal's title and description,
+   * re-encrypted under the new key, aren't changes: they throw a
+   * `ChatXdkError` of kind `'invalidInput'` under either policy.
    */
   decryptEvent(params: DecryptEventParams): Event;
 

@@ -16,7 +16,7 @@ use chat_xdk_core::keys::conversation_keys::encrypt_conversation_key;
 use chat_xdk_core::signatures::build_ckey_change_signature;
 use chat_xdk_core::{
     AttachmentDescriptor, ChatCore, EncryptMessageParams, GroupAvatarChangeParams,
-    GroupDescriptionChangeParams,
+    GroupDescriptionChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::json;
@@ -37,6 +37,12 @@ const EVENT_GROUP_DESCRIPTION: &str = "fixture group description, encrypted";
 const EVENT_GROUP_TITLE: &str = "fixture group title, encrypted";
 const EVENT_GROUP_AVATAR_URL: &str = "https://ton.x.com/xchat_media/g1111/fixture-avatar";
 const EVENT_GROUP_CREATE_KEY_VERSION: &str = "1002";
+const EVENT_GROUP_REMOVED_MEMBER_ID: &str = "2222";
+const EVENT_GROUP_REMOVAL_KEY_VERSION: &str = "1003";
+const EVENT_GROUP_RENAMED_TITLE: &str = "fixture group renamed";
+// Positions in the removal flow below of the title and description
+// re-encryptions, which decrypt drops.
+const EVENT_GROUP_REMOVAL_DROPPED_INDICES: [usize; 2] = [1, 2];
 
 // Raw Thrift enum values embedded in the failure vector; suites assert the
 // decoded names ("RateLimitUpsell" / "Premium", camelCased in JS).
@@ -303,6 +309,47 @@ fn main() {
         .as_ref()
         .expect("group create key");
 
+    // Group removal flow: what a member who stays receives for a removal
+    // that passes the group's title and description — the removal, the
+    // title and description re-encrypted under the new key, the key change
+    // — then a rename under that key. Every suite checks decrypt keeps the
+    // removal, the key change and the rename and drops the re-encryptions.
+    let removal = core
+        .prepare_group_members_remove_with_version(
+            &GroupMembersRemoveParams::new(
+                vec![chat_xdk_core::PublicKeyInput::new(
+                    EVENT_SENDER_ID,
+                    B64.encode(identity_kp.public.encoded()),
+                    EVENT_RECIPIENT_KEY_VERSION,
+                )],
+                EVENT_GROUP_ID,
+                vec![EVENT_GROUP_REMOVED_MEMBER_ID.to_string()],
+            )
+            .with_title(EVENT_GROUP_TITLE)
+            .with_description(EVENT_GROUP_DESCRIPTION),
+            EVENT_GROUP_REMOVAL_KEY_VERSION,
+        )
+        .expect("prepare group member removal");
+    let removal_key = removal.conversation_key.as_ref().expect("removal key");
+    let rename = core
+        .prepare_group_title_change(
+            &GroupTitleChangeParams::new(EVENT_GROUP_ID, EVENT_GROUP_RENAMED_TITLE)
+                .with_conversation_key(
+                    removal_key.encoded().to_vec(),
+                    EVENT_GROUP_REMOVAL_KEY_VERSION,
+                ),
+        )
+        .expect("prepare group rename");
+    let event_group_removal_flow_b64: Vec<String> = removal
+        .action_signatures
+        .iter()
+        .chain(&rename.action_signatures)
+        .map(|signature| {
+            internals::frame_action_signature(signature, EVENT_SENDER_ID, EVENT_GROUP_ID)
+                .expect("frame group removal flow")
+        })
+        .collect();
+
     // Failure vector: an unsigned RATE_LIMIT_UPSELL failure carrying the
     // PREMIUM tier, so every suite can pin the decoded failure metadata.
     let event_failure_b64 = internals::frame_failure_event(
@@ -515,6 +562,11 @@ fn main() {
         "event_group_title": EVENT_GROUP_TITLE,
         "event_group_avatar_change_b64": event_group_avatar_change_b64,
         "event_group_avatar_url": EVENT_GROUP_AVATAR_URL,
+        "event_group_removal_flow_b64": event_group_removal_flow_b64,
+        "event_group_removal_dropped_indices": EVENT_GROUP_REMOVAL_DROPPED_INDICES,
+        "event_group_removal_conversation_key_version": EVENT_GROUP_REMOVAL_KEY_VERSION,
+        "event_group_removed_member_id": EVENT_GROUP_REMOVED_MEMBER_ID,
+        "event_group_renamed_title": EVENT_GROUP_RENAMED_TITLE,
         "event_key_change_b64": event_key_change_b64,
         "event_message_b64": event_message_b64,
         "event_reply_valid_b64": event_reply_valid_b64,

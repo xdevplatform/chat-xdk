@@ -413,6 +413,10 @@ namespace ChatXdk
         ///  optional `signing_keys` (`[{"user_id","public_key_version","public_key",
         ///  "identity_public_key","identity_public_key_signature"},...]`); absent or
         ///  empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
+        ///
+        ///  The result's `errors` maps the index of each event left out of `events`,
+        ///  as a string, to its error: one that failed, or one decrypt drops, such as
+        ///  a member removal's title or description re-encrypted under the new key.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_events", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_decrypt_events(ChatHandle* handle, byte* params_json);
@@ -428,7 +432,9 @@ namespace ChatXdk
         ///  `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
         ///  events fail decryption under the default reject-unverified policy
         ///  (disable it via `chat_xdk_set_reject_unverified` to have them returned
-        ///  with `verified: false` instead).
+        ///  with `verified: false` instead). A member removal's title and
+        ///  description, re-encrypted under the new key, aren't changes: they fail
+        ///  with an `invalid_input` error under either policy.
         ///
         ///  Returns JSON representation of the decrypted Event.
         /// </summary>
@@ -594,14 +600,16 @@ namespace ChatXdk
         ///  members who stay.
         ///
         ///  `params_json` — `public_keys` (the identity keys of the members who
-        ///  stay), `conversation_id`, `user_ids`, plus optional `title` and
-        ///  `description` (the group's plaintext metadata, re-encrypted under the
-        ///  new key) and `sender_id` / `signing_key_version`.
+        ///  stay, yours included: a member left out can't read what the group sends
+        ///  under the new key), `conversation_id`, `user_ids`, plus optional `title`
+        ///  and `description` (the group's current plaintext metadata, re-encrypted
+        ///  under the new key; pass each one the group has) and `sender_id` /
+        ///  `signing_key_version`.
         ///
         ///  Returns JSON `PreparedConversationChange`: `conversation_key` is the new
         ///  raw key base64, and `action_signatures` is the removal, a title and a
         ///  description change for each one set, marked as key-rotation
-        ///  re-encryptions, then the key change.
+        ///  re-encryptions, which recipients' decrypt drops, then the key change.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_group_members_remove", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_group_members_remove(ChatHandle* handle, byte* params_json);

@@ -356,7 +356,9 @@ impl ChatCore {
     ///   the batch's conversations and held monotonic for this instance's
     ///   lifetime; `None` until a key change verifies. A key from a key change
     ///   that did not verify still decrypts but never becomes the latest.
-    /// * `errors` - Map of event index → error message for failed decryptions
+    /// * `errors` - Map of event index → error message for the events left
+    ///   out of `events`: those that failed, and those decrypt drops, as
+    ///   [`Self::decrypt_event`] describes
     pub fn decrypt_events(&self, params: &DecryptEventsParams) -> DecryptEventsResult {
         let events: Vec<&str> = params.events.iter().map(String::as_str).collect();
         self.decrypt_events_with(&events, params.signing_keys.as_deref().unwrap_or_default())
@@ -469,6 +471,13 @@ impl ChatCore {
     /// policy, no matching key makes every signed event fail; only after
     /// [`Self::set_reject_unverified`]`(false)` are such events returned with
     /// `verified: false`.
+    ///
+    /// A member removal re-encrypts the group's title and description under
+    /// the new key and marks them as key-rotation re-encryptions. They aren't
+    /// changes, so decrypt drops them under either policy: this call fails
+    /// with an [`SdkError::InvalidInput`] that says so, and
+    /// [`Self::decrypt_events`] leaves them out of `events` and records them
+    /// in `errors`. The removal itself and its key change decrypt as usual.
     pub fn decrypt_event(&self, params: &DecryptEventParams) -> Result<Event, SdkError> {
         self.decrypt_event_with(
             &params.event_b64,
@@ -675,6 +684,7 @@ impl ChatCore {
                 let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
                 let verified = matches!(sig_result, Ok(true));
                 self.reject_if_unverified(&sig_result, "GroupChange")?;
+                reject_key_rotation_reencryption(group_change)?;
                 let change = self.group_change(
                     parsed.conversation_id.as_deref(),
                     group_change.group_change.as_ref(),
@@ -897,4 +907,26 @@ impl ChatCore {
             },
         }
     }
+}
+
+/// A member removal re-encrypts the group's title and description under the
+/// new key and marks them `for_key_rotation`: the same text, not a change,
+/// so decrypt drops them. The flag is outside the signed payload, so a relay
+/// that sets it gains nothing over withholding the event.
+fn reject_key_rotation_reencryption(
+    event: &crate::thrift::event::GroupChangeEvent,
+) -> Result<(), SdkError> {
+    use crate::thrift::event::GroupChange as GenGC;
+    if event.for_key_rotation != Some(true) {
+        return Ok(());
+    }
+    let field = match event.group_change {
+        Some(GenGC::GroupTitleChange(_)) => "title",
+        Some(GenGC::GroupDescriptionChange(_)) => "description",
+        _ => return Ok(()),
+    };
+    Err(SdkError::InvalidInput(format!(
+        "GroupChange re-encrypts the group's {field} for a key rotation (for_key_rotation), \
+         not a {field} change: decrypt does not return it"
+    )))
 }

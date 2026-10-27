@@ -33,6 +33,11 @@ struct Vectors {
     event_group_title: String,
     event_group_avatar_change_b64: String,
     event_group_avatar_url: String,
+    event_group_removal_flow_b64: Vec<String>,
+    event_group_removal_dropped_indices: Vec<usize>,
+    event_group_removal_conversation_key_version: String,
+    event_group_removed_member_id: String,
+    event_group_renamed_title: String,
     event_key_change_b64: String,
     event_message_b64: String,
     event_reply_valid_b64: String,
@@ -347,6 +352,80 @@ fn text_of(value: &GroupText) -> &str {
     match value {
         GroupText::Text { text, .. } => text,
         other => panic!("Expected decrypted text, got {:?}", other),
+    }
+}
+
+#[test]
+fn vectors_group_removal_drops_the_metadata_reencryptions() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new(); // default reject_unverified = true
+    core.import_keys(
+        &ImportKeysParams::new(B64.decode(&v.private_keys_concat_b64).unwrap().to_vec())
+            .with_signing_key_version(&v.event_recipient_key_version),
+    )
+    .unwrap();
+    let signing_keys = vec![signing_key_for(&v, &v.event_sender_id)];
+    let flow = &v.event_group_removal_flow_b64;
+
+    let result = core.decrypt_events(
+        &DecryptEventsParams::new(flow.clone()).with_signing_keys(signing_keys.clone()),
+    );
+    let mut dropped: Vec<usize> = result.errors.keys().copied().collect();
+    dropped.sort_unstable();
+    assert_eq!(dropped, v.event_group_removal_dropped_indices);
+    assert_eq!(
+        result.conversation_keys.latest_version.as_deref(),
+        Some(v.event_group_removal_conversation_key_version.as_str())
+    );
+    let kept: Vec<&chat_xdk_core::Event> = result.events.iter().map(|e| &e.event).collect();
+    assert_eq!(kept.len(), 3, "{kept:?}");
+    match kept[0] {
+        chat_xdk_core::Event::GroupChange(change) => match &change.change {
+            chat_xdk_core::GroupChange::MembersRemoved { member_ids, .. } => {
+                assert!(change.verified);
+                assert_eq!(
+                    member_ids,
+                    std::slice::from_ref(&v.event_group_removed_member_id)
+                );
+            }
+            other => panic!("Expected MembersRemoved, got {:?}", other),
+        },
+        other => panic!("Expected the removal, got {:?}", other),
+    }
+    match kept[1] {
+        chat_xdk_core::Event::KeyChange(change) => {
+            assert!(change.verified);
+            assert_eq!(
+                change.conversation_key_version,
+                v.event_group_removal_conversation_key_version
+            );
+        }
+        other => panic!("Expected the key change, got {:?}", other),
+    }
+    match kept[2] {
+        chat_xdk_core::Event::GroupChange(change) => match &change.change {
+            chat_xdk_core::GroupChange::TitleChanged { new_title, .. } => {
+                assert!(change.verified);
+                assert_eq!(text_of(new_title), v.event_group_renamed_title);
+            }
+            other => panic!("Expected TitleChanged, got {:?}", other),
+        },
+        other => panic!("Expected the rename, got {:?}", other),
+    }
+
+    // The single-event path drops the same events, as invalid input.
+    for index in &v.event_group_removal_dropped_indices {
+        let err = core
+            .decrypt_event(
+                &DecryptEventParams::new(
+                    flow[*index].clone(),
+                    result.conversation_keys.keys.clone(),
+                )
+                .with_signing_keys(signing_keys.clone()),
+            )
+            .unwrap_err();
+        assert_eq!(err.kind(), chat_xdk_core::error::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), result.errors[index]);
     }
 }
 

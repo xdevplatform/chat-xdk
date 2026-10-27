@@ -141,7 +141,16 @@ public sealed class Bot
             if (!item.TryGetProperty("encoded_event", out var ev) || ev.GetString() is not { } eventB64)
                 continue;
             // An empty key map: the conversation keys come from the cache.
-            var decrypted = _core.DecryptOne(eventB64, new Dictionary<string, byte[]>(), signingKeys);
+            JsonElement decrypted;
+            try
+            {
+                decrypted = _core.DecryptOne(eventB64, new Dictionary<string, byte[]>(), signingKeys);
+            }
+            catch (ChatXdkException e)
+            {
+                Console.Error.WriteLine($"decrypt_failed conv={conversationId} err={e.Message}");
+                continue;
+            }
 
             if (decrypted.TryGetProperty("type", out var t) && t.GetString() == "KeyChange")
             {

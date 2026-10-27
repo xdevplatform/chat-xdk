@@ -114,7 +114,10 @@ type DecryptedEvent struct {
 	OriginalB64 string `json:"original_b64,omitempty"`
 }
 
-// DecryptEventsResult is the batch decrypt API.
+// DecryptEventsResult is the batch decrypt API. Errors maps the index of each
+// event left out of Events, as a string, to its error: one that failed, or one
+// decrypt drops, such as a member removal's title or description re-encrypted
+// under the new key.
 type DecryptEventsResult struct {
 	Events           []DecryptedEvent      `json:"events"`
 	ConversationKeys ConversationKeyBundle `json:"conversation_keys"`
@@ -441,12 +444,15 @@ const (
 
 // GroupMembersRemoveParams are the parameters for PrepareGroupMembersRemove.
 //
-// PublicKeys are the identity keys of the members who stay: the call rotates
-// the conversation key for them. Title and Description are the group's
-// plaintext metadata; each one set is encrypted under the new key and signed
-// with the removal as a key-rotation re-encryption.
+// PublicKeys are the identity keys of the members who stay, yours included:
+// the call rotates the conversation key for them, and a member left out can't
+// read what the group sends under the new key. Title and Description are the
+// group's current plaintext metadata; pass each one the group has. Each one
+// set is encrypted under the new key and signed with the removal as a
+// key-rotation re-encryption, which recipients' decrypt drops rather than show
+// as a change.
 type GroupMembersRemoveParams struct {
-	// PublicKeys are the identity keys of the members who stay.
+	// PublicKeys are the identity keys of the members who stay, yours included.
 	PublicKeys     []PublicKeyInput `json:"public_keys"`
 	ConversationID string           `json:"conversation_id"`
 	// UserIDs are the user ids being removed.
@@ -956,7 +962,9 @@ type GroupChangeEvent struct {
 // the value decrypted, or the plaintext an event that names no key version
 // carries. Kind "Unavailable" carries Raw: a value the SDK could not decrypt,
 // as the event carries it. 0.5.x apps sent titles as plaintext while naming a
-// key version, so show Raw when a title isn't decryptable.
+// key version, so show Raw when a title isn't decryptable. A member removal
+// re-encrypts the title and description under the new key; those
+// re-encryptions aren't changes, and decrypt drops them.
 type GroupText struct {
 	Kind string `json:"kind"`
 	Text string `json:"text,omitempty"`

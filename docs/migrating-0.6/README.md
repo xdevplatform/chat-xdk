@@ -1,9 +1,23 @@
 # Migrating to chat-xdk 0.6.0
 
-0.6.0 changes the API of every binding. Each guide below covers one
-binding: a checklist of everything its code written for 0.5.x (0.5.0, 0.5.1
-or 0.5.2) runs into, then each change with the lines to change.
-[Why 0.6.0 changes](why.md) explains why each change was made.
+0.6.0 changes the API of every binding. Each guide below moves one
+binding's code written for 0.5.x (0.5.0, 0.5.1 or 0.5.2) to 0.6.0 on its
+own, and every guide has the same sections:
+
+0. **Before you start**: the install line, the readers to upgrade first, and
+   the feature-switch request.
+1. **Symbol index**: every 0.5.x name that changes, with its 0.6.0 form.
+2. **Compile-time changes**, in the order an app meets them.
+3. **Runtime and behavior changes**, which nothing reports before the code
+   runs.
+4. **Group and receipt signing**: every signed request, with its X API
+   method, path and body.
+5. **Verify**: the build, a search for 0.5.x names, and a round trip.
+
+A checklist at the top of each guide tags every item `[rollout]`,
+`[compile]`, `[runtime]` or `[new]`. CI compiles the 0.6.0 half of every
+snippet in the guides against 0.6.0. [Why 0.6.0 changes](why.md) explains
+why each change was made.
 
 | Binding | Package | Migration guide |
 |---|---|---|
@@ -17,8 +31,9 @@ or 0.5.2) runs into, then each change with the lines to change.
 
 One step applies across bindings: upgrade every app that reads your
 conversations before any sender can send v1, the format with per-message
-keys, because 0.5.x rejects v1 sends. Each page explains it under "Upgrade
-readers before v1 sends start".
+keys, and before you remove group members or add them with a description,
+because 0.5.x rejects those signatures. Each guide explains it under
+"Upgrade readers first".
 
 The [CHANGELOG](../../CHANGELOG.md) lists every change in 0.6.0, and
 [API.md](../API.md) documents the 0.6.0 API.

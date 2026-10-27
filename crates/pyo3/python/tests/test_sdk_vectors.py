@@ -392,6 +392,56 @@ class TestPythonSdkVectors(unittest.TestCase):
             },
         )
 
+    def test_group_removal_drops_the_title_and_description_reencryptions(self):
+        from chat_xdk import (
+            Chat,
+            DecryptEventParams,
+            DecryptEventsParams,
+            ImportKeysParams,
+            InvalidInputError,
+        )
+
+        v = _load_vectors()
+        chat = Chat()  # default reject-unverified policy
+        chat.import_keys(ImportKeysParams(base64.b64decode(v["private_keys_concat_b64"]), signing_key_version=v["event_recipient_key_version"]))
+        flow = v["event_group_removal_flow_b64"]
+        version = v["event_group_removal_conversation_key_version"]
+
+        result = chat.decrypt_events(
+            DecryptEventsParams(flow, signing_keys=_fixture_signing_keys(v))
+        )
+        dropped = [str(index) for index in v["event_group_removal_dropped_indices"]]
+        self.assertEqual(sorted(result["errors"]), dropped)
+        self.assertEqual(result["conversation_keys"]["latest_version"], version)
+        kept = [m["event"] for m in result["events"]]
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(
+            kept[0]["change"],
+            {"change_type": "MembersRemoved", "member_ids": [v["event_group_removed_member_id"]]},
+        )
+        self.assertEqual(kept[1]["type"], "KeyChange")
+        self.assertEqual(kept[1]["conversation_key_version"], version)
+        self.assertEqual(
+            kept[2]["change"],
+            {
+                "change_type": "TitleChanged",
+                "new_title": {"kind": "Text", "text": v["event_group_renamed_title"]},
+            },
+        )
+        self.assertTrue(all(event["verified"] for event in kept))
+
+        # The single-event path drops the same events, as invalid input.
+        for index in v["event_group_removal_dropped_indices"]:
+            with self.assertRaises(InvalidInputError) as ctx:
+                chat.decrypt_event(
+                    DecryptEventParams(
+                        flow[index],
+                        result["conversation_keys"]["keys"],
+                        signing_keys=_fixture_signing_keys(v),
+                    )
+                )
+            self.assertEqual(str(ctx.exception), result["errors"][str(index)])
+
     def test_group_create_decrypts_its_title_on_receive(self):
         from chat_xdk import Chat, DecryptEventParams, DecryptEventsParams
 

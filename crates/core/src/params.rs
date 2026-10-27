@@ -1130,14 +1130,18 @@ impl GroupCreateParams {
 
 /// Parameters for [`crate::ChatCore::prepare_group_members_remove`].
 ///
-/// `public_keys` are the identity keys of the members who stay: the call
-/// rotates the conversation key and encrypts the new key for them, so the
-/// removed members don't receive the key the group encrypts under next.
+/// `public_keys` are the identity keys of the members who stay, yours
+/// included: the call rotates the conversation key and encrypts the new key
+/// to each member's newest key version, so the removed members don't receive
+/// the key the group encrypts under next. A member left out, you included,
+/// can't read what the group sends under the new key.
 ///
-/// `title` and `description` are the group's plaintext title and
-/// description. Each one set is encrypted under the new key and signed as a
-/// change of its own, marked as a key-rotation re-encryption, so the members
-/// who stay read it under the key they hold; an empty value is unset.
+/// `title` and `description` are the group's current plaintext title and
+/// description; pass each one the group has. Each one set is encrypted under
+/// the new key and signed as a change of its own, marked as a key-rotation
+/// re-encryption, so the members who stay read it under the key they hold
+/// and their decrypt drops it rather than show a change; an empty value is
+/// unset.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupMembersRemoveParams {
