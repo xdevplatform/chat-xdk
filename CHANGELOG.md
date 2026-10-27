@@ -18,6 +18,11 @@ range. NaN, an infinity or a number past that range names no instant or
 duration, so the call throws an `Invalid <method> params` error rather than
 signing some other value. A fraction is truncated toward zero.
 
+In every binding the feature-switch request sends and stores no cookies and
+follows no redirect. A cookie the endpoint sets never reaches a later chat's
+request, and a redirect counts as an answer other than 200, so the chat's
+sends stay v0.
+
 ### Added
 
 Group and conversation-metadata actions should be signed before they are sent.

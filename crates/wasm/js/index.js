@@ -643,8 +643,12 @@ async function getWithFetch(url, timeoutMs, maxBytes) {
   const request = new AbortController();
   const timer = unrefTimer(setTimeout(() => request.abort(), timeoutMs));
   try {
+    // The read is anonymous: it sends no cookies, and it follows no redirect,
+    // so a 3xx answer fails the read rather than reaching another URL.
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
+      credentials: "omit",
+      redirect: "error",
       signal: request.signal,
     });
     return { status: response.status, body: await readCappedBody(response, maxBytes) };
