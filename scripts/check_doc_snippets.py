@@ -462,8 +462,8 @@ GO_PARAMS = [
     ("chat", "*chatxdk.Chat"), ("api", "apiClient"), ("keys", "map[string][]byte"),
     ("payload", "*chatxdk.SendPayload"), ("prepared", "*chatxdk.PreparedConversationChange"),
     ("keyChange", "*chatxdk.KeyChangeEvent"), ("message", "*chatxdk.Message"),
-    ("receipt", "*chatxdk.ReadReceiptEvent"), ("deleted", "*chatxdk.MessageDeletedEvent"),
-    ("groupChange", "*chatxdk.GroupChangeEvent"), ("event", "*chatxdk.Event"),
+    ("receipt", "chatxdk.ReadReceiptEvent"), ("groupChange", "*chatxdk.GroupChangeEvent"),
+    ("event", "*chatxdk.Event"),
     ("bundle", "*chatxdk.ConversationKeyBundle"), ("page", "eventsPage"),
 ] + [(n, "string") for n in [
     "userID", "myUserID", "signingKeyVersion", "conversationID", "pathID", "conversationKeyVersion",
@@ -514,7 +514,10 @@ type eventsPage struct {
 	} `json:"data"`
 }
 
+func must(err error)                                                  {}
 func photoAttachment(mediaHashKey string) chatxdk.AttachmentDescriptor { return chatxdk.AttachmentDescriptor{} }
+func showReaction(sequenceID, emoji string)                           {}
+func showEvent(event chatxdk.Event)                                   {}
 func showEdit(sequenceID, text string)                                {}
 func showTitle(title string)                                          {}
 func showDescription(description string)                              {}
@@ -527,12 +530,13 @@ func storeConversationKey(conversationID, version string, key []byte) {}
 
 
 def go_declared(code):
+    """Names a snippet declares at its top level, which Go requires used."""
     names = set()
-    for m in re.finditer(r"^\s*([\w, ]+?)\s*:=", code, re.M):
+    for m in re.finditer(r"^([\w, ]+?)\s*:=", code, re.M):
         if re.match(r"(for|if|switch|select)\b", m.group(1).strip()):
             continue
         names.update(n.strip() for n in m.group(1).split(","))
-    names |= declared(code, r"^\s*var (\w+)")
+    names |= declared(code, r"^var (\w+)")
     names.discard("_")
     return names
 
