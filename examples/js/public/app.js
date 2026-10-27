@@ -152,7 +152,13 @@ async function poll() {
       if (!eventB64) continue;
       // An empty key map resolves from the cache, and the omitted signing
       // keys from the store.
-      const event = chat.decryptEvent({ eventB64, conversationKeys: {} });
+      let event;
+      try {
+        event = chat.decryptEvent({ eventB64, conversationKeys: {} });
+      } catch (e) {
+        log(`decrypt_failed: ${e.message}`);
+        continue;
+      }
       if (event.type === "keyChange") {
         // Only the batch path feeds the key cache, so route key changes back
         // through it to adopt the rotated key.
