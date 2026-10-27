@@ -998,6 +998,62 @@ class TestApiShapes(unittest.TestCase):
             chat.prepare_screen_capture(ScreenCaptureParams("g100", "nope", **ident))
         self.assertIn("Invalid screen capture change: 'nope'", str(raised.exception))
 
+    def test_group_actions_sign_each_action(self):
+        """The group and conversation-metadata actions each sign one action at
+        signature version 7: its payload names the event and ends with the
+        signed fields, and its signature verifies with the signer's signing key."""
+        from chat_xdk import (
+            GroupAdminsAddParams,
+            GroupAdminsRemoveParams,
+            GroupAvatarChangeParams,
+            GroupDescriptionChangeParams,
+            GroupInviteDisableParams,
+            GroupInviteEnableParams,
+            GroupJoinRejectParams,
+            GroupJoinRequestParams,
+            MessageTtlChangeParams,
+            MessageTtlRemoveParams,
+            SetIdentityParams,
+        )
+
+        chat, _ = self._unlocked_chat()
+        chat.set_identity(SetIdentityParams("111", "1"))
+        signing_key = chat.get_public_keys().signing
+        cases = [
+            ("GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
+             lambda: chat.prepare_group_avatar_change(GroupAvatarChangeParams("g100", "4", "https://img/a.png"))),
+            ("GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
+             lambda: chat.prepare_group_description_change(GroupDescriptionChangeParams("g100", "4", "enc-desc"))),
+            ("GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+             lambda: chat.prepare_group_admins_add(GroupAdminsAddParams("g100", ["910008", "910009"]))),
+            ("GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+             lambda: chat.prepare_group_admins_remove(GroupAdminsRemoveParams("g100", ["910008"]))),
+            ("GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null",
+             lambda: chat.prepare_group_invite_enable(GroupInviteEnableParams("g100", "https://x.com/i/invite/abc"))),
+            ("GroupChangeEvent.GroupInviteDisable", ",g100,111",
+             lambda: chat.prepare_group_invite_disable(GroupInviteDisableParams("g100"))),
+            ("GroupChangeEvent.GroupJoinRequest", ",g100,111",
+             lambda: chat.prepare_group_join_request(GroupJoinRequestParams("g100"))),
+            ("GroupChangeEvent.GroupJoinReject", ",g100,910010",
+             lambda: chat.prepare_group_join_reject(GroupJoinRejectParams("g100", ["910010"]))),
+            ("ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000",
+             lambda: chat.prepare_message_ttl_change(MessageTtlChangeParams("g100", 86400000))),
+            ("ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+             lambda: chat.prepare_message_ttl_remove(MessageTtlRemoveParams("g100"))),
+        ]
+        for event, suffix, prepare in cases:
+            with self.subTest(event=event):
+                action = _only_action(prepare())
+                payload = action["signature_payload"]
+                self.assertTrue(payload.startswith(event + ","), payload)
+                self.assertTrue(payload.endswith(suffix), payload)
+                sig = action["message_event_signature"]
+                self.assertEqual(sig["signature_version"], "7")
+                self.assertEqual(sig["signing_public_key"], signing_key)
+                # The signature is base64 without padding, as the wire carries it.
+                raw = base64.b64decode(sig["signature"] + "=" * (-len(sig["signature"]) % 4))
+                self.assertTrue(chat.verify(signing_key, raw, payload.encode("utf-8")))
+
     def test_prepare_message_delete_shape(self):
         from chat_xdk import MessageDeleteParams
 

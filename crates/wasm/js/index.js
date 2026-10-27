@@ -295,6 +295,25 @@ export function juiceboxClientConfig(configValue) {
   return configValue;
 }
 
+// The conversation key is secret: JSON.stringify leaves it out of a prepared
+// change. toJSON is non-enumerable, so keys, spreads and copies are unaffected.
+function preparedChangeToJson() {
+  const { conversationKey: _secret, ...json } = this;
+  return json;
+}
+
+function keepKeyOutOfJson(prepared) {
+  if (prepared !== null && typeof prepared === "object") {
+    Object.defineProperty(prepared, "toJSON", {
+      value: preparedChangeToJson,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return prepared;
+}
+
 // ChatWithJuicebox — JS wrapper that owns both a WasmChat and a Juicebox client
 
 /**
@@ -503,10 +522,10 @@ export class ChatWithJuicebox {
   fileDecryptor(params) { return this.#inner.fileDecryptor(params); }
   encrypt(plaintext, key) { return this.#inner.encrypt(plaintext, key); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
-  prepareConversationKeyChange(params) { return this.#inner.prepareConversationKeyChange(params); }
-  prepareGroupMembersChange(params) { return this.#inner.prepareGroupMembersChange(params); }
-  prepareGroupCreate(params) { return this.#inner.prepareGroupCreate(params); }
-  prepareGroupMembersRemove(params) { return this.#inner.prepareGroupMembersRemove(params); }
+  prepareConversationKeyChange(params) { return keepKeyOutOfJson(this.#inner.prepareConversationKeyChange(params)); }
+  prepareGroupMembersChange(params) { return keepKeyOutOfJson(this.#inner.prepareGroupMembersChange(params)); }
+  prepareGroupCreate(params) { return keepKeyOutOfJson(this.#inner.prepareGroupCreate(params)); }
+  prepareGroupMembersRemove(params) { return keepKeyOutOfJson(this.#inner.prepareGroupMembersRemove(params)); }
   prepareGroupLeave(params) { return this.#inner.prepareGroupLeave(params); }
   prepareGroupTitleChange(params) { return this.#inner.prepareGroupTitleChange(params); }
   prepareGroupAvatarChange(params) { return this.#inner.prepareGroupAvatarChange(params); }

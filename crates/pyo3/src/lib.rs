@@ -2390,7 +2390,7 @@ impl Chat {
     /// Returns:
     ///     A dict with:
     ///     - ``keys``: Dict mapping key version string to raw 32-byte conversation key (``bytes``)
-    ///     - ``latest_version``: The highest key version (use for encrypting new messages)
+    ///     - ``latest_version``: The highest key version; signatures are not checked
     fn extract_conversation_keys(&self, events: Vec<String>) -> PyResult<Py<PyAny>> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
         let result = self.inner.extract_conversation_keys(&refs);
@@ -3128,13 +3128,17 @@ impl Chat {
         self.inner.import_keys(&core).map_err(to_py_err)
     }
 
-    /// Sign arbitrary data. Returns raw signature bytes.
+    /// Sign application data. Returns raw signature bytes.
     ///
     /// Args:
     ///     data: Bytes to sign.
     ///
     /// Returns:
     ///     Raw signature bytes (64 bytes).
+    ///
+    /// Raises:
+    ///     ValueError: ``data`` is an event signature payload or a public key,
+    ///         which only the SDK signs.
     fn sign<'py>(&self, py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
         let sig = self.inner.sign(data).map_err(to_py_err)?;
         Ok(PyBytes::new(py, &sig))
