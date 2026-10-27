@@ -386,6 +386,30 @@ class ChatTest {
     }
 
     @Test
+    void unsetRequiredDescriptorFieldsAreNamedNotDefaulted() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
+            byte[] ckey = newConvKey(chat);
+            EncryptMessageParams p = new EncryptMessageParams("conv-1", "unset fields");
+            p.conversationKey = ckey;
+            p.conversationKeyVersion = "1";
+            // A required field left unset is omitted, so the core names it.
+            p.attachments = java.util.List.of(new Types.AttachmentDescriptor());
+            ChatXdkException missingType = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, missingType.getKind());
+            assertTrue(missingType.getMessage().contains("attachment_type"), missingType.getMessage());
+
+            Types.UrlAttachmentImageDescriptor banner = new Types.UrlAttachmentImageDescriptor();
+            banner.mediaHashKey = "banner-hash";
+            banner.filename = "banner.jpg";
+            p.attachments = java.util.List.of(
+                    Types.AttachmentDescriptor.urlCard("https://example.com", "Example", banner, null));
+            ChatXdkException missingSize = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+            assertTrue(missingSize.getMessage().contains("filesize_bytes"), missingSize.getMessage());
+        }
+    }
+
+    @Test
     void encryptMessageMixedAttachmentTypesThrows() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);
@@ -537,10 +561,7 @@ class ChatTest {
             // Explicit-field form: conversation id + target sequence id instead
             // of the raw target event.
             EncryptEditParams p = new EncryptEditParams(null, "see https://example.com");
-            EntityDescriptor url = new EntityDescriptor();
-            url.start = 4;
-            url.end = 23;
-            url.entityType = "url";
+            EntityDescriptor url = new EntityDescriptor(4, 23, "url");
             p.entities = List.of(url);
             p.conversationId = "conv-1";
             p.targetMessageSequenceId = "seq-99";

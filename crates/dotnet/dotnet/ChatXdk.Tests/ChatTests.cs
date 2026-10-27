@@ -341,6 +341,23 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public void UnsetFields_AreOmitted_NotSentAsNull()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("1234", "1700000000123"));
+            // A required field left null is omitted, so the core names it.
+            var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareMessageDelete(
+                new MessageDeleteParams("1234-5678", null!, deleteForAll: false)));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, ex.Kind);
+            Assert.Contains("missing field `sequence_ids`", ex.Message);
+            // Unset optional fields resolve from the session identity.
+            Assert.Equal(
+                "1700000000123",
+                OnlyAction(chat.PrepareMessageDelete(new MessageDeleteParams(
+                    "1234-5678", new[] { "seq-1" }, deleteForAll: false))).MessageEventSignature.PublicKeyVersion);
+        }
+
+        [Fact]
         public void IsUnlocked_TrueAfterImport()
         {
             using var chat = CreateUnlocked();

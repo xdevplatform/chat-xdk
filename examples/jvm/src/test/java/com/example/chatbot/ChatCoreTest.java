@@ -247,10 +247,7 @@ class ChatCoreTest {
         try (ChatCore core = loadedCore(v)) {
             core.setIdentity("1000");
             byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
-            EntityDescriptor mention = new EntityDescriptor();
-            mention.start = 0;
-            mention.end = 5;
-            mention.entityType = "mention";
+            EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
             // Reply by raw event: the preview is derived from the fixture event,
             // which was encrypted under the same fixture key + version.
             ChatCore.SendBody body = core.encryptReply(

@@ -396,13 +396,19 @@ public final class Types {
      */
     public static final class EntityDescriptor {
         /** Byte offset of the start of the entity in the message text. */
-        public int start;
+        public final int start;
 
         /** Byte offset of the end of the entity in the message text. */
-        public int end;
+        public final int end;
 
         /** One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number". */
-        public String entityType = "";
+        public final String entityType;
+
+        public EntityDescriptor(int start, int end, String entityType) {
+            this.start = start;
+            this.end = end;
+            this.entityType = entityType;
+        }
     }
 
     /**
@@ -412,7 +418,7 @@ public final class Types {
     public static final class AttachmentDescriptor {
         /** Attachment kind: one of "media", "url", or "post". */
         @JsonProperty("attachment_type")
-        public String attachmentType = "";
+        public String attachmentType;
 
         /** Media hash key identifying the uploaded media. */
         @JsonProperty("media_hash_key")
@@ -534,17 +540,17 @@ public final class Types {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class UrlAttachmentImageDescriptor {
-        /** Media hash key the image's upload started with. */
+        /** Media hash key the image's upload started with. Required. */
         @JsonProperty("media_hash_key")
-        public String mediaHashKey = "";
+        public String mediaHashKey;
 
         /** Size of the encrypted image in bytes: {@code encryptedFileSize} of the image's size. Required. */
         @JsonProperty("filesize_bytes")
-        public long filesizeBytes;
+        public Long filesizeBytes;
 
         /** Original filename of the image. Required. */
         @JsonProperty("filename")
-        public String filename = "";
+        public String filename;
 
         /** Image width in pixels. */
         @JsonProperty("width")

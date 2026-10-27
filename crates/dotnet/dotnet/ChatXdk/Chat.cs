@@ -241,11 +241,11 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["user_id"] = parameters.UserId,
                 ["signing_key_version"] = parameters.SigningKeyVersion,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             fixed (byte* jsonPtr = jsonBytes)
                 ConsumeResult(NativeMethods.chat_xdk_set_identity(_handle, jsonPtr));
@@ -466,10 +466,10 @@ namespace ChatXdk
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
             var keys = parameters.Keys ?? Array.Empty<byte>();
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["signing_key_version"] = parameters.SigningKeyVersion,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             fixed (byte* jsonPtr = jsonBytes)
             {
@@ -531,12 +531,12 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = parameters.EventB64,
                 ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
                 ["signing_keys"] = parameters.SigningKeys,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
@@ -566,11 +566,11 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["events"] = parameters.Events ?? Array.Empty<string>(),
                 ["signing_keys"] = parameters.SigningKeys,
-            }, JsonOpts);
+            });
             var jsonBytes = Utf8Z(json);
             string resultJson;
             fixed (byte* jsonPtr = jsonBytes)
@@ -932,14 +932,14 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["file"] = Convert.ToBase64String(parameters.File ?? Array.Empty<byte>()),
                 ["event_b64"] = parameters.EventB64,
                 ["media_hash_key"] = parameters.MediaHashKey,
                 ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
                 ["conversation_key_version"] = parameters.ConversationKeyVersion,
-            }, JsonOpts);
+            });
             return CallFileEndpoint(json, NativeMethods.chat_xdk_encrypt_file);
         }
 
@@ -956,13 +956,13 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["encrypted"] = Convert.ToBase64String(parameters.Encrypted ?? Array.Empty<byte>()),
                 ["event_b64"] = parameters.EventB64,
                 ["conversation_keys"] = ConversationKeysB64(parameters.ConversationKeys),
                 ["media_hash_key"] = parameters.MediaHashKey,
-            }, JsonOpts);
+            });
             return CallFileEndpoint(json, NativeMethods.chat_xdk_decrypt_file);
         }
 
@@ -985,13 +985,13 @@ namespace ChatXdk
         {
             ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(parameters);
-            var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            var json = ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = parameters.EventB64,
                 ["media_hash_key"] = parameters.MediaHashKey,
                 ["conversation_key"] = parameters.ConversationKey is null ? null : Convert.ToBase64String(parameters.ConversationKey),
                 ["conversation_key_version"] = parameters.ConversationKeyVersion,
-            }, JsonOpts);
+            });
             var encryptor = ChatXdk.FileEncryptor.Create(_handle, json);
             GC.KeepAlive(this);
             return encryptor;
@@ -1014,12 +1014,12 @@ namespace ChatXdk
 
         private static string FileParamsJson(
             string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys, string mediaHashKey)
-            => JsonSerializer.Serialize(new Dictionary<string, object?>
+            => ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = eventB64,
                 ["conversation_keys"] = ConversationKeysB64(conversationKeys),
                 ["media_hash_key"] = mediaHashKey,
-            }, JsonOpts);
+            });
 
         // Signing / verification
 
@@ -1129,9 +1129,18 @@ namespace ChatXdk
 
         // JSON builders for the single-JSON params documents
 
-        // A null in any optional slot serializes as JSON null (WhenWritingNull
-        // does not apply to dictionary entries), which the FFI reads as unset —
-        // the value then resolves from the session identity / key cache.
+        /// <summary>
+        /// The params document of <paramref name="fields"/>, without the fields left
+        /// null: an unset field is omitted, never sent as JSON <c>null</c>, so the core
+        /// resolves it from the session identity or key cache, or names it when it is
+        /// required.
+        /// </summary>
+        private static string ParamsJson(Dictionary<string, object?> fields)
+            => JsonSerializer.Serialize(
+                fields.Where(field => field.Value is not null)
+                    .ToDictionary(field => field.Key, field => field.Value),
+                JsonOpts);
+
         private static string BuildEncryptMessageJson(EncryptMessageParams p)
         {
             var dict = new Dictionary<string, object?>
@@ -1148,7 +1157,7 @@ namespace ChatXdk
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildEncryptReplyJson(EncryptReplyParams p)
@@ -1175,7 +1184,7 @@ namespace ChatXdk
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildReactionJson(EncryptReactionParams p)
@@ -1191,7 +1200,7 @@ namespace ChatXdk
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildEncryptEditJson(EncryptEditParams p)
@@ -1208,7 +1217,7 @@ namespace ChatXdk
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareMessageDeleteJson(MessageDeleteParams p)
@@ -1221,14 +1230,14 @@ namespace ChatXdk
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string IdentityJson(Dictionary<string, object?> dict, string? senderId, string? signingKeyVersion)
         {
             dict["sender_id"] = senderId;
             dict["signing_key_version"] = signingKeyVersion;
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareGroupMembersRemoveJson(GroupMembersRemoveParams p)
@@ -1377,7 +1386,7 @@ namespace ChatXdk
                 ["sender_id"] = p.SenderId,
                 ["signing_key_version"] = p.SigningKeyVersion,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareConversationKeyChangeJson(ConversationKeyChangeParams p)
@@ -1389,7 +1398,7 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_id"] = p.ConversationId,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareGroupMembersChangeJson(GroupMembersChangeParams p)
@@ -1413,7 +1422,7 @@ namespace ChatXdk
                 // unset — never a false default.
                 ["current_screen_capture_blocking_enabled"] = p.CurrentScreenCaptureBlockingEnabled,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         private static string BuildPrepareGroupCreateJson(GroupCreateParams p)
@@ -1429,7 +1438,7 @@ namespace ChatXdk
                 ["title"] = p.Title,
                 ["ttl_msec"] = p.TtlMsec,
             };
-            return JsonSerializer.Serialize(dict, JsonOpts);
+            return ParamsJson(dict);
         }
 
         // Entities are serialised as [[start, end, "type"], ...] tuples.

@@ -305,10 +305,7 @@ class E2ELiveTest {
                 }
             }
             String marker = "chat-xdk e2e [jvm] " + (System.currentTimeMillis() / 1000);
-            EntityDescriptor mention = new EntityDescriptor();
-            mention.start = 0;
-            mention.end = 5;
-            mention.entityType = "mention";
+            EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
             ChatCore.SendBody body = core.encryptReply(
                     canonicalConv,
                     "@user " + marker,
