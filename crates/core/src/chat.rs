@@ -204,6 +204,7 @@ impl Chat {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+            .filter(|config| !config.config_json.trim().is_empty())
             .ok_or_else(crate::keys::juicebox::no_config_error)
     }
 
@@ -683,6 +684,16 @@ mod tests {
             Chat::default().delete().await.unwrap_err().to_string(),
             expected
         );
+        for empty in ["", "  "] {
+            let chat = Chat::with_juicebox(
+                JuiceboxConfig::from_json(empty.to_string()),
+                Arc::new(MockJuiceboxApi::new()),
+            );
+            chat.generate_keypairs().unwrap();
+            let err = chat.setup(b"2580").await.unwrap_err();
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidState);
+            assert_eq!(err.to_string(), expected);
+        }
     }
 
     #[tokio::test]

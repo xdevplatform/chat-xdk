@@ -109,6 +109,8 @@ impl JuiceboxConfig {
     }
 
     /// Create from just the config JSON (tokens will need to be added separately).
+    /// An empty or blank `config_json` is no config: a chat given it fails its
+    /// Juicebox calls with the error a chat without a config gives.
     pub fn from_json(config_json: String) -> Self {
         Self {
             tokens: HashMap::new(),
