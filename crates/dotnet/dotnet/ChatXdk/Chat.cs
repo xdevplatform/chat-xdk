@@ -258,8 +258,8 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Store signing keys to use when a decrypt call omits its <c>signingKeys</c>
-        /// argument. Only this explicit call populates the store — a key carried inside
+        /// Store signing keys to use when a decrypt call's params leave <c>SigningKeys</c>
+        /// null (or empty). Only this explicit call populates the store — a key carried inside
         /// an event is never trusted for verification. Each call replaces the previous set.
         /// </summary>
         public void SetSigningKeys(IReadOnlyList<SigningKeyEntry> keys)
@@ -416,8 +416,8 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Export private keys as raw bytes for a secure backup.
-        /// Returns <see langword="null"/> if the SDK is locked.
+        /// Export private keys as raw bytes (32 or 64) for a secure backup.
+        /// Returns <see langword="null"/> when no identity key is loaded.
         /// Warning: These are raw secret key bytes — store with extreme care.
         /// </summary>
         public byte[]? ExportKeys()

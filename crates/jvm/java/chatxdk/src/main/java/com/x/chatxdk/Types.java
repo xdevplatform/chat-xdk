@@ -30,7 +30,7 @@ public final class Types {
 
     /**
      * Registration fields expected by the X API
-     * ({@code POST /2/chat/keys}).
+     * ({@code POST /2/users/{id}/public_keys}).
      */
     public static final class PublicKeyRegistration {
         /** Base64-encoded raw r||s signature over the identity public key. */
@@ -186,8 +186,11 @@ public final class Types {
     }
 
     /**
-     * A signed message delete or read receipt: the {@code action_signatures} a
-     * request carries for it, one entry.
+     * Signed actions for a request that does not rotate a conversation key: the
+     * {@code action_signatures} it carries. Returned by {@link Chat#prepareMessageDelete},
+     * {@link Chat#prepareMarkConversationRead}, and the group-action prepares other than
+     * {@link Chat#prepareGroupMembersRemove}; {@link Chat#prepareGroupLeave} returns one
+     * entry per signed event.
      */
     public static final class PreparedAction {
         /** The signed action, as the request's {@code action_signatures} entries. */
@@ -237,8 +240,8 @@ public final class Types {
     }
 
     /**
-     * Returned by {@link Chat#prepareConversationKeyChange},
-     * {@link Chat#prepareGroupCreate}, and {@link Chat#prepareGroupMembersChange}.
+     * Returned by {@link Chat#prepareConversationKeyChange}, {@link Chat#prepareGroupCreate},
+     * {@link Chat#prepareGroupMembersChange}, and {@link Chat#prepareGroupMembersRemove}.
      * Carries everything needed to POST the change.
      */
     public static final class PreparedConversationChange {
@@ -275,7 +278,7 @@ public final class Types {
         /** Version string &#8594; raw 32-byte conversation key. */
         public Map<String, byte[]> keys = Collections.emptyMap();
 
-        /** Highest key version (for encrypting new messages), or {@code null}. */
+        /** Latest key version, or {@code null}. */
         public String latestVersion;
     }
 

@@ -224,8 +224,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Store signing keys to use when a decrypt call omits its {@code signingKeys}
-     * argument. Only this explicit call populates the store — a key carried inside
+     * Store signing keys to use when a decrypt call's params leave {@code signingKeys}
+     * null (or empty). Only this explicit call populates the store — a key carried inside
      * an event is never trusted for verification. Each call replaces the previous set.
      */
     public void setSigningKeys(List<SigningKeyEntry> keys) throws Exception {
@@ -367,8 +367,8 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Export private keys as raw bytes for a secure backup.
-     * Returns {@code null} if the SDK is locked.
+     * Export private keys as raw bytes (32 or 64) for a secure backup.
+     * Returns {@code null} when no identity key is loaded.
      * These are raw secret key bytes — store with extreme care.
      */
     public byte[] exportKeys() {

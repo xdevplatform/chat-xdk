@@ -2390,7 +2390,7 @@ impl Chat {
     /// Returns:
     ///     A dict with:
     ///     - ``keys``: Dict mapping key version string to raw 32-byte conversation key (``bytes``)
-    ///     - ``latest_version``: The highest key version (use for encrypting new messages)
+    ///     - ``latest_version``: The highest key version; signatures are not checked
     fn extract_conversation_keys(&self, events: Vec<String>) -> PyResult<Py<PyAny>> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
         let result = self.inner.extract_conversation_keys(&refs);

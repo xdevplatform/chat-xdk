@@ -4,6 +4,10 @@
 
 ### Fixed
 
+The documentation matches the code: API.md, the migration guides, the
+READMEs and the doc comments in every binding. Their code examples compile
+against the 0.6.0 API, and the Rust crate's examples build as doctests.
+
 The .NET `Verify` and JVM `verify` errors ask you to check the inputs that
 failed: the public key, which must be a base64 P-256 signing key, and the
 signature. Verifying needs no loaded keys.
@@ -21,6 +25,8 @@ the conversation key in the same call. The result is a
 `PreparedConversationChange`: the new key, the remaining members'
 participant keys, and signatures for the removal and then the key change.
 Without those keys the same type comes back with only the removal signature.
+Pass them on every removal, so the removed members can't decrypt later
+messages.
 
 `prepare_group_leave` signs leaving a group: a removal of the sender, an
 admin add when `promote_admin_id` names the member to promote, and a
@@ -70,26 +76,21 @@ ECDSA mismatch), so upgrade readers first. Other signed actions
 
 `sender_id` must be the sender's numeric user id, and
 `conversation_key_version` an integer as its key-change event carries it.
-Other values are now rejected in both formats, since v1 recipients derive
+Other values are rejected in both formats, since v1 recipients derive
 the key from the numeric id and look it up by the version.
 
 #### Key registration sends only the public key
 
 `generate_keypairs` returns a `PublicKeyRegistrationPayload` that carries
-only `public_key`: `version` and `generate_version` are removed in every
-binding (`Version` / `GenerateVersion` in Go and .NET, `generateVersion` in
-JS). POST the payload as returned. Rust:
-`ChatCore::generate_keypairs_with_version` is removed; use
-`generate_keypairs`.
+only `public_key`, in every binding. POST the payload as returned.
 
-`generate_keypairs` no longer sets a signing-key version. After you register
-the keys, call `set_identity` with your user id and the `public_key_version`
+`generate_keypairs` sets no signing-key version. After you register the
+keys, call `set_identity` with your user id and the `public_key_version`
 the registration returns, or pass that version as `signing_key_version` in
-`ImportKeysParams` when you load saved keys. A signed action without a version fails in the SDK with
-`signing_key_version is not set: pass it explicitly or call set_identity()
-first`. In 0.5.x, `generate_keypairs` set a local timestamp as the version,
-and signed actions were rejected unless the app called `set_identity` with
-the registered version.
+`ImportKeysParams` when you load saved keys. A signed action without a
+version fails in the SDK with `signing_key_version is not set: pass it
+explicitly or call set_identity() first`, rather than reaching the X API,
+which accepts only the registered version.
 
 In the snippets, `api.post(path, body)` stands for your HTTP client: it
 POSTs `body` as JSON to `https://api.x.com` + `path` and returns the parsed
@@ -97,22 +98,12 @@ response. The JS one writes keys in snake_case, and in Python `public_key`
 is the `public_key` object you build from `registration.public_key`.
 
 ```js
-// Before
-const registration = chat.generateKeypairs();
-const response = await api.post(`/2/users/${userId}/public_keys`, {
-  public_key: registration.publicKey,
-  version: registration.version,
-  generate_version: registration.generateVersion,
-});
-chat.setIdentity(userId, response.data.public_key_version);
-// After
 const registration = chat.generateKeypairs();
 const response = await api.post(`/2/users/${userId}/public_keys`, { public_key: registration.publicKey });
 chat.setIdentity({ userId, signingKeyVersion: response.data.public_key_version });
 ```
 
 ```python
-# After
 registration = chat.generate_keypairs()
 response = api.post(f"/2/users/{user_id}/public_keys", {"public_key": public_key})
 chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_version"]))
@@ -120,7 +111,8 @@ chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_versio
 
 Go, .NET, JVM and Rust call `SetIdentity` / `setIdentity` / `set_identity`
 the same way; each binding's guide in
-[docs/migrating-0.6](docs/migrating-0.6/README.md) shows its request.
+[docs/migrating-0.6](docs/migrating-0.6/README.md) shows its request and the
+0.5.x code to change.
 
 #### A message with files is built before its files are encrypted
 
@@ -145,8 +137,7 @@ the message, so the message comes first:
    `POST /2/chat/media/upload/{session_id}/append` and finish it with
    `POST /2/chat/media/upload/{session_id}/finalize`, then send the message.
 
-`encrypt_stream` and `stream_encryptor`, which took only a conversation key,
-are removed. The file calls need no session identity: the sender, message id
+The file calls need no session identity: the sender, message id
 and key version come from `event_b64`. In v1 the SDK derives the id of a
 message with files from the conversation key and its version, the sender,
 the conversation and the files' media hash keys, so building the same
@@ -158,25 +149,14 @@ it as a repeat. A message that lists an empty media hash
 key, or one media hash key in two attachments, is rejected, and the file
 calls' errors say what to pass instead.
 
-Migration — `api.post(path, body)` stands for your HTTP client, as in the
-key registration entry above, and `photo_attachment` for your code that
+In the snippets, `api.post(path, body)` stands for your HTTP client, as in
+the key registration entry above, and `photo_attachment` for your code that
 builds a photo's attachment descriptor. The `append` and `finalize`
-requests don't change, but they come after `encrypt_file`, which produces
-the bytes they upload:
+requests come after `encrypt_file`, which produces the bytes they upload:
 
 Rust
 
 ```rust
-// Before
-let encrypted = chat.encrypt_stream(&photo, &conversation_key)?;
-let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
-    "conversation_id": conversation_id, "total_bytes": encrypted.len(),
-}))?;
-let media_hash_key = upload["data"]["media_hash_key"].as_str().ok_or("no media_hash_key")?;
-let mut params = EncryptMessageParams::new(conversation_id, "a photo");
-params.attachments = Some(vec![photo_attachment(media_hash_key)]);
-let payload = chat.encrypt_message(params)?;
-// After
 let total_bytes = utils::encrypted_file_size(photo.len() as u64).ok_or("file too large")?;
 let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
     "conversation_id": conversation_id, "total_bytes": total_bytes,
@@ -199,14 +179,6 @@ api.post(&format!("/2/chat/media/upload/{session_id}/finalize"), &serde_json::js
 Python
 
 ```python
-# Before
-encrypted = chat.encrypt_stream(photo, conversation_key)
-upload = api.post("/2/chat/media/upload/initialize", {
-    "conversation_id": conversation_id, "total_bytes": len(encrypted),
-})["data"]
-media_hash_key = upload["media_hash_key"]
-payload = chat.encrypt_message(conversation_id, "a photo", attachments=[photo_attachment(media_hash_key)])
-# After
 upload = api.post("/2/chat/media/upload/initialize", {
     "conversation_id": conversation_id, "total_bytes": encrypted_file_size(len(photo)),
 })["data"]
@@ -227,15 +199,6 @@ api.post(f"/2/chat/media/upload/{upload['session_id']}/finalize", {
 JS / TypeScript
 
 ```js
-// Before
-const encrypted = chat.encryptStream(photo, conversationKey);
-const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
-  conversation_id: conversationId, total_bytes: encrypted.length,
-});
-const payload = chat.encryptMessage({
-  conversationId, text: "a photo", attachments: [photoAttachment(upload.media_hash_key)],
-});
-// After
 const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
   conversation_id: conversationId, total_bytes: encryptedFileSize(photo.length),
 });
@@ -256,17 +219,6 @@ await api.post(`/2/chat/media/upload/${upload.session_id}/finalize`, {
 Go
 
 ```go
-// Before
-encrypted, err := chat.EncryptStream(photo, conversationKey)
-response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
-    "conversation_id": conversationID, "total_bytes": len(encrypted),
-})
-mediaHashKey := response["data"].(map[string]any)["media_hash_key"].(string)
-payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
-    ConversationID: conversationID, Text: "a photo",
-    Attachments: []chatxdk.AttachmentDescriptor{photoAttachment(mediaHashKey)},
-})
-// After
 size, err := chatxdk.EncryptedFileSize(uint64(len(photo)))
 response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
     "conversation_id": conversationID, "total_bytes": size,
@@ -292,18 +244,6 @@ _, err = api.Post("/2/chat/media/upload/"+sessionID+"/finalize", map[string]any{
 .NET (C#)
 
 ```csharp
-// Before
-var encrypted = chat.EncryptStream(photo, conversationKey);
-var upload = api.Post("/2/chat/media/upload/initialize", new
-{
-    conversation_id = conversationId, total_bytes = encrypted.Length,
-}).GetProperty("data");
-var mediaHashKey = upload.GetProperty("media_hash_key").GetString()!;
-var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a photo")
-{
-    Attachments = new[] { PhotoAttachment(mediaHashKey) },
-});
-// After
 var upload = api.Post("/2/chat/media/upload/initialize", new
 {
     conversation_id = conversationId,
@@ -330,15 +270,6 @@ api.Post($"/2/chat/media/upload/{sessionId}/finalize", new
 JVM (Java)
 
 ```java
-// Before
-byte[] encrypted = chat.encryptStream(photo, conversationKey);
-JsonNode upload = api.post("/2/chat/media/upload/initialize", Map.of(
-        "conversation_id", conversationId, "total_bytes", encrypted.length)).path("data");
-String mediaHashKey = upload.path("media_hash_key").asText();
-EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo");
-params.attachments = List.of(photoAttachment(mediaHashKey));
-SendPayload payload = chat.encryptMessage(params);
-// After
 JsonNode upload = api.post("/2/chat/media/upload/initialize", Map.of(
         "conversation_id", conversationId,
         "total_bytes", ChatXdkUtilities.encryptedFileSize(photo.length))).path("data");
@@ -355,15 +286,14 @@ api.post("/2/chat/media/upload/" + sessionId + "/finalize", Map.of(
         "conversation_id", conversationId, "media_hash_key", mediaHashKey, "num_parts", "1"));
 ```
 
-For a large file, replace `encrypt_file` with
-`file_encryptor(FileEncryptorParams(event_b64, media_hash_key))` and feed it
-with `push` / `finish` as before. See
+For a large file, use
+`file_encryptor(FileEncryptorParams(event_b64, media_hash_key))` instead of
+`encrypt_file` and feed it with `push` / `finish`. See
 [docs/API.md — Files (Media)](docs/API.md#files-media).
 
 #### Files are decrypted from the message that carries them
 
-`decrypt_stream` and `stream_decryptor`, which took only a conversation key,
-are replaced by `decrypt_file` and `file_decryptor`. They take the base64
+`decrypt_file` and `file_decryptor` take the base64
 event of the message that carries the file and the conversation's key map —
 the same two values `decrypt_event` takes — plus the file's media hash key
 from the decrypted message: one of its media attachments, a link card's
@@ -374,35 +304,29 @@ Errors say what to pass when the key version is missing from the map, the
 media hash key is not in the event, the event is not an encrypted message
 with files, or the bytes are wrong or truncated.
 
-Migration:
-
 ```rust
 // Rust
-let plaintext = chat.decrypt_stream(&encrypted, &conversation_key)?;                 // before
 let plaintext = chat.decrypt_file(DecryptFileParams::new(
-    encrypted, event_b64, conversation_keys, media_hash_key,
-))?;                                                                                 // after
+    encrypted, event_b64.clone(), conversation_keys.clone(), media_hash_key.clone(),
+))?;
 let decryptor = chat.file_decryptor(FileDecryptorParams::new(event_b64, conversation_keys, media_hash_key))?;
 ```
 
 ```python
 # Python
-plaintext = chat.decrypt_stream(encrypted, conversation_key)  # before
-plaintext = chat.decrypt_file(DecryptFileParams(encrypted, event_b64, conversation_keys, media_hash_key))  # after
+plaintext = chat.decrypt_file(DecryptFileParams(encrypted, event_b64, conversation_keys, media_hash_key))
 decryptor = chat.file_decryptor(FileDecryptorParams(event_b64, conversation_keys, media_hash_key))
 ```
 
 ```js
 // JS / TypeScript
-const plaintext = chat.decryptStream(encrypted, conversationKey); // before
-const plaintext = chat.decryptFile({ encrypted, eventB64, conversationKeys, mediaHashKey }); // after
+const plaintext = chat.decryptFile({ encrypted, eventB64, conversationKeys, mediaHashKey });
 const decryptor = chat.fileDecryptor({ eventB64, conversationKeys, mediaHashKey });
 ```
 
 ```go
 // Go
-plaintext, err := chat.DecryptStream(encrypted, conversationKey) // before
-plaintext, err := chat.DecryptFile(chatxdk.DecryptFileParams{ // after
+plaintext, err := chat.DecryptFile(chatxdk.DecryptFileParams{
     Encrypted: encrypted, EventB64: eventB64, ConversationKeys: conversationKeys, MediaHashKey: mediaHashKey,
 })
 decryptor, err := chat.FileDecryptor(chatxdk.FileDecryptorParams{
@@ -412,15 +336,13 @@ decryptor, err := chat.FileDecryptor(chatxdk.FileDecryptorParams{
 
 ```csharp
 // .NET (C#)
-var plaintext = chat.DecryptStream(encrypted, conversationKey); // before
-var plaintext = chat.DecryptFile(new DecryptFileParams(encrypted, eventB64, conversationKeys, mediaHashKey)); // after
+var plaintext = chat.DecryptFile(new DecryptFileParams(encrypted, eventB64, conversationKeys, mediaHashKey));
 using var decryptor = chat.FileDecryptor(new FileDecryptorParams(eventB64, conversationKeys, mediaHashKey));
 ```
 
 ```java
 // JVM (Java)
-byte[] plaintext = chat.decryptStream(encrypted, conversationKey); // before
-byte[] plaintext = chat.decryptFile(new DecryptFileParams(encrypted, eventB64, conversationKeys, mediaHashKey)); // after
+byte[] plaintext = chat.decryptFile(new DecryptFileParams(encrypted, eventB64, conversationKeys, mediaHashKey));
 FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(eventB64, conversationKeys, mediaHashKey));
 ```
 
@@ -430,59 +352,47 @@ FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(eventB64, c
 `signing_keys`) and `decrypt_event` takes `DecryptEventParams` (`event_b64`,
 optional `conversation_keys`, optional `signing_keys`), named the same in
 every binding. Omitted (or, in Rust, empty), the conversation keys come from
-the opt-in key cache. The .NET and JVM `decryptEvent` overloads that
-took a `ConversationKeyBundle` are removed; pass `bundle.Keys` /
-`bundle.keys`. The contracts are as before: `decrypt_events` never throws
-and `decrypt_event` throws on failure.
+the opt-in key cache. In .NET and the JVM, a `ConversationKeyBundle`'s
+`Keys` / `keys` map is the key map they take. `decrypt_events` collects a
+failure in an event in its `errors` instead of throwing, and throws only for
+invalid params; `decrypt_event` throws on failure.
 
 ```rust
 // Rust
-let result = chat.decrypt_events(&events, &signing_keys); // before
-let result = chat.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys)); // after
-let event = chat.decrypt_event(event_b64, &keys, &signing_keys)?; // before
-let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?; // after
+let result = chat.decrypt_events(DecryptEventsParams::new(events).with_signing_keys(signing_keys.clone()));
+let event = chat.decrypt_event(DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?;
 ```
 
 ```python
 # Python
-result = chat.decrypt_events(events, signing_keys)  # before
-result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))  # after
-event = chat.decrypt_event(event_b64)  # before
-event = chat.decrypt_event(DecryptEventParams(event_b64))  # after
+result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
+event = chat.decrypt_event(DecryptEventParams(event_b64))
 ```
 
 ```js
 // JS / TypeScript
-const result = chat.decryptEvents(events, signingKeys); // before
-const result = chat.decryptEvents({ events, signingKeys }); // after
-const event = chat.decryptEvent(eventB64, keys, signingKeys); // before
-const event = chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys }); // after
+const result = chat.decryptEvents({ events, signingKeys });
+const event = chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys });
 ```
 
 ```go
 // Go
-result, err := chat.DecryptEvents(events, signingKeys) // before
-result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events, SigningKeys: signingKeys}) // after
-event, err := chat.DecryptEvent(eventB64, keys, signingKeys) // before
-event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{EventB64: eventB64, ConversationKeys: keys, SigningKeys: signingKeys}) // after
+result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events, SigningKeys: signingKeys})
+event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{EventB64: eventB64, ConversationKeys: keys, SigningKeys: signingKeys})
 ```
 
 ```csharp
 // .NET (C#)
-var result = chat.DecryptEvents(events, signingKeys); // before
-var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys }); // after
-var evt = chat.DecryptEvent(eventB64, keys, signingKeys); // before
-var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, keys) { SigningKeys = signingKeys }); // after
+var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys });
+var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, keys) { SigningKeys = signingKeys });
 ```
 
 ```java
 // JVM (Java)
-DecryptEventsResult result = chat.decryptEvents(events, signingKeys); // before
-DecryptEventsParams batch = new DecryptEventsParams(events); // after
+DecryptEventsParams batch = new DecryptEventsParams(events);
 batch.signingKeys = signingKeys;
 DecryptEventsResult result = chat.decryptEvents(batch);
-JsonNode event = chat.decryptEvent(eventB64, keys, signingKeys); // before
-DecryptEventParams one = new DecryptEventParams(eventB64, keys); // after
+DecryptEventParams one = new DecryptEventParams(eventB64, keys);
 one.signingKeys = signingKeys;
 JsonNode event = chat.decryptEvent(one);
 ```
@@ -496,18 +406,11 @@ JsonNode event = chat.decryptEvent(one);
 `EncryptMessageParams`, `EncryptReplyParams`, `EncryptReactionParams`,
 `EncryptEditParams`, `ConversationKeyChangeParams`,
 `GroupMembersChangeParams`, `GroupCreateParams` and `MessageDeleteParams`.
-Each class takes the arguments its method took, in the same order and with
-the same names and defaults, and exposes every field as a read/write
-attribute.
+Each class takes its required fields positionally, as it does the event a
+reply, reaction or edit targets, and the rest as keywords, and exposes every
+field as a read/write attribute.
 
 ```python
-# Before
-payload = chat.encrypt_message(conversation_id, "hi", ttl_msec=60_000)
-reply = chat.encrypt_reply(conversation_id, "pong", event_b64)
-reaction = chat.encrypt_add_reaction(event_b64, "👍")
-edit = chat.encrypt_edit(event_b64, "fixed text")
-prepared = chat.prepare_conversation_key_change(public_keys, conversation_id=conversation_id)
-# After
 payload = chat.encrypt_message(EncryptMessageParams(conversation_id, "hi", ttl_msec=60_000))
 reply = chat.encrypt_reply(EncryptReplyParams(conversation_id, "pong", event_b64))
 reaction = chat.encrypt_add_reaction(EncryptReactionParams(event_b64, "👍"))
@@ -517,112 +420,105 @@ prepared = chat.prepare_conversation_key_change(
 )
 ```
 
-#### Renames
+#### File and C ABI names
 
-- `StreamEncryptor` / `StreamDecryptor` are `FileEncryptor` /
-  `FileDecryptor` in every binding; `push` and `finish` are unchanged.
-- `encrypted_stream_size` is `encrypted_file_size` (`encryptedFileSize`,
-  `EncryptedFileSize`).
-- Rust: `crypto::encryption::{encrypt_stream, decrypt_stream,
-  encrypted_stream_size}` are `{encrypt_file, decrypt_file,
-  encrypted_file_size}`.
-- C ABI: `chat_xdk_encrypt_stream`, `chat_xdk_decrypt_stream`,
-  `chat_xdk_encrypted_stream_size`, `chat_xdk_stream_encryptor_*` and
-  `chat_xdk_stream_decryptor_*` are `chat_xdk_encrypt_file`,
+- The incremental file classes are `FileEncryptor` and `FileDecryptor` in
+  every binding, each with `push` and `finish`.
+- `encrypted_file_size` (`encryptedFileSize`, `EncryptedFileSize`) gives the
+  size an upload declares before the file is encrypted.
+- Rust: `crypto::encryption::{encrypt_file, decrypt_file,
+  encrypted_file_size}` take a conversation key directly.
+- C ABI: an entry point whose arguments differ from 0.5.x takes a new name,
+  so a stale header or library fails to link instead of misreading its
+  arguments. The file calls are `chat_xdk_encrypt_file`,
   `chat_xdk_decrypt_file`, `chat_xdk_encrypted_file_size`,
-  `chat_xdk_file_encryptor_*` and `chat_xdk_file_decryptor_*`.
-  `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` are
-  `chat_xdk_decrypt_events_params` and `chat_xdk_decrypt_event_params`, so a
-  stale header or library fails to link instead of misreading arguments. They
-  and the file calls take one params JSON document, and
-  `chat_xdk_file_encryptor_new` / `chat_xdk_file_decryptor_new` return a
-  result and write the handle to an out-parameter.
+  `chat_xdk_file_encryptor_*` and `chat_xdk_file_decryptor_*`, and the
+  decrypt calls are `chat_xdk_decrypt_events_params` and
+  `chat_xdk_decrypt_event_params`. They and the file calls take one params
+  JSON document, and `chat_xdk_file_encryptor_new` /
+  `chat_xdk_file_decryptor_new` return a result and write the handle to an
+  out-parameter. [C ABI](docs/migrating-0.6/c-abi.md) lists the calls that
+  keep their names but take or return different JSON.
 
 #### Other breaking changes
 
-- Rust: `SendPayload` gains `event_b64` and `xdk_version` and is
-  `#[non_exhaustive]`, so code outside the SDK reads its fields but no longer
-  builds it with a struct literal.
-- `SendPayload`'s `encrypted_content` and `encoded_event_signature` are
-  `encoded_message_create_event` and `encoded_message_event_signature`, the
-  send request's field names, in every binding
-  (`encodedMessageCreateEvent` / `encodedMessageEventSignature` in JS and
-  the JVM, `EncodedMessageCreateEvent` / `EncodedMessageEventSignature` in
-  Go and .NET), so the request takes them as they are.
+- Rust: `SendPayload` carries `event_b64` and `xdk_version` and is
+  `#[non_exhaustive]`, so code outside the SDK reads its fields but can't
+  build it with a struct literal.
+- `SendPayload`'s encoded fields are `encoded_message_create_event` and
+  `encoded_message_event_signature`, the send request's field names, in every
+  binding (`encodedMessageCreateEvent` / `encodedMessageEventSignature` in JS
+  and the JVM, `EncodedMessageCreateEvent` / `EncodedMessageEventSignature`
+  in Go and .NET), so the request takes them as they are.
 - Participant keys take the X API's names, on send and on receive. A
-  prepared change's `participant_keys` is `conversation_participant_keys`,
-  and each entry's `encrypted_key` is `encrypted_conversation_key`: the
+  prepared change carries `conversation_participant_keys`, each entry with
+  `user_id`, `encrypted_conversation_key` and `public_key_version`: the
   field names the X API uses in every request that takes participant keys
   (`POST /2/chat/conversations/{id}/keys`, `/group` and `/{id}/members`, and
-  `PUT /2/chat/conversations/{id}`), so apps pass the keys through unchanged
-  instead of renaming them. A decrypted `KeyChange` event carries its keys
-  under the same names, as Thrift's `ConversationKeyChangeEvent` does.
-  `ParticipantKey` (Rust, Go, TypeScript) and `EncryptedKeyForRecipient`
-  (every binding but Python) are one type, `ConversationParticipantKey`, in
-  both directions. The names are `conversationParticipantKeys` /
-  `encryptedConversationKey` in JS and the JVM, and
-  `ConversationParticipantKeys` / `EncryptedConversationKey` in Go and .NET.
+  `PUT /2/chat/conversations/{id}`), so apps pass the keys through
+  unchanged. A decrypted `KeyChange` event carries its keys under the same
+  names, as Thrift's `ConversationKeyChangeEvent` does, and one type,
+  `ConversationParticipantKey`, holds them in both directions (Python
+  returns dicts with those keys). The names are
+  `conversationParticipantKeys` / `encryptedConversationKey` in JS and the
+  JVM, and `ConversationParticipantKeys` / `EncryptedConversationKey` in Go
+  and .NET.
 - Decrypted messages and key changes carry their conversation key version
   as `conversation_key_version`, the name the X API's events and Thrift give
-  it: `key_version` is `conversation_key_version` in every binding
-  (`conversationKeyVersion` in JS, `ConversationKeyVersion` in Go).
-- Rust: every encrypt and prepare method takes its params by reference:
-  `encrypt_message(&params)` and `encrypt_reply(&params)`, like the reaction,
-  edit, delete and mark-read methods, and also `encrypt_file`,
+  it (`conversationKeyVersion` in JS, `ConversationKeyVersion` in Go).
+- Rust: the encrypt, prepare and file-encrypt methods take their params by
+  reference: `encrypt_message(&params)` and `encrypt_reply(&params)`, like the
+  reaction, edit, delete and mark-read methods, and also `encrypt_file`,
   `file_encryptor`, `prepare_conversation_key_change`, `prepare_group_create`
   and `prepare_group_members_change` (and their `_with_version` forms). Add
-  `&` at each call.
+  `&` at each call. `decrypt_events`, `decrypt_event`, `decrypt_file` and
+  `file_decryptor` take their params by value.
 - `set_identity` and `import_keys` take a params object, as every call with
   more than one input does: `SetIdentityParams` (`user_id`,
   `signing_key_version`) and `ImportKeysParams` (`keys`, optional
-  `signing_key_version`), named the same in every binding.
-  `import_keys_with_version` (Rust), `ImportKeysWithVersion` (Go) and the
-  version overloads of `importKeys` / `ImportKeys` (JVM, .NET) are removed,
-  and Python's `import_keys` takes the version as `signing_key_version` in
-  the params. `set_identity` reports invalid input (Rust returns `Result`).
-  C ABI: `chat_xdk_set_identity` is `chat_xdk_set_identity_params`, and
-  `chat_xdk_import_keys` and `chat_xdk_import_keys_with_version` are
-  `chat_xdk_import_keys_params`, which takes the key bytes by pointer and
-  the version as a params JSON document.
+  `signing_key_version`), named the same in every binding, so the
+  signing-key version of imported keys goes in `ImportKeysParams`.
+  `set_identity` reports invalid input (Rust returns `Result`). C ABI:
+  `chat_xdk_set_identity_params` and `chat_xdk_import_keys_params` take a
+  params JSON document, and `chat_xdk_import_keys_params` takes the key
+  bytes by pointer.
 - Every user id is a string of digits, validated as `sender_id` is: the
   `set_identity` user id, `reply_to_sender_id`, the `user_id` of each public
   key, and group member, admin and pending-member ids. Anything else fails
-  with an error naming the field. `reply_to_sender_id` is a string in every
-  binding (it was an integer: `i64`, `int`, `*int64`, `long?`, `Long`, and
-  `string | number` in JS).
+  with an error naming the field. `reply_to_sender_id` is a string of digits
+  in every binding.
 - Every key version takes one form, a non-negative integer as a string of
   digits, as the X API returns it: signing-key versions (in `set_identity`,
   `import_keys`, per-call `signing_key_version`, and each public key's
-  `key_version`) are now checked as `conversation_key_version` is, and
-  `conversation_key_version` no longer accepts a negative value. Anything
-  else fails with an error naming the field.
+  `key_version`) are checked as `conversation_key_version` is, and a
+  negative `conversation_key_version` fails. Anything else fails with an
+  error naming the field.
 - Action signatures come in the shape a request's `action_signatures`
   carries them: `message_id`, `encoded_message_event_detail`, the signature
   nested under `message_event_signature` (`signature`, `signature_version`,
-  `public_key_version` and the new `signing_public_key`, your signing public
-  key as `get_public_keys` returns it), and `signature_payload` when it is
-  not withheld. They were flat, with no signing public key, and apps
-  re-nested them: pass `action_signatures` through as returned instead.
-  The new `MessageEventSignature` type holds the nested signature in every
-  binding. `prepare_message_delete` and `prepare_mark_conversation_read`
-  return the new `PreparedAction` (`action_signatures`, one entry) instead
-  of a single `ActionSignature`; read the action's `message_id` from that
-  entry. Go, .NET and the JVM omit an absent `signature_payload` when
-  serializing (.NET `SignaturePayload` is `string?` and the JVM field is
-  `null` when absent).
+  `public_key_version` and `signing_public_key`, your signing public key as
+  `get_public_keys` returns it), and `signature_payload` when it is not
+  withheld. Pass `action_signatures` through as returned. The
+  `MessageEventSignature` type holds the nested signature in every binding.
+  `prepare_message_delete` and `prepare_mark_conversation_read` return a
+  `PreparedAction` (`action_signatures`, one entry); read the action's
+  `message_id` from that entry. Go, .NET and the JVM omit an absent
+  `signature_payload` when serializing (.NET `SignaturePayload` is `string?`
+  and the JVM field is `null` when absent).
 - A missing or invalid parameter fails with the message alone, such as
   `Invalid sender_id 'user-1': …` or `too many attachments: …`, without the
   `Invalid state:` prefix; in Rust it is the new `SdkError::InvalidInput`.
   `SdkError::InvalidState` is left for values neither passed nor set on the
   chat, such as a missing session identity or an empty key cache.
-- Every binding but Rust now makes an outbound HTTPS request when a chat is
+- Every binding but Rust makes an outbound HTTPS request when a chat is
   created: `GET https://api.x.com/2/chat/features`, in the background (see
   Added). Allow it through egress filters for v1 sends; blocked, sends stay
-  v0. In Node before 20.16 a request still in flight can delay exit until it
-  ends, at most 2 seconds.
-- JS typings export only what the module exports. `Chat` and `ChatCrypto`,
-  which the module never exported, no longer import, and `FileEncryptor` /
-  `FileDecryptor`, which it returns but does not export, are interfaces.
+  v0. A chat sends v0 until the answer arrives, so its first sends can be v0
+  while the switch is on. In Node before 20.16 a request still in flight can
+  delay exit until it ends, at most 2 seconds.
+- JS typings declare only what the module exports: `Chat` and `ChatCrypto`
+  aren't importable, and `FileEncryptor` / `FileDecryptor`, which the module
+  returns but doesn't export, are interfaces.
 
 ### Added
 

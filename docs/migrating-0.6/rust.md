@@ -207,8 +207,10 @@ Every encrypt and prepare method takes its params by reference. Add `&` to
 `prepare_group_create` and `prepare_group_members_change`, and to the
 `ChatCore` methods' `_with_version` forms. Calls to
 `encrypt_add_reaction`, `encrypt_remove_reaction`, `encrypt_edit` and
-`prepare_message_delete` stay as they are, and the file and read-receipt
-methods take `&params` too.
+`prepare_message_delete` stay as they are, and the read-receipt method and
+`encrypt_file` and `file_encryptor` take `&params` too. The decrypt calls,
+`decrypt_events`, `decrypt_event`, `decrypt_file` and `file_decryptor`, take
+their params by value.
 
 ```rust
 // 0.5.x
@@ -354,7 +356,7 @@ let decryptor = chat.stream_decryptor(&keys[conversation_key_version])?;
 
 // 0.6.0
 let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64);
-let encryptor = chat.file_encryptor(&FileEncryptorParams::new(&payload.event_b64, &media_hash_key))?;
+let encryptor = chat.file_encryptor(&FileEncryptorParams::new(&payload.event_b64, media_hash_key))?;
 let decryptor = chat.file_decryptor(FileDecryptorParams::new(file_event_b64, keys, file_hash_key))?;
 ```
 
@@ -413,13 +415,14 @@ every request that takes them (`POST /2/chat/conversations/{id}/keys`,
 `conversation_participant_keys`, each entry a `ConversationParticipantKey`
 with `user_id`, `encrypted_conversation_key` and `public_key_version`, the
 type a received key change uses too
-(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)). Drop the renaming
-and pass them through as returned:
+(see [Received participant keys take the same names](#received-participant-keys-take-the-same-names)).
+The 0.5.x entry type, `EncryptedKeyForRecipient`, is removed. Drop the
+renaming and pass the keys through as returned:
 
 ```rust
 // 0.5.x
-let conversation_participant_keys: Vec<serde_json::Value> = prepared
-    .participant_keys
+let participant_keys: &[EncryptedKeyForRecipient] = &prepared.participant_keys;
+let conversation_participant_keys: Vec<serde_json::Value> = participant_keys
     .iter()
     .map(|key| {
         serde_json::json!({
@@ -431,7 +434,7 @@ let conversation_participant_keys: Vec<serde_json::Value> = prepared
     .collect();
 
 // 0.6.0
-let conversation_participant_keys = &prepared.conversation_participant_keys;
+let conversation_participant_keys: &[ConversationParticipantKey] = &prepared.conversation_participant_keys;
 ```
 
 ## Received participant keys take the same names
@@ -512,12 +515,14 @@ those entries on the update's request.
 
 ### Removing members
 
-`prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange`: the new
+`prepare_group_members_remove` removes `user_ids`. Pass the identity keys of
+the members who stay as `public_keys` and it also rotates the conversation
+key for them: the result is a `PreparedConversationChange` with the new
 conversation key, `conversation_participant_keys` for those members, and
 `action_signatures` in this order — the removal, then the conversation-key
-change.
+change. Without `public_keys` it signs the removal alone, with no new key,
+and the removed members can still decrypt later messages, so pass them on
+every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new
@@ -525,7 +530,7 @@ signatures, and `group_key_rotation_data` holding the new
 
 ```rust
 // 0.6.0
-let mut removal = GroupMembersRemoveParams::new(conversation_id, user_ids);
+let mut removal = GroupMembersRemoveParams::new(conversation_id, user_ids.clone());
 removal.public_keys = Some(remaining_public_keys);
 let prepared = chat.prepare_group_members_remove(&removal)?;
 let path = format!("/2/chat/conversations/{conversation_id}/members/remove");
