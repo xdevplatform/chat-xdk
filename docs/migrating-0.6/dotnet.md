@@ -20,6 +20,7 @@ change was made, and the [index](README.md) lists the other bindings' pages.
 - [ ] [Pass a `DecryptEventsParams` to `DecryptEvents` and read its `Events`](#decryptevents-takes-decrypteventsparams)
 - [ ] [Pass a `DecryptEventParams` to `DecryptEvent`](#decryptevent-takes-decrypteventparams)
 - [ ] [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
+- [ ] [Build an `EntityDescriptor` and a `UrlAttachmentImageDescriptor` with their constructors](#entities-and-preview-images-take-their-values-in-the-constructor)
 - [ ] [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
 - [ ] [Use `FileEncryptor` and `FileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
@@ -292,6 +293,25 @@ as recipients receive it. It isn't part of the send request: keep it to
 encrypt the message's files (see
 [Encrypt a file from its message](#encrypt-a-file-from-its-message)).
 
+## Entities and preview images take their values in the constructor
+
+An `EntityDescriptor` takes its start, end and type in its constructor, and a
+`UrlAttachmentImageDescriptor` its media hash key, size and filename, with
+`Width` and `Height` set in an initializer. Those values are read-only, and
+an `AttachmentDescriptor` comes only from `AttachmentDescriptor.Media`,
+`UrlCard` or `Post`, so none of them can leave a required value at `""` or
+`0`:
+
+```csharp
+// 0.5.x
+var mention = new EntityDescriptor { Start = 0, End = 5, EntityType = "mention" };
+var banner = new UrlAttachmentImageDescriptor { MediaHashKey = "banner-hash", FilesizeBytes = 24_000, Filename = "banner.jpg" };
+
+// 0.6.0
+var mention = new EntityDescriptor(0, 5, "mention");
+var banner = new UrlAttachmentImageDescriptor("banner-hash", 24_000, "banner.jpg") { Width = 1200, Height = 630 };
+```
+
 ## Encrypt a file from its message
 
 Each file is encrypted from the message that carries it, so build the
@@ -360,10 +380,13 @@ and the key version from `EventB64`.
 Upload each file for one message only. In v1 the id of a message with files
 is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
-the same message again gives the same id, so files you already encrypted
-for it stay valid, and a second message that reuses the first one's uploads
-gets the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected.
+the same message again gives the same id, so files you already encrypted for
+it stay valid, and a second message that reuses the first one's uploads gets
+the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected, and so is a
+file whose `Filename` is empty or whose `FilesizeBytes` is 0 or less, which
+receiving clients would discard: give each file its name and the encrypted
+size `ChatXdkUtilities.EncryptedFileSize` gives.
 
 ## Decrypt a file with its message's event
 
@@ -567,10 +590,13 @@ A missing or invalid parameter throws one of kind `InvalidInput` with a
 message that names the value, such as `Invalid sender_id 'user-1': pass a
 numeric user id (digits only)` or `too many attachments: at most 10 per
 message`, without an `Invalid state:` prefix. That covers a key or signature
-that `Verify`, `VerifyKeyBinding` or `MatchesRegisteredKey` can't decode.
-Errors about state the chat lacks, such as a missing session identity or an
-empty key cache, are of kind `InvalidState` and keep their prefix. Tell them
-apart by kind rather than by message:
+that `Verify`, `VerifyKeyBinding` or `MatchesRegisteredKey` can't decode. An
+entity of a type the SDK doesn't know, an empty one included, fails the same
+way, with `Invalid entity_type 'user_mention': pass url, mention, hashtag,
+cashtag, email, address or phone_number`, where 0.5.x sent the message
+without that entity. Errors about state the chat lacks, such as a missing
+session identity or an empty key cache, are of kind `InvalidState` and keep
+their prefix. Tell them apart by kind rather than by message:
 
 ```csharp
 // 0.5.x

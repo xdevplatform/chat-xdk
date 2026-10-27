@@ -107,10 +107,12 @@ order: start the upload, whose `media_hash_key` names the file in the
 message and whose size `encrypted_file_size` gives before encryption, build
 the message, then encrypt and upload the file. A v1 message with files takes
 an id derived from them, so building the same message again gives the same
-id and keeps its encrypted files valid. `decrypt_file` takes the event of the
-message that carries the file, which gives the key for the message's format
-and version and covers media quoted in a reply preview. v0 files use the
-conversation key, and the same calls handle both formats:
+id and keeps its encrypted files valid. A file with an empty filename or a
+size of 0 or less fails before anything is encrypted, since receiving
+clients discard it. `decrypt_file` takes the event of the message that
+carries the file, which gives the key for the message's format and version
+and covers media quoted in a reply preview. v0 files use the conversation
+key, and the same calls handle both formats:
 [Rust](rust.md#encrypt-a-file-from-its-message),
 [Python](python.md#encrypt-a-file-from-its-message),
 [JavaScript](javascript.md#encrypt-a-file-from-its-message),
@@ -375,9 +377,11 @@ wrong PIN carries the attempts Juicebox reports left as a number, not text
 to parse. A missing or invalid parameter fails with an error that names the
 value (`SdkError::InvalidInput` in Rust), without the `Invalid state:`
 prefix, which is left for state the chat lacks, such as a missing identity
-or an empty key cache. Calls that answered with a bare result, such as
-`verify` and `export_keys`, report the core's error too, rather than a
-generic failure or no value:
+or an empty key cache. An entity of a type the protocol doesn't have fails
+the same way: dropping it, as 0.5.x did, sent a message that differed from
+the one the app built, without saying so. Calls that answered with a bare
+result, such as `verify` and `export_keys`, report the core's error too,
+rather than a generic failure or no value:
 [Rust](rust.md#errors-carry-their-kind),
 [Python](python.md#errors-carry-their-kind),
 [JavaScript](javascript.md#errors-carry-their-kind),
@@ -402,10 +406,13 @@ generic failure or no value:
 - Python types the dicts its calls take and return with exported
   `TypedDict`s, so a type checker reads them
   ([Python](python.md#key-entries-and-results-have-named-types)).
-- .NET params documents omit a field left `null`, and JVM descriptors
-  leave required fields unset rather than filled with `""` or `0`, so a
-  missing value fails with an error that names it instead of a stand-in
-  reaching the core ([JVM](jvm.md#entities-take-their-values-in-the-constructor)).
+- .NET params documents omit a field left `null`, .NET descriptors take
+  their required values in their constructors, and JVM descriptors leave
+  required fields unset rather than filled with `""` or `0`, so a missing
+  value fails with an error that names it, or doesn't compile, instead of a
+  stand-in reaching the core
+  ([JVM](jvm.md#entities-take-their-values-in-the-constructor),
+  [.NET](dotnet.md#entities-and-preview-images-take-their-values-in-the-constructor)).
 - Rust's public enums, params structs and result structs, `SendPayload`
   among them, are `#[non_exhaustive]`, so a variant or field can be added
   without breaking code that builds params with `new` and `with_*`, reads

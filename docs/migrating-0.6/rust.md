@@ -408,10 +408,13 @@ sender, the message id and the key version from `event_b64`.
 Upload each file for one message only. In v1 the id of a message with files
 is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
-the same message again gives the same id, so files you already encrypted
-for it stay valid, and a second message that reuses the first one's uploads
-gets the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected.
+the same message again gives the same id, so files you already encrypted for
+it stay valid, and a second message that reuses the first one's uploads gets
+the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected, and so is a
+file whose `filename` is empty or whose `filesize_bytes` is 0 or less, which
+receiving clients would discard: give each file its name and the encrypted
+size `utils::encrypted_file_size` gives.
 
 ## Decrypt a file with its message's event
 
@@ -637,15 +640,18 @@ A missing or invalid parameter fails with `SdkError::InvalidInput`, of kind
 most 10 per message`. That covers a key or signature that `verify`,
 `verify_key_binding` or `matches_registered_key` can't decode, a
 conversation key or key blob of the wrong length, and an empty
-`public_keys`. `SdkError::InvalidState` is left for values the chat lacks,
-such as a missing session identity, an empty key cache, or the Juicebox
-config of a `Chat` made with `Chat::default()`, whose Juicebox calls fail
-with `Invalid state: no Juicebox config: pass the juicebox_config the X API
-returns when you create the chat, or call update_config() first` until
-`update_config` gives it one. After a wrong PIN,
-`guesses_remaining()` holds the attempts Juicebox reports left, `Some(0)`
-once the stored keys are locked. Tell failures apart by kind; a `match` on
-`ErrorKind` or `SdkError` takes a wildcard arm (see
+`public_keys`. An entity of a type the SDK doesn't know, an empty one
+included, fails the same way, with `Invalid entity_type 'user_mention': pass
+url, mention, hashtag, cashtag, email, address or phone_number`, where 0.5.x
+sent the message without that entity. `SdkError::InvalidState` is left for
+values the chat lacks, such as a missing session identity, an empty key
+cache, or the Juicebox config of a `Chat` made with `Chat::default()`, whose
+Juicebox calls fail with `Invalid state: no Juicebox config: pass the
+juicebox_config the X API returns when you create the chat, or call
+update_config() first` until `update_config` gives it one. After a wrong
+PIN, `guesses_remaining()` holds the attempts Juicebox reports left,
+`Some(0)` once the stored keys are locked. Tell failures apart by kind; a
+`match` on `ErrorKind` or `SdkError` takes a wildcard arm (see
 [Types are `#[non_exhaustive]`](#types-are-non_exhaustive)):
 
 ```rust

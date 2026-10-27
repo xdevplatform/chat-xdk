@@ -630,9 +630,23 @@ juicebox-sdk.
   request still in flight can delay exit until it ends, at most 2 seconds.
 - .NET params documents omit a field left `null`, so an unset optional
   resolves from the session identity or key cache and an unset required
-  field fails with an error naming it. JVM: `EntityDescriptor` takes its
-  start, end and type in its constructor, and the attachment and image
-  descriptors leave their required fields unset rather than `""` or `0`.
+  field fails with an error naming it. .NET: `EntityDescriptor` takes its
+  start, end and type, and `UrlAttachmentImageDescriptor` its media hash
+  key, size and filename, in its constructor, read-only, and an
+  `AttachmentDescriptor` comes only from `Media`, `UrlCard` or `Post`, so
+  no descriptor defaults a required value to `""` or `0`. JVM:
+  `EntityDescriptor` takes its start, end and type in its constructor, and
+  the attachment and image descriptors leave their required fields unset
+  rather than `""` or `0`.
+- An entity of a type the SDK doesn't know, an empty one included, fails
+  the call with an invalid-input error naming it (`Invalid entity_type
+  'user_mention': pass url, mention, hashtag, cashtag, email, address or
+  phone_number`) instead of being left out of the message, for a message's,
+  a reply's, a reply preview's and an edit's entities. A file a message
+  carries, a media attachment or a URL card's banner or favicon, with an
+  empty `filename` or a `filesize_bytes` of 0 or less fails the send with an
+  invalid-input error naming its media hash key, since receiving clients
+  discard such a file.
 - JS typings declare only what the module exports: `Chat` and `ChatCrypto`
   aren't importable, and `FileEncryptor` / `FileDecryptor`, which the module
   returns but doesn't export, are interfaces. `ChatXdkError`,

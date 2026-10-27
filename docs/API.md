@@ -2451,7 +2451,7 @@ pub struct SendPayload {
 
 ### EntityDescriptor (Rust, .NET, JVM) / EntityTuple (Go, JS) / tuple (Python)
 
-Describes a rich-text entity to embed in a message. The `start` and `end` byte offsets refer to positions within the message text. Rust, .NET, and JVM expose an `EntityDescriptor` struct/class; Go and JS use an `EntityTuple` (`[start, end, type]`); Python takes plain `(start, end, entity_type)` tuples.
+Describes a rich-text entity to embed in a message. The `start` and `end` byte offsets refer to positions within the message text. Rust, .NET, and JVM expose an `EntityDescriptor` struct/class, built from its start, end and type (`EntityDescriptor::new`, and the .NET and JVM constructors); Go and JS use an `EntityTuple` (`[start, end, type]`); Python takes plain `(start, end, entity_type)` tuples.
 
 ```rust
 // Rust
@@ -2489,11 +2489,11 @@ Supported entity types:
 | `"address"` | A physical address in the message text |
 | `"phone_number"` | A phone number in the message text (the camelCase spelling `"phoneNumber"` is accepted too) |
 
-Both the `"phone_number"` and `"phoneNumber"` spellings are accepted by every
-binding (the conversion happens in core). **Unrecognized entity-type tokens
-are silently dropped** — the message encrypts without that entity and no
-error is raised — so double-check tokens when porting entity lists between
-bindings.
+Both the `"phone_number"` and `"phoneNumber"` spellings are accepted by
+every binding (the conversion happens in core). Any other type, an empty one
+included, fails the call with an invalid-input error naming it, in every
+binding: `Invalid entity_type 'user_mention': pass url, mention, hashtag,
+cashtag, email, address or phone_number`.
 
 ### AttachmentDescriptor (send side)
 
@@ -2525,9 +2525,12 @@ interface UrlAttachmentImageDescriptor {
 `media_hash_key`, `filesize_bytes`, and `filename` are all **required**:
 first-party clients share an ingest path that silently discards the whole
 preview image when any of the three is missing on the wire, so an optional
-field here would be an invisible no-banner failure for callers. `width`/
-`height` are optional and currently ignored by receiving clients (emitted
-for wire fidelity).
+field here would be an invisible no-banner failure for callers. For the same
+reason a send fails with an invalid-input error when a media attachment or a
+URL card image has an empty `media_hash_key` or `filename`, or a
+`filesize_bytes` of 0 or less, such as `media_hash_key 'banner' has an empty
+filename: pass the file's original name`. `width`/`height` are optional and
+currently ignored by receiving clients (emitted for wire fidelity).
 
 **URL cards ("clickable images").** A `url` attachment with only a `url`
 renders as a bare link on some clients: clients only auto-fetch missing card
@@ -2558,8 +2561,13 @@ Rust, .NET, and JVM expose typed variants/factories
 (`AttachmentDescriptor::Url { … }` with images built by
 `UrlAttachmentImageDescriptor::new(media_hash_key, filesize_bytes, filename)`
 and `with_dimensions(width, height)`, `AttachmentDescriptor.UrlCard(url,
-displayTitle, bannerImage, faviconImage)`, `Types.AttachmentDescriptor
-.urlCard(url, displayTitle, bannerImage, faviconImage)`); Go uses the flat
+displayTitle, bannerImage, faviconImage)` with images built by `new
+UrlAttachmentImageDescriptor(mediaHashKey, filesizeBytes, filename)` and an
+optional `{ Width, Height }` initializer, `Types.AttachmentDescriptor
+.urlCard(url, displayTitle, bannerImage, faviconImage)` with images built by
+`UrlAttachmentImageDescriptor.of(mediaHashKey, filesizeBytes, filename)`).
+A .NET `AttachmentDescriptor` comes only from its `Media`, `UrlCard` and
+`Post` factories. Go uses the flat
 `AttachmentDescriptor` struct with `BannerImage`/`FaviconImage` pointer
 fields (`URLAttachmentImageDescriptor`); JS and Python pass the plain
 object/dict shape above.

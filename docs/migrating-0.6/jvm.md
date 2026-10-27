@@ -374,10 +374,13 @@ and the key version from `eventB64`.
 Upload each file for one message only. In v1 the id of a message with files
 is derived from its conversation key and version, its sender, its
 conversation and its files' media hash keys, but not its text: encrypting
-the same message again gives the same id, so files you already encrypted
-for it stay valid, and a second message that reuses the first one's uploads
-gets the same id, so recipients drop it as a repeat. A message that lists an
-empty media hash key, or one media hash key twice, is rejected.
+the same message again gives the same id, so files you already encrypted for
+it stay valid, and a second message that reuses the first one's uploads gets
+the same id, so recipients drop it as a repeat. A message that lists an
+empty media hash key, or one media hash key twice, is rejected, and so is a
+file whose `filename` is empty or whose `filesizeBytes` is 0 or less, which
+receiving clients would discard: give each file its name and the encrypted
+size `ChatXdkUtilities.encryptedFileSize` gives.
 
 ## Decrypt a file with its message's event
 
@@ -583,10 +586,13 @@ the stored keys are locked and `null` when Juicebox reports no count.
 A missing or invalid parameter throws one of kind `INVALID_INPUT` with a
 message that names the value, such as `Invalid sender_id 'user-1': pass a
 numeric user id (digits only)` or `too many attachments: at most 10 per
-message`, without an `Invalid state:` prefix. Errors about state the chat
-lacks, such as a missing session identity or an empty key cache, are of
-kind `INVALID_STATE` and keep their prefix. Tell them apart by kind rather
-than by message:
+message`, without an `Invalid state:` prefix. An entity of a type the SDK
+doesn't know, an empty one included, fails the same way, with `Invalid
+entity_type 'user_mention': pass url, mention, hashtag, cashtag, email,
+address or phone_number`, where 0.5.x sent the message without that entity.
+Errors about state the chat lacks, such as a missing session identity or an
+empty key cache, are of kind `INVALID_STATE` and keep their prefix. Tell
+them apart by kind rather than by message:
 
 ```java
 // 0.5.x
