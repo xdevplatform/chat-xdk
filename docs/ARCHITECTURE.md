@@ -518,7 +518,8 @@ Developer                          SDK                           Juicebox
     │  payload                      │                               │
     │◀──────────────────────────────│                               │
     │                               │                               │
-    │  POST /2/chat/keys            │                               │
+    │  POST /2/users/{id}/          │                               │
+    │    public_keys                │                               │
     │  (developer calls X API)      │                               │
     │                               │                               │
     │  chat.update_config(config)   │                               │

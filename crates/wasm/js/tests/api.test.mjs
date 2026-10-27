@@ -697,6 +697,46 @@ async function main() {
     /Invalid screen capture change: 'nope'/,
   );
 
+  // 4c3b. The group and conversation-metadata actions each sign one action at
+  // signature version 7: its payload names the event and ends with the signed
+  // fields, and its signature verifies with the signer's signing key.
+  {
+    const signingKey = chat.getPublicKeys().signing;
+    const ident = { senderId: "111", signingKeyVersion: "1", conversationId: "g100" };
+    const cases = [
+      ["GroupChangeEvent.GroupAvatarUrlChange", ",g100,4,https://img/a.png",
+        () => chat.prepareGroupAvatarChange({ ...ident, conversationKeyVersion: "4", customAvatarUrl: "https://img/a.png" })],
+      ["GroupChangeEvent.GroupDescriptionChange", ",g100,4,enc-desc",
+        () => chat.prepareGroupDescriptionChange({ ...ident, conversationKeyVersion: "4", customDescription: "enc-desc" })],
+      ["GroupChangeEvent.GroupAdminAddChange", ",g100,910008,910009",
+        () => chat.prepareGroupAdminsAdd({ ...ident, userIds: ["910008", "910009"] })],
+      ["GroupChangeEvent.GroupAdminRemoveChange", ",g100,910008",
+        () => chat.prepareGroupAdminsRemove({ ...ident, userIds: ["910008"] })],
+      ["GroupChangeEvent.GroupInviteEnable", ",g100,https://x.com/i/invite/abc,null,null",
+        () => chat.prepareGroupInviteEnable({ ...ident, inviteUrl: "https://x.com/i/invite/abc" })],
+      ["GroupChangeEvent.GroupInviteDisable", ",g100,111", () => chat.prepareGroupInviteDisable({ ...ident })],
+      ["GroupChangeEvent.GroupJoinRequest", ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
+      ["GroupChangeEvent.GroupJoinReject", ",g100,910010",
+        () => chat.prepareGroupJoinReject({ ...ident, userIds: ["910010"] })],
+      ["ConversationMetadataChangeEvent.MessageDurationChange", ",g100,86400000",
+        () => chat.prepareMessageTtlChange({ ...ident, ttlMsec: 86400000 })],
+      ["ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
+        () => chat.prepareMessageTtlRemove({ ...ident })],
+    ];
+    for (const [event, suffix, prepare] of cases) {
+      const action = onlyAction(prepare());
+      assert.ok(action.signaturePayload.startsWith(`${event},`), action.signaturePayload);
+      assert.ok(action.signaturePayload.endsWith(suffix), action.signaturePayload);
+      const sig = action.messageEventSignature;
+      assert.equal(sig.signatureVersion, "7", event);
+      assert.equal(sig.signingPublicKey, signingKey, event);
+      assert.ok(
+        chat.verify(signingKey, b64ToBytes(sig.signature), new TextEncoder().encode(action.signaturePayload)),
+        event,
+      );
+    }
+  }
+
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.
   const readSig = onlyAction(chat.prepareMarkConversationRead({

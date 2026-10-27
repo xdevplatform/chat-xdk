@@ -55,9 +55,11 @@ impl Party {
         }
     }
 
-    /// A signature over `payload`, labeled with signature version `version`.
+    /// A signature over `payload`, labeled with signature version `version`,
+    /// made on the SDK's own signing path.
     pub(super) fn sign(&self, payload: &str, version: i32) -> MessageEventSignature {
-        let signature = self.core.sign(payload.as_bytes()).unwrap();
+        let signing_key = self.core.get_signing_private_key().unwrap();
+        let signature = KeyFactory::sign(&signing_key, payload.as_bytes()).unwrap();
         MessageEventSignature {
             signature: Some(STANDARD_NO_PAD.encode(signature)),
             public_key_version: Some(SIGNING_KEY_VERSION.to_string()),

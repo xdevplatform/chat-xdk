@@ -29,7 +29,7 @@ Run the JVM tests (builds the cdylib, then `mvn test` with `jna.library.path` po
 make jvm-test
 ```
 
-For your app, depend on the `chatxdk` artifact (`mvn install` from `crates/jvm/java/chatxdk` or publish to your registry) and ensure JNA can load `chat_xdk_dotnet` (place the shared library next to the JVM or set `jna.library.path`).
+For your app, depend on the `com.x:chatxdk` artifact. The published jar bundles `chat_xdk_dotnet` for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) and loads it from the jar. A jar you build with `mvn install` from `crates/jvm/java/chatxdk` bundles none, so JNA loads the library from `jna.library.path` (or the system library path).
 
 ## Quick Start
 

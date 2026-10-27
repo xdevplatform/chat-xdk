@@ -364,6 +364,16 @@ for (ActionSignature sig : prepared.actionSignatures) {
 List<ActionSignature> actionSignatures = prepared.actionSignatures;
 ```
 
+A withheld `signaturePayload` is `null`, where 0.5.x set it to `""`:
+
+```java
+// 0.5.x
+boolean withheld = sig.signaturePayload.isEmpty();
+
+// 0.6.0
+boolean withheld = sig.signaturePayload == null;
+```
+
 ## Participant keys take the key requests' names
 
 A prepared change's participant keys carry the names the X API gives them in
@@ -480,11 +490,14 @@ those entries on the update's request.
 
 ### Removing members
 
-`prepareGroupMembersRemove` removes `userIds` and rotates the conversation
-key for the members who stay. Pass their identity keys as `publicKeys`.
-The result is a `PreparedConversationChange`: the new conversation key,
-`conversationParticipantKeys` for those members, and `actionSignatures` in
-this order — the removal, then the conversation-key change.
+`prepareGroupMembersRemove` removes `userIds`. Pass the identity keys of the
+members who stay as `publicKeys` and it also rotates the conversation key
+for them: the result is a `PreparedConversationChange` with the new
+conversation key, `conversationParticipantKeys` for those members, and
+`actionSignatures` in this order — the removal, then the conversation-key
+change. Without `publicKeys` it signs the removal alone, with no new key,
+and the removed members can still decrypt later messages, so pass them on
+every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new

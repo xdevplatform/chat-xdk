@@ -129,13 +129,14 @@ chat.set_identity(SetIdentityParams(user_id, signing_key_version))
 ## `import_keys` takes `ImportKeysParams`
 
 Pass the saved key bytes, and optionally the signing-key version they were
-registered under as the keyword argument `signing_key_version`. Without a
-version, call `set_identity` before the first signed call.
+registered under as the keyword argument `signing_key_version` (the
+`version` keyword of 0.5.x's `import_keys`). Without a version, call
+`set_identity` before the first signed call.
 
 ```python
 # 0.5.x
 chat.import_keys(private_keys)
-chat.import_keys(private_keys, signing_key_version)
+chat.import_keys(private_keys, version=signing_key_version)
 
 # 0.6.0
 chat.import_keys(ImportKeysParams(private_keys))
@@ -178,8 +179,10 @@ no code to change if you pass the versions the X API returns.
 
 Pass the events in a `DecryptEventsParams`. `signing_keys` is optional and
 keyword-only; without it, the keys `set_signing_keys` stored verify the
-events. The result is the same dict, and the call still never raises: errors
-are collected per event.
+events. The result is the same dict. An event that fails is collected in its
+`errors` rather than raised; the call raises only for invalid params, such
+as a signing key entry without `public_key_version` (`ValueError`) or
+`events` that is not a list (`TypeError`).
 
 ```python
 # 0.5.x
@@ -353,18 +356,24 @@ plaintext = chat.decrypt_file(DecryptFileParams(downloaded, file_event_b64, keys
 `file_encryptor` and `file_decryptor` take the same values as
 `encrypt_file` and `decrypt_file`, without the file bytes, and return a
 `FileEncryptor` or a `FileDecryptor`; `push` and `finish` are unchanged.
+The classes are named `FileEncryptor` and `FileDecryptor` in imports and
+type hints too, where 0.5.x had `StreamEncryptor` and `StreamDecryptor`.
 Size an upload with `encrypted_file_size`.
 
 ```python
 # 0.5.x
+from chat_xdk import StreamDecryptor, StreamEncryptor
+
 size = encrypted_stream_size(len(photo))
-encryptor = chat.stream_encryptor(conversation_key)
-decryptor = chat.stream_decryptor(keys[conversation_key_version])
+encryptor: StreamEncryptor = chat.stream_encryptor(conversation_key)
+decryptor: StreamDecryptor = chat.stream_decryptor(keys[conversation_key_version])
 
 # 0.6.0
+from chat_xdk import FileDecryptor, FileEncryptor
+
 size = encrypted_file_size(len(photo))
-encryptor = chat.file_encryptor(FileEncryptorParams(payload.event_b64, media_hash_key))
-decryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_hash_key))
+encryptor: FileEncryptor = chat.file_encryptor(FileEncryptorParams(payload.event_b64, media_hash_key))
+decryptor: FileDecryptor = chat.file_decryptor(FileDecryptorParams(file_event_b64, keys, file_hash_key))
 ```
 
 ## Action signatures come nested
@@ -472,10 +481,11 @@ message_id = deletion["action_signatures"][0]["message_id"]
 
 ## Invalid input errors
 
-A missing or invalid argument raises `ValueError` with a message that names
-the value, such as `Invalid sender_id 'user-1': pass a numeric user id
-(digits only)` or `too many attachments: at most 10 per message`, without an
-`Invalid state:` prefix. If your code looks for that prefix on these errors,
+An invalid argument raises `ValueError` with a message that names the value,
+such as `Invalid sender_id 'user-1': pass a numeric user id (digits only)` or
+`too many attachments: at most 10 per message`, without an `Invalid state:`
+prefix. A missing argument, or one of the wrong type, raises `TypeError`, as
+in any Python call. If your code looks for that prefix on these errors,
 match the message instead. Errors about state the chat lacks, such as a
 missing session identity or an empty key cache, keep their prefix.
 
@@ -488,12 +498,14 @@ those entries on the update's request.
 
 ### Removing members
 
-`prepare_group_members_remove` removes `user_ids` and rotates the
-conversation key for the members who stay. Pass their identity keys as
-`public_keys`. The result is a `PreparedConversationChange` dict: the new
+`prepare_group_members_remove` removes `user_ids`. Pass the identity keys of
+the members who stay as `public_keys` and it also rotates the conversation
+key for them: the result is a `PreparedConversationChange` dict with the new
 conversation key, `conversation_participant_keys` for those members, and
 `action_signatures` in this order — the removal, then the conversation-key
-change.
+change. Without `public_keys` it signs the removal alone, with no new key,
+and the removed members can still decrypt later messages, so pass them on
+every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new

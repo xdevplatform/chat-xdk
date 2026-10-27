@@ -175,12 +175,18 @@ a `DecryptEventsParams`, and the signing keys as `SigningKeys`. Left
 `null`, the keys `SetSigningKeys` stored verify the events. The result is
 unchanged, and per-event errors are still collected in it.
 
+The events of `DecryptEvents` and the signing keys of both decrypt calls are
+`IReadOnlyList`s, where 0.5.x took any `IEnumerable`. Call `ToList()` on a
+LINQ query (`signingKeyQuery` below is an `IEnumerable<SigningKeyEntry>`):
+
 ```csharp
 // 0.5.x
 var result = chat.DecryptEvents(events, signingKeys);
+var fromQuery = chat.DecryptEvents(events, signingKeyQuery);
 
 // 0.6.0
 var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys });
+var fromQuery = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeyQuery.ToList() });
 ```
 
 ## `DecryptEvent` takes `DecryptEventParams`
@@ -329,19 +335,21 @@ var plaintext = chat.DecryptFile(new DecryptFileParams(downloaded, fileEventB64,
 
 `FileEncryptor` and `FileDecryptor` take the same values as `EncryptFile`
 and `DecryptFile`, without the file bytes, and return a `FileEncryptor` or
-a `FileDecryptor`; `Push`, `Finish` and `Dispose` are unchanged. Size an
-upload with `ChatXdkUtilities.EncryptedFileSize`.
+a `FileDecryptor`; `Push`, `Finish` and `Dispose` are unchanged. The
+returned classes are named `FileEncryptor` and `FileDecryptor` too, where
+0.5.x had `StreamEncryptor` and `StreamDecryptor`. Size an upload with
+`ChatXdkUtilities.EncryptedFileSize`.
 
 ```csharp
 // 0.5.x
 var size = ChatXdkUtilities.EncryptedStreamSize((ulong)photo.Length);
-using var encryptor = chat.StreamEncryptor(conversationKey);
-using var decryptor = chat.StreamDecryptor(keys[conversationKeyVersion]);
+using StreamEncryptor encryptor = chat.StreamEncryptor(conversationKey);
+using StreamDecryptor decryptor = chat.StreamDecryptor(keys[conversationKeyVersion]);
 
 // 0.6.0
 var size = ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length);
-using var encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, mediaHashKey));
-using var decryptor = chat.FileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
+using FileEncryptor encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, mediaHashKey));
+using FileDecryptor decryptor = chat.FileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
 ```
 
 ## Action signatures come nested
@@ -476,11 +484,14 @@ those entries on the update's request.
 
 ### Removing members
 
-`PrepareGroupMembersRemove` removes `UserIds` and rotates the conversation
-key for the members who stay. Pass their identity keys as `PublicKeys`.
-The result is a `PreparedConversationChange`: the new conversation key,
-`ConversationParticipantKeys` for those members, and `ActionSignatures` in
-this order — the removal, then the conversation-key change.
+`PrepareGroupMembersRemove` removes `UserIds`. Pass the identity keys of the
+members who stay as `PublicKeys` and it also rotates the conversation key
+for them: the result is a `PreparedConversationChange` with the new
+conversation key, `ConversationParticipantKeys` for those members, and
+`ActionSignatures` in this order — the removal, then the conversation-key
+change. Without `PublicKeys` it signs the removal alone, with no new key,
+and the removed members can still decrypt later messages, so pass them on
+every removal.
 
 POST `/2/chat/conversations/{id}/members/remove` with `user_ids`, both
 signatures, and `group_key_rotation_data` holding the new
