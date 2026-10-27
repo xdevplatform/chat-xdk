@@ -690,10 +690,13 @@ pub(crate) fn apply_identity(
 
 /// Parameters for ``Chat.prepare_group_members_remove``.
 ///
-/// ``public_keys`` are the identity keys of the members who stay: the call
-/// rotates the conversation key for them. ``title`` and ``description`` are
-/// the group's plaintext metadata; each one set is encrypted under the new
-/// key and signed with the removal as a key-rotation re-encryption.
+/// ``public_keys`` are the identity keys of the members who stay, yours
+/// included: the call rotates the conversation key for them, and a member
+/// left out can't read what the group sends under the new key. ``title`` and
+/// ``description`` are the group's current plaintext metadata; pass each one
+/// the group has. Each one set is encrypted under the new key and signed with
+/// the removal as a key-rotation re-encryption, which recipients' decrypt
+/// drops rather than show as a change.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersRemoveParams {
     pub(crate) public_keys: Py<PyAny>,

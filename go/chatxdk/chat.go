@@ -266,7 +266,9 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 //
 // Nil (or empty) SigningKeys fall back to the keys stored via
 // SetSigningKeys; with nothing stored either, signed events fail decryption
-// under the default reject-unverified policy.
+// under the default reject-unverified policy. A member removal's title and
+// description, re-encrypted under the new key, aren't changes: they land in
+// Errors under either policy.
 func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, error) {
 	defer runtime.KeepAlive(c)
 	params.Events = orEmpty(params.Events)
@@ -580,7 +582,9 @@ func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*
 // the sender's key for the version the event carries. With no signing keys
 // passed or stored, every signed event fails under the default
 // reject-unverified policy; only after SetRejectUnverified(false) are such
-// events returned with Verified=false.
+// events returned with Verified=false. A member removal's title and
+// description, re-encrypted under the new key, aren't changes: they fail with
+// an ErrorKindInvalidInput error under either policy.
 func (c *Chat) DecryptEvent(params DecryptEventParams) (*Event, error) {
 	defer runtime.KeepAlive(c)
 	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)

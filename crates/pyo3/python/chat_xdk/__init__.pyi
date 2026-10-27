@@ -96,7 +96,9 @@ class GroupText(TypedDict, total=False):
     ``kind`` ``"Text"`` carries ``text``: the value decrypted, or the
     plaintext an event that names no key version carries. ``kind``
     ``"Unavailable"`` carries ``raw``: a value the SDK could not decrypt, as
-    the event carries it. Show ``raw`` when a title isn't decryptable.
+    the event carries it. Show ``raw`` when a title isn't decryptable. A
+    member removal re-encrypts the title and description under the new key;
+    those re-encryptions aren't changes, and decrypt drops them.
     """
 
     kind: Literal["Text", "Unavailable"]
@@ -137,7 +139,9 @@ class DecryptedEvent(TypedDict, total=False):
 
 class DecryptEventsResult(TypedDict):
     """What ``decrypt_events`` returns. ``errors`` maps the index of each
-    event that failed, as a string, to its error."""
+    event left out of ``events``, as a string, to its error: one that
+    failed, or one decrypt drops, such as a member removal's title or
+    description re-encrypted under the new key."""
 
     events: list[DecryptedEvent]
     conversation_keys: ConversationKeyResult

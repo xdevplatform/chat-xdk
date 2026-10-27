@@ -516,6 +516,8 @@ public final class Chat implements AutoCloseable {
      * <p>Under the default reject-unverified policy, a signed event with no usable signing key
      * (passed or stored via {@link #setSigningKeys}) throws; only after
      * {@link #setRejectUnverified}(false) are such events returned with {@code verified: false}.
+     * A member removal's title and description, re-encrypted under the new key, aren't changes:
+     * they throw a {@link ChatXdkException} of kind {@code INVALID_INPUT} under either policy.
      *
      * @return A {@link JsonNode} with a {@code "type"} field indicating the event kind
      *     ({@code "Message"}, {@code "KeyChange"}, {@code "GroupChange"}, etc.).
@@ -540,6 +542,8 @@ public final class Chat implements AutoCloseable {
     /**
      * Decrypt a batch of webhook events in one call. Keys are extracted from {@code KeyChange} events in the batch;
      * failures are recorded in {@link DecryptEventsResult#errors} — this method never throws per-event.
+     * A member removal's title and description, re-encrypted under the new key, aren't changes:
+     * they are recorded there too.
      */
     public DecryptEventsResult decryptEvents(DecryptEventsParams parameters) throws Exception {
         throwIfDisposed();

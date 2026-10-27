@@ -1621,7 +1621,9 @@ pub struct DecryptEventsResult {
     /// Conversation keys extracted from key events.
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub conversation_keys: ConversationKeyResult,
-    /// Errors encountered during decryption (index → error message).
+    /// Index → error message for each event left out of `events`: one that
+    /// failed, or one decrypt drops, such as a member removal's title or
+    /// description re-encrypted under the new key.
     pub errors: std::collections::HashMap<usize, String>,
 }
 

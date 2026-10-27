@@ -93,6 +93,10 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// optional `signing_keys` (`[{"user_id","public_key_version","public_key",
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
 /// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
+///
+/// The result's `errors` maps the index of each event left out of `events`,
+/// as a string, to its error: one that failed, or one decrypt drops, such as
+/// a member removal's title or description re-encrypted under the new key.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_events(
     handle: *const ChatHandle,
@@ -166,7 +170,9 @@ pub(crate) fn json_prepared_change(
 /// `chat_xdk_decrypt_events`). With no signing keys passed or stored, signed
 /// events fail decryption under the default reject-unverified policy
 /// (disable it via `chat_xdk_set_reject_unverified` to have them returned
-/// with `verified: false` instead).
+/// with `verified: false` instead). A member removal's title and
+/// description, re-encrypted under the new key, aren't changes: they fail
+/// with an `invalid_input` error under either policy.
 ///
 /// Returns JSON representation of the decrypted Event.
 #[no_mangle]

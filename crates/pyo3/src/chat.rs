@@ -312,7 +312,10 @@ impl Chat {
     ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str}``;
     ///       ``latest_version`` is the newest version whose key change
     ///       verified, ``None`` until one verifies
-    ///     - ``errors``: Dict mapping event index (string, e.g. ``"0"``) to error message
+    ///     - ``errors``: Dict mapping event index (string, e.g. ``"0"``) to error
+    ///       message, for each event left out of ``events``: one that failed,
+    ///       or one decrypt drops, such as a member removal's title or
+    ///       description re-encrypted under the new key
     pub(crate) fn decrypt_events(
         &self,
         py: Python<'_>,
@@ -374,6 +377,11 @@ impl Chat {
     ///
     /// Returns:
     ///     A dictionary representing the decrypted event.
+    ///
+    /// Raises:
+    ///     InvalidInputError: for a member removal's title or description
+    ///         re-encrypted under the new key. It isn't a change, so decrypt
+    ///         drops it; ``decrypt_events`` records it in ``errors``.
     pub(crate) fn decrypt_event(
         &self,
         py: Python<'_>,
