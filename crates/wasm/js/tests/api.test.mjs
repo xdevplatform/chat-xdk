@@ -1066,6 +1066,60 @@ async function main() {
     /attachment combination/,
   );
 
+  // 4j. A file without a name or a size, and an entity of an unknown or
+  // empty type, fail with the core's invalid-input error naming them.
+  const invalidInput = (message) => (err) => {
+    assert.equal(err.kind, "invalidInput");
+    assert.equal(err.message, message);
+    return true;
+  };
+  const send = (extra) =>
+    chat.encryptMessage({
+      senderId: "111",
+      conversationId: "conv-1",
+      conversationKey: convKey,
+      text: "hi @bob",
+      conversationKeyVersion: "1",
+      signingKeyVersion: "1",
+      ...extra,
+    });
+  const noName = "has an empty filename: pass the file's original name";
+  const noSize =
+    "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives";
+  const photo = {
+    attachment_type: "media",
+    media_hash_key: "photo",
+    width: 100,
+    height: 100,
+    filesize_bytes: 1000,
+    filename: "photo.jpg",
+    media_type: 1,
+  };
+  const card = (images) => ({ attachment_type: "url", url: "https://example.com", ...images });
+  for (const [attachment, message] of [
+    [{ ...photo, filename: "" }, `media_hash_key 'photo' ${noName}`],
+    [{ ...photo, filesize_bytes: 0 }, `media_hash_key 'photo' ${noSize}`],
+    [
+      card({ banner_image: { media_hash_key: "banner", filesize_bytes: 1000, filename: "" } }),
+      `media_hash_key 'banner' ${noName}`,
+    ],
+    [
+      card({ favicon_image: { media_hash_key: "favicon", filesize_bytes: 0, filename: "f.png" } }),
+      `media_hash_key 'favicon' ${noSize}`,
+    ],
+  ]) {
+    assert.throws(() => send({ attachments: [attachment] }), invalidInput(message));
+  }
+  for (const entityType of ["bogus", ""]) {
+    assert.throws(
+      () => send({ entities: [[3, 7, entityType]] }),
+      invalidInput(
+        `Invalid entity_type '${entityType}': pass url, mention, hashtag, cashtag, email, ` +
+          "address or phone_number",
+      ),
+    );
+  }
+
   // 5. decryptEvents / decryptEvent throw on a malformed (3-field) signingKeys entry
   const malformedSigningKeys = [
     { userId: "111", publicKeyVersion: "1", publicKey: v.signing_public_b64 },

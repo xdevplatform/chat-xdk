@@ -240,7 +240,10 @@ type EncryptMessageParams struct {
 // EntityTuple represents a text entity: [start, end, type].
 type EntityTuple [3]interface{}
 
-// NewEntity creates an EntityTuple.
+// NewEntity creates an EntityTuple. entityType is one of "url", "mention",
+// "hashtag", "cashtag", "email", "address" or "phone_number"; any other
+// value, an empty one included, fails the call with an error of kind
+// ErrorKindInvalidInput naming it.
 func NewEntity(start, end int, entityType string) EntityTuple {
 	return EntityTuple{start, end, entityType}
 }
@@ -249,8 +252,11 @@ func NewEntity(start, end int, entityType string) EntityTuple {
 type AttachmentDescriptor struct {
 	AttachmentType string `json:"attachment_type"` // "media", "url", or "post"
 	// The media fields are always marshaled (no omitempty): core requires
-	// them on "media" attachments and a zero value (e.g. width 0) is valid,
-	// so omitting zeros would be rejected. Other variants ignore them.
+	// them on "media" attachments and a zero width or height is valid, so
+	// omitting zeros would be rejected. FilesizeBytes is the encrypted
+	// file's size, EncryptedFileSize of its size; an empty Filename or a
+	// FilesizeBytes of 0 or less fails the send with an error of kind
+	// ErrorKindInvalidInput. Other variants ignore them.
 	MediaHashKey   string  `json:"media_hash_key"`
 	Width          int64   `json:"width"`
 	Height         int64   `json:"height"`
@@ -277,8 +283,10 @@ type AttachmentDescriptor struct {
 //
 // FilesizeBytes and Filename are required alongside MediaHashKey: receiving
 // clients' shared ingest silently discards the whole preview image when
-// either is missing on the wire. FilesizeBytes is the encrypted image's size,
-// EncryptedFileSize of the image's size.
+// either is missing on the wire, so an empty Filename or a FilesizeBytes of
+// 0 or less fails the send with an error of kind ErrorKindInvalidInput.
+// FilesizeBytes is the encrypted image's size, EncryptedFileSize of the
+// image's size.
 type URLAttachmentImageDescriptor struct {
 	MediaHashKey  string `json:"media_hash_key"`
 	FilesizeBytes int64  `json:"filesize_bytes"`

@@ -2827,7 +2827,7 @@ func TestEncryptMessageMediaAttachmentZeroDimensions(t *testing.T) {
 				MediaHashKey:   "zerohash",
 				Width:          0,
 				Height:         0,
-				FilesizeBytes:  0,
+				FilesizeBytes:  2048,
 				Filename:       "voice.ogg",
 			},
 		},
@@ -3336,6 +3336,80 @@ func TestExtractConversationKeysInvalid(t *testing.T) {
 	}
 	if result.LatestVersion != nil {
 		t.Errorf("expected nil latest_version for malformed input, got %q", *result.LatestVersion)
+	}
+}
+
+// TestEncryptMessageRejectsAFileWithoutANameOrASize checks that the core
+// rejects a file's empty filename or a size of 0, which receiving clients
+// would discard the file for, with an invalid-input error naming the file.
+func TestEncryptMessageRejectsAFileWithoutANameOrASize(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "910002", SigningKeyVersion: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	const noName = "has an empty filename: pass the file's original name"
+	const noSize = "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives"
+	media := func(size int64, filename string) AttachmentDescriptor {
+		return AttachmentDescriptor{AttachmentType: "media", MediaHashKey: "photo", Width: 100, Height: 100, FilesizeBytes: size, Filename: filename}
+	}
+	card := func(banner, favicon *URLAttachmentImageDescriptor) AttachmentDescriptor {
+		return AttachmentDescriptor{AttachmentType: "url", URL: "https://example.com", BannerImage: banner, FaviconImage: favicon}
+	}
+	cases := []struct {
+		attachment AttachmentDescriptor
+		want       string
+	}{
+		{media(1000, ""), "media_hash_key 'photo' " + noName},
+		{media(0, "photo.jpg"), "media_hash_key 'photo' " + noSize},
+		{card(&URLAttachmentImageDescriptor{MediaHashKey: "banner", FilesizeBytes: 1000}, nil), "media_hash_key 'banner' " + noName},
+		{card(nil, &URLAttachmentImageDescriptor{MediaHashKey: "favicon", Filename: "favicon.png"}), "media_hash_key 'favicon' " + noSize},
+	}
+	for _, c := range cases {
+		_, err := chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         "conv-1",
+			Text:                   "a file",
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: "1",
+			Attachments:            []AttachmentDescriptor{c.attachment},
+		})
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput || chatErr.Message != c.want {
+			t.Errorf("got %v, want %q", err, c.want)
+		}
+	}
+}
+
+// TestEncryptMessageRejectsAnUnknownEntityType checks that an unknown or
+// empty entity type fails with an invalid-input error naming it instead of
+// dropping the entity.
+func TestEncryptMessageRejectsAnUnknownEntityType(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "910002", SigningKeyVersion: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, entityType := range []string{"bogus", ""} {
+		_, err := chat.EncryptMessage(EncryptMessageParams{
+			ConversationID:         "conv-1",
+			Text:                   "hi @bob",
+			ConversationKey:        v.conversationKey(t),
+			ConversationKeyVersion: "1",
+			Entities:               []EntityTuple{NewEntity(3, 7, entityType)},
+		})
+		want := "Invalid entity_type '" + entityType + "': pass url, mention, hashtag, cashtag, email, address or phone_number"
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput || chatErr.Message != want {
+			t.Errorf("%q: got %v, want %q", entityType, err, want)
+		}
 	}
 }
 

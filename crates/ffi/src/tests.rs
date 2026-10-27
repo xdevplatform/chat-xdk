@@ -130,6 +130,72 @@ fn a_caller_hands_a_chat_its_feature_switches_once() {
     );
 }
 
+#[test]
+fn unknown_entity_types_and_files_without_a_name_or_size_fail_with_invalid_input() {
+    let chat = new_chat();
+    let encrypt = |fields: serde_json::Value| {
+        let mut params = serde_json::json!({
+            "conversation_id": "1001:2002",
+            "text": "hi @bob",
+            "conversation_key": BASE64.encode([7u8; 32]),
+            "conversation_key_version": "1",
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let params = c(&params.to_string());
+        error(chat_xdk_encrypt_message(chat, params.as_ptr()))
+    };
+    let invalid_input = |message: String| {
+        serde_json::json!({
+            "kind": "invalid_input",
+            "message": message,
+        })
+    };
+    for entity_type in ["bogus", ""] {
+        assert_eq!(
+            encrypt(serde_json::json!({ "entities": [[3, 7, entity_type]] })),
+            invalid_input(format!(
+                "Invalid entity_type '{entity_type}': pass url, mention, hashtag, cashtag, \
+                 email, address or phone_number"
+            ))
+        );
+    }
+    let photo = |filesize_bytes: i64, filename: &str| {
+        serde_json::json!({
+            "attachment_type": "media",
+            "media_hash_key": "photo",
+            "width": 100,
+            "height": 100,
+            "filesize_bytes": filesize_bytes,
+            "filename": filename,
+        })
+    };
+    let banner = serde_json::json!({
+        "attachment_type": "url",
+        "url": "https://example.com",
+        "banner_image": { "media_hash_key": "banner", "filesize_bytes": 0, "filename": "b.png" },
+    });
+    for (attachment, message) in [
+        (
+            photo(1000, ""),
+            "media_hash_key 'photo' has an empty filename: pass the file's original name",
+        ),
+        (
+            banner,
+            "media_hash_key 'banner' has filesize_bytes 0: pass the encrypted file's size, \
+             which encrypted_file_size gives",
+        ),
+    ] {
+        assert_eq!(
+            encrypt(serde_json::json!({ "attachments": [attachment] })),
+            invalid_input(message.to_string())
+        );
+    }
+    chat_xdk_free(chat);
+}
+
 #[cfg(feature = "juicebox")]
 #[test]
 fn juicebox_calls_without_a_config_fail_with_the_cores_invalid_state_error() {

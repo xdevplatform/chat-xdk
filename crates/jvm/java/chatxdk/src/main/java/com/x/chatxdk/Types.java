@@ -401,7 +401,11 @@ public final class Types {
         /** Byte offset of the end of the entity in the message text. */
         public final int end;
 
-        /** One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number". */
+        /**
+         * One of: "url", "mention", "hashtag", "cashtag", "email", "address", "phone_number".
+         * Any other value, an empty one included, fails the call with a {@link ChatXdkException}
+         * of kind {@code INVALID_INPUT} naming it.
+         */
         public final String entityType;
 
         public EntityDescriptor(int start, int end, String entityType) {
@@ -432,11 +436,17 @@ public final class Types {
         @JsonProperty("height")
         public Long height;
 
-        /** Media file size in bytes. */
+        /**
+         * Size of the encrypted media file in bytes: {@code encryptedFileSize} of its size. 0 or
+         * less fails the send with a {@link ChatXdkException} of kind {@code INVALID_INPUT}.
+         */
         @JsonProperty("filesize_bytes")
         public Long filesizeBytes;
 
-        /** Media file name. */
+        /**
+         * Media file name. An empty one fails the send with a {@link ChatXdkException} of kind
+         * {@code INVALID_INPUT}.
+         */
         @JsonProperty("filename")
         public String filename;
 
@@ -536,7 +546,9 @@ public final class Types {
      *
      * <p>{@code filesizeBytes} and {@code filename} are required alongside
      * {@code mediaHashKey}: receiving clients' shared ingest silently discards
-     * the whole preview image when either is missing on the wire.
+     * the whole preview image when either is missing on the wire, so a send fails
+     * with a {@link ChatXdkException} of kind {@code INVALID_INPUT} when either is
+     * unset, empty or not above 0.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static final class UrlAttachmentImageDescriptor {

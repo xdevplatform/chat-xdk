@@ -1312,7 +1312,8 @@ pub struct EntityDescriptor {
     /// End byte offset of the entity within the message text (exclusive).
     pub end: i32,
     /// One of: `"url"`, `"mention"`, `"hashtag"`, `"cashtag"`, `"email"`,
-    /// `"address"`, `"phone_number"`. Unrecognized values are ignored.
+    /// `"address"`, `"phone_number"`. Any other value, an empty one
+    /// included, fails the call with an `InvalidInput` error naming it.
     pub entity_type: String,
 }
 
@@ -1345,7 +1346,12 @@ pub enum AttachmentDescriptor {
         media_hash_key: String,
         width: i64,
         height: i64,
+        /// Size of the encrypted file in bytes: `encrypted_file_size` of the
+        /// file's size. A size of 0 or less fails the send with an
+        /// `InvalidInput` error.
         filesize_bytes: i64,
+        /// Original filename. An empty one fails the send with an
+        /// `InvalidInput` error.
         filename: String,
         /// Media type: 1=image, 2=gif, 3=video, 4=audio, 5=file, 6=svg.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1399,13 +1405,15 @@ pub struct UrlAttachmentImageDescriptor {
     /// image's size.
     ///
     /// Required: receiving clients' shared ingest silently discards the
-    /// whole preview image when this field is missing on the wire.
+    /// whole preview image when this field is missing on the wire, so a
+    /// size of 0 or less fails the send with an `InvalidInput` error.
     pub filesize_bytes: i64,
     /// Original filename of the image (receivers use it to key the
     /// decrypted-file cache).
     ///
     /// Required: receiving clients' shared ingest silently discards the
-    /// whole preview image when this field is missing on the wire.
+    /// whole preview image when this field is missing on the wire, so an
+    /// empty filename fails the send with an `InvalidInput` error.
     pub filename: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,

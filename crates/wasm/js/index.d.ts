@@ -243,8 +243,8 @@ export interface PreparedConversationChange {
  * Entity descriptor tuple: [startByteOffset, endByteOffset, entityType].
  * entityType is one of: "url", "mention", "hashtag", "cashtag", "email",
  * "address", "phoneNumber" (the snake_case spelling "phone_number" is
- * accepted too). Unrecognized entity types are silently dropped — the
- * message encrypts without that entity and no error is raised.
+ * accepted too). Any other entity type, an empty one included, fails the
+ * call with a `ChatXdkError` of kind `invalidInput` naming it.
  */
 export type EntityTuple = [number, number, string];
 
@@ -914,7 +914,10 @@ export interface FileDecryptorParams {
 // NOTE: AttachmentDescriptor uses snake_case as it's part of the Thrift protocol
 // and matches the wire format used by the X API
 /**
- * Attachment descriptor object.
+ * Attachment descriptor object. A media attachment's `filesize_bytes` is the
+ * encrypted file's size, `encryptedFileSize` of its size; an empty
+ * `filename` or a `filesize_bytes` of 0 or less fails the send with a
+ * `ChatXdkError` of kind `invalidInput`.
  */
 export type AttachmentDescriptor =
   | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number }
@@ -935,13 +938,15 @@ export interface UrlAttachmentImageDescriptor {
   /**
    * Size of the encrypted image in bytes: `encryptedFileSize` of the image's
    * size. Required: receiving clients silently discard the preview image
-   * when this is missing on the wire.
+   * when this is missing on the wire, so 0 or less fails the send with a
+   * `ChatXdkError` of kind `invalidInput`.
    */
   filesize_bytes: number;
   /**
    * Original filename of the image (receivers key their decrypted-file
    * cache on it). Required: receiving clients silently discard the preview
-   * image when this is missing on the wire.
+   * image when this is missing on the wire, so an empty one fails the send
+   * with a `ChatXdkError` of kind `invalidInput`.
    */
   filename: string;
   width?: number;

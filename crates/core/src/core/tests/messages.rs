@@ -1,6 +1,6 @@
 //! Messages, edits and quick replies: encrypt → decrypt round trips, the
-//! message ids and signatures they carry, and the attachment combinations
-//! a message may not send.
+//! message ids and signatures they carry, and the entities, files and
+//! attachment combinations a message may not send.
 
 use super::*;
 
@@ -702,4 +702,120 @@ fn encrypt_reply_rejects_disallowed_attachment_combos() {
     let err = core.encrypt_reply(&params).unwrap_err();
     assert!(matches!(err, SdkError::InvalidInput(_)), "got: {err}");
     assert!(err.to_string().contains("attachment combination"));
+}
+
+#[test]
+fn every_send_rejects_an_unknown_or_empty_entity_type() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+    core.set_identity(&SetIdentityParams::new("4001", "61"))
+        .unwrap();
+    let ckey = core.generate_conversation_key().unwrap();
+    for entity_type in ["bogus", ""] {
+        let entities = vec![
+            EntityDescriptor::new(0, 2, "mention"),
+            EntityDescriptor::new(3, 8, entity_type),
+        ];
+        let message = crate::EncryptMessageParams::new("conv-1", "hi there")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_entities(entities.clone());
+        let reply = crate::EncryptReplyParams::new("conv-1", "hi there", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-1")
+            .with_entities(entities.clone());
+        let preview = crate::EncryptReplyParams::new("conv-1", "hi there", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-1")
+            .with_reply_to_entities(entities.clone());
+        let mut edit = crate::EncryptEditParams::new("", "hi there")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_entities(entities);
+        edit.conversation_id = Some("conv-1".into());
+        edit.target_message_sequence_id = Some("seq-1".into());
+        for err in [
+            core.encrypt_message(&message).unwrap_err(),
+            core.encrypt_reply(&reply).unwrap_err(),
+            core.encrypt_reply(&preview).unwrap_err(),
+            core.encrypt_edit(&edit).unwrap_err(),
+        ] {
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput);
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid entity_type '{entity_type}': pass url, mention, hashtag, cashtag, \
+                     email, address or phone_number"
+                )
+            );
+        }
+    }
+}
+
+#[test]
+fn every_send_rejects_a_file_without_a_name_or_a_size() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+    core.set_identity(&SetIdentityParams::new("4001", "61"))
+        .unwrap();
+    let ckey = core.generate_conversation_key().unwrap();
+    let media = |filesize_bytes: i64, filename: &str| crate::AttachmentDescriptor::Media {
+        media_hash_key: "photo".into(),
+        width: 100,
+        height: 100,
+        filesize_bytes,
+        filename: filename.into(),
+        media_type: Some(1),
+        duration_millis: None,
+    };
+    let card = |banner: Option<UrlAttachmentImageDescriptor>,
+                favicon: Option<UrlAttachmentImageDescriptor>| {
+        crate::AttachmentDescriptor::Url {
+            url: "https://example.com".into(),
+            display_title: Some("Example".into()),
+            banner_image: banner,
+            favicon_image: favicon,
+        }
+    };
+    let image = UrlAttachmentImageDescriptor::new;
+    let no_name = |key: &str| {
+        format!("media_hash_key '{key}' has an empty filename: pass the file's original name")
+    };
+    let no_size = |key: &str, size: i64| {
+        format!(
+            "media_hash_key '{key}' has filesize_bytes {size}: pass the encrypted file's size, \
+             which encrypted_file_size gives"
+        )
+    };
+    let cases = [
+        (media(1000, ""), no_name("photo")),
+        (media(0, "photo.jpg"), no_size("photo", 0)),
+        (media(-1, "photo.jpg"), no_size("photo", -1)),
+        (
+            card(Some(image("banner", 1000, "")), None),
+            no_name("banner"),
+        ),
+        (
+            card(Some(image("banner", 0, "banner.png")), None),
+            no_size("banner", 0),
+        ),
+        (
+            card(None, Some(image("favicon", 0, "favicon.png"))),
+            no_size("favicon", 0),
+        ),
+    ];
+    for (attachment, expected) in cases {
+        let message = crate::EncryptMessageParams::new("conv-1", "hi")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_attachments(vec![attachment.clone()]);
+        let reply = crate::EncryptReplyParams::new("conv-1", "hi", "")
+            .with_conversation_key(ckey.to_bytes(), "1")
+            .with_reply_to_sequence_id("seq-1")
+            .with_attachments(vec![attachment]);
+        for err in [
+            core.encrypt_message(&message).unwrap_err(),
+            core.encrypt_reply(&reply).unwrap_err(),
+        ] {
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidInput);
+            assert_eq!(err.to_string(), expected);
+        }
+    }
 }

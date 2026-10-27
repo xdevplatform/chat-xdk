@@ -435,6 +435,53 @@ class ChatTest {
     }
 
     @Test
+    void aFileWithoutANameOrASizeFailsWithInvalidInput() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
+            byte[] ckey = newConvKey(chat);
+            String noName = "has an empty filename: pass the file's original name";
+            String noSize = "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives";
+            for (Map.Entry<Types.AttachmentDescriptor, String> c : List.of(
+                    Map.entry(Types.AttachmentDescriptor.media("photo", 100, 100, 1000, "", 1, null),
+                            "media_hash_key 'photo' " + noName),
+                    Map.entry(Types.AttachmentDescriptor.media("photo", 100, 100, 0, "photo.jpg", 1, null),
+                            "media_hash_key 'photo' " + noSize),
+                    Map.entry(Types.AttachmentDescriptor.urlCard("https://example.com", "Example",
+                                    Types.UrlAttachmentImageDescriptor.of("banner", 1000, ""), null),
+                            "media_hash_key 'banner' " + noName),
+                    Map.entry(Types.AttachmentDescriptor.urlCard("https://example.com", "Example",
+                                    null, Types.UrlAttachmentImageDescriptor.of("favicon", 0, "favicon.png")),
+                            "media_hash_key 'favicon' " + noSize))) {
+                EncryptMessageParams p = new EncryptMessageParams("conv-1", "a file");
+                p.conversationKey = ckey;
+                p.conversationKeyVersion = "1";
+                p.attachments = List.of(c.getKey());
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals(c.getValue(), e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void anUnknownOrEmptyEntityTypeFailsWithInvalidInput() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("1001", "66"));
+            byte[] ckey = newConvKey(chat);
+            for (String entityType : new String[] {"bogus", ""}) {
+                EncryptMessageParams p = new EncryptMessageParams("conv-1", "hi @bob");
+                p.conversationKey = ckey;
+                p.conversationKeyVersion = "1";
+                p.entities = List.of(new EntityDescriptor(3, 7, entityType));
+                ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(p));
+                assertEquals(ChatXdkException.Kind.INVALID_INPUT, e.getKind());
+                assertEquals("Invalid entity_type '" + entityType + "': pass url, mention, hashtag, cashtag, "
+                        + "email, address or phone_number", e.getMessage());
+            }
+        }
+    }
+
+    @Test
     void encryptMessageMixedAttachmentTypesThrows() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);

@@ -1519,6 +1519,70 @@ class TestApiShapes(unittest.TestCase):
                 )
             )
 
+    def test_a_file_without_a_name_or_a_size_fails_with_invalid_input(self):
+        from chat_xdk import EncryptMessageParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+        no_name = "has an empty filename: pass the file's original name"
+        no_size = (
+            "has filesize_bytes 0: pass the encrypted file's size, which encrypted_file_size gives"
+        )
+
+        def card(**image):
+            return {"attachment_type": "url", "url": "https://example.com", **image}
+
+        cases = [
+            ({**_media("photo"), "filename": ""}, f"media_hash_key 'photo' {no_name}"),
+            (_media("photo", filesize_bytes=0), f"media_hash_key 'photo' {no_size}"),
+            (
+                card(banner_image={"media_hash_key": "banner", "filesize_bytes": 1000, "filename": ""}),
+                f"media_hash_key 'banner' {no_name}",
+            ),
+            (
+                card(favicon_image={"media_hash_key": "favicon", "filesize_bytes": 0, "filename": "f.png"}),
+                f"media_hash_key 'favicon' {no_size}",
+            ),
+        ]
+        for attachment, message in cases:
+            with self.assertRaises(InvalidInputError) as ctx:
+                chat.encrypt_message(
+                    EncryptMessageParams(
+                        "123:456",
+                        "a file",
+                        sender_id="123",
+                        signing_key_version="1",
+                        conversation_key=bytes(32),
+                        conversation_key_version="1",
+                        attachments=[attachment],
+                    )
+                )
+            self.assertEqual(ctx.exception.kind, "invalid_input")
+            self.assertEqual(str(ctx.exception), message)
+
+    def test_an_unknown_or_empty_entity_type_fails_with_invalid_input(self):
+        from chat_xdk import EncryptMessageParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+        for entity_type in ("bogus", ""):
+            with self.assertRaises(InvalidInputError) as ctx:
+                chat.encrypt_message(
+                    EncryptMessageParams(
+                        "123:456",
+                        "hi @bob",
+                        sender_id="123",
+                        signing_key_version="1",
+                        conversation_key=bytes(32),
+                        conversation_key_version="1",
+                        entities=[(3, 7, entity_type)],
+                    )
+                )
+            self.assertEqual(ctx.exception.kind, "invalid_input")
+            self.assertEqual(
+                str(ctx.exception),
+                f"Invalid entity_type '{entity_type}': pass url, mention, hashtag, cashtag, "
+                "email, address or phone_number",
+            )
+
     def test_mixed_attachment_types_rejected(self):
         from chat_xdk import EncryptMessageParams
 
