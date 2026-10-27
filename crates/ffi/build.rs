@@ -15,8 +15,19 @@ fn main() {
 
     // The C# P/Invoke layer. It is committed so .NET consumers need no Rust
     // toolchain; this build regenerates it after any change to the C ABI.
-    csbindgen::Builder::default()
-        .input_extern_file("src/lib.rs")
+    let mut csharp = csbindgen::Builder::default();
+    for file in [
+        "src/lib.rs",
+        "src/conversation.rs",
+        "src/encrypt.rs",
+        "src/events.rs",
+        "src/files.rs",
+        "src/prepare.rs",
+        "src/signing.rs",
+    ] {
+        csharp = csharp.input_extern_file(file);
+    }
+    csharp
         .csharp_dll_name("chat_xdk_ffi")
         .csharp_namespace("ChatXdk")
         .csharp_class_name("NativeMethods")

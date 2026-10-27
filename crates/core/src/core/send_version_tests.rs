@@ -534,7 +534,11 @@ fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
         .core
         .set_feature_switches(200, br#"{"features":{"v1_send":false}}"#);
     assert_eq!(send(&party), "10", "a chat takes one answer");
-    assert_eq!(party.core.start_features(), None, "nor reads the switches again");
+    assert_eq!(
+        party.core.start_features(),
+        None,
+        "nor reads the switches again"
+    );
 
     let on = br#"{"features":{"v1_send":true}}"#;
     let mut oversized = on.to_vec();

@@ -39,7 +39,6 @@ pub const FEATURES_MAX_BODY: usize = 64 * 1024;
 /// How long a request may take, body included, in milliseconds.
 pub const FEATURES_TIMEOUT_MS: u64 = 2_000;
 
-
 /// A GET for a language binding to perform.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Fetch {
@@ -392,7 +391,12 @@ mod tests {
         let mut requests = Requests::default();
         let a = requests.join(URL, FEATURES_TIMEOUT_MS, &chat(), 0).unwrap();
         let b = requests
-            .join("https://elsewhere.test/features", FEATURES_TIMEOUT_MS, &chat(), 0)
+            .join(
+                "https://elsewhere.test/features",
+                FEATURES_TIMEOUT_MS,
+                &chat(),
+                0,
+            )
             .unwrap();
         assert_ne!(a.id, b.id);
         assert_eq!(b.url, "https://elsewhere.test/features");
