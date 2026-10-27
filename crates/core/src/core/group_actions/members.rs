@@ -29,8 +29,8 @@ impl ChatCore {
     /// its participant keys, and `action_signatures` in request order — the
     /// removal (bound to the new key version); a title and a description
     /// change for each of `title` and `description` that is set, encrypted
-    /// under the new key and marked as key-rotation re-encryptions; then the
-    /// conversation-key change.
+    /// under the new key and marked as key-rotation re-encryptions, which
+    /// recipients' decrypt drops; then the conversation-key change.
     ///
     /// The removal is signed at signature version 11 so the key version is
     /// part of the payload. The key change is signed at the version every

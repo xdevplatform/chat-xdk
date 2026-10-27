@@ -42,7 +42,8 @@ impl GroupMetadata {
 
     /// The change event for `encrypted` under `key_version`. A change that
     /// only re-encrypts the value for a key rotation is marked
-    /// `for_key_rotation`, so X clients don't show it as a change.
+    /// `for_key_rotation`, so X clients don't show it as a change and the
+    /// SDK's decrypt drops it.
     fn detail(
         self,
         encrypted: &str,
