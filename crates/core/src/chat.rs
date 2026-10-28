@@ -83,14 +83,14 @@ use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, Registe
 #[cfg(feature = "juicebox")]
 use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
-    EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
-    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
-    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
-    SetIdentityParams,
+    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
+    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
+    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -425,6 +425,25 @@ impl Chat {
         params: &FileDecryptorParams,
     ) -> Result<crate::FileDecryptor, SdkError> {
         self.inner.file_decryptor(params)
+    }
+
+    /// Encrypt a file under a key you already hold, such as a group's
+    /// avatar image under the conversation key; see
+    /// [`crate::ChatCore::encrypt_file_with_key`].
+    pub fn encrypt_file_with_key(
+        &self,
+        params: &EncryptFileWithKeyParams,
+    ) -> Result<Vec<u8>, SdkError> {
+        self.inner.encrypt_file_with_key(params)
+    }
+
+    /// Decrypt a file encrypted under a key you already hold; see
+    /// [`crate::ChatCore::decrypt_file_with_key`].
+    pub fn decrypt_file_with_key(
+        &self,
+        params: &DecryptFileWithKeyParams,
+    ) -> Result<Vec<u8>, SdkError> {
+        self.inner.decrypt_file_with_key(params)
     }
 
     /// Decrypt a group title or description the X API returns for a

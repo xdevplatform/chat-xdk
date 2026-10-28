@@ -1,11 +1,13 @@
 """Write compatibility fixtures with a released chatxdk 0.5.x.
 
 One send of each kind (message, message with entities, message with a file,
-reply, reaction add and remove, edit) and a file encrypted with encrypt_stream.
-The reply and the edit are made twice: from explicit fields, and from the
-event of the first message as the backend relays it. The Rust compatibility
-tests check that the current SDK decrypts and verifies them, and that its v0
-sends match them on the wire.
+reply, reaction add and remove, edit), and three files encrypted with
+encrypt_stream under the conversation key: a text file of several chunks, a
+file shaped like a group avatar, and an empty file. The reply and the edit are
+made twice: from explicit fields, and from the event of the first message as
+the backend relays it. The Rust compatibility tests check that the current SDK
+decrypts and verifies the sends, that its v0 sends match them on the wire, and
+that decrypt_file_with_key opens the files.
 
 Run it with the released package installed, never the in-repo one:
 
@@ -36,6 +38,13 @@ MEDIA = {
     "filename": "compat.jpg",
     "media_type": 1,
 }
+# Shaped like a group avatar: JPEG markers around filler bytes, 3,050 bytes in
+# all, so the encrypted file ends on a short frame.
+AVATAR = (
+    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    + bytes((i * 37 + 11) % 256 for i in range(3028))
+    + b"\xff\xd9"
+)
 
 
 def b64(data):
@@ -156,6 +165,14 @@ def main(out_path):
         "file": {
             "plaintext_b64": b64(file_plaintext),
             "ciphertext_b64": b64(chat.encrypt_stream(file_plaintext, CONVERSATION_KEY)),
+        },
+        "avatar_file": {
+            "plaintext_b64": b64(AVATAR),
+            "ciphertext_b64": b64(chat.encrypt_stream(AVATAR, CONVERSATION_KEY)),
+        },
+        "empty_file": {
+            "plaintext_b64": "",
+            "ciphertext_b64": b64(chat.encrypt_stream(b"", CONVERSATION_KEY)),
         },
     }
     with open(out_path, "w", encoding="utf-8") as f:

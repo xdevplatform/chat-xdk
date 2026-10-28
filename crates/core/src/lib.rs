@@ -195,14 +195,14 @@ pub use crypto::encryption::{FileDecryptor, FileEncryptor};
 pub use features::{FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_TIMEOUT_MS};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
-    EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
-    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
-    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
-    SetIdentityParams,
+    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
+    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
+    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
 };
 pub use types::*;
 
