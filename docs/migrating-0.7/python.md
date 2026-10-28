@@ -18,7 +18,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 reports, `[runtime]` a change in behavior that nothing reports, and `[new]`
 a 0.7.0 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0](#install-070)
+- [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] `[compile]` [Keep keys in Juicebox with the config the chat is created with](#keys-stored-in-juicebox)
@@ -91,12 +91,12 @@ imports from `chat_xdk`.
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Pin the package at 0.7.0 in your requirements file, then install it:
+Pin the package at 0.7.1 in your requirements file, then install it:
 
 ```sh
-pip install chatxdk==0.7.0
+pip install chatxdk==0.7.1
 ```
 
 The package imports as `chat_xdk`, as 0.5.x does, and needs Python 3.10 or

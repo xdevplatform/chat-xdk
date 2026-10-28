@@ -18,7 +18,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
 that nothing reports, and `[new]` a 0.7.0 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0](#install-070)
+- [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] `[compile]` [Create a Juicebox chat with `NewWithJuiceboxConfig`, and pass `Setup` and `Unlock` only the PIN](#keys-stored-in-juicebox)
@@ -94,12 +94,12 @@ for your code that stores a conversation key. `pin` is the PIN's bytes and
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Require the module at v0.7.0:
+Require the module at v0.7.1:
 
 ```sh
-go get github.com/xdevplatform/chat-xdk/go/chatxdk@v0.7.0
+go get github.com/xdevplatform/chat-xdk/go/chatxdk@v0.7.1
 ```
 
 It needs Go 1.21 or newer and cgo: the module links the prebuilt static

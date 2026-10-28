@@ -17,7 +17,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
 that nothing reports, and `[new]` a 0.7.0 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0](#install-070)
+- [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[new]` [Hand a chat the X API's feature switches to send v1](#the-feature-switch-request)
 - [ ] `[compile]` [Keep keys in Juicebox, and read a config error as an `SdkError`](#keys-stored-in-juicebox)
@@ -99,13 +99,13 @@ import from `chat_xdk_core::error`, and `JuiceboxConfig`, from
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Set the dependency to 0.7.0 in `Cargo.toml`:
+Set the dependency to 0.7.1 in `Cargo.toml`:
 
 ```toml
 [dependencies]
-chat-xdk-core = "0.7.0"
+chat-xdk-core = "0.7.1"
 ```
 
 The `juicebox` feature, on by default, adds `Chat` and Juicebox key storage;
@@ -1658,7 +1658,7 @@ signed message id; rename the rest to `target_message_sequence_id`. Each
 `encrypt_stream` and `decrypt_stream` the first finds is a message's file or
 a file under a key you hold, and [Encrypt a file under a key you
 hold](#encrypt-a-file-under-a-key-you-hold) says which call each moves to.
-The compiler reports the rest of the index once the dependency is 0.7.0.
+The compiler reports the rest of the index once the dependency is 0.7.1.
 
 ### Run a round trip
 

@@ -17,7 +17,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
 that nothing reports, and `[new]` a 0.7.0 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0](#install-070)
+- [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Remove a native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
@@ -98,19 +98,19 @@ threw. The types import from `com.x.chatxdk`, `com.x.chatxdk.Types`,
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Set the dependency to 0.7.0. With Maven:
+Set the dependency to 0.7.1. With Maven:
 
 ```xml
 <dependency>
   <groupId>com.x</groupId>
   <artifactId>chatxdk</artifactId>
-  <version>0.7.0</version>
+  <version>0.7.1</version>
 </dependency>
 ```
 
-With Gradle, `implementation("com.x:chatxdk:0.7.0")`. It needs Java 17 or
+With Gradle, `implementation("com.x:chatxdk:0.7.1")`. It needs Java 17 or
 newer. Every app that shares conversations with yours reads the formats
 0.7.0 sends only once it runs 0.7.0 too, so plan the rollout below before
 you deploy.
@@ -120,7 +120,7 @@ you deploy.
 The jar bundles the native library for 64-bit ARM Linux (`linux-arm64`) as
 well, and on ARM64 Linux loads it ahead of any copy on `jna.library.path`.
 There's no code to change. If you built a library to run 0.5.x there,
-remove it: a 0.5.x build doesn't export the entry points 0.7.0 calls (see
+remove it: a 0.5.x build doesn't export the entry points 0.7.1 calls (see
 [C ABI](c-abi.md)). The native library is `chat_xdk_ffi`
 (`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`, `chat_xdk_ffi.dll`), built
 from the `chat-xdk-ffi` crate: name one you build yourself for another

@@ -17,7 +17,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
 that nothing reports, and `[new]` a 0.7.0 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0](#install-070)
+- [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Remove a native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
@@ -99,16 +99,16 @@ namespaces.
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Set the package reference to 0.7.0:
+Set the package reference to 0.7.1:
 
 ```sh
-dotnet add package XDevPlatform.ChatXdk --version 0.7.0
+dotnet add package XDevPlatform.ChatXdk --version 0.7.1
 ```
 
 or, in the project file, `<PackageReference Include="XDevPlatform.ChatXdk"
-Version="0.7.0" />`. It targets .NET 8 (`net8.0`). Every app that shares
+Version="0.7.1" />`. It targets .NET 8 (`net8.0`). Every app that shares
 conversations with yours reads the formats 0.7.0 sends only once it runs
 0.7.0 too, so plan the rollout below before you deploy.
 
@@ -118,7 +118,7 @@ The package bundles the native library for 64-bit ARM Linux (`linux-arm64`)
 as well, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need
 no copy of their own. There's no code to change. If you shipped a library
 you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
-entry points 0.7.0 calls (see [C ABI](c-abi.md)). The native library is
+entry points 0.7.1 calls (see [C ABI](c-abi.md)). The native library is
 `chat_xdk_ffi` (`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`,
 `chat_xdk_ffi.dll`), built from the `chat-xdk-ffi` crate: name one you
 build yourself for another platform the same way.

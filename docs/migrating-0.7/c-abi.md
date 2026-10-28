@@ -21,7 +21,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 changed document or value, which only a call reports, and `[new]` a 0.7.0
 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0: swap the header and the library](#install-070)
+- [ ] `[rollout]` [Install 0.7.1: swap the header and the library](#install-071)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Hand a chat the X API's feature switches to send v1](#the-feature-switch-request)
 - [ ] `[rollout]` [Check the ABI version](#check-the-abi-version)
@@ -109,10 +109,10 @@ value of the wrong JSON type fails with an `invalid_input` error such as
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Swap your copy of `chat_xdk.h` for the 0.7.0 header,
-`go/chatxdk/include/chat_xdk.h` in the 0.7.0 release, and link the 0.7.0
+Swap your copy of `chat_xdk.h` for the 0.7.1 header,
+`go/chatxdk/include/chat_xdk.h` in the 0.7.1 release, and link the 0.7.1
 library. Its name differs from the 0.5.x library's (see the [symbol
 index](#1-symbol-index)), so change the name your build links or loads:
 
@@ -122,7 +122,7 @@ index](#1-symbol-index)), so change the name your build links or loads:
   `chat_xdk_ffi.dll`), the shared library the .NET package and the JVM jar
   carry.
 
-`cargo build -p chat-xdk-ffi --release` builds both from the 0.7.0 source.
+`cargo build -p chat-xdk-ffi --release` builds both from the 0.7.1 source.
 The libraries are built with Juicebox, and the header declares the Juicebox
 functions only when `CHAT_XDK_JUICEBOX` is defined, so define it to call
 them (see [Keys stored in Juicebox](#keys-stored-in-juicebox)). On Linux:
@@ -214,7 +214,7 @@ reports those. [Verify](#5-verify) gives the search as one command.
 
 | 0.5.x | 0.7.0 | Section |
 |---|---|---|
-| `libchat_xdk_go.a`, `chat_xdk_dotnet` | `libchat_xdk_ffi.a`, `chat_xdk_ffi` | [Install](#install-070) |
+| `libchat_xdk_go.a`, `chat_xdk_dotnet` | `libchat_xdk_ffi.a`, `chat_xdk_ffi` | [Install](#install-071) |
 | `struct ChatHandle *chat_xdk_new(void)` | `struct FfiResult chat_xdk_new(const char *juicebox_config_json, struct ChatHandle **out_chat)` | [Juicebox](#keys-stored-in-juicebox) |
 | `chat_xdk_setup(handle, const char *pin, const char *config_json)`, `chat_xdk_unlock(handle, const char *pin, const char *config_json)` | `chat_xdk_setup(handle, const uint8_t *pin, uintptr_t pin_len)`, `chat_xdk_unlock(handle, const uint8_t *pin, uintptr_t pin_len)` | [Juicebox](#keys-stored-in-juicebox) |
 | `chat_xdk_change_pin(handle, const char *old_pin, const char *new_pin)` | `chat_xdk_change_pin(handle, const uint8_t *old_pin, uintptr_t old_pin_len, const uint8_t *new_pin, uintptr_t new_pin_len)` | [Juicebox](#keys-stored-in-juicebox) |
@@ -1495,7 +1495,7 @@ api_put("/2/chat/conversations/g1/screen_capture", capture_request_json);
 
 ### Build
 
-Compile with the 0.7.0 header and `-DCHAT_XDK_JUICEBOX` if you call the
+Compile with the 0.7.1 header and `-DCHAT_XDK_JUICEBOX` if you call the
 Juicebox functions, and `-Wall -Werror`: the compiler flags every call that
 still passes 0.5.x arguments and every 0.5.x function the header no longer
 declares. Documents are strings, which the compiler doesn't check: the

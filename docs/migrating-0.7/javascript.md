@@ -18,7 +18,7 @@ Each item is tagged with what it takes: `[rollout]` is a deployment step,
 first call), `[runtime]` a change in behavior that nothing reports, and
 `[new]` a 0.7.0 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.0](#install-070)
+- [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] `[compile]` [Put the PIN guess budget in the Juicebox config](#keys-stored-in-juicebox)
@@ -118,12 +118,12 @@ function toSnake(value) {
 
 ## 0. Before you start
 
-### Install 0.7.0
+### Install 0.7.1
 
-Pin the package at 0.7.0 in `package.json`, then install it:
+Pin the package at 0.7.1 in `package.json`, then install it:
 
 ```sh
-npm install @xdevplatform/chat-xdk@0.7.0
+npm install @xdevplatform/chat-xdk@0.7.1
 ```
 
 It needs Node 18 or newer, or a browser bundler that loads WebAssembly.
