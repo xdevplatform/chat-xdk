@@ -1628,7 +1628,11 @@ conversation key for the version its avatar change names; the full flow is
 under [`prepare_group_avatar_change`](#prepare_group_avatar_change). Files
 0.5.x apps encrypted with `encrypt_stream` or a stream encryptor open with
 `decrypt_file_with_key`, and 0.5.x `decrypt_stream` opens the files
-`encrypt_file_with_key` returns.
+`encrypt_file_with_key` returns. An empty file encrypts to its 24-byte
+header alone, which nothing authenticates, so any 24 bytes decrypt to an
+empty file under any key, a file cut to its header included: when the file
+can't be empty, as an avatar image can't, treat an empty result as a
+failure.
 
 ```js
 const encrypted = chat.encryptFileWithKey({ file: image, key: conversationKey });

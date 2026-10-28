@@ -161,7 +161,10 @@ impl ChatCore {
     /// A key that is not 32 bytes is an `InvalidInput` error. Bytes that are
     /// not the complete file encrypted under that key (another key's file,
     /// corrupted, cut short, or followed by more data) are a `Decryption`
-    /// error.
+    /// error, apart from 24 bytes: an empty file is its header alone, which
+    /// nothing authenticates, so any 24 bytes decrypt to an empty file under
+    /// any key, a file cut to its header included. Reject an empty result
+    /// for a file that can't be empty, such as an avatar image.
     pub fn decrypt_file_with_key(
         &self,
         params: &DecryptFileWithKeyParams,

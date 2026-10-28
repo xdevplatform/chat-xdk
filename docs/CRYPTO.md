@@ -327,7 +327,11 @@ Every non-empty encrypted file ends with a `TAG_FINAL` chunk. Decryption
 rejects a non-empty file that ends before its `TAG_FINAL` chunk, so dropping
 trailing whole chunks (which the per-chunk MAC alone cannot catch) is detected.
 The only file that legitimately has no `TAG_FINAL` is the empty file (bare
-24-byte header).
+24-byte header). Nothing in a bare header is authenticated, so any 24 bytes
+decrypt to an empty file under any key, and a file cut to its header can't
+be told from an empty one: a caller whose files are never empty, such as a
+message's media or a group's avatar image, treats an empty result as a
+failure.
 
 ### Incremental API
 

@@ -174,6 +174,18 @@ fn a_bad_or_truncated_file_is_a_decryption_error() {
 }
 
 #[test]
+fn a_header_alone_decrypts_to_an_empty_file_under_any_key() {
+    let encrypted = encrypt(&file_of(2500), &KEY).unwrap();
+    for (case, bytes) in [
+        ("cut at the end of the header", encrypted[..HEADER].to_vec()),
+        ("another key's empty file", encrypt(&[], &[9; 32]).unwrap()),
+        ("24 zero bytes", vec![0; HEADER]),
+    ] {
+        assert_eq!(decrypt(&bytes, &KEY).unwrap(), Vec::<u8>::new(), "{case}");
+    }
+}
+
+#[test]
 fn the_params_redact_the_key() {
     let encrypt = format!(
         "{:?}",
