@@ -1,12 +1,12 @@
-# Migrating to chat-xdk 0.7.0
+# Migrating to chat-xdk 0.7.1
 
-0.7.0 changes the API of every binding. Each guide below moves one
-binding's code written for 0.5.x (0.5.0, 0.5.1 or 0.5.2) to 0.7.0 on its
+0.7.1 changes the API of every binding. Each guide below moves one
+binding's code written for 0.5.x (0.5.0, 0.5.1 or 0.5.2) to 0.7.1 on its
 own, and every guide has the same sections:
 
 0. **Before you start**: the install line, the readers to upgrade first, and
    the feature-switch request.
-1. **Symbol index**: every 0.5.x name that changes, with its 0.7.0 form.
+1. **Symbol index**: every 0.5.x name that changes, with its 0.7.1 form.
 2. **Compile-time changes**, in the order an app meets them.
 3. **Runtime and behavior changes**, which nothing reports before the code
    runs.
@@ -15,8 +15,8 @@ own, and every guide has the same sections:
 5. **Verify**: the build, a search for 0.5.x names, and a round trip.
 
 A checklist at the top of each guide tags every item `[rollout]`,
-`[compile]`, `[runtime]` or `[new]`. CI compiles the 0.7.0 half of every
-snippet in the guides against 0.7.0. [Why 0.7.0 changes](why.md) explains
+`[compile]`, `[runtime]` or `[new]`. CI compiles the 0.7.1 half of every
+snippet in the guides against 0.7.1. [Why 0.7.1 changes](why.md) explains
 why each change was made.
 
 | Binding | Package | Migration guide |
@@ -35,5 +35,5 @@ keys, and before you remove group members or add them with a description,
 because 0.5.x rejects those signatures. Each guide explains it under
 "Upgrade readers first".
 
-The [CHANGELOG](../../CHANGELOG.md) lists every change in 0.7.0, and
-[API.md](../API.md) documents the 0.7.0 API.
+The [CHANGELOG](../../CHANGELOG.md) lists every change by release, and
+[API.md](../API.md) documents the 0.7.1 API.

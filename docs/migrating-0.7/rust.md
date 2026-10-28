@@ -1,13 +1,13 @@
-# Migrating Rust code to chat-xdk 0.7.0
+# Migrating Rust code to chat-xdk 0.7.1
 
 This page moves Rust code written for `chat-xdk-core` 0.5.x (0.5.0, 0.5.1
-or 0.5.2) to 0.7.0. Work through it top to bottom: [Before you
+or 0.5.2) to 0.7.1. Work through it top to bottom: [Before you
 start](#0-before-you-start) sets up the upgrade, the [symbol
-index](#1-symbol-index) maps every 0.5.x name to its 0.7.0 form,
+index](#1-symbol-index) maps every 0.5.x name to its 0.7.1 form,
 [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.0
+request, and [Verify](#5-verify) checks the result. [Why 0.7.1
 changes](why.md) explains each change, and the [index](README.md) lists the
 other bindings' pages. [API.md](../API.md) documents every call.
 
@@ -15,7 +15,7 @@ other bindings' pages. [API.md](../API.md) documents every call.
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
-that nothing reports, and `[new]` a 0.7.0 call to adopt.
+that nothing reports, and `[new]` a 0.7.1 call to adopt.
 
 - [ ] `[rollout]` [Install 0.7.1](#install-071)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
@@ -60,9 +60,9 @@ that nothing reports, and `[new]` a 0.7.0 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.0 code writes them, under `// 0.7.0`. A
-snippet with only a `// 0.7.0` half shows code 0.7.0 adds. CI compiles the
-0.7.0 half of every snippet on this page against 0.7.0
+under `// 0.5.x`, and then as 0.7.1 code writes them, under `// 0.7.1`. A
+snippet with only a `// 0.7.1` half shows code 0.7.1 adds. CI compiles the
+0.7.1 half of every snippet on this page against 0.7.1
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)),
 as the body of a function that returns `Result<(), Box<dyn std::error::Error>>`.
 
@@ -110,12 +110,12 @@ chat-xdk-core = "0.7.1"
 
 The `juicebox` feature, on by default, adds `Chat` and Juicebox key storage;
 `default-features = false` builds `ChatCore` without it, as in 0.5.x. Every
-app that shares conversations with yours reads the formats 0.7.0 sends only
-once it runs 0.7.0 too, so plan the rollout below before you deploy.
+app that shares conversations with yours reads the formats 0.7.1 sends only
+once it runs a 0.7 release too, so plan the rollout below before you deploy.
 
 ### Upgrade readers first
 
-0.7.0 sends each message, reply, reaction and edit in one of two formats.
+0.7.1 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 once you hand it the X API's
@@ -125,7 +125,7 @@ versions 0.5.x can't verify: a member removal signs at version 11, and a
 member add that carries a description at version 8.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.0, Rust ones included,
+every app that reads your conversations to 0.7.1, Rust ones included,
 before:
 
 - any of your senders can send v1;
@@ -133,7 +133,7 @@ before:
   [`prepare_group_members_remove`](#removing-members);
 - you pass a description to [`prepare_group_members_change`](#adding-members).
 
-0.7.0 reads both formats, including v1 reply previews, edits and files.
+0.7.1 reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read
 `signature_info.signature_version`, `"7"` for v0 and `"10"` for v1.
 
@@ -149,7 +149,7 @@ parameters, within `FEATURES_TIMEOUT_MS` milliseconds, reading at most one
 byte past `FEATURES_MAX_BODY`:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let (status, body) = http_get(FEATURES_ENDPOINT, FEATURES_TIMEOUT_MS, FEATURES_MAX_BODY + 1)?;
 chat.set_feature_switches(status, &body);
 ```
@@ -161,12 +161,12 @@ request fails keeps sending v0. Without the call there's no code to change.
 
 ## 1. Symbol index
 
-Every 0.5.x name that changes, with its 0.7.0 form and the section that
+Every 0.5.x name that changes, with its 0.7.1 form and the section that
 shows the change. A name not listed here keeps its 0.5.x form. Search your
 code for each name in the first column; [Verify](#5-verify) gives the
 search as one command.
 
-| 0.5.x | 0.7.0 | Section |
+| 0.5.x | 0.7.1 | Section |
 |---|---|---|
 | `JuiceboxConfig::from_x_api_json` returning `Result<_, String>` | Returns `Result<_, SdkError>` | [Juicebox](#keys-stored-in-juicebox) |
 | `SdkError::Juicebox(JuiceboxError::InvalidPin { guesses_remaining })` | `err.guesses_remaining()` | [Errors](#errors-carry-their-kind) |
@@ -231,7 +231,7 @@ the problem for a malformed one, where 0.5.x returned a `String`:
 // 0.5.x
 let config: Result<JuiceboxConfig, String> = JuiceboxConfig::from_x_api_json(&juicebox_config);
 
-// 0.7.0
+// 0.7.1
 let config: Result<JuiceboxConfig, SdkError> = JuiceboxConfig::from_x_api_json(&juicebox_config);
 ```
 
@@ -244,7 +244,7 @@ kind](#errors-carry-their-kind)).
 
 `generate_keypairs` returns a `PublicKeyRegistrationPayload` that holds only
 `public_key`. Send it as the only field of the
-`POST /2/users/{id}/public_keys` body. 0.7.0 doesn't take or pick a
+`POST /2/users/{id}/public_keys` body. 0.7.1 doesn't take or pick a
 signing-key version for new keys: call `set_identity` with the
 `public_key_version` the request returns. A signed call made without a
 version fails with `SdkError::InvalidState`: `signing_key_version is not
@@ -262,7 +262,7 @@ let response = api.post(&format!("/2/users/{user_id}/public_keys"), &body)?;
 let public_key_version = response["data"]["public_key_version"].as_str().ok_or("no version")?;
 chat.set_identity(user_id, public_key_version);
 
-// 0.7.0
+// 0.7.1
 let registration = chat.generate_keypairs()?;
 let body = serde_json::json!({ "public_key": registration.public_key });
 let response = api.post(&format!("/2/users/{user_id}/public_keys"), &body)?;
@@ -276,7 +276,7 @@ chat.set_identity(&SetIdentityParams::new(user_id, public_key_version))?;
 // 0.5.x
 let registration = chat.generate_keypairs_with_version(signing_key_version)?;
 
-// 0.7.0
+// 0.7.1
 let registration = chat.generate_keypairs()?;
 ```
 
@@ -296,7 +296,7 @@ when either value is invalid (see
 // 0.5.x
 chat.set_identity(user_id, signing_key_version);
 
-// 0.7.0
+// 0.7.1
 chat.set_identity(&SetIdentityParams::new(user_id, signing_key_version))?;
 ```
 
@@ -313,7 +313,7 @@ identity key loaded it fails with an error of kind `ErrorKind::InvalidState`.
 chat.import_keys(&private_keys)?;
 chat.import_keys_with_version(&private_keys, signing_key_version)?;
 
-// 0.7.0
+// 0.7.1
 chat.import_keys(&ImportKeysParams::new(private_keys.clone()))?;
 chat.import_keys(&ImportKeysParams::new(private_keys).with_signing_key_version(signing_key_version))?;
 ```
@@ -332,7 +332,7 @@ included, and it holds the decrypted events, of every event type, in
 let result = chat.decrypt_events(&events, &signing_keys);
 let first: Option<&DecryptedMessage> = result.messages.first();
 
-// 0.7.0
+// 0.7.1
 let result = chat.decrypt_events(&DecryptEventsParams::new(events).with_signing_keys(signing_keys));
 let first: Option<&DecryptedEvent> = result.events.first();
 ```
@@ -355,7 +355,7 @@ re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions))
 // 0.5.x
 let event = chat.decrypt_event(event_b64, &keys, &signing_keys)?;
 
-// 0.7.0
+// 0.7.1
 let event = chat.decrypt_event(&DecryptEventParams::new(event_b64, keys).with_signing_keys(signing_keys))?;
 ```
 
@@ -380,7 +380,7 @@ let reply = chat.encrypt_reply(EncryptReplyParams::new(conversation_id, "pong", 
 let prepared = chat.prepare_conversation_key_change(key_change)?;
 chat.set_signing_keys(signing_keys);
 
-// 0.7.0
+// 0.7.1
 let payload = chat.encrypt_message(&EncryptMessageParams::new(conversation_id, "hello"))?;
 let reply = chat.encrypt_reply(&EncryptReplyParams::new(conversation_id, "pong", event_b64))?;
 let prepared = chat.prepare_conversation_key_change(&key_change)?;
@@ -417,7 +417,7 @@ let mut params = EncryptMessageParams::new(conversation_id, "@user hello");
 params.entities = Some(vec![EntityDescriptor { start: 0, end: 5, entity_type: "mention".to_string() }]);
 params.ttl_msec = Some(86_400_000);
 
-// 0.7.0
+// 0.7.1
 let signing_key = SigningKeyEntry::new(
     user_id,
     public_key_version,
@@ -446,7 +446,7 @@ let body = serde_json::json!({
     "encoded_message_event_signature": payload.encoded_event_signature,
 });
 
-// 0.7.0
+// 0.7.1
 let body = serde_json::json!({
     "message_id": payload.message_id,
     "encoded_message_create_event": payload.encoded_message_create_event,
@@ -485,7 +485,7 @@ let mut params = EncryptMessageParams::new(conversation_id, "a photo");
 params.attachments = Some(vec![photo_attachment(media_hash_key)]);
 let payload = chat.encrypt_message(params)?;
 
-// 0.7.0
+// 0.7.1
 let total_bytes = utils::encrypted_file_size(photo.len() as u64).ok_or("file too large")?;
 let upload = api.post("/2/chat/media/upload/initialize", &serde_json::json!({
     "conversation_id": conversation_id, "total_bytes": total_bytes,
@@ -541,7 +541,7 @@ signature: use `verified` from `decrypt_event` for that.
 // 0.5.x
 let plaintext = chat.decrypt_stream(&downloaded, &keys[conversation_key_version])?;
 
-// 0.7.0
+// 0.7.1
 let plaintext = chat.decrypt_file(&DecryptFileParams::new(downloaded, file_event_b64, keys, file_hash_key))?;
 ```
 
@@ -569,7 +569,7 @@ and bytes that aren't a complete file encrypted under the key with
 let encrypted = chat.encrypt_stream(&data, &keys[conversation_key_version])?;
 let plaintext = chat.decrypt_stream(&downloaded, &keys[conversation_key_version])?;
 
-// 0.7.0
+// 0.7.1
 let key = keys[conversation_key_version].to_bytes();
 let encrypted = chat.encrypt_file_with_key(&EncryptFileWithKeyParams::new(data, key.clone()))?;
 let plaintext = chat.decrypt_file_with_key(&DecryptFileWithKeyParams::new(downloaded, key))?;
@@ -597,7 +597,7 @@ let size = chat_xdk_core::utils::encrypted_stream_size(photo.len() as u64);
 let encryptor = chat.stream_encryptor(&keys[conversation_key_version])?;
 let decryptor = chat.stream_decryptor(&keys[conversation_key_version])?;
 
-// 0.7.0
+// 0.7.1
 let size = chat_xdk_core::utils::encrypted_file_size(photo.len() as u64);
 let encryptor = chat.file_encryptor(&FileEncryptorParams::new(&payload.event_b64, &media_hash_key))?;
 let decryptor = chat.file_decryptor(&FileDecryptorParams::new(file_event_b64, keys, file_hash_key))?;
@@ -612,7 +612,7 @@ use chat_xdk_core::crypto::encryption::{
     decrypt_stream, encrypt_stream, encrypted_stream_size, StreamDecryptor, StreamEncryptor,
 };
 
-// 0.7.0
+// 0.7.1
 use chat_xdk_core::crypto::encryption::{
     decrypt_file, encrypt_file, encrypted_file_size, FileDecryptor, FileEncryptor,
 };
@@ -646,7 +646,7 @@ let action_signatures: Vec<serde_json::Value> = prepared
     })
     .collect();
 
-// 0.7.0
+// 0.7.1
 let action_signatures = serde_json::to_value(&prepared.action_signatures)?;
 ```
 
@@ -667,7 +667,7 @@ let input = PublicKeyInput {
 };
 let version = &input.key_version;
 
-// 0.7.0
+// 0.7.1
 let input = PublicKeyInput::new(user_id, identity_public_key, public_key_version);
 let version = &input.public_key_version;
 ```
@@ -697,7 +697,7 @@ let conversation_participant_keys: Vec<serde_json::Value> = participant_keys
     })
     .collect();
 
-// 0.7.0
+// 0.7.1
 let conversation_participant_keys: &[ConversationParticipantKey] = &prepared.conversation_participant_keys;
 ```
 
@@ -714,7 +714,7 @@ keys are one type, `ConversationParticipantKey`:
 let key: &ParticipantKey = &received_key_change.participant_keys[0];
 let encrypted = &key.encrypted_key;
 
-// 0.7.0
+// 0.7.1
 let key: &ConversationParticipantKey = &received_key_change.conversation_participant_keys[0];
 let encrypted = &key.encrypted_conversation_key;
 ```
@@ -732,7 +732,7 @@ nested](#action-signatures-come-nested) shows. Read the action's
 let deletion = chat.prepare_message_delete(&MessageDeleteParams::new(conversation_id, sequence_ids, false))?;
 let message_id = deletion.message_id;
 
-// 0.7.0
+// 0.7.1
 let deletion = chat.prepare_message_delete(&MessageDeleteParams::new(conversation_id, sequence_ids, false))?;
 let message_id = deletion.action_signatures[0].message_id.clone();
 ```
@@ -748,7 +748,7 @@ events give it, and the name the encrypt params take:
 let message_version = message.key_version.as_deref();
 let key_change_version = received_key_change.key_version.as_str();
 
-// 0.7.0
+// 0.7.1
 let message_version = message.conversation_key_version.as_deref();
 let key_change_version = received_key_change.conversation_key_version.as_str();
 ```
@@ -764,7 +764,7 @@ Fields that hold sequence ids take the names of the params that send them.
 of the message it edits as `target_message_id`, `None` for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`.
-Don't keep `target_message_id`: in 0.7.0 it names a different value** (see
+Don't keep `target_message_id`: in 0.7.1 it names a different value** (see
 [`target_message_id` holds a different
 value](#target_message_id-holds-a-different-value)).
 
@@ -776,7 +776,7 @@ if let MessageContent::Edit { target_message_id, new_text, .. } = &message.conte
 let deleted_sequence_ids = &deleted.message_ids;
 let seen_until = receipt.seen_until_id.as_deref();
 
-// 0.7.0
+// 0.7.1
 if let MessageContent::Edit { target_message_sequence_id, updated_text, .. } = &message.content {
     show_edit(target_message_sequence_id, updated_text);
 }
@@ -816,7 +816,7 @@ let guesses_left = match &err {
     _ => None,
 };
 
-// 0.7.0
+// 0.7.1
 let invalid_input = err.kind() == ErrorKind::InvalidInput;
 let guesses_left = err.guesses_remaining();
 ```
@@ -843,7 +843,7 @@ sender_id 'user-1': pass a numeric user id (digits only)`.
 let mut reply = EncryptReplyParams::new(conversation_id, "pong", event_b64);
 reply.reply_to_sender_id = Some(4201);
 
-// 0.7.0
+// 0.7.1
 let reply = EncryptReplyParams::new(conversation_id, "pong", event_b64).with_reply_to_sender_id("4201");
 ```
 
@@ -886,7 +886,7 @@ fail with `SdkError::InvalidInput` naming the value, where 0.5.x sent it:
 A Rust string's byte offsets are already UTF-8 offsets:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let text = "café @bob";
 let start = text.find("@bob").ok_or("no mention")?;
 let end = start + "@bob".len();
@@ -903,7 +903,7 @@ signing key, so give the chat every participant's signing keys, your own
 included, before you decrypt. It's `None` until a key change verifies: a key
 change the SDK can't verify still adds its key to `conversation_keys.keys`,
 for decrypting, but never becomes the version you encrypt with. Where 0.5.x
-returned the batch's highest version, 0.7.0 can return `None`: fetch the
+returned the batch's highest version, 0.7.1 can return `None`: fetch the
 missing signing keys or the conversation's key-change events and decrypt
 again, rather than encrypting under the highest key in `keys`:
 
@@ -912,7 +912,7 @@ again, rather than encrypting under the highest key in `keys`:
 let result = chat.decrypt_events(&events, &signing_keys);
 let version = result.conversation_keys.latest_version;
 
-// 0.7.0
+// 0.7.1
 chat.set_signing_keys(&signing_keys);
 let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 let Some(version) = result.conversation_keys.latest_version else {
@@ -927,7 +927,7 @@ let Some(version) = result.conversation_keys.latest_version else {
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.0 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.1 that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id,
 `Some` only on a v1 edit.** The compiler catches a pattern that binds the
 reaction's field, but not code that serializes events and reads
@@ -954,7 +954,7 @@ Sign only your own application data with `sign`; the SDK signs events
 itself. Any other data signs as in 0.5.x:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let signature = match chat.sign(&data) {
     Ok(signature) => Some(signature),
     // The data reads as an event or a public key, which only the SDK signs.
@@ -988,7 +988,7 @@ for item in &result.messages {
     }
 }
 
-// 0.7.0
+// 0.7.1
 let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 for item in &result.events {
     if let Event::GroupChange(change) = &item.event {
@@ -1007,7 +1007,7 @@ A loop over single events handles the error, as it handles an unverified
 event's, and moves on to the next event:
 
 ```rust
-// 0.7.0
+// 0.7.1
 for item in page["data"].as_array().into_iter().flatten() {
     let Some(event_b64) = item["encoded_event"].as_str() else { continue };
     match chat.decrypt_event(&DecryptEventParams::new(event_b64, keys.clone())) {
@@ -1093,7 +1093,7 @@ api.post(&format!("/2/chat/conversations/{path_id}/messages/delete"), &serde_jso
     }],
 }))?;
 
-// 0.7.0
+// 0.7.1
 let deletion = chat.prepare_message_delete(&MessageDeleteParams::new(conversation_id, sequence_ids.clone(), true))?;
 api.post(&format!("/2/chat/conversations/{path_id}/messages/delete"), &serde_json::json!({
     "sequence_ids": sequence_ids,
@@ -1119,7 +1119,7 @@ receipt, which recipients drop.
 // 0.5.x
 api.post(&format!("/2/chat/conversations/{path_id}/read"), &serde_json::json!({}))?;
 
-// 0.7.0
+// 0.7.1
 let receipt = chat.prepare_mark_conversation_read(&MarkConversationReadParams::new(
     conversation_id,
     seen_until_sequence_id,
@@ -1163,7 +1163,7 @@ create.avatar_url = Some(avatar_url.to_string());
 let prepared = chat.prepare_group_create(create)?;
 let body = serde_json::json!({ "group_name": title, "group_avatar_url": avatar_url });
 
-// 0.7.0
+// 0.7.1
 let create = GroupCreateParams::new(public_keys, conversation_id, member_ids.clone(), admin_ids.clone())
     .with_title(title);
 let prepared = chat.prepare_group_create(&create)?;
@@ -1200,7 +1200,7 @@ if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
     show_title(&chat.decrypt(title, &keys[conversation_key_version])?);
 }
 
-// 0.7.0
+// 0.7.1
 if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
     match title {
         GroupText::Text { text, .. } => show_title(text),
@@ -1233,7 +1233,7 @@ let mut add = GroupMembersChangeParams::new(public_keys, conversation_id, new_me
 add.current_title = Some(title.to_string());
 let prepared = chat.prepare_group_members_change(add)?;
 
-// 0.7.0
+// 0.7.1
 let add = GroupMembersChangeParams::new(public_keys, conversation_id, new_member_ids.clone(), member_ids, admin_ids, vec![])
     .with_current_title(title)
     .with_current_description(description);
@@ -1252,7 +1252,7 @@ if let Some(key) = &prepared.conversation_key {
 
 Passing a description makes the add sign at signature version 8, the first
 version whose member-add payload covers one, and 0.5.x readers can't verify
-a version-8 add. Until every app that reads your groups runs 0.7.0, leave
+a version-8 add. Until every app that reads your groups runs 0.7.1, leave
 the description out, so the add signs at version 7 as in 0.5.x; the new
 members can read the description once a description change sets it under the
 new key.
@@ -1307,7 +1307,7 @@ api.post(
     &serde_json::json!({ "user_ids": user_ids }),
 )?;
 
-// 0.7.0
+// 0.7.1
 let removal = GroupMembersRemoveParams::new(remaining_public_keys, conversation_id, user_ids.clone())
     .with_title(title)
     .with_description(description);
@@ -1332,7 +1332,7 @@ the new key and version, and pass them to every encrypt and prepare call
 until the cache holds them:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let key = prepared.conversation_key.as_ref().ok_or("no conversation key")?;
 store_conversation_key(conversation_id, &prepared.conversation_key_version, key);
 let payload = chat.encrypt_message(
@@ -1354,7 +1354,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```rust
-// 0.7.0
+// 0.7.1
 let result = chat.decrypt_events(&DecryptEventsParams::new(events));
 for item in &result.events {
     if let Event::GroupChange(change) = &item.event {
@@ -1381,7 +1381,7 @@ api.post(
     &serde_json::json!({ "user_ids": [my_user_id] }),
 )?;
 
-// 0.7.0
+// 0.7.1
 let leave = GroupLeaveParams::new(conversation_id).with_promote_admin_id(promote_admin_id);
 let left = chat.prepare_group_leave(&leave)?;
 api.post(&format!("/2/chat/conversations/{path_id}/members/remove"), &serde_json::json!({
@@ -1409,7 +1409,7 @@ api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
     "modified_fields": ["group_name"],
 }))?;
 
-// 0.7.0
+// 0.7.1
 let prepared = chat.prepare_group_title_change(&GroupTitleChangeParams::new(conversation_id, title))?;
 api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
     "group_name": prepared.encrypted_value,
@@ -1433,7 +1433,7 @@ if let GroupChange::TitleChanged { new_title } = &group_change.change {
     show_title(&chat.decrypt(new_title, &keys[conversation_key_version])?);
 }
 
-// 0.7.0
+// 0.7.1
 if let GroupChange::TitleChanged { new_title, .. } = &group_change.change {
     match new_title {
         GroupText::Text { text, .. } => show_title(text),
@@ -1457,7 +1457,7 @@ api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
     "modified_fields": ["group_description"],
 }))?;
 
-// 0.7.0
+// 0.7.1
 let prepared = chat.prepare_group_description_change(&GroupDescriptionChangeParams::new(
     conversation_id,
     description,
@@ -1475,7 +1475,7 @@ holding `new_description` as a `GroupText`; read it as a title change's
 `new_title`. A removal's re-encrypted description never arrives as one:
 
 ```rust
-// 0.7.0
+// 0.7.1
 if let GroupChange::DescriptionChanged { new_description, .. } = &group_change.change {
     match new_description {
         GroupText::Text { text, .. } => show_description(text),
@@ -1506,7 +1506,7 @@ api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
     "modified_fields": ["group_avatar_url"],
 }))?;
 
-// 0.7.0
+// 0.7.1
 let encrypted = chat.encrypt_file_with_key(&EncryptFileWithKeyParams::new(
     photo,
     keys[conversation_key_version].to_bytes(),
@@ -1530,7 +1530,7 @@ its `conversation_key_version`: download the image and decrypt it with
 `decrypt_file_with_key` under the key for that version.
 
 ```rust
-// 0.7.0
+// 0.7.1
 if let GroupChange::AvatarChanged { conversation_key_version, .. } = &group_change.change {
     if let Some(key) = conversation_key_version.as_deref().and_then(|version| keys.get(version)) {
         let image = chat.decrypt_file_with_key(&DecryptFileWithKeyParams::new(downloaded, key.to_bytes()))?;
@@ -1556,7 +1556,7 @@ api.post(
     &serde_json::json!({ "user_ids": user_ids }),
 )?;
 
-// 0.7.0
+// 0.7.1
 let added = chat.prepare_group_admins_add(&GroupAdminsAddParams::new(conversation_id, user_ids.clone()))?;
 api.post(&format!("/2/chat/conversations/{path_id}/admins"), &serde_json::json!({
     "user_ids": user_ids, "action_signatures": added.action_signatures,
@@ -1573,7 +1573,7 @@ expiry as `validity_expiry_timestamp_msec`, and only with the same value the
 params signed:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let mut enable = GroupInviteEnableParams::new(conversation_id, invite_url);
 enable.expires_at_msec = Some(expires_at_msec);
 let invite = chat.prepare_group_invite_enable(&enable)?;
@@ -1593,7 +1593,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let request = chat.prepare_group_join_request(&GroupJoinRequestParams::new(conversation_id))?;
 api.post(&format!("/2/chat/conversations/{path_id}/join_requests"), &serde_json::json!({
     "token": invite_token, "action_signatures": request.action_signatures,
@@ -1607,7 +1607,7 @@ api.post(&format!("/2/chat/conversations/{path_id}/join_requests/reject"), &serd
 A TTL change signs `ttl_msec` only; a negative one is rejected:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let ttl = chat.prepare_message_ttl_change(&MessageTtlChangeParams::new(conversation_id, ttl_msec))?;
 api.put(&format!("/2/chat/conversations/{path_id}/message_ttl"), &serde_json::json!({
     "message_ttl_ms": ttl_msec.to_string(), "action_signatures": ttl.action_signatures,
@@ -1625,7 +1625,7 @@ names its signatures after the setting, `blocking_action_signatures` or
 `detection_action_signatures`, not `action_signatures`:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let capture = chat.prepare_screen_capture(&ScreenCaptureParams::new(
     conversation_id,
     ScreenCaptureChange::BlockingEnabled,
@@ -1667,7 +1667,7 @@ registers both, starts a conversation, sends a message and decrypts it with
 `reject_unverified` on, the default, so the signature has to verify:
 
 ```rust
-// 0.7.0
+// 0.7.1
 let alice = ChatCore::new();
 let bob = ChatCore::new();
 let alice_keys = alice.generate_keypairs()?.public_key;
