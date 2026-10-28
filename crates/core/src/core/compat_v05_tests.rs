@@ -113,6 +113,27 @@ fn sends_from_0_5_decrypt_and_verify() {
     }
 }
 
+/// The files 0.5.0 and 0.5.2 encrypted with `encrypt_stream` open with
+/// `decrypt_file_with_key` under the same key: a text file of three frames,
+/// a file shaped like a group avatar, and an empty file. X Android encrypts
+/// group avatars in this format under the raw conversation key.
+#[test]
+fn files_from_0_5_encrypt_stream_open_with_decrypt_file_with_key() {
+    let core = ChatCore::new();
+    for (version, json) in FIXTURES {
+        let fixture: Value = serde_json::from_str(json).unwrap();
+        let key = bytes(&fixture, "conversation_key_b64");
+        for name in ["file", "avatar_file", "empty_file"] {
+            let file = &fixture[name];
+            let params = DecryptFileWithKeyParams::new(bytes(file, "ciphertext_b64"), key.clone());
+            let opened = core
+                .decrypt_file_with_key(&params)
+                .unwrap_or_else(|e| panic!("{version} {name}: {e}"));
+            assert_eq!(opened, bytes(file, "plaintext_b64"), "{version} {name}");
+        }
+    }
+}
+
 /// The same send made here with every feature switch off.
 fn v0_send(core: &ChatCore, fixture: &Value, kind: &str) -> SendPayload {
     let conversation = text(fixture, "conversation_id").to_string();

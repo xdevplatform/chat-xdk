@@ -424,6 +424,18 @@ func ffiDecryptFile(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_decrypt_file(h, c))
 }
 
+func ffiEncryptFileWithKey(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_encrypt_file_with_key(h, c))
+}
+
+func ffiDecryptFileWithKey(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_decrypt_file_with_key(h, c))
+}
+
 type fileEncryptorHandle = *C.struct_FileEncryptorHandle
 type fileDecryptorHandle = *C.struct_FileDecryptorHandle
 

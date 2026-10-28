@@ -615,6 +615,62 @@ impl Chat {
         Ok(FileDecryptor { inner: Some(inner) })
     }
 
+    /// Encrypt a file under a key you already hold, rather than from a
+    /// message: a group's avatar image under the conversation key whose
+    /// version is signed next to the avatar URL, or an app's own files at
+    /// rest. The file is encrypted under the key itself, in the format
+    /// ``encrypt_file`` writes; its size is ``encrypted_file_size(len(file))``.
+    ///
+    /// Args:
+    ///     params: An ``EncryptFileWithKeyParams``.
+    ///
+    /// Returns:
+    ///     Encrypted bytes.
+    ///
+    /// Raises:
+    ///     InvalidInputError: The key is not 32 bytes.
+    pub(crate) fn encrypt_file_with_key<'py>(
+        &self,
+        py: Python<'py>,
+        params: PyRef<'_, EncryptFileWithKeyParams>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let params = params.to_core();
+        // Release the GIL for the file crypto; only Rust data crosses into
+        // the closure.
+        let output = py
+            .detach(|| self.inner.encrypt_file_with_key(&params))
+            .map_err(to_py_err)?;
+        Ok(PyBytes::new(py, &output))
+    }
+
+    /// Decrypt a file encrypted under a key you already hold, as downloaded,
+    /// such as a group's avatar image under the conversation key for the
+    /// version its avatar change names.
+    ///
+    /// Args:
+    ///     params: A ``DecryptFileWithKeyParams``.
+    ///
+    /// Returns:
+    ///     Decrypted bytes.
+    ///
+    /// Raises:
+    ///     InvalidInputError: The key is not 32 bytes.
+    ///     DecryptionError: ``encrypted`` is not the complete file encrypted
+    ///         under the key.
+    pub(crate) fn decrypt_file_with_key<'py>(
+        &self,
+        py: Python<'py>,
+        params: PyRef<'_, DecryptFileWithKeyParams>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let params = params.to_core();
+        // Release the GIL for the file crypto; only Rust data crosses into
+        // the closure.
+        let output = py
+            .detach(|| self.inner.decrypt_file_with_key(&params))
+            .map_err(to_py_err)?;
+        Ok(PyBytes::new(py, &output))
+    }
+
     /// Decrypt a group title or description the X API returns for a
     /// conversation. Group changes in events need no call of their own:
     /// ``decrypt_event`` returns them decrypted.

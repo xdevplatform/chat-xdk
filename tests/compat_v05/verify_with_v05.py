@@ -2,8 +2,9 @@
 
 Reads the JSON write_v0_sends.py produced. Every send must decrypt and verify
 (the default reject-unverified policy raises otherwise) and carry its expected
-text or emoji, and the file must open with decrypt_stream under the
-conversation key. Run it with the released package installed:
+text or emoji, and the message's file and the files encrypted with
+encrypt_file_with_key must open with decrypt_stream under the conversation
+key. Run it with the released package installed:
 
     /tmp/v05/bin/python tests/compat_v05/verify_with_v05.py /tmp/v0_sends.json
 """
@@ -35,6 +36,12 @@ def main(path):
     plaintext = base64.b64decode(data["file"]["plaintext_b64"])
     assert bytes(chat.decrypt_stream(ciphertext, conversation_key)) == plaintext
     print(f"chatxdk {version} reads the file")
+
+    for name, entry in data["files_with_key"].items():
+        ciphertext = base64.b64decode(entry["ciphertext_b64"])
+        plaintext = base64.b64decode(entry["plaintext_b64"])
+        assert bytes(chat.decrypt_stream(ciphertext, conversation_key)) == plaintext, name
+        print(f"chatxdk {version} reads the {name} file encrypted with encrypt_file_with_key")
 
 
 if __name__ == "__main__":

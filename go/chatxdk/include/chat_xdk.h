@@ -486,6 +486,34 @@ struct FfiResult chat_xdk_encrypt_file(const struct ChatHandle *handle, const ch
 struct FfiResult chat_xdk_decrypt_file(const struct ChatHandle *handle, const char *params_json);
 
 /**
+ * Encrypt a file under a key you already hold, rather than from a message:
+ * a group's avatar image under the conversation key whose version is signed
+ * next to the avatar URL, or an app's own files at rest. The file is
+ * encrypted under the key itself, in the format [`chat_xdk_encrypt_file`]
+ * writes, with nothing derived from a message.
+ *
+ * `params_json` — single JSON document: `file` (base64) and `key` (base64
+ * raw 32-byte key, such as a conversation key).
+ *
+ * Returns the encrypted file, base64.
+ */
+struct FfiResult chat_xdk_encrypt_file_with_key(const struct ChatHandle *handle,
+                                                const char *params_json);
+
+/**
+ * Decrypt a file encrypted under a key you already hold, such as a group's
+ * avatar image under the conversation key for the version its avatar change
+ * names.
+ *
+ * `params_json` — single JSON document: `encrypted` (base64, as downloaded)
+ * and `key` (base64 raw 32-byte key the file was encrypted under).
+ *
+ * Returns the decrypted file, base64.
+ */
+struct FfiResult chat_xdk_decrypt_file_with_key(const struct ChatHandle *handle,
+                                                const char *params_json);
+
+/**
  * Create an incremental encryptor for a file too large to hold in memory.
  * `params_json` takes the fields of [`chat_xdk_encrypt_file`] apart from
  * `file`, which is fed to the encryptor.

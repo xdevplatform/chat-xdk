@@ -2196,6 +2196,89 @@ impl FileDecryptorParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::encrypt_file_with_key`].
+///
+/// A file under a key the caller already holds, rather than a file attached
+/// to a message: a group's avatar image, which X clients encrypt under the
+/// conversation key whose version is signed next to the avatar URL, or an
+/// app's own files at rest. The file is encrypted under `key` itself, in the
+/// format [`EncryptFileParams`] files take, with nothing derived from a
+/// message. For a file a message carries, use [`EncryptFileParams`].
+///
+/// The key is zeroized when the params are dropped and, with the file,
+/// redacted from `Debug` output.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct EncryptFileWithKeyParams {
+    /// The file to encrypt.
+    pub file: Vec<u8>,
+    /// The raw 32-byte key to encrypt the file under, such as a conversation
+    /// key.
+    pub key: Vec<u8>,
+}
+
+impl EncryptFileWithKeyParams {
+    /// Create params; every field is required.
+    pub fn new(file: Vec<u8>, key: Vec<u8>) -> Self {
+        Self { file, key }
+    }
+}
+
+impl Drop for EncryptFileWithKeyParams {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for EncryptFileWithKeyParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptFileWithKeyParams")
+            .field("file", &format_args!("[{} bytes]", self.file.len()))
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Parameters for [`crate::ChatCore::decrypt_file_with_key`]: a file
+/// encrypted under a key the caller already holds, such as a group's avatar
+/// image under the conversation key for the version its avatar change names.
+///
+/// The key is zeroized when the params are dropped and is redacted from
+/// `Debug` output.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct DecryptFileWithKeyParams {
+    /// The encrypted file, as downloaded.
+    pub encrypted: Vec<u8>,
+    /// The raw 32-byte key the file was encrypted under.
+    pub key: Vec<u8>,
+}
+
+impl DecryptFileWithKeyParams {
+    /// Create params; every field is required.
+    pub fn new(encrypted: Vec<u8>, key: Vec<u8>) -> Self {
+        Self { encrypted, key }
+    }
+}
+
+impl Drop for DecryptFileWithKeyParams {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for DecryptFileWithKeyParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecryptFileWithKeyParams")
+            .field(
+                "encrypted",
+                &format_args!("[{} bytes]", self.encrypted.len()),
+            )
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

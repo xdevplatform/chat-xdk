@@ -16,8 +16,10 @@ reply (a simple echo), encrypts the reply, and sends it back.
 The bots deliberately stop at that messaging core. The rest of the SDK surface
 — group management (`prepareGroupCreate` / `prepareGroupMembersChange` /
 `prepareGroupMembersRemove`),
-reactions (`encryptAddReaction` / `encryptRemoveReaction`), and media files
-(`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`) — is documented in
+reactions (`encryptAddReaction` / `encryptRemoveReaction`), media files
+(`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`), and files
+under a key such as group avatars (`encryptFileWithKey` / `decryptFileWithKey`)
+— is documented in
 [`../docs/API.md`](../docs/API.md), with tested reference call shapes in each
 binding's test suite (`crates/*/tests`, `crates/wasm/js/tests`,
 `go/chatxdk/chatxdk_test.go`).

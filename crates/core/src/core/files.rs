@@ -1,4 +1,5 @@
-//! File encryption and decryption from the message that carries the file.
+//! File encryption and decryption: from the message that carries the file,
+//! or under a key the caller already holds.
 
 use super::*;
 
@@ -130,6 +131,59 @@ impl ChatCore {
         Ok(FileDecryptor::for_media(&key, &params.media_hash_key)?)
     }
 
+    /// Encrypt a file under a key the caller already holds, rather than
+    /// from a message.
+    ///
+    /// `params.key` is a raw 32-byte key, such as a conversation key: X
+    /// clients encrypt a group's avatar image under the conversation key
+    /// whose version is signed next to the avatar URL. The file is encrypted
+    /// under that key itself, in the format [`Self::encrypt_file`] writes (a
+    /// 24-byte header, then 1024-byte frames, the last one tagged final),
+    /// with nothing derived from a message or a media hash key; its size is
+    /// `utils::encrypted_file_size(file.len())`. For a file attached to a
+    /// message, use [`Self::encrypt_file`].
+    ///
+    /// A key that is not 32 bytes is an `InvalidInput` error.
+    pub fn encrypt_file_with_key(
+        &self,
+        params: &EncryptFileWithKeyParams,
+    ) -> Result<Vec<u8>, SdkError> {
+        let key = file_key(&params.key)?;
+        let mut output = Vec::new();
+        crate::crypto::encryption::encrypt_file(&key, params.file.as_slice(), &mut output)?;
+        Ok(output)
+    }
+
+    /// Decrypt a file encrypted under a key the caller already holds, such
+    /// as a group's avatar image under the conversation key for the version
+    /// its avatar change names.
+    ///
+    /// A key that is not 32 bytes is an `InvalidInput` error. Bytes that are
+    /// not the complete file encrypted under that key (another key's file,
+    /// corrupted, cut short, or followed by more data) are a `Decryption`
+    /// error, apart from 24 bytes: an empty file is its header alone, which
+    /// nothing authenticates, so any 24 bytes decrypt to an empty file under
+    /// any key, a file cut to its header included. Reject an empty result
+    /// for a file that can't be empty, such as an avatar image.
+    pub fn decrypt_file_with_key(
+        &self,
+        params: &DecryptFileWithKeyParams,
+    ) -> Result<Vec<u8>, SdkError> {
+        let key = file_key(&params.key)?;
+        let mut output = Vec::new();
+        crate::crypto::encryption::decrypt_file(&key, params.encrypted.as_slice(), &mut output)
+            .map_err(|e| match e {
+                CryptoError::DecryptionFailed(cause) => {
+                    SdkError::Crypto(CryptoError::DecryptionFailed(format!(
+                        "the bytes are not a complete file encrypted under this key ({cause}): \
+                         pass all the encrypted bytes and the key they were encrypted under"
+                    )))
+                }
+                other => other.into(),
+            })?;
+        Ok(output)
+    }
+
     /// Decrypt a group title or description the X API returns for a
     /// conversation: base64 XSalsa20-Poly1305 ciphertext under the
     /// conversation key, decrypted to its UTF-8 plaintext.
@@ -148,4 +202,14 @@ impl ChatCore {
         String::from_utf8(plaintext)
             .map_err(|e| SdkError::Parse(format!("Decrypted data is not valid UTF-8: {}", e)))
     }
+}
+
+/// The key a file-with-key call encrypts or decrypts under.
+fn file_key(key: &[u8]) -> Result<XChatConversationKey, SdkError> {
+    XChatConversationKey::from_bytes(key.to_vec()).ok_or_else(|| {
+        SdkError::InvalidInput(format!(
+            "Invalid key (expected 32 bytes, got {})",
+            key.len()
+        ))
+    })
 }

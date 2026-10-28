@@ -1,12 +1,13 @@
-# Why 0.7.0 changes
+# Why 0.7.1 changes
 
-This page explains why each change in chat-xdk 0.7.0 was made, and links to
-the lines to change in each binding's guide. The [index](README.md) lists
-the guides, and the [CHANGELOG](../../CHANGELOG.md) lists every change.
+This page explains why each change from 0.5.x to chat-xdk 0.7.1 was made,
+and links to the lines to change in each binding's guide. The
+[index](README.md) lists the guides, and the [CHANGELOG](../../CHANGELOG.md)
+lists every change.
 
 ## Sends can use per-message keys
 
-0.7.0 sends each message, reply, reaction and edit in one of two formats.
+0.7.1 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends: contents encrypted under the conversation key,
 signed at signature version 7. v1 encrypts each message under its own
 message key, derived with HKDF-SHA256 from the conversation key, the sender
@@ -18,14 +19,14 @@ never the conversation key. Version 10 signs `contents_encryption_version`,
 so a message's choice of key can't be changed or stripped without breaking
 its signature. Message keys derive from the conversation key, so the
 protocol's [known limitations](../CRYPTO.md#known-limitations), no forward
-secrecy and no post-compromise security, still apply. 0.7.0 reads both
+secrecy and no post-compromise security, still apply. 0.7.1 reads both
 formats.
 
 ## v0 is the default, and the X API's `v1_send` switch turns on v1
 
 0.5.x decrypts message contents with the conversation key and doesn't know
 signature version 10, so it rejects every v1 send as a signature
-verification failure. 0.7.0 therefore sends v0, which every reader opens,
+verification failure. 0.7.1 therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
 chat that can't read the switch keeps sending v0. The Rust crate and the C
@@ -74,7 +75,7 @@ the signed payload from the numeric ids of the delivered event, and derive
 v1 message keys from the sender's. Recipients look keys up by the key version
 as the event carries it, while signatures from version 8 on cover its
 integer value, so `01` and `1` sign alike but name different keys. Any
-other spelling yields a send no recipient can verify or decrypt, so 0.7.0
+other spelling yields a send no recipient can verify or decrypt, so 0.7.1
 checks every user id and key version, in both formats, and fails with an
 error naming the field:
 [Rust](rust.md#user-ids-are-strings-of-digits),
@@ -125,6 +126,24 @@ handle both formats:
 [JVM](jvm.md#encrypt-a-file-from-its-message),
 [.NET](dotnet.md#encrypt-a-file-from-its-message),
 [C ABI](c-abi.md#encrypt-a-file-from-its-message).
+
+0.5.x `encrypt_stream` and `decrypt_stream` took any bytes and a key, so an
+app picked the key for a message's file itself. Deriving it from the message
+takes that choice away for files a message carries, the ones whose key
+depends on the message. A file no message carries has no message to derive a
+key from: a group's avatar image, which X clients encrypt under the
+conversation key whose version the avatar change signs next to the avatar
+URL, or an app's own files at rest. `encrypt_file_with_key` and
+`decrypt_file_with_key` take the raw 32-byte key for those and encrypt the
+file under it in the same file format, the one `encrypt_stream` wrote, so
+files from either release open with the other's calls:
+[Rust](rust.md#encrypt-a-file-under-a-key-you-hold),
+[Python](python.md#encrypt-a-file-under-a-key-you-hold),
+[JavaScript](javascript.md#encrypt-a-file-under-a-key-you-hold),
+[Go](go.md#encrypt-a-file-under-a-key-you-hold),
+[JVM](jvm.md#encrypt-a-file-under-a-key-you-hold),
+[.NET](dotnet.md#encrypt-a-file-under-a-key-you-hold),
+[C ABI](c-abi.md#encrypt-a-file-under-a-key-you-hold).
 
 ## Calls take params objects
 
@@ -318,7 +337,7 @@ Each signature carries its version, and each version signs its own payload
 layout: version 8 signs key versions as integers and adds a group's
 description to member adds, 9 appends the signature version, 10 covers
 `contents_encryption_version`, and 11 adds the key version to group member
-removals. 0.7.0 rebuilds each payload in the layout of the version its
+removals. 0.7.1 rebuilds each payload in the layout of the version its
 signature carries, so events signed at 8 through 11 verify, including the v1
 sends it signs at 10 and the member adds with a description it signs at 8.
 Versions above 11 are rejected, since their layout is unknown
@@ -372,16 +391,19 @@ new members can read them, and returns the title for its request. A removal
 signs each between the removal and the key change, marked as a key-rotation
 re-encryption, which decrypt drops (see [Decrypt drops a removal's title and
 description
-re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions));
-it leaves the avatar alone.
+re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)).
 
 An avatar is an image, and X clients encrypt the image, not its URL: the app
-encrypts the image under the conversation key and uploads it to the group's
-media, and the X API checks the URL against that media. So the avatar change
-signs the media URL as is, with the version of the key the image is
-encrypted under, and the decrypt calls return both for a received avatar
-change. A create sets no avatar, as X clients' creates normally don't; the
-app sets one with an avatar change.
+encrypts the image under the conversation key with `encrypt_file_with_key`
+and uploads it to the group's media, and the X API checks the URL against
+that media. So the avatar change signs the media URL as is, with the version
+of the key the image is encrypted under, and the decrypt calls return both
+for a received avatar change. The image is the app's to encrypt, so the
+calls that rotate the key don't re-encrypt it; X clients re-encrypt the
+avatar under the new key on every rotation, and an app does the same: it
+encrypts the image under the new key, uploads it, and sends an avatar change
+naming the new key version. A create sets no avatar, as X clients' creates
+normally don't; the app sets one with an avatar change.
 
 `decrypt_event` and `decrypt_events` decrypt a received create's title and a
 received title or description change into a `GroupText`. A value they can't
@@ -531,6 +553,6 @@ events on its own path:
   ([Rust](rust.md#types-are-non_exhaustive)).
 - The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
   so apps there need no copy of their own; a library built for 0.5.x doesn't
-  export the entry points 0.7.0 calls
+  export the entry points 0.7.1 calls
   ([JVM](jvm.md#the-jar-bundles-the-linux-arm64-native-library),
   [.NET](dotnet.md#the-package-bundles-the-linux-arm64-native-library)).

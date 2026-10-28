@@ -188,7 +188,7 @@ output = K_1 || K_2 || ... truncated to key_length
 
 ## 5. Message Encryption — XSalsa20-Poly1305
 
-Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title and description are encrypted the same way under the conversation key: `prepare_group_create` (under the key it seeds), `prepare_group_members_change` and `prepare_group_members_remove` (under the key they rotate to), `prepare_group_title_change` and `prepare_group_description_change` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received create or change, and `decrypt` opens the values the X API returns with a conversation. A received value that names no key version is plaintext, and one that does not decrypt comes back unavailable, with the value as carried, rather than failing the event. A group's avatar URL is not encrypted: the app encrypts the image under the conversation key and uploads it, and the avatar change signs the media URL with the version of the key the image is encrypted under.
+Message payloads (the decrypted Thrift `MessageEntryHolder`) are encrypted using XSalsa20-Poly1305 (the secretbox construction). A group's title and description are encrypted the same way under the conversation key: `prepare_group_create` (under the key it seeds), `prepare_group_members_change` and `prepare_group_members_remove` (under the key they rotate to), `prepare_group_title_change` and `prepare_group_description_change` encrypt the plaintext the caller passes, `decrypt_event` decrypts a received create or change, and `decrypt` opens the values the X API returns with a conversation. A received value that names no key version is plaintext, and one that does not decrypt comes back unavailable, with the value as carried, rather than failing the event. A group's avatar URL is not encrypted: the app encrypts the image under the conversation key with `encrypt_file_with_key` (see [Files under a key](#files-under-a-key)) and uploads it, and the avatar change signs the media URL with the version of the key the image is encrypted under.
 
 ### Algorithm
 
@@ -327,7 +327,11 @@ Every non-empty encrypted file ends with a `TAG_FINAL` chunk. Decryption
 rejects a non-empty file that ends before its `TAG_FINAL` chunk, so dropping
 trailing whole chunks (which the per-chunk MAC alone cannot catch) is detected.
 The only file that legitimately has no `TAG_FINAL` is the empty file (bare
-24-byte header).
+24-byte header). Nothing in a bare header is authenticated, so any 24 bytes
+decrypt to an empty file under any key, and a file cut to its header can't
+be told from an empty one: a caller whose files are never empty, such as a
+message's media or a group's avatar image, treats an empty result as a
+failure.
 
 ### Incremental API
 
@@ -339,6 +343,16 @@ are byte-for-byte identical to the whole-file functions regardless of how the
 input is split. Because truncation is only proven absent once `finish`
 succeeds, plaintext returned by `push` must not be treated as complete until
 `finish` returns successfully.
+
+### Files under a key
+
+`encrypt_file_with_key` and `decrypt_file_with_key` run the algorithm above
+under a raw 32-byte key the caller passes, with nothing derived from a
+message: for a file no message carries, such as a group's avatar image, which
+X clients encrypt under the conversation key whose version the avatar change
+signs, or an app's own files at rest. A key that is not 32 bytes is rejected.
+These are the files 0.5.x `encrypt_stream` and `decrypt_stream` wrote and
+read: each release opens the other's.
 
 ### Media Keys
 

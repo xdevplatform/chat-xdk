@@ -935,6 +935,31 @@ export interface FileDecryptorParams {
   mediaHashKey: string;
 }
 
+/**
+ * Parameters for encryptFileWithKey: a file under a key you already hold
+ * rather than a file attached to a message, such as a group's avatar image
+ * under the conversation key whose version is signed next to the avatar
+ * URL, or an app's own files at rest.
+ */
+export interface EncryptFileWithKeyParams {
+  /** The file to encrypt. */
+  file: Uint8Array;
+  /** The raw 32-byte key to encrypt the file under, such as a conversation key. */
+  key: Uint8Array;
+}
+
+/**
+ * Parameters for decryptFileWithKey: a file encrypted under a key you
+ * already hold, such as a group's avatar image under the conversation key
+ * for the version its avatar change names.
+ */
+export interface DecryptFileWithKeyParams {
+  /** The encrypted file, as downloaded. */
+  encrypted: Uint8Array;
+  /** The raw 32-byte key the file was encrypted under. */
+  key: Uint8Array;
+}
+
 // NOTE: AttachmentDescriptor uses snake_case as it's part of the Thrift protocol
 // and matches the wire format used by the X API
 /**
@@ -1439,6 +1464,29 @@ interface ChatCrypto {
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
 
   /**
+   * Encrypt a file under a key you already hold, rather than from a
+   * message: a group's avatar image under the conversation key whose
+   * version is signed next to the avatar URL, or an app's own files at rest.
+   *
+   * The file is encrypted under `params.key` itself, in the format
+   * `encryptFile` writes; its size is `encryptedFileSize(file.length)`.
+   * Throws a `ChatXdkError` of kind `invalidInput` when the key is not 32
+   * bytes.
+   */
+  encryptFileWithKey(params: EncryptFileWithKeyParams): Uint8Array;
+
+  /**
+   * Decrypt a file encrypted under a key you already hold, as downloaded,
+   * such as a group's avatar image under the conversation key for the
+   * version its avatar change names.
+   *
+   * Throws a `ChatXdkError` of kind `invalidInput` when the key is not 32
+   * bytes, and of kind `decryption` when `encrypted` is not the complete
+   * file encrypted under the key.
+   */
+  decryptFileWithKey(params: DecryptFileWithKeyParams): Uint8Array;
+
+  /**
    * Decrypt a group title or description the X API returns for a
    * conversation. Group changes in events need no call of their own:
    * decryptEvent returns them decrypted.
@@ -1591,6 +1639,8 @@ declare class Chat implements ChatCrypto {
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
+  encryptFileWithKey(params: EncryptFileWithKeyParams): Uint8Array;
+  decryptFileWithKey(params: DecryptFileWithKeyParams): Uint8Array;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;
@@ -1675,6 +1725,8 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   fileEncryptor(params: FileEncryptorParams): FileEncryptor;
   decryptFile(params: DecryptFileParams): Uint8Array;
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
+  encryptFileWithKey(params: EncryptFileWithKeyParams): Uint8Array;
+  decryptFileWithKey(params: DecryptFileWithKeyParams): Uint8Array;
   decrypt(ciphertextB64: string, conversationKey: Uint8Array): string;
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
   prepareGroupMembersChange(params: GroupMembersChangeParams): PreparedConversationChange;

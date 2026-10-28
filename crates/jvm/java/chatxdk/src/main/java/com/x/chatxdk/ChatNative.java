@@ -120,6 +120,10 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_decrypt_file(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_encrypt_file_with_key(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_decrypt_file_with_key(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_file_encryptor_new(
             Pointer handle, Pointer paramsJson, PointerByReference outEncryptor);
 

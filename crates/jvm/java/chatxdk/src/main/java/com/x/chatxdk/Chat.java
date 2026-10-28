@@ -1049,6 +1049,48 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
+     * Encrypt a file under a key you already hold, rather than from a message: a group's avatar
+     * image under the conversation key whose version is signed next to the avatar URL, or an app's
+     * own files at rest. The file is encrypted under the key itself, in the format {@link
+     * #encryptFile} writes; its size is {@link ChatXdkUtilities#encryptedFileSize}.
+     *
+     * @return Encrypted bytes.
+     * @throws ChatXdkException of kind {@link ChatXdkException.Kind#INVALID_INPUT} if the key is
+     *     not 32 bytes.
+     */
+    public byte[] encryptFileWithKey(EncryptFileWithKeyParams parameters) {
+        throwIfDisposed();
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("file", Base64.getEncoder().encodeToString(parameters.file == null ? new byte[0] : parameters.file));
+        if (parameters.key != null) {
+            n.put("key", Base64.getEncoder().encodeToString(parameters.key));
+        }
+        return callFile(n, ChatNative.INSTANCE::chat_xdk_encrypt_file_with_key);
+    }
+
+    /**
+     * Decrypt a file encrypted under a key you already hold, as downloaded, such as a group's
+     * avatar image under the conversation key for the version its avatar change names.
+     *
+     * @return Decrypted bytes.
+     * @throws ChatXdkException of kind {@link ChatXdkException.Kind#INVALID_INPUT} if the key is
+     *     not 32 bytes, or of kind {@link ChatXdkException.Kind#DECRYPTION} if {@link
+     *     DecryptFileWithKeyParams#encrypted} is not the complete file encrypted under the key.
+     */
+    public byte[] decryptFileWithKey(DecryptFileWithKeyParams parameters) {
+        throwIfDisposed();
+        Objects.requireNonNull(parameters, "parameters");
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("encrypted", Base64.getEncoder().encodeToString(
+                parameters.encrypted == null ? new byte[0] : parameters.encrypted));
+        if (parameters.key != null) {
+            n.put("key", Base64.getEncoder().encodeToString(parameters.key));
+        }
+        return callFile(n, ChatNative.INSTANCE::chat_xdk_decrypt_file_with_key);
+    }
+
+    /**
      * Sign application data with the signing key. Throws {@link ChatXdkException} for an
      * event signature payload or a public key, which only the SDK signs.
      *

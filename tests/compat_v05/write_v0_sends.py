@@ -1,4 +1,5 @@
-"""Write the current SDK's sends with every feature switch off, for verify_with_v05.py.
+"""Write the current SDK's sends with every feature switch off, and files it
+encrypts under the conversation key, for verify_with_v05.py.
 
 Runs against the in-repo package (PYTHONPATH=crates/pyo3/python with the built
 extension installed, as in CI). Every send must be v0, the 0.5.x format.
@@ -15,6 +16,7 @@ from chat_xdk import (
     Chat,
     EncryptEditParams,
     EncryptFileParams,
+    EncryptFileWithKeyParams,
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
@@ -118,6 +120,11 @@ def main(out_path):
             conversation_key_version=KEY_VERSION,
         )
     )
+    files_with_key = {
+        "empty": b"",
+        "avatar": b"\xff\xd8\xff\xe0" + bytes(i % 251 for i in range(3044)) + b"\xff\xd9",
+        "two_frames": bytes(range(256)) * 8,
+    }
     out = {
         "conversation_key_b64": b64(CONVERSATION_KEY),
         "conversation_key_version": KEY_VERSION,
@@ -132,6 +139,13 @@ def main(out_path):
             {"kind": kind, "expected": expected, "event_b64": payload.event_b64} for kind, expected, payload in sends
         ],
         "file": {"plaintext_b64": b64(file_plaintext), "ciphertext_b64": b64(file_ciphertext)},
+        "files_with_key": {
+            name: {
+                "plaintext_b64": b64(plaintext),
+                "ciphertext_b64": b64(chat.encrypt_file_with_key(EncryptFileWithKeyParams(plaintext, CONVERSATION_KEY))),
+            }
+            for name, plaintext in files_with_key.items()
+        },
     }
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)

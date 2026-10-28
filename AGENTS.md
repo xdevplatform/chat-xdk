@@ -63,7 +63,9 @@ When you add or change SDK behavior:
 Keep the public surface small and uniform. The flow every binding exposes:
 key management (`import`/`export`, `setup`/`unlock`), conversation keys
 (`prepareConversationKeyChange` / `decryptConversationKey`), `encryptMessage`/reply,
-the file calls (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`),
+the file calls (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`
+for a message's files, `encryptFileWithKey` / `decryptFileWithKey` for a file
+under a key the app holds, such as a group avatar),
 and two decrypt paths whose contracts are **identical across bindings**:
 
 - `decryptEvents({ events, signingKeys })` — batch (initial load / pagination).

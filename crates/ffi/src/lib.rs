@@ -24,15 +24,15 @@ use chat_xdk_core::error::{ErrorKind, SdkError};
 use chat_xdk_core::keys::juicebox::JuiceboxConfig;
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
-    DecryptFileParams, EncryptEditParams, EncryptFileParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, FileDecryptorParams,
-    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
-    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
-    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
-    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, PublicKeyInput, QuickReply, ScreenCaptureChange, ScreenCaptureParams,
-    SetIdentityParams, SigningKeyEntry,
+    DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams,
+    EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    EntityDescriptor, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
+    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
+    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
+    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
+    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, PublicKeyInput,
+    QuickReply, ScreenCaptureChange, ScreenCaptureParams, SetIdentityParams, SigningKeyEntry,
 };
 
 /// The version of this C ABI: the functions and the shapes of their

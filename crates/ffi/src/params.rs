@@ -394,6 +394,18 @@ pub(crate) struct FfiDecryptFileParams {
     pub(crate) media_hash_key: String,
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct FfiEncryptFileWithKeyParams {
+    pub(crate) file: String,
+    pub(crate) key: String,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct FfiDecryptFileWithKeyParams {
+    pub(crate) encrypted: String,
+    pub(crate) key: String,
+}
+
 /// The params of the file encryptor and decryptor.
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiFileParams {

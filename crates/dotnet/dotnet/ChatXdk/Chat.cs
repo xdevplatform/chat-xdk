@@ -1032,6 +1032,51 @@ namespace ChatXdk
                 ["media_hash_key"] = mediaHashKey,
             });
 
+        /// <summary>
+        /// Encrypt a file under a key you already hold, rather than from a message: a group's
+        /// avatar image under the conversation key whose version is signed next to the avatar
+        /// URL, or an app's own files at rest. The file is encrypted under the key itself, in the
+        /// format <see cref="EncryptFile"/> writes; its size is
+        /// <see cref="ChatXdkUtilities.EncryptedFileSize"/>.
+        /// </summary>
+        /// <returns>Encrypted bytes.</returns>
+        /// <exception cref="ChatXdkException">
+        /// <see cref="ChatXdkErrorKind.InvalidInput"/>: the key is not 32 bytes.
+        /// </exception>
+        public byte[] EncryptFileWithKey(EncryptFileWithKeyParams parameters)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = ParamsJson(new Dictionary<string, object?>
+            {
+                ["file"] = Convert.ToBase64String(parameters.File ?? Array.Empty<byte>()),
+                ["key"] = parameters.Key is null ? null : Convert.ToBase64String(parameters.Key),
+            });
+            return CallFileEndpoint(json, NativeMethods.chat_xdk_encrypt_file_with_key);
+        }
+
+        /// <summary>
+        /// Decrypt a file encrypted under a key you already hold, as downloaded, such as a group's
+        /// avatar image under the conversation key for the version its avatar change names.
+        /// </summary>
+        /// <returns>Decrypted bytes.</returns>
+        /// <exception cref="ChatXdkException">
+        /// <see cref="ChatXdkErrorKind.InvalidInput"/>: the key is not 32 bytes;
+        /// <see cref="ChatXdkErrorKind.Decryption"/>: <see cref="DecryptFileWithKeyParams.Encrypted"/>
+        /// is not the complete file encrypted under the key.
+        /// </exception>
+        public byte[] DecryptFileWithKey(DecryptFileWithKeyParams parameters)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(parameters);
+            var json = ParamsJson(new Dictionary<string, object?>
+            {
+                ["encrypted"] = Convert.ToBase64String(parameters.Encrypted ?? Array.Empty<byte>()),
+                ["key"] = parameters.Key is null ? null : Convert.ToBase64String(parameters.Key),
+            });
+            return CallFileEndpoint(json, NativeMethods.chat_xdk_decrypt_file_with_key);
+        }
+
         // Signing / verification
 
         /// <summary>

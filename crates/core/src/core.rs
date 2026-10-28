@@ -15,10 +15,10 @@ use crate::keys::conversation_keys;
 use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
-    EncryptEditParams, EncryptFileParams, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
-    SetIdentityParams,
+    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
+    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, SetIdentityParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};
@@ -1828,6 +1828,9 @@ mod send_version_tests;
 
 #[cfg(test)]
 mod compat_v05_tests;
+
+#[cfg(test)]
+mod file_with_key_tests;
 
 #[cfg(test)]
 mod sign_tests;
