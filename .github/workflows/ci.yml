@@ -201,9 +201,10 @@ jobs:
 
   compat-v05:
     # Hard gate for 0.7.0: the released 0.5.x packages read the v0 sends this
-    # tree makes with every feature switch off. The other direction (this tree
-    # reads 0.5.x sends, byte for byte on the wire) runs in `cargo test`
-    # against tests/fixtures/compat_v0_5_*.json.
+    # tree makes with every feature switch off, and open the files it encrypts
+    # under a key. The other direction (this tree reads 0.5.x sends, byte for
+    # byte on the wire, and their files) runs in `cargo test` against
+    # tests/fixtures/compat_v0_5_*.json.
     name: compat with released chatxdk ${{ matrix.version }}
     runs-on: ubuntu-latest
     strategy:
