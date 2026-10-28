@@ -2021,9 +2021,8 @@ class TestApiShapes(unittest.TestCase):
 
     def test_files_under_a_key_are_libsodium_secretstream_files(self):
         """X Android encrypts a group's avatar under the raw conversation key
-        with libsodium's crypto_secretstream_xchacha20poly1305 (x-android
-        LibsodiumEncryption.kt, ConversationManagerImpl.kt): a header, then
-        1,024-byte chunks with no additional data, the last tagged final.
+        with libsodium's crypto_secretstream_xchacha20poly1305: a header,
+        then 1,024-byte chunks with no additional data, the last tagged final.
         Files under a key open with libsodium itself, and files libsodium
         writes that way open with decrypt_file_with_key."""
         try:

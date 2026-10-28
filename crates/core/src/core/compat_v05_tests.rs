@@ -116,9 +116,7 @@ fn sends_from_0_5_decrypt_and_verify() {
 /// The files 0.5.0 and 0.5.2 encrypted with `encrypt_stream` open with
 /// `decrypt_file_with_key` under the same key: a text file of three frames,
 /// a file shaped like a group avatar, and an empty file. X Android encrypts
-/// group avatars with the raw conversation key in this format (x-android
-/// LibsodiumEncryption.kt `encryptStream`, called from
-/// ConversationManagerImpl.kt `uploadAvatar`).
+/// group avatars in this format under the raw conversation key.
 #[test]
 fn files_from_0_5_encrypt_stream_open_with_decrypt_file_with_key() {
     let core = ChatCore::new();

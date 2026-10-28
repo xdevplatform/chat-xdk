@@ -91,11 +91,10 @@ fn files_cross_with_the_crypto_module_functions() {
     assert_eq!(opened, file);
 }
 
-/// X Android encrypts a group avatar with the raw conversation key in this
-/// format (x-android LibsodiumEncryption.kt `encryptStream`, called from
-/// ConversationManagerImpl.kt `uploadAvatar`), under the key whose version
-/// its avatar change signs. The image here is the avatar-shaped file of the
-/// 0.5.x fixtures: JPEG markers around 3,028 filler bytes.
+/// X Android encrypts a group avatar in this format under the raw
+/// conversation key whose version its avatar change signs. The image here is
+/// the avatar-shaped file of the 0.5.x fixtures: JPEG markers around 3,028
+/// filler bytes.
 #[test]
 fn an_avatar_under_the_conversation_key_round_trips() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
