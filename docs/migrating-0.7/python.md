@@ -1451,11 +1451,11 @@ A received `AvatarChanged` change holds `new_avatar_url` as sent and its
 ```python
 # 0.7.0
 change = group_change["change"]
-if change["change_type"] == "AvatarChanged":
-    show_avatar(change["new_avatar_url"], change["conversation_key_version"])
+if change["change_type"] == "AvatarChanged" and change["conversation_key_version"]:
     image = chat.decrypt_file_with_key(
         DecryptFileWithKeyParams(downloaded, keys[change["conversation_key_version"]])
     )
+    show_avatar(image)
 ```
 
 ### Admins, invites, join requests, message TTL and screen capture

@@ -1539,10 +1539,10 @@ var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "AvatarChanged")
 {
     var version = change.GetProperty("conversation_key_version").GetString();
-    ShowAvatar(change.GetProperty("new_avatar_url").GetString()!, version);
     if (version is not null)
     {
         var image = chat.DecryptFileWithKey(new DecryptFileWithKeyParams(downloaded, keys[version]));
+        ShowAvatar(image);
     }
 }
 ```

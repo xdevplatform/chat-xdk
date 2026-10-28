@@ -1531,10 +1531,10 @@ its `conversation_key_version`: download the image and decrypt it with
 
 ```rust
 // 0.7.0
-if let GroupChange::AvatarChanged { new_avatar_url, conversation_key_version, .. } = &group_change.change {
-    show_avatar(new_avatar_url, conversation_key_version.as_deref());
+if let GroupChange::AvatarChanged { conversation_key_version, .. } = &group_change.change {
     if let Some(key) = conversation_key_version.as_deref().and_then(|version| keys.get(version)) {
         let image = chat.decrypt_file_with_key(&DecryptFileWithKeyParams::new(downloaded, key.to_bytes()))?;
+        show_avatar(&image);
     }
 }
 ```

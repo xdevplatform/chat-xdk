@@ -1503,11 +1503,9 @@ received `avatarChanged` change holds `newAvatarUrl` as sent and its
 ```js
 // 0.7.0
 const change = groupChange.change;
-if (change.changeType === 'avatarChanged') {
-  showAvatar(change.newAvatarUrl, change.conversationKeyVersion);
-  if (change.conversationKeyVersion) {
-    const image = chat.decryptFileWithKey({ encrypted: downloaded, key: keys[change.conversationKeyVersion] });
-  }
+if (change.changeType === 'avatarChanged' && change.conversationKeyVersion) {
+  const image = chat.decryptFileWithKey({ encrypted: downloaded, key: keys[change.conversationKeyVersion] });
+  showAvatar(image);
 }
 ```
 

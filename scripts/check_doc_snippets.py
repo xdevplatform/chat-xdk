@@ -109,7 +109,7 @@ fn photo_attachment(_media_hash_key: &str) -> AttachmentDescriptor { unimplement
 fn show_edit(_sequence_id: &str, _text: &str) {}
 fn show_title(_title: &str) {}
 fn show_description(_description: &str) {}
-fn show_avatar(_avatar_url: &str, _conversation_key_version: Option<&str>) {}
+fn show_avatar(_image: &[u8]) {}
 fn handle(_event: &Event) {}
 fn log_skipped(_event_b64: &str, _err: &SdkError) {}
 fn store_conversation_key(_conversation_id: &str, _version: &str, _key: &crypto::keys::XChatConversationKey) {}
@@ -382,7 +382,7 @@ declare function photoAttachment(mediaHashKey: string): AttachmentDescriptor;
 declare function showEdit(sequenceId: string, text: string): void;
 declare function showTitle(title: string): void;
 declare function showDescription(description: string): void;
-declare function showAvatar(avatarUrl: string, conversationKeyVersion: string | null | undefined): void;
+declare function showAvatar(image: Uint8Array): void;
 declare function showGuessesLeft(guessesLeft: number | null): void;
 declare function handle(event: Event): void;
 declare function logSkipped(eventB64: string, err: unknown): void;
@@ -533,7 +533,7 @@ func showEvent(event chatxdk.Event)                                   {}
 func showEdit(sequenceID, text string)                                {}
 func showTitle(title string)                                          {}
 func showDescription(description string)                              {}
-func showAvatar(avatarURL string, conversationKeyVersion *string)     {}
+func showAvatar(image []byte)                                         {}
 func showGuessesLeft(n int, ok bool)                                  {}
 func handle(event *chatxdk.Event)                                     {}
 func logSkipped(eventB64 string, err error)                           {}
@@ -615,7 +615,7 @@ class Snippets {
     static void showEdit(String sequenceId, String text) {}
     static void showTitle(String title) {}
     static void showDescription(String description) {}
-    static void showAvatar(String avatarUrl, String conversationKeyVersion) {}
+    static void showAvatar(byte[] image) {}
     static void showGuessesLeft(Integer guessesLeft) {}
     static void handle(JsonNode event) {}
     static void logSkipped(String eventB64, Exception error) {}
@@ -683,7 +683,7 @@ public class Snippets
     static void ShowEdit(string? sequenceId, string? text) {}
     static void ShowTitle(string title) {}
     static void ShowDescription(string description) {}
-    static void ShowAvatar(string avatarUrl, string? conversationKeyVersion) {}
+    static void ShowAvatar(byte[] image) {}
     static void ShowGuessesLeft(int? guessesLeft) {}
     static void Handle(JsonElement evt) {}
     static void LogSkipped(string eventB64, Exception error) {}

@@ -1627,15 +1627,12 @@ var change struct {
 	ConversationKeyVersion *string `json:"conversation_key_version"`
 }
 must(json.Unmarshal(groupChange.Change, &change))
-var image []byte
-if change.ChangeType == "AvatarChanged" {
-	showAvatar(change.NewAvatarURL, change.ConversationKeyVersion)
-	if change.ConversationKeyVersion != nil {
-		image, err = chat.DecryptFileWithKey(chatxdk.DecryptFileWithKeyParams{
-			Encrypted: downloaded, Key: keys[*change.ConversationKeyVersion],
-		})
-		must(err)
-	}
+if change.ChangeType == "AvatarChanged" && change.ConversationKeyVersion != nil {
+	image, err := chat.DecryptFileWithKey(chatxdk.DecryptFileWithKeyParams{
+		Encrypted: downloaded, Key: keys[*change.ConversationKeyVersion],
+	})
+	must(err)
+	showAvatar(image)
 }
 ```
 

@@ -1479,10 +1479,10 @@ received `AvatarChanged` change holds `new_avatar_url` as sent and its
 ```java
 // 0.7.0
 JsonNode change = groupChange.path("change");
-if (change.path("change_type").asText().equals("AvatarChanged")) {
-    String version = change.path("conversation_key_version").asText();
-    showAvatar(change.path("new_avatar_url").asText(), version);
+if (change.path("change_type").asText().equals("AvatarChanged") && change.hasNonNull("conversation_key_version")) {
+    String version = change.get("conversation_key_version").asText();
     byte[] image = chat.decryptFileWithKey(new DecryptFileWithKeyParams(downloaded, keys.get(version)));
+    showAvatar(image);
 }
 ```
 
