@@ -50,6 +50,16 @@ class ChatTest {
                 Files.readString(dir.resolve("tests/fixtures/sdk_vectors.json"), StandardCharsets.UTF_8));
     }
 
+    private static JsonNode loadFixture(String name) throws Exception {
+        Path dir = Paths.get(System.getProperty("user.dir")).toAbsolutePath();
+        while (dir != null && !Files.exists(dir.resolve("tests/fixtures/" + name))) {
+            dir = dir.getParent();
+        }
+        assertNotNull(dir, "tests/fixtures/" + name + " not found above " + System.getProperty("user.dir"));
+        return new ObjectMapper().readTree(
+                Files.readString(dir.resolve("tests/fixtures/" + name), StandardCharsets.UTF_8));
+    }
+
     private static byte[] b64(JsonNode vectors, String field) {
         return Base64.getDecoder().decode(vectors.get(field).asText());
     }
@@ -2010,6 +2020,64 @@ class ChatTest {
                 ChatXdkException e = assertThrows(ChatXdkException.class, truncated::finish);
                 assertTrue(e.getMessage().contains("truncated"), e.getMessage());
             }
+        }
+    }
+
+    @Test
+    void fileWithKeyRoundTripsAtEveryFrameCount() throws Exception {
+        byte[] key = b64(loadVectors(), "conversation_key_b64");
+        try (Chat chat = new Chat()) {
+            for (int size : new int[] {0, 1, 1023, 1024, 1025, 3050}) {
+                byte[] file = new byte[size];
+                for (int i = 0; i < size; i++) {
+                    file[i] = (byte) (i % 251);
+                }
+                byte[] encrypted = chat.encryptFileWithKey(new EncryptFileWithKeyParams(file, key));
+                assertEquals(ChatXdkUtilities.encryptedFileSize(size), encrypted.length);
+                assertArrayEquals(file, chat.decryptFileWithKey(new DecryptFileWithKeyParams(encrypted, key)));
+            }
+        }
+    }
+
+    @Test
+    void fileWithKeyOpensTheFiles05EncryptStreamEncrypted() throws Exception {
+        try (Chat chat = new Chat()) {
+            for (String version : new String[] {"0_5_0", "0_5_2"}) {
+                JsonNode fixture = loadFixture("compat_v" + version + ".json");
+                byte[] key = b64(fixture, "conversation_key_b64");
+                for (String name : new String[] {"file", "avatar_file", "empty_file"}) {
+                    JsonNode entry = fixture.get(name);
+                    assertArrayEquals(
+                            b64(entry, "plaintext_b64"),
+                            chat.decryptFileWithKey(new DecryptFileWithKeyParams(b64(entry, "ciphertext_b64"), key)),
+                            version + " " + name);
+                }
+            }
+        }
+    }
+
+    @Test
+    void fileWithKeyErrorsCarryTheirKind() throws Exception {
+        byte[] key = b64(loadVectors(), "conversation_key_b64");
+        try (Chat chat = new Chat()) {
+            byte[] encrypted = chat.encryptFileWithKey(new EncryptFileWithKeyParams(new byte[1800], key));
+
+            ChatXdkException shortKey = assertThrows(ChatXdkException.class, () -> chat.encryptFileWithKey(
+                    new EncryptFileWithKeyParams(new byte[] {1}, Arrays.copyOf(key, 31))));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, shortKey.getKind());
+            assertTrue(shortKey.getMessage().contains("expected 32 bytes, got 31"), shortKey.getMessage());
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, assertThrows(ChatXdkException.class,
+                    () -> chat.decryptFileWithKey(new DecryptFileWithKeyParams(encrypted, null))).getKind());
+
+            for (byte[] bad : new byte[][] {
+                    Arrays.copyOf(encrypted, encrypted.length - 1),
+                    Arrays.copyOf(encrypted, 24 + 1041),
+                    Arrays.copyOf(encrypted, 10)}) {
+                assertEquals(ChatXdkException.Kind.DECRYPTION, assertThrows(ChatXdkException.class,
+                        () -> chat.decryptFileWithKey(new DecryptFileWithKeyParams(bad, key))).getKind());
+            }
+            assertEquals(ChatXdkException.Kind.DECRYPTION, assertThrows(ChatXdkException.class,
+                    () -> chat.decryptFileWithKey(new DecryptFileWithKeyParams(encrypted, new byte[32]))).getKind());
         }
     }
 

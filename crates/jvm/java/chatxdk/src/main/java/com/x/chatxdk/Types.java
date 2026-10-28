@@ -1425,6 +1425,54 @@ public final class Types {
     }
 
     /**
+     * Parameters for {@link Chat#encryptFileWithKey}: a file under a key you already hold rather
+     * than a file attached to a message, such as a group's avatar image under the conversation key
+     * whose version is signed next to the avatar URL, or an app's own files at rest.
+     */
+    public static final class EncryptFileWithKeyParams {
+        /** The file to encrypt. */
+        public final byte[] file;
+
+        /** The raw 32-byte key to encrypt the file under, such as a conversation key. */
+        public final byte[] key;
+
+        /**
+         * Create params with the required fields.
+         *
+         * @param file The file to encrypt.
+         * @param key The raw 32-byte key to encrypt the file under.
+         */
+        public EncryptFileWithKeyParams(byte[] file, byte[] key) {
+            this.file = file;
+            this.key = key;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#decryptFileWithKey}: a file encrypted under a key you already
+     * hold, such as a group's avatar image under the conversation key for the version its avatar
+     * change names.
+     */
+    public static final class DecryptFileWithKeyParams {
+        /** The encrypted file, as downloaded. */
+        public final byte[] encrypted;
+
+        /** The raw 32-byte key the file was encrypted under. */
+        public final byte[] key;
+
+        /**
+         * Create params with the required fields.
+         *
+         * @param encrypted The encrypted file, as downloaded.
+         * @param key The raw 32-byte key the file was encrypted under.
+         */
+        public DecryptFileWithKeyParams(byte[] encrypted, byte[] key) {
+            this.encrypted = encrypted;
+            this.key = key;
+        }
+    }
+
+    /**
      * Parameters for {@link Chat#prepareMessageDelete}.
      *
      * <p>A delete is a signed plaintext event, not an encrypted message, so no
