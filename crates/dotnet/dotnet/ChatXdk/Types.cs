@@ -1287,6 +1287,51 @@ namespace ChatXdk
     }
 
     /// <summary>
+    /// Parameters for <see cref="Chat.EncryptFileWithKey"/>: a file under a key you already hold
+    /// rather than a file attached to a message, such as a group's avatar image under the
+    /// conversation key whose version is signed next to the avatar URL, or an app's own files at
+    /// rest.
+    /// </summary>
+    public sealed class EncryptFileWithKeyParams
+    {
+        /// <summary>Create params with the required fields.</summary>
+        /// <param name="file">The file to encrypt.</param>
+        /// <param name="key">The raw 32-byte key to encrypt the file under, such as a conversation key.</param>
+        public EncryptFileWithKeyParams(byte[] file, byte[] key)
+        {
+            File = file;
+            Key = key;
+        }
+
+        /// <summary>The file to encrypt.</summary>
+        public byte[] File { get; }
+        /// <summary>The raw 32-byte key to encrypt the file under.</summary>
+        public byte[] Key { get; }
+    }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.DecryptFileWithKey"/>: a file encrypted under a key you
+    /// already hold, such as a group's avatar image under the conversation key for the version
+    /// its avatar change names.
+    /// </summary>
+    public sealed class DecryptFileWithKeyParams
+    {
+        /// <summary>Create params with the required fields.</summary>
+        /// <param name="encrypted">The encrypted file, as downloaded.</param>
+        /// <param name="key">The raw 32-byte key the file was encrypted under.</param>
+        public DecryptFileWithKeyParams(byte[] encrypted, byte[] key)
+        {
+            Encrypted = encrypted;
+            Key = key;
+        }
+
+        /// <summary>The encrypted file, as downloaded.</summary>
+        public byte[] Encrypted { get; }
+        /// <summary>The raw 32-byte key the file was encrypted under.</summary>
+        public byte[] Key { get; }
+    }
+
+    /// <summary>
     /// Parameters for <see cref="Chat.PrepareMessageDelete"/>.
     /// A delete is a signed plaintext event, not an encrypted message, so no
     /// conversation key is involved: the result is an action signature the

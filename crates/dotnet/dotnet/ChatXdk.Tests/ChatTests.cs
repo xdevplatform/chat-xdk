@@ -119,6 +119,15 @@ namespace ChatXdk.Tests
             return JsonSerializer.Deserialize<SdkVectors>(json)!;
         }
 
+        private static JsonDocument LoadFixture(string name)
+        {
+            var dir = AppContext.BaseDirectory;
+            while (dir != null && !File.Exists(Path.Combine(dir, "tests", "fixtures", name)))
+                dir = Path.GetDirectoryName(dir);
+            Assert.NotNull(dir);
+            return JsonDocument.Parse(File.ReadAllText(Path.Combine(dir!, "tests", "fixtures", name)));
+        }
+
         /// <summary>
         /// Create a Chat that already has keys loaded (without Juicebox).
         /// </summary>
@@ -1338,6 +1347,61 @@ namespace ChatXdk.Tests
             truncated.Push(encrypted[..^4]);
             var ex = Assert.Throws<ChatXdkException>(() => truncated.Finish());
             Assert.Contains("truncated", ex.Message);
+        }
+
+        [Fact]
+        public void FileWithKey_RoundTripsAtEveryFrameCount()
+        {
+            var key = Convert.FromBase64String(LoadVectors().ConversationKeyB64);
+            using var chat = new Chat();
+            foreach (var size in new[] { 0, 1, 1023, 1024, 1025, 3050 })
+            {
+                var file = Enumerable.Range(0, size).Select(i => (byte)(i % 251)).ToArray();
+                var encrypted = chat.EncryptFileWithKey(new EncryptFileWithKeyParams(file, key));
+                Assert.Equal(ChatXdkUtilities.EncryptedFileSize((ulong)size), (ulong)encrypted.Length);
+                Assert.Equal(file, chat.DecryptFileWithKey(new DecryptFileWithKeyParams(encrypted, key)));
+            }
+        }
+
+        [Fact]
+        public void FileWithKey_OpensTheFiles05EncryptStreamEncrypted()
+        {
+            using var chat = new Chat();
+            foreach (var version in new[] { "0_5_0", "0_5_2" })
+            {
+                using var fixture = LoadFixture($"compat_v{version}.json");
+                var root = fixture.RootElement;
+                var key = Convert.FromBase64String(root.GetProperty("conversation_key_b64").GetString()!);
+                foreach (var name in new[] { "file", "avatar_file", "empty_file" })
+                {
+                    var entry = root.GetProperty(name);
+                    Assert.Equal(
+                        Convert.FromBase64String(entry.GetProperty("plaintext_b64").GetString()!),
+                        chat.DecryptFileWithKey(new DecryptFileWithKeyParams(
+                            Convert.FromBase64String(entry.GetProperty("ciphertext_b64").GetString()!), key)));
+                }
+            }
+        }
+
+        [Fact]
+        public void FileWithKey_ErrorsCarryTheirKind()
+        {
+            var key = Convert.FromBase64String(LoadVectors().ConversationKeyB64);
+            using var chat = new Chat();
+            var encrypted = chat.EncryptFileWithKey(new EncryptFileWithKeyParams(new byte[1800], key));
+
+            var shortKey = Assert.Throws<ChatXdkException>(
+                () => chat.EncryptFileWithKey(new EncryptFileWithKeyParams(new byte[] { 1 }, key[..31])));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, shortKey.Kind);
+            Assert.Contains("expected 32 bytes, got 31", shortKey.Message);
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, Assert.Throws<ChatXdkException>(
+                () => chat.DecryptFileWithKey(new DecryptFileWithKeyParams(encrypted, null!))).Kind);
+
+            foreach (var bad in new[] { encrypted[..^1], encrypted[..(24 + 1041)], encrypted[..10] })
+                Assert.Equal(ChatXdkErrorKind.Decryption, Assert.Throws<ChatXdkException>(
+                    () => chat.DecryptFileWithKey(new DecryptFileWithKeyParams(bad, key))).Kind);
+            Assert.Equal(ChatXdkErrorKind.Decryption, Assert.Throws<ChatXdkException>(
+                () => chat.DecryptFileWithKey(new DecryptFileWithKeyParams(encrypted, new byte[32]))).Kind);
         }
 
         [Fact]
