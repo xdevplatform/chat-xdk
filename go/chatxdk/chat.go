@@ -765,6 +765,11 @@ func (c *Chat) DecryptFile(params DecryptFileParams) ([]byte, error) {
 // file is encrypted under the key itself, in the format EncryptFile writes;
 // its size is EncryptedFileSize(len(File)). A key that is not 32 bytes is an
 // ErrorKindInvalidInput error.
+//
+//	encrypted, err := chat.EncryptFileWithKey(chatxdk.EncryptFileWithKeyParams{
+//	    File: image,
+//	    Key:  conversationKey,
+//	})
 func (c *Chat) EncryptFileWithKey(params EncryptFileWithKeyParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	params.File = orEmptyBytes(params.File)
@@ -785,6 +790,11 @@ func (c *Chat) EncryptFileWithKey(params EncryptFileWithKeyParams) ([]byte, erro
 // the version its avatar change names. A key that is not 32 bytes is an
 // ErrorKindInvalidInput error; bytes that are not the complete file encrypted
 // under it are an ErrorKindDecryption error.
+//
+//	image, err := chat.DecryptFileWithKey(chatxdk.DecryptFileWithKeyParams{
+//	    Encrypted: downloaded,
+//	    Key:       conversationKey,
+//	})
 func (c *Chat) DecryptFileWithKey(params DecryptFileWithKeyParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	params.Encrypted = orEmptyBytes(params.Encrypted)
