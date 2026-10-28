@@ -1208,6 +1208,89 @@ func TestEncryptFileDecryptFileRoundtrip(t *testing.T) {
 	}
 }
 
+// TestFileWithKeyRoundtrip covers files under a key the caller holds: a round
+// trip at every frame count, the files the released 0.5.0 and 0.5.2 encrypted
+// with encrypt_stream (a text file, an avatar-shaped file and an empty file),
+// and the error kinds.
+func TestFileWithKeyRoundtrip(t *testing.T) {
+	chat := New()
+	defer chat.Close()
+	key := bytes.Repeat([]byte{7}, 32)
+	for _, size := range []int{0, 1, 1024, 3050} {
+		file := make([]byte, size)
+		for i := range file {
+			file[i] = byte(i % 251)
+		}
+		encrypted, err := chat.EncryptFileWithKey(EncryptFileWithKeyParams{File: file, Key: key})
+		if err != nil {
+			t.Fatalf("size %d: %v", size, err)
+		}
+		if want, _ := EncryptedFileSize(uint64(size)); uint64(len(encrypted)) != want {
+			t.Errorf("size %d: encrypted %d bytes, want %d", size, len(encrypted), want)
+		}
+		decrypted, err := chat.DecryptFileWithKey(DecryptFileWithKeyParams{Encrypted: encrypted, Key: key})
+		if err != nil || !bytes.Equal(decrypted, file) {
+			t.Errorf("size %d: roundtrip = %x, %v", size, decrypted, err)
+		}
+	}
+
+	_, thisFile, _, _ := runtime.Caller(0)
+	for _, version := range []string{"0_5_0", "0_5_2"} {
+		path := filepath.Join(filepath.Dir(thisFile), "..", "..", "tests", "fixtures", "compat_v"+version+".json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fixture map[string]any
+		if err := json.Unmarshal(data, &fixture); err != nil {
+			t.Fatal(err)
+		}
+		decode := func(field any) []byte {
+			b, err := base64.StdEncoding.DecodeString(field.(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+		conversationKey := decode(fixture["conversation_key_b64"])
+		for _, name := range []string{"file", "avatar_file", "empty_file"} {
+			entry := fixture[name].(map[string]any)
+			opened, err := chat.DecryptFileWithKey(DecryptFileWithKeyParams{
+				Encrypted: decode(entry["ciphertext_b64"]),
+				Key:       conversationKey,
+			})
+			if err != nil || !bytes.Equal(opened, decode(entry["plaintext_b64"])) {
+				t.Errorf("%s %s: opened %d bytes, %v", version, name, len(opened), err)
+			}
+		}
+	}
+
+	kindOf := func(err error) ErrorKind {
+		t.Helper()
+		var chatErr *Error
+		if !errors.As(err, &chatErr) {
+			t.Fatalf("expected an *Error, got %v", err)
+		}
+		return chatErr.Kind
+	}
+	encrypted, err := chat.EncryptFileWithKey(EncryptFileWithKeyParams{File: []byte("avatar"), Key: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chat.EncryptFileWithKey(EncryptFileWithKeyParams{File: []byte("avatar"), Key: key[:31]}); kindOf(err) != ErrorKindInvalidInput {
+		t.Errorf("a 31-byte key: %v", err)
+	}
+	if _, err := chat.DecryptFileWithKey(DecryptFileWithKeyParams{Encrypted: encrypted, Key: nil}); kindOf(err) != ErrorKindInvalidInput {
+		t.Errorf("no key: %v", err)
+	}
+	if _, err := chat.DecryptFileWithKey(DecryptFileWithKeyParams{Encrypted: encrypted[:len(encrypted)-1], Key: key}); kindOf(err) != ErrorKindDecryption {
+		t.Errorf("a truncated file: %v", err)
+	}
+	if _, err := chat.DecryptFileWithKey(DecryptFileWithKeyParams{Encrypted: encrypted, Key: bytes.Repeat([]byte{9}, 32)}); kindOf(err) != ErrorKindDecryption {
+		t.Errorf("another key: %v", err)
+	}
+}
+
 func TestFileEncryptorDecryptorRoundtrip(t *testing.T) {
 	v := loadVectors(t)
 	chat := mediaSender(t, v)

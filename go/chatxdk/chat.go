@@ -759,6 +759,47 @@ func (c *Chat) DecryptFile(params DecryptFileParams) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(outB64)
 }
 
+// EncryptFileWithKey encrypts a file under a key you already hold, rather
+// than from a message: a group's avatar image under the conversation key whose
+// version is signed next to the avatar URL, or an app's own files at rest. The
+// file is encrypted under the key itself, in the format EncryptFile writes;
+// its size is EncryptedFileSize(len(File)). A key that is not 32 bytes is an
+// ErrorKindInvalidInput error.
+func (c *Chat) EncryptFileWithKey(params EncryptFileWithKeyParams) ([]byte, error) {
+	defer runtime.KeepAlive(c)
+	params.File = orEmptyBytes(params.File)
+	params.Key = orEmptyBytes(params.Key)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	outB64, err := ffiEncryptFileWithKey(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(outB64)
+}
+
+// DecryptFileWithKey decrypts a file encrypted under a key you already hold,
+// as downloaded, such as a group's avatar image under the conversation key for
+// the version its avatar change names. A key that is not 32 bytes is an
+// ErrorKindInvalidInput error; bytes that are not the complete file encrypted
+// under it are an ErrorKindDecryption error.
+func (c *Chat) DecryptFileWithKey(params DecryptFileWithKeyParams) ([]byte, error) {
+	defer runtime.KeepAlive(c)
+	params.Encrypted = orEmptyBytes(params.Encrypted)
+	params.Key = orEmptyBytes(params.Key)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	outB64, err := ffiDecryptFileWithKey(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(outB64)
+}
+
 // FileEncryptor is an incremental encryptor for one file of an outgoing
 // message.
 //

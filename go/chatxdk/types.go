@@ -703,6 +703,26 @@ type FileDecryptorParams struct {
 	MediaHashKey     string            `json:"media_hash_key"`
 }
 
+// EncryptFileWithKeyParams are the parameters for EncryptFileWithKey: a file
+// under a key you already hold rather than a file attached to a message, such
+// as a group's avatar image under the conversation key whose version is signed
+// next to the avatar URL, or an app's own files at rest.
+type EncryptFileWithKeyParams struct {
+	// File is the file to encrypt.
+	File []byte `json:"file"`
+	// Key is the raw 32-byte key to encrypt the file under, such as a
+	// conversation key.
+	Key []byte `json:"key"`
+}
+
+// DecryptFileWithKeyParams are the parameters for DecryptFileWithKey.
+type DecryptFileWithKeyParams struct {
+	// Encrypted is the encrypted file, as downloaded.
+	Encrypted []byte `json:"encrypted"`
+	// Key is the raw 32-byte key the file was encrypted under.
+	Key []byte `json:"key"`
+}
+
 // ActionSignature authenticates a conversation key change, group change,
 // message delete, or read receipt. It is shaped as an entry of a request's
 // action_signatures: the signature is nested under message_event_signature.
