@@ -517,6 +517,8 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<FileEncryptorParams>()?;
     m.add_class::<DecryptFileParams>()?;
     m.add_class::<FileDecryptorParams>()?;
+    m.add_class::<EncryptFileWithKeyParams>()?;
+    m.add_class::<DecryptFileWithKeyParams>()?;
 
     // Utility functions
     m.add_function(wrap_pyfunction!(encrypted_file_size, m)?)?;

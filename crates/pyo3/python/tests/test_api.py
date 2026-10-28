@@ -237,6 +237,8 @@ class TestParams(unittest.TestCase):
             "FileEncryptorParams",
             "DecryptFileParams",
             "FileDecryptorParams",
+            "EncryptFileWithKeyParams",
+            "DecryptFileWithKeyParams",
         ):
             self.assertIn(name, chat_xdk.__all__)
             self.assertTrue(isinstance(getattr(chat_xdk, name), type), name)
@@ -279,8 +281,10 @@ class TestParams(unittest.TestCase):
             DecryptEventParams,
             DecryptEventsParams,
             DecryptFileParams,
+            DecryptFileWithKeyParams,
             EncryptEditParams,
             EncryptFileParams,
+            EncryptFileWithKeyParams,
             EncryptMessageParams,
             EncryptReactionParams,
             EncryptReplyParams,
@@ -318,6 +322,8 @@ class TestParams(unittest.TestCase):
             lambda: FileEncryptorParams("event"),
             lambda: DecryptFileParams(b"file", "event", {}),
             lambda: FileDecryptorParams("event", {}),
+            lambda: EncryptFileWithKeyParams(b"file"),
+            lambda: DecryptFileWithKeyParams(b"encrypted"),
         ]
         for make in missing_required:
             with self.assertRaises(TypeError):
@@ -1975,6 +1981,121 @@ class TestApiShapes(unittest.TestCase):
                     attachments=[_media("photo"), _media("photo")],
                 )
             )
+
+    def test_files_round_trip_under_a_key_the_caller_holds(self):
+        from chat_xdk import Chat, DecryptFileWithKeyParams, EncryptFileWithKeyParams, encrypted_file_size
+
+        chat = Chat()
+        key = bytes(range(32))
+        for size in (0, 1, 1023, 1024, 1025, 2048, 3050):
+            file = bytes(i % 251 for i in range(size))
+            encrypted = chat.encrypt_file_with_key(EncryptFileWithKeyParams(file=file, key=key))
+            self.assertEqual(len(encrypted), encrypted_file_size(size))
+            self.assertEqual(
+                chat.decrypt_file_with_key(DecryptFileWithKeyParams(encrypted=encrypted, key=key)),
+                file,
+            )
+        self.assertNotEqual(
+            chat.encrypt_file_with_key(EncryptFileWithKeyParams(b"avatar", key)),
+            chat.encrypt_file_with_key(EncryptFileWithKeyParams(b"avatar", key)),
+        )
+
+    def test_files_from_0_5_encrypt_stream_decrypt_under_their_key(self):
+        from chat_xdk import Chat, DecryptFileWithKeyParams
+
+        chat = Chat()
+        for version in ("0_5_0", "0_5_2"):
+            path = os.path.join(_repo_root(), "tests", "fixtures", f"compat_v{version}.json")
+            with open(path, "r", encoding="utf-8") as f:
+                fixture = json.load(f)
+            key = base64.b64decode(fixture["conversation_key_b64"])
+            for name in ("file", "avatar_file", "empty_file"):
+                with self.subTest(version=version, file=name):
+                    entry = fixture[name]
+                    self.assertEqual(
+                        chat.decrypt_file_with_key(
+                            DecryptFileWithKeyParams(base64.b64decode(entry["ciphertext_b64"]), key)
+                        ),
+                        base64.b64decode(entry["plaintext_b64"]),
+                    )
+
+    def test_files_under_a_key_are_libsodium_secretstream_files(self):
+        """X Android encrypts a group's avatar under the raw conversation key
+        with libsodium's crypto_secretstream_xchacha20poly1305 (x-android
+        LibsodiumEncryption.kt, ConversationManagerImpl.kt): a header, then
+        1,024-byte chunks with no additional data, the last tagged final.
+        Files under a key open with libsodium itself, and files libsodium
+        writes that way open with decrypt_file_with_key."""
+        try:
+            from nacl import bindings as sodium
+        except ImportError:
+            self.skipTest("PyNaCl (libsodium) is not installed")
+        from chat_xdk import Chat, DecryptFileWithKeyParams, EncryptFileWithKeyParams
+
+        with open(os.path.join(_repo_root(), "tests", "fixtures", "compat_v0_5_2.json"), encoding="utf-8") as f:
+            fixture = json.load(f)
+        key = base64.b64decode(fixture["conversation_key_b64"])
+        avatar = base64.b64decode(fixture["avatar_file"]["plaintext_b64"])
+        header_size = sodium.crypto_secretstream_xchacha20poly1305_HEADERBYTES
+        frame_size = 1024 + sodium.crypto_secretstream_xchacha20poly1305_ABYTES
+        message = sodium.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE
+        final = sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL
+
+        chat = Chat()
+        for file in (b"", b"x", bytes(1024), bytes(range(256)) * 8, avatar):
+            with self.subTest(size=len(file)):
+                encrypted = chat.encrypt_file_with_key(EncryptFileWithKeyParams(file, key))
+                state = sodium.crypto_secretstream_xchacha20poly1305_state()
+                sodium.crypto_secretstream_xchacha20poly1305_init_pull(state, encrypted[:header_size], key)
+                frames = [encrypted[i:i + frame_size] for i in range(header_size, len(encrypted), frame_size)]
+                pulled = [sodium.crypto_secretstream_xchacha20poly1305_pull(state, frame) for frame in frames]
+                self.assertEqual(b"".join(chunk for chunk, _ in pulled), file)
+                self.assertEqual([tag for _, tag in pulled], [message] * (len(frames) - 1) + [final] * bool(frames))
+                self.assertEqual(len(frames), -(-len(file) // 1024))
+
+                state = sodium.crypto_secretstream_xchacha20poly1305_state()
+                pushed = sodium.crypto_secretstream_xchacha20poly1305_init_push(state, key)
+                chunks = [file[i:i + 1024] for i in range(0, len(file), 1024)]
+                for i, chunk in enumerate(chunks):
+                    tag = final if i == len(chunks) - 1 else message
+                    pushed += sodium.crypto_secretstream_xchacha20poly1305_push(state, chunk, tag=tag)
+                self.assertEqual(chat.decrypt_file_with_key(DecryptFileWithKeyParams(pushed, key)), file)
+
+    def test_file_with_key_errors_name_the_key_or_the_file(self):
+        from chat_xdk import (
+            Chat,
+            DecryptFileWithKeyParams,
+            DecryptionError,
+            EncryptFileWithKeyParams,
+            InvalidInputError,
+        )
+
+        chat = Chat()
+        key = bytes(range(32))
+        encrypted = chat.encrypt_file_with_key(EncryptFileWithKeyParams(b"avatar" * 300, key))
+        for bad_key in (b"", bytes(16), bytes(31), bytes(33)):
+            with self.subTest(key_size=len(bad_key)):
+                with self.assertRaises(InvalidInputError) as ctx:
+                    chat.encrypt_file_with_key(EncryptFileWithKeyParams(b"avatar", bad_key))
+                self.assertEqual(ctx.exception.kind, "invalid_input")
+                self.assertIn(f"expected 32 bytes, got {len(bad_key)}", str(ctx.exception))
+                with self.assertRaises(InvalidInputError):
+                    chat.decrypt_file_with_key(DecryptFileWithKeyParams(encrypted, bad_key))
+
+        frame_end = 24 + 1041
+        for name, bad in (
+            ("another key", (encrypted, bytes(32))),
+            ("a flipped byte", (encrypted[:30] + bytes([encrypted[30] ^ 1]) + encrypted[31:], key)),
+            ("cut inside the last frame", (encrypted[:-1], key)),
+            ("cut at a frame boundary", (encrypted[:frame_end], key)),
+            ("cut inside the header", (encrypted[:10], key)),
+            ("trailing bytes", (encrypted + b"\0", key)),
+        ):
+            with self.subTest(name):
+                with self.assertRaises(DecryptionError) as ctx:
+                    chat.decrypt_file_with_key(DecryptFileWithKeyParams(*bad))
+                self.assertEqual(ctx.exception.kind, "decryption")
+                self.assertIn("pass all the encrypted bytes and the key they were encrypted under", str(ctx.exception))
 
     def test_verify_key_binding_valid_and_tampered(self):
         chat, v = self._unlocked_chat()

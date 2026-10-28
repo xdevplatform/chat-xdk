@@ -1699,3 +1699,57 @@ impl FileDecryptorParams {
         ))
     }
 }
+
+/// Parameters for ``Chat.encrypt_file_with_key``: a file under a key you
+/// already hold rather than a file attached to a message, such as a group's
+/// avatar image under the conversation key whose version is signed next to
+/// the avatar URL, or an app's own files at rest.
+#[pyclass(get_all, set_all)]
+pub struct EncryptFileWithKeyParams {
+    /// The file to encrypt (``bytes``).
+    pub(crate) file: Vec<u8>,
+    /// The raw 32-byte key to encrypt the file under (``bytes``), such as a
+    /// conversation key.
+    pub(crate) key: Vec<u8>,
+}
+
+#[pymethods]
+impl EncryptFileWithKeyParams {
+    #[new]
+    #[pyo3(signature = (file, key))]
+    pub(crate) fn new(file: Vec<u8>, key: Vec<u8>) -> Self {
+        Self { file, key }
+    }
+}
+
+impl EncryptFileWithKeyParams {
+    pub(crate) fn to_core(&self) -> chat_xdk_core::EncryptFileWithKeyParams {
+        chat_xdk_core::EncryptFileWithKeyParams::new(self.file.clone(), self.key.clone())
+    }
+}
+
+/// Parameters for ``Chat.decrypt_file_with_key``: a file encrypted under a
+/// key you already hold, such as a group's avatar image under the
+/// conversation key for the version its avatar change names.
+#[pyclass(get_all, set_all)]
+pub struct DecryptFileWithKeyParams {
+    /// The encrypted file, as downloaded (``bytes``).
+    pub(crate) encrypted: Vec<u8>,
+    /// The raw 32-byte key the file was encrypted under (``bytes``).
+    pub(crate) key: Vec<u8>,
+}
+
+#[pymethods]
+impl DecryptFileWithKeyParams {
+    #[new]
+    #[pyo3(signature = (encrypted, key))]
+    pub(crate) fn new(encrypted: Vec<u8>, key: Vec<u8>) -> Self {
+        Self { encrypted, key }
+    }
+}
+
+impl DecryptFileWithKeyParams {
+    pub(crate) fn to_core(&self) -> chat_xdk_core::DecryptFileWithKeyParams {
+        chat_xdk_core::DecryptFileWithKeyParams::new(self.encrypted.clone(), self.key.clone())
+    }
+}
