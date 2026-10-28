@@ -409,6 +409,8 @@ export class ChatWithJuicebox {
   fileEncryptor(params) { return this.#inner.fileEncryptor(params); }
   decryptFile(params) { return this.#inner.decryptFile(params); }
   fileDecryptor(params) { return this.#inner.fileDecryptor(params); }
+  encryptFileWithKey(params) { return this.#inner.encryptFileWithKey(params); }
+  decryptFileWithKey(params) { return this.#inner.decryptFileWithKey(params); }
   decrypt(ciphertext, key) { return this.#inner.decrypt(ciphertext, key); }
   prepareConversationKeyChange(params) { return keepKeyOutOfJson(this.#inner.prepareConversationKeyChange(params)); }
   prepareGroupMembersChange(params) { return keepKeyOutOfJson(this.#inner.prepareGroupMembersChange(params)); }

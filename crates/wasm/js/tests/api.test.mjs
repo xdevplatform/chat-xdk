@@ -446,6 +446,61 @@ async function main() {
     assert.throws(() => truncated.finish(), /truncated/);
   }
 
+  // 3c. Files under a key the caller holds: a round trip at every frame
+  // count, the files the released 0.5.0 and 0.5.2 encrypted with
+  // encryptStream (a text file, an avatar-shaped file and an empty file),
+  // and the error kinds.
+  {
+    const keyed = new Chat();
+    for (const size of [0, 1, 1023, 1024, 1025, 3050]) {
+      const file = Uint8Array.from({ length: size }, (_, i) => i % 251);
+      const encrypted = keyed.encryptFileWithKey({ file, key: convKey });
+      assert.equal(encrypted.length, encryptedFileSize(size));
+      assert.deepEqual(keyed.decryptFileWithKey({ encrypted, key: convKey }), file);
+    }
+    const avatar = new TextEncoder().encode("avatar");
+    assert.notDeepEqual(
+      keyed.encryptFileWithKey({ file: avatar, key: convKey }),
+      keyed.encryptFileWithKey({ file: avatar, key: convKey }),
+    );
+
+    for (const version of ["0_5_0", "0_5_2"]) {
+      const fixturePath = new URL(`../../../../tests/fixtures/compat_v${version}.json`, import.meta.url);
+      const fixture = JSON.parse(await fs.readFile(fixturePath, "utf-8"));
+      const key = b64ToBytes(fixture.conversation_key_b64);
+      for (const name of ["file", "avatar_file", "empty_file"]) {
+        assert.deepEqual(
+          keyed.decryptFileWithKey({ encrypted: b64ToBytes(fixture[name].ciphertext_b64), key }),
+          b64ToBytes(fixture[name].plaintext_b64),
+          `${version} ${name}`,
+        );
+      }
+    }
+
+    const encrypted = keyed.encryptFileWithKey({ file: new Uint8Array(1800).fill(7), key: convKey });
+    assert.throws(() => keyed.encryptFileWithKey({ file: avatar, key: convKey.subarray(0, 31) }), {
+      kind: "invalidInput",
+      message: /expected 32 bytes, got 31/,
+    });
+    assert.throws(() => keyed.decryptFileWithKey({ encrypted, key: new Uint8Array(33) }), { kind: "invalidInput" });
+    assert.throws(() => keyed.encryptFileWithKey({ file: avatar, key: Array.from(convKey) }), {
+      kind: "invalidInput",
+      message: /Invalid encryptFileWithKey params: key must be a Uint8Array/,
+    });
+    assert.throws(() => keyed.decryptFileWithKey({ encrypted }), {
+      kind: "invalidInput",
+      message: /Invalid decryptFileWithKey params.*missing field `key`/,
+    });
+    for (const bad of [encrypted.subarray(0, encrypted.length - 1), encrypted.subarray(0, 24 + 1041), encrypted.subarray(0, 10)]) {
+      assert.throws(() => keyed.decryptFileWithKey({ encrypted: bad, key: convKey }), {
+        kind: "decryption",
+        message: /pass all the encrypted bytes and the key they were encrypted under/,
+      });
+    }
+    assert.throws(() => keyed.decryptFileWithKey({ encrypted, key: new Uint8Array(32) }), { kind: "decryption" });
+    keyed.free();
+  }
+
   // 4. encryptMessage returns a SendPayload with signatureVersion === "7"
   //    (v0) until the v1_send feature switch is on.
   const payload = chat.encryptMessage({

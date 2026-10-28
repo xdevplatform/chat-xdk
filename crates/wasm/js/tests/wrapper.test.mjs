@@ -453,6 +453,12 @@ async function delegationTests() {
   });
   const out = new Uint8Array([...dec.push(streamed), ...dec.finish()]);
   assert.deepEqual(out, b64ToBytes(v.plaintext_b64));
+  const keyedCt = chat.encryptFileWithKey({ file: b64ToBytes(v.plaintext_b64), key: convKey });
+  assert.deepEqual(chat.decryptFileWithKey({ encrypted: keyedCt, key: convKey }), b64ToBytes(v.plaintext_b64));
+  assert.throws(() => chat.decryptFileWithKey({ encrypted: keyedCt, key: new Uint8Array(32) }), {
+    name: "ChatXdkError",
+    kind: "decryption",
+  });
 
   // The edit, delete, read-receipt and group-action delegations: each signed
   // payload carries the values its params named.

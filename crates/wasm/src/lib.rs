@@ -997,6 +997,48 @@ impl Chat {
         Ok(FileDecryptor { inner })
     }
 
+    /// Encrypt a file under a key you already hold, rather than from a
+    /// message: a group's avatar image under the conversation key whose
+    /// version is signed next to the avatar URL, or an app's own files at
+    /// rest.
+    ///
+    /// Takes a single params object: `file` (Uint8Array) and `key`, the raw
+    /// 32-byte key to encrypt it under (Uint8Array), such as a conversation
+    /// key. The file is encrypted under the key itself, in the format
+    /// `encryptFile` writes; its size is `encryptedFileSize(file.length)`. A
+    /// key that is not 32 bytes fails with kind `invalidInput`.
+    #[wasm_bindgen(js_name = encryptFileWithKey)]
+    pub fn encrypt_file_with_key(&self, params: JsValue) -> Result<Vec<u8>, JsValue> {
+        let p: JsEncryptFileWithKeyParams = from_js_params("encryptFileWithKey", params)?;
+        let core_params = chat_xdk_core::EncryptFileWithKeyParams::new(
+            js_to_bytes("encryptFileWithKey", "file", &p.file)?,
+            js_to_bytes("encryptFileWithKey", "key", &p.key)?,
+        );
+        self.inner
+            .encrypt_file_with_key(&core_params)
+            .map_err(sdk_error)
+    }
+
+    /// Decrypt a file encrypted under a key you already hold, as downloaded,
+    /// such as a group's avatar image under the conversation key for the
+    /// version its avatar change names.
+    ///
+    /// Takes a single params object: `encrypted` (Uint8Array) and `key`, the
+    /// raw 32-byte key the file was encrypted under (Uint8Array). A key that
+    /// is not 32 bytes fails with kind `invalidInput`, and bytes that are not
+    /// the complete file encrypted under the key with kind `decryption`.
+    #[wasm_bindgen(js_name = decryptFileWithKey)]
+    pub fn decrypt_file_with_key(&self, params: JsValue) -> Result<Vec<u8>, JsValue> {
+        let p: JsDecryptFileWithKeyParams = from_js_params("decryptFileWithKey", params)?;
+        let core_params = chat_xdk_core::DecryptFileWithKeyParams::new(
+            js_to_bytes("decryptFileWithKey", "encrypted", &p.encrypted)?,
+            js_to_bytes("decryptFileWithKey", "key", &p.key)?,
+        );
+        self.inner
+            .decrypt_file_with_key(&core_params)
+            .map_err(sdk_error)
+    }
+
     /// Decrypt a group title or description the X API returns for a
     /// conversation. Group changes in events need no call of their own:
     /// `decryptEvent` returns them decrypted.
@@ -1979,6 +2021,24 @@ struct JsFileDecryptorParams {
     #[serde(with = "serde_wasm_bindgen::preserve")]
     conversation_keys: JsValue,
     media_hash_key: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsEncryptFileWithKeyParams {
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    file: JsValue,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    key: JsValue,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsDecryptFileWithKeyParams {
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    encrypted: JsValue,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    key: JsValue,
 }
 
 fn to_js_value<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
