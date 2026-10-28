@@ -126,6 +126,24 @@ handle both formats:
 [.NET](dotnet.md#encrypt-a-file-from-its-message),
 [C ABI](c-abi.md#encrypt-a-file-from-its-message).
 
+0.5.x `encrypt_stream` and `decrypt_stream` took any bytes and a key, so an
+app picked the key for a message's file itself. Deriving it from the message
+takes that choice away for files a message carries, the ones whose key
+depends on the message. A file no message carries has no message to derive a
+key from: a group's avatar image, which X clients encrypt under the
+conversation key whose version the avatar change signs next to the avatar
+URL, or an app's own files at rest. `encrypt_file_with_key` and
+`decrypt_file_with_key` take the raw 32-byte key for those and encrypt the
+file under it in the same file format, the one `encrypt_stream` wrote, so
+files from either release open with the other's calls:
+[Rust](rust.md#encrypt-a-file-under-a-key-you-hold),
+[Python](python.md#encrypt-a-file-under-a-key-you-hold),
+[JavaScript](javascript.md#encrypt-a-file-under-a-key-you-hold),
+[Go](go.md#encrypt-a-file-under-a-key-you-hold),
+[JVM](jvm.md#encrypt-a-file-under-a-key-you-hold),
+[.NET](dotnet.md#encrypt-a-file-under-a-key-you-hold),
+[C ABI](c-abi.md#encrypt-a-file-under-a-key-you-hold).
+
 ## Calls take params objects
 
 Every call with more than one input takes one params value, with the same
@@ -372,16 +390,19 @@ new members can read them, and returns the title for its request. A removal
 signs each between the removal and the key change, marked as a key-rotation
 re-encryption, which decrypt drops (see [Decrypt drops a removal's title and
 description
-re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions));
-it leaves the avatar alone.
+re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)).
 
 An avatar is an image, and X clients encrypt the image, not its URL: the app
-encrypts the image under the conversation key and uploads it to the group's
-media, and the X API checks the URL against that media. So the avatar change
-signs the media URL as is, with the version of the key the image is
-encrypted under, and the decrypt calls return both for a received avatar
-change. A create sets no avatar, as X clients' creates normally don't; the
-app sets one with an avatar change.
+encrypts the image under the conversation key with `encrypt_file_with_key`
+and uploads it to the group's media, and the X API checks the URL against
+that media. So the avatar change signs the media URL as is, with the version
+of the key the image is encrypted under, and the decrypt calls return both
+for a received avatar change. The image is the app's to encrypt, so the
+calls that rotate the key don't re-encrypt it; X clients re-encrypt the
+avatar under the new key on every rotation, and an app does the same: it
+encrypts the image under the new key, uploads it, and sends an avatar change
+naming the new key version. A create sets no avatar, as X clients' creates
+normally don't; the app sets one with an avatar change.
 
 `decrypt_event` and `decrypt_events` decrypt a received create's title and a
 received title or description change into a `GroupText`. A value they can't

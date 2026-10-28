@@ -392,7 +392,11 @@ await api.post(`/2/chat/conversations/${result.conversationId.replaceAll(":", "-
 cache.set(result.conversationId, result.conversationKey, result.conversationKeyVersion);
 ```
 
-For a group key rotation, set `conversationId` to the existing group's id.
+For a group key rotation, set `conversationId` to the existing group's id,
+then re-encrypt the group's avatar under the new key, as X clients do on
+every rotation: encrypt the image with
+[`encrypt_file_with_key`](#files-media), upload it, and send an [avatar
+change](#prepare_group_avatar_change) naming the new key version.
 
 ---
 
@@ -417,7 +421,8 @@ when unset: send it as the request's `group_name`.
 
 A create sets no avatar. Set one afterwards with
 [`prepare_group_avatar_change`](#prepare_group_avatar_change), with the
-image encrypted under the key the create returns.
+image encrypted by [`encrypt_file_with_key`](#files-media) under the key the
+create returns.
 
 ```python
 prepared = chat.prepare_group_create(
@@ -495,11 +500,12 @@ api.post(f"/2/chat/conversations/{conversation_id}/members", {
 })
 ```
 
-`current_avatar_url` is the avatar's media URL, signed as is. The image
-stays encrypted under the key it was uploaded with, which the new members
-never receive: to keep the avatar readable for them, encrypt the image under
-the key the add returns, upload it, and send an [avatar
-change](#prepare_group_avatar_change) naming the new key version.
+`current_avatar_url` is the avatar's media URL, signed as is. The add
+doesn't re-encrypt the image, which stays encrypted under the key it was
+uploaded with, a key the new members never receive. X clients re-encrypt the
+avatar on every key rotation: encrypt the image under the key the add
+returns with [`encrypt_file_with_key`](#files-media), upload it, and send an
+[avatar change](#prepare_group_avatar_change) naming the new key version.
 
 ---
 
@@ -518,9 +524,11 @@ The group's title and description are encrypted under the conversation key,
 so a rotation re-encrypts them: pass the ones the group has, as plaintext,
 in the optional `title` and `description` (Rust `with_title`,
 `with_description`), and the call encrypts each under the new key. An empty
-value is unset. A rotation leaves the avatar alone: its image stays
-encrypted under the key it was uploaded with, which the members who stay
-hold.
+value is unset. The avatar is an image the app encrypts, so the call doesn't
+re-encrypt it. X clients re-encrypt the avatar on every key rotation: once
+the removal is sent, encrypt the image under the new key with
+[`encrypt_file_with_key`](#files-media), upload it, and send an [avatar
+change](#prepare_group_avatar_change) naming the new key version.
 
 The call generates a new conversation key, encrypts it for the members who
 stay, and returns a `PreparedConversationChange`: the new key and version,
@@ -651,8 +659,9 @@ version the change names.
 #### prepare_group_avatar_change
 
 Sign a group avatar change. An avatar URL is not encrypted; the image is.
-The app encrypts the image bytes under the conversation key, uploads them to
-the group's media, and passes the image's media URL. Required:
+The app encrypts the image bytes under the conversation key with
+[`encrypt_file_with_key`](#files-media), as X clients do, uploads them to the
+group's media, and passes the image's media URL. Required:
 `conversation_id`; `new_avatar_url`, that media URL, signed and sent as is;
 and `conversation_key_version`, the version of the key the image is
 encrypted under. The `sender_id` / `signing_key_version` overrides resolve
@@ -664,6 +673,10 @@ GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id}
 ```
 
 ```python
+encrypted = chat.encrypt_file_with_key(
+    EncryptFileWithKeyParams(image, keys[conversation_key_version])
+)
+# … upload `encrypted` to the group's media; avatar_url is its media URL …
 prepared = chat.prepare_group_avatar_change(
     GroupAvatarChangeParams(conversation_id, avatar_url, conversation_key_version)
 )
@@ -672,7 +685,21 @@ prepared = chat.prepare_group_avatar_change(
 
 A recipient's `decrypt_event` returns it as `AvatarChanged` with
 `new_avatar_url` and `conversation_key_version`: the image to download and
-the version of the key that decrypts it.
+the version of the key that decrypts it, with
+[`decrypt_file_with_key`](#files-media):
+
+```python
+change = group_change["change"]
+image = chat.decrypt_file_with_key(
+    DecryptFileWithKeyParams(downloaded, keys[change["conversation_key_version"]])
+)
+```
+
+The image stays under the key it was encrypted with until an avatar change
+names another. X clients re-encrypt the avatar under the new conversation key
+on every key rotation (a member add or removal, or a group's key change), so
+after a rotation encrypt the image again under the new key, upload it, and
+send an avatar change naming the new key version.
 
 ---
 
@@ -1459,10 +1486,27 @@ reaction = chat.encrypt_add_reaction(EncryptReactionParams(original_event_b64, "
 | 34 | **file_encryptor** | `file_encryptor(&FileEncryptorParams) → FileEncryptor` | `fileEncryptor(params: FileEncryptorParams) → FileEncryptor` | `file_encryptor(FileEncryptorParams) → FileEncryptor` | `FileEncryptor(FileEncryptorParams) (*FileEncryptor, error)` | `fileEncryptor(FileEncryptorParams)` → `FileEncryptor` | `FileEncryptor(FileEncryptorParams)` → `FileEncryptor` |
 | 35 | **decrypt_file** | `decrypt_file(DecryptFileParams) → Vec<u8>` | `decryptFile(params: DecryptFileParams) → Uint8Array` | `decrypt_file(DecryptFileParams) → bytes` | `DecryptFile(DecryptFileParams) ([]byte, error)` | `decryptFile(DecryptFileParams)` → `byte[]` | `DecryptFile(DecryptFileParams)` → `byte[]` |
 | 36 | **file_decryptor** | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `fileDecryptor(params: FileDecryptorParams) → FileDecryptor` | `file_decryptor(FileDecryptorParams) → FileDecryptor` | `FileDecryptor(FileDecryptorParams) (*FileDecryptor, error)` | `fileDecryptor(FileDecryptorParams)` → `FileDecryptor` | `FileDecryptor(FileDecryptorParams)` → `FileDecryptor` |
+| 63 | **encrypt_file_with_key** | `encrypt_file_with_key(&EncryptFileWithKeyParams) → Vec<u8>` | `encryptFileWithKey(params: EncryptFileWithKeyParams) → Uint8Array` | `encrypt_file_with_key(EncryptFileWithKeyParams) → bytes` | `EncryptFileWithKey(EncryptFileWithKeyParams) ([]byte, error)` | `encryptFileWithKey(EncryptFileWithKeyParams)` → `byte[]` | `EncryptFileWithKey(EncryptFileWithKeyParams)` → `byte[]` |
+| 64 | **decrypt_file_with_key** | `decrypt_file_with_key(&DecryptFileWithKeyParams) → Vec<u8>` | `decryptFileWithKey(params: DecryptFileWithKeyParams) → Uint8Array` | `decrypt_file_with_key(DecryptFileWithKeyParams) → bytes` | `DecryptFileWithKey(DecryptFileWithKeyParams) ([]byte, error)` | `decryptFileWithKey(DecryptFileWithKeyParams)` → `byte[]` | `DecryptFileWithKey(DecryptFileWithKeyParams)` → `byte[]` |
 
-The file calls take the key the way the message calls do: a send takes the
-one key its message was encrypted under, and a receive takes the
-conversation's key map, as `decrypt_event` does (names per language idiom):
+**Which call.** A file attached to a message goes through `encrypt_file`
+and `decrypt_file` (or their incremental forms): the app passes the message,
+and the SDK finds the attachment in `event_b64` and derives the file's key
+from it, so the app never handles a file key. A file under a key the app
+already holds, outside any message, goes through `encrypt_file_with_key`
+and `decrypt_file_with_key`: a group's avatar image, which X clients encrypt
+under the conversation key whose version the avatar change signs next to
+the avatar URL (see
+[`prepare_group_avatar_change`](#prepare_group_avatar_change)), or an app's
+own files at rest under a key it keeps. These take the raw 32-byte key and
+encrypt the file under the key itself, with nothing derived from a message,
+in the same [file format](CRYPTO.md#6-file-encryption) as a message's files,
+the one 0.5.x `encrypt_stream` writes.
+
+The message file calls take the key the way the message calls do: a send
+takes the one key its message was encrypted under, and a receive takes the
+conversation's key map, as `decrypt_event` does. The calls under a key take
+the key itself (names per language idiom):
 
 | Params | Fields |
 |---|---|
@@ -1470,6 +1514,8 @@ conversation's key map, as `decrypt_event` does (names per language idiom):
 | `FileEncryptorParams` | `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
 | `DecryptFileParams` | `encrypted`, `event_b64`, `conversation_keys`, `media_hash_key` |
 | `FileDecryptorParams` | `event_b64`, `conversation_keys`, `media_hash_key` |
+| `EncryptFileWithKeyParams` | `file`, `key` |
+| `DecryptFileWithKeyParams` | `encrypted`, `key` |
 
 `event_b64` is the base64 event of the message that carries the file and
 `media_hash_key` the file's media hash key. On a send, `conversation_key` and
@@ -1480,6 +1526,8 @@ the conversation's key map (version → raw 32-byte key). Each file of a
 message is encrypted under its own key, derived from the message's key and
 the file's attachment (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)),
 so a file encrypted for another message or attachment does not decrypt.
+`key` is the raw 32-byte key itself, such as a conversation key: nothing is
+derived from it, so every file encrypted under it opens with it.
 
 **Sending files.** A message with files is built before its files are
 encrypted:
@@ -1572,8 +1620,26 @@ for (const { mediaHashKey } of message.mediaHashes ?? []) {
 }
 ```
 
+**Files under a key you hold.** Pass the file and the raw 32-byte key to
+`encrypt_file_with_key`, and the downloaded bytes and the same key to
+`decrypt_file_with_key`. The encrypted size is `encrypted_file_size` of the
+file's size, as for a message's file. A group avatar's key is the
+conversation key for the version its avatar change names; the full flow is
+under [`prepare_group_avatar_change`](#prepare_group_avatar_change). Files
+0.5.x apps encrypted with `encrypt_stream` or a stream encryptor open with
+`decrypt_file_with_key`, and 0.5.x `decrypt_stream` opens the files
+`encrypt_file_with_key` returns.
+
+```js
+const encrypted = chat.encryptFileWithKey({ file: image, key: conversationKey });
+// … upload `encrypted`; later, download it as `downloaded` …
+const opened = chat.decryptFileWithKey({ encrypted: downloaded, key: conversationKey });
+```
+
 **Whole file or incremental.** `encrypt_file` and `decrypt_file` process the
-whole file in memory. `file_encryptor` and `file_decryptor` return an
+whole file in memory, and so do `encrypt_file_with_key` and
+`decrypt_file_with_key`, which have no incremental form: read a file under a
+key whole. `file_encryptor` and `file_decryptor` return an
 incremental object for large files, so memory stays bounded by the chunk
 size: feed chunks with `push`, then call `finish` once. The encryptor's
 `finish` emits the final frame, without which the file does not decrypt. The
@@ -1586,6 +1652,8 @@ object; call `free()` only when abandoning a file without finishing it
 
 The file calls raise an error that says what to pass instead when:
 
+- (under a key) `key` is not 32 bytes: kind `invalid_input`;
+- (decrypting under a key) the bytes are not a complete file encrypted under `key` (another key's file, corrupted, or truncated): kind `decryption`;
 - (encrypting) `conversation_key_version` is not the message's key version, `conversation_key` is not 32 bytes, or only one of the two is set;
 - (decrypting) the key map has no key for the message's version (the error names the version), or an entry is not a 32-byte key;
 - `media_hash_key` is empty, or is not one of the message's files (the error lists the media hash keys that are);
@@ -1607,8 +1675,10 @@ The X API returns a group's title and description (`group_name` and
 raw key of the version it was encrypted under, and returns the UTF-8
 plaintext. A title a 0.5.x app set is plaintext: when `decrypt` fails on a
 title, show the value as the API returns it. The avatar (`group_avatar_url`)
-is a media URL, not encrypted; the image it points to is. Group creates and
-changes need no separate call: `prepare_group_create`,
+is a media URL, not encrypted; the image it points to is, and it opens with
+[`decrypt_file_with_key`](#files-media) under the conversation key for the
+version its avatar change names. Group creates and changes need no separate
+call: `prepare_group_create`,
 `prepare_group_members_change`, `prepare_group_title_change` and
 `prepare_group_description_change` encrypt the value, and `decrypt_event`
 decrypts a received create or change.
@@ -2765,7 +2835,8 @@ change's `title`, a `titleChanged` change's `newTitle` and a
 `avatarChanged` change's `newAvatarUrl`, and the `avatarUrl` another
 client's create may carry, come back as the event carries them, with the
 `conversationKeyVersion` the image is encrypted under. Download the image
-and decrypt it with the key for that version. A member removal's title and
+and decrypt it with [`decrypt_file_with_key`](#files-media) under the key for
+that version. A member removal's title and
 description re-encryptions, marked `for_key_rotation`, never arrive as
 `titleChanged` or `descriptionChanged`: decrypt drops them (see
 [decrypt_events](#decrypt_events--batch-self-contained)). Rust's

@@ -476,6 +476,10 @@ message's `event_b64` when encrypting, the delivered event when decrypting —
 and derives its key from the message's conversation key: the key passed (or
 cached) for the message's version when encrypting, the key map's entry for
 it when decrypting (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)).
+`encrypt_file_with_key` and `decrypt_file_with_key` take no event: they
+encrypt or decrypt a file under the raw key the caller passes, such as a
+group's avatar image under the conversation key, with the `crypto/encryption.rs`
+file functions.
 
 #### `chat.rs` — `Chat` (Juicebox wrapper)
 

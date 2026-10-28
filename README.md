@@ -56,7 +56,9 @@ Python/Rust, PascalCase in .NET/Go):
    `encryptFile({file, eventB64, mediaHashKey})` with the payload's
    `eventB64` (plus `conversationKey` and `conversationKeyVersion` unless the
    key cache holds them, as for the message). `decryptFile` opens a received
-   file from its message's event.
+   file from its message's event. A file no message carries, such as a
+   group's avatar image under the conversation key, goes through
+   `encryptFileWithKey({file, key})` and `decryptFileWithKey({encrypted, key})`.
 
 | Method | Use case |
 |--------|----------|

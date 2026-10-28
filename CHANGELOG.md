@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+
+`encrypt_file_with_key` and `decrypt_file_with_key` encrypt and decrypt a
+file under a key the app already holds, rather than a file a message
+carries: a group's avatar image, which X clients encrypt under the
+conversation key whose version the avatar change signs next to the avatar
+URL, or an app's own files at rest. Every binding has them in its own idiom
+(`encryptFileWithKey`, `EncryptFileWithKey`, and
+`chat_xdk_encrypt_file_with_key` and `chat_xdk_decrypt_file_with_key` in the
+C ABI), taking `EncryptFileWithKeyParams` (`file`, `key`) and
+`DecryptFileWithKeyParams` (`encrypted`, `key`) with the raw 32-byte key.
+They write the file format of a message's files, the one 0.5.x
+`encrypt_stream` wrote: files 0.5.x encrypted with `encrypt_stream` or a
+stream encryptor decrypt with `decrypt_file_with_key`, and 0.5.x
+`decrypt_stream` decrypts what `encrypt_file_with_key` returns. A key that
+isn't 32 bytes fails with `invalid_input`, and bytes that aren't a complete
+file encrypted under the key with `decryption`. The migration guides move
+each `encrypt_stream` and `decrypt_stream` call to `encrypt_file` or
+`encrypt_file_with_key` by the file it encrypts.
+
+### Fixed
+
+- API.md, the migration guides and why.md say to re-encrypt a group's avatar
+  under the new conversation key after every key rotation, as X clients do:
+  encrypt the image with `encrypt_file_with_key`, upload it, and send an
+  avatar change naming the new key version.
+
 ## [0.7.0] - 2026-10-27
 
 To move code from 0.5.x, follow your binding's guide in
