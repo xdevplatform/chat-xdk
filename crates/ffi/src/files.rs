@@ -87,6 +87,88 @@ pub extern "C" fn chat_xdk_decrypt_file(
     })
 }
 
+/// Encrypt a file under a key you already hold, rather than from a message:
+/// a group's avatar image under the conversation key whose version is signed
+/// next to the avatar URL, or an app's own files at rest. The file is
+/// encrypted under the key itself, in the format [`chat_xdk_encrypt_file`]
+/// writes, with nothing derived from a message.
+///
+/// `params_json` — single JSON document: `file` (base64) and `key` (base64
+/// raw 32-byte key, such as a conversation key).
+///
+/// Returns the encrypted file, base64.
+#[no_mangle]
+pub extern "C" fn chat_xdk_encrypt_file_with_key(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiEncryptFileWithKeyParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let file = match bytes_from_b64("file", &p.file) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let key = match bytes_from_b64("key", &p.key) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        match h
+            .inner
+            .encrypt_file_with_key(&EncryptFileWithKeyParams::new(file, key))
+        {
+            Ok(encrypted) => ok_data(&BASE64.encode(&encrypted)),
+            Err(e) => err_from(e),
+        }
+    })
+}
+
+/// Decrypt a file encrypted under a key you already hold, such as a group's
+/// avatar image under the conversation key for the version its avatar change
+/// names.
+///
+/// `params_json` — single JSON document: `encrypted` (base64, as downloaded)
+/// and `key` (base64 raw 32-byte key the file was encrypted under).
+///
+/// Returns the decrypted file, base64.
+#[no_mangle]
+pub extern "C" fn chat_xdk_decrypt_file_with_key(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiDecryptFileWithKeyParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let encrypted = match bytes_from_b64("encrypted", &p.encrypted) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let key = match bytes_from_b64("key", &p.key) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        match h
+            .inner
+            .decrypt_file_with_key(&DecryptFileWithKeyParams::new(encrypted, key))
+        {
+            Ok(output) => ok_data(&BASE64.encode(&output)),
+            Err(e) => err_from(e),
+        }
+    })
+}
+
 // Incremental files
 
 /// Opaque handle to an incremental file encryptor.

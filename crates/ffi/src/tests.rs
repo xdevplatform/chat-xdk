@@ -225,6 +225,72 @@ fn invalid_entities_and_attachments_fail_with_invalid_input() {
 }
 
 #[test]
+fn files_round_trip_under_a_key_the_caller_holds() {
+    use crate::files::{chat_xdk_decrypt_file_with_key, chat_xdk_encrypt_file_with_key};
+    let chat = new_chat();
+    let key = BASE64.encode([7u8; 32]);
+    let encrypt = |document: serde_json::Value| {
+        let params = c(&document.to_string());
+        chat_xdk_encrypt_file_with_key(chat, params.as_ptr())
+    };
+    let decrypt = |document: serde_json::Value| {
+        let params = c(&document.to_string());
+        chat_xdk_decrypt_file_with_key(chat, params.as_ptr())
+    };
+    for size in [0usize, 1500, 2048] {
+        let file: Vec<u8> = (0..size).map(|i| i as u8).collect();
+        let encrypted = data(encrypt(
+            serde_json::json!({ "file": BASE64.encode(&file), "key": key }),
+        ))
+        .unwrap();
+        assert_eq!(
+            Some(BASE64.decode(&encrypted).unwrap().len() as u64),
+            chat_xdk_core::utils::encrypted_file_size(size as u64),
+            "size {size}"
+        );
+        let opened = data(decrypt(
+            serde_json::json!({ "encrypted": encrypted, "key": key }),
+        ));
+        assert_eq!(BASE64.decode(opened.unwrap()).unwrap(), file, "size {size}");
+    }
+
+    // The avatar-shaped file 0.5.2 encrypted with encrypt_stream opens under
+    // the same key.
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/compat_v0_5_2.json")).unwrap();
+    let opened = data(decrypt(serde_json::json!({
+        "encrypted": fixture["avatar_file"]["ciphertext_b64"],
+        "key": fixture["conversation_key_b64"],
+    })));
+    assert_eq!(
+        opened.as_deref(),
+        fixture["avatar_file"]["plaintext_b64"].as_str()
+    );
+
+    let short_key = BASE64.encode([7u8; 31]);
+    for document in [
+        error(encrypt(
+            serde_json::json!({ "file": "AAAA", "key": short_key }),
+        )),
+        error(decrypt(
+            serde_json::json!({ "encrypted": "AAAA", "key": short_key }),
+        )),
+        error(encrypt(serde_json::json!({ "file": "AAAA" }))),
+        error(encrypt(
+            serde_json::json!({ "file": "AAAA", "key": "not base64" }),
+        )),
+    ] {
+        assert_eq!(document["kind"], "invalid_input", "{document}");
+    }
+    let bad = error(decrypt(serde_json::json!({
+        "encrypted": BASE64.encode([0u8; 60]),
+        "key": key,
+    })));
+    assert_eq!(bad["kind"], "decryption", "{bad}");
+    chat_xdk_free(chat);
+}
+
+#[test]
 fn a_group_removal_drops_the_title_and_description_reencryptions() {
     let v: serde_json::Value =
         serde_json::from_str(include_str!("../../../tests/fixtures/sdk_vectors.json")).unwrap();
