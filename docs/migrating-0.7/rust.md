@@ -31,6 +31,7 @@ that nothing reports, and `[new]` a 0.7.0 call to adopt.
 - [ ] `[compile]` [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] `[compile]` [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] `[compile]` [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
+- [ ] `[compile]` [Encrypt a file no message carries, such as a group avatar, with `encrypt_file_with_key`](#encrypt-a-file-under-a-key-you-hold)
 - [ ] `[compile]` [Use `file_encryptor` and `file_decryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] `[compile]` [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] `[compile]` [Build a `PublicKeyInput` with `identity_public_key` and `public_key_version`](#public-key-inputs-name-the-identity-key-and-its-version)
@@ -185,12 +186,15 @@ search as one command.
 | Struct literals for `SigningKeyEntry`, `EntityDescriptor`, `PublicKeyInput`, params | `new` and `with_*` | [non_exhaustive](#types-are-non_exhaustive) |
 | `payload.encrypted_content` | `payload.encoded_message_create_event` | [SendPayload](#sendpayload-fields-take-the-send-requests-names) |
 | `payload.encoded_event_signature` | `payload.encoded_message_event_signature` | [SendPayload](#sendpayload-fields-take-the-send-requests-names) |
-| `chat.encrypt_stream(&plaintext, &key)` | `chat.encrypt_file(&EncryptFileParams::new(file, &event_b64, media_hash_key))` | [Files](#encrypt-a-file-from-its-message) |
-| `chat.decrypt_stream(&encrypted, &key)` | `chat.decrypt_file(&DecryptFileParams::new(encrypted, event_b64, keys, media_hash_key))` | [Files](#decrypt-a-file-with-its-messages-event) |
-| `chat.stream_encryptor(&key)`, `chat.stream_decryptor(&key)` | `chat.file_encryptor(&FileEncryptorParams::new(..))`, `chat.file_decryptor(&FileDecryptorParams::new(..))` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `chat.encrypt_stream(&plaintext, &key)`, a message's file | `chat.encrypt_file(&EncryptFileParams::new(file, &event_b64, media_hash_key))` | [Files](#encrypt-a-file-from-its-message) |
+| `chat.encrypt_stream(&plaintext, &key)`, any other file, such as a group avatar | `chat.encrypt_file_with_key(&EncryptFileWithKeyParams::new(file, key.to_bytes()))` | [Files under a key](#encrypt-a-file-under-a-key-you-hold) |
+| `chat.decrypt_stream(&encrypted, &key)`, a message's file | `chat.decrypt_file(&DecryptFileParams::new(encrypted, event_b64, keys, media_hash_key))` | [Files](#decrypt-a-file-with-its-messages-event) |
+| `chat.decrypt_stream(&encrypted, &key)`, any other file | `chat.decrypt_file_with_key(&DecryptFileWithKeyParams::new(encrypted, key.to_bytes()))` | [Files under a key](#encrypt-a-file-under-a-key-you-hold) |
+| `chat.stream_encryptor(&key)`, `chat.stream_decryptor(&key)`, a message's file | `chat.file_encryptor(&FileEncryptorParams::new(..))`, `chat.file_decryptor(&FileDecryptorParams::new(..))` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `chat.stream_encryptor(&key)`, `chat.stream_decryptor(&key)`, any other file | `crypto::encryption::FileEncryptor::new(&key)`, `FileDecryptor::new(&key)` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
 | `utils::encrypted_stream_size` | `utils::encrypted_file_size` | [Files](#encrypt-a-file-from-its-message) |
 | `crypto::encryption::{encrypt_stream, decrypt_stream, encrypted_stream_size, StreamEncryptor, StreamDecryptor}` | `{encrypt_file, decrypt_file, encrypted_file_size, FileEncryptor, FileDecryptor}` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
-| `chat.encrypt(plaintext, &key)` | Removed: titles and descriptions go through `prepare_group_title_change`, `prepare_group_description_change` and the group creates and member adds; avatar URLs aren't encrypted; files go through `encrypt_file` | [Changing the title](#changing-the-title) |
+| `chat.encrypt(plaintext, &key)` | Removed: titles and descriptions go through `prepare_group_title_change`, `prepare_group_description_change` and the group creates and member adds; avatar URLs aren't encrypted; files go through `encrypt_file` or `encrypt_file_with_key` | [Changing the title](#changing-the-title) |
 | `ActionSignature { signature, signature_version, public_key_version, signature_payload }` | `message_event_signature: MessageEventSignature`; serialize `action_signatures` as returned | [Action signatures](#action-signatures-come-nested) |
 | `PublicKeyInput { public_key, key_version, .. }` | `PublicKeyInput::new(user_id, identity_public_key, public_key_version)` | [Public key inputs](#public-key-inputs-name-the-identity-key-and-its-version) |
 | `prepared.participant_keys`, `EncryptedKeyForRecipient`, `encrypted_key` | `prepared.conversation_participant_keys`, `ConversationParticipantKey`, `encrypted_conversation_key` | [Participant keys](#participant-keys-take-the-key-requests-names) |
@@ -541,12 +545,51 @@ let plaintext = chat.decrypt_stream(&downloaded, &keys[conversation_key_version]
 let plaintext = chat.decrypt_file(&DecryptFileParams::new(downloaded, file_event_b64, keys, file_hash_key))?;
 ```
 
+### Encrypt a file under a key you hold
+
+`encrypt_stream` and `decrypt_stream` take a key from the app for every
+file. A file a message carries takes its key from the message, as the two
+sections above show. A file no message carries keeps the key you hold, and
+goes through `encrypt_file_with_key` and `decrypt_file_with_key`: a group's
+avatar image, which X clients encrypt under the conversation key whose
+version the avatar change signs next to the avatar URL (see [Changing the
+avatar](#changing-the-avatar)), or your app's own files at rest.
+`EncryptFileWithKeyParams` and `DecryptFileWithKeyParams` take the raw
+32-byte key `encrypt_stream` took, as bytes (`to_bytes()` of an
+`XChatConversationKey`), and the calls write the format `encrypt_stream`
+writes: files 0.5.x encrypted with `encrypt_stream` or a stream encryptor
+decrypt with `decrypt_file_with_key`, and 0.5.x `decrypt_stream` decrypts
+what `encrypt_file_with_key` returns, so files you stored need no
+re-encryption. A key that isn't 32 bytes fails with `ErrorKind::InvalidInput`,
+and bytes that aren't a complete file encrypted under the key with
+`ErrorKind::Decryption`.
+
+```rust
+// 0.5.x
+let encrypted = chat.encrypt_stream(&data, &keys[conversation_key_version])?;
+let plaintext = chat.decrypt_stream(&downloaded, &keys[conversation_key_version])?;
+
+// 0.7.0
+let key = keys[conversation_key_version].to_bytes();
+let encrypted = chat.encrypt_file_with_key(&EncryptFileWithKeyParams::new(data, key.clone()))?;
+let plaintext = chat.decrypt_file_with_key(&DecryptFileWithKeyParams::new(downloaded, key))?;
+```
+
+To move an `encrypt_stream` or `decrypt_stream` call, look at its file. A
+file one of a message's attachments names (a photo, a video, a link card's
+banner or favicon) moves to `encrypt_file` and `decrypt_file`, with the
+message; any other file moves to `encrypt_file_with_key` and
+`decrypt_file_with_key`, with the same key.
+
 ### Encrypt and decrypt large files in chunks
 
 `file_encryptor` and `file_decryptor` take the same values as
 `encrypt_file` and `decrypt_file`, without the file bytes, and return a
 `FileEncryptor` or a `FileDecryptor`; `push` and `finish` keep their 0.5.x
-form. Size an upload with `utils::encrypted_file_size`.
+form. Size an upload with `utils::encrypted_file_size`. A file under a key
+you hold goes through `encrypt_file_with_key` and `decrypt_file_with_key`
+whole, or in chunks through the `crypto::encryption` types below, which take
+the key itself.
 
 ```rust
 // 0.5.x
@@ -1097,7 +1140,8 @@ Every group change below returns `action_signatures` for its request in
 encrypted under the conversation key, and the SDK encrypts them: the
 creates, member adds, removals and title and description changes take them
 as plaintext and return the encrypted values to send. An avatar is an image
-the app encrypts and uploads; its URL is signed as is.
+the app encrypts with `encrypt_file_with_key` and uploads; its URL is signed
+as is.
 
 ### Creating a group
 
@@ -1168,7 +1212,8 @@ if let GroupChange::Created { title: Some(title), .. } = &group_change.change {
 
 `Created` also carries the create's `conversation_key_version`, and the
 `avatar_url` a create from another client may set: a media URL whose image
-is encrypted under that key version.
+is encrypted under that key version, which `decrypt_file_with_key` opens
+with that version's key.
 
 ### Adding members
 
@@ -1212,12 +1257,12 @@ the description out, so the add signs at version 7 as in 0.5.x; the new
 members can read the description once a description change sets it under the
 new key.
 
-The avatar isn't re-encrypted: `with_current_avatar_url` takes its media
-URL, signed as is, and the image stays encrypted under the key it was
-uploaded with, which the new members never receive. To keep the avatar
-readable for them, encrypt the image under the key the add returns, upload
-it, and send an [avatar change](#changing-the-avatar) naming the new key
-version.
+The add doesn't re-encrypt the avatar: `with_current_avatar_url` takes its
+media URL, signed as is, and the image stays encrypted under the key it was
+uploaded with, which the new members never receive. X clients re-encrypt the
+avatar on every key rotation: encrypt the image under the key the add
+returns with `encrypt_file_with_key`, upload it, and send an [avatar
+change](#changing-the-avatar) naming the new key version.
 
 A recipient's `decrypt_event` returns the add as a verified
 `GroupChange::MembersAdded` with `member_ids`, `current_member_ids` and
@@ -1241,8 +1286,11 @@ Pass the group's current title and description, as plaintext, with
 `with_title` and `with_description`, each one the group has: the call
 encrypts each under the new key and signs it as a key-rotation
 re-encryption, which recipients' decrypt drops rather than shows as a
-change. A rotation leaves the avatar alone: its image stays encrypted under
-the key it was uploaded with, which the members who stay hold.
+change. The avatar is an image you encrypt, so the call doesn't re-encrypt
+it: X clients re-encrypt the avatar on every key rotation, so once the
+removal succeeds, encrypt the image under the new key with
+`encrypt_file_with_key`, upload it, and send an [avatar
+change](#changing-the-avatar) naming the new key version.
 
 The result is a `PreparedConversationChange`: the new `conversation_key`
 and `conversation_key_version`, `conversation_participant_keys` for the
@@ -1440,15 +1488,18 @@ if let GroupChange::DescriptionChanged { new_description, .. } = &group_change.c
 ### Changing the avatar
 
 An avatar URL is not encrypted; the image is. Encrypt the image bytes under
-the conversation key, upload them to the group's media, and pass the image's
-media URL to `prepare_group_avatar_change`, with the version of the key the
-image is encrypted under. The call signs both as they are and returns a
+the conversation key with `encrypt_file_with_key`, as X clients do, upload
+them to the group's media, and pass the image's media URL to
+`prepare_group_avatar_change`, with the version of the key the image is
+encrypted under. The call signs both as they are and returns a
 `PreparedAction`; send its `action_signatures` with the URL. A URL
 containing a comma is rejected, since signatures join their fields with
-commas.
+commas. Send an avatar change after every key rotation too, with the image
+encrypted under the new key, as X clients do.
 
 ```rust
 // 0.5.x
+let encrypted = chat.encrypt_stream(&photo, &keys[conversation_key_version])?;
 api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
     "group_avatar_url": chat.encrypt(avatar_url, &keys[conversation_key_version])?,
     "conversation_key_version": conversation_key_version,
@@ -1456,6 +1507,10 @@ api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
 }))?;
 
 // 0.7.0
+let encrypted = chat.encrypt_file_with_key(&EncryptFileWithKeyParams::new(
+    photo,
+    keys[conversation_key_version].to_bytes(),
+))?;
 let prepared = chat.prepare_group_avatar_change(&GroupAvatarChangeParams::new(
     conversation_id,
     avatar_url,
@@ -1469,14 +1524,18 @@ api.put(&format!("/2/chat/conversations/{path_id}"), &serde_json::json!({
 }))?;
 ```
 
+In both, `avatar_url` is the media URL of the uploaded `encrypted` image.
 A received `GroupChange::AvatarChanged` holds `new_avatar_url` as sent and
-its `conversation_key_version`: download the image and decrypt it with the
-key for that version.
+its `conversation_key_version`: download the image and decrypt it with
+`decrypt_file_with_key` under the key for that version.
 
 ```rust
 // 0.7.0
 if let GroupChange::AvatarChanged { new_avatar_url, conversation_key_version, .. } = &group_change.change {
     show_avatar(new_avatar_url, conversation_key_version.as_deref());
+    if let Some(key) = conversation_key_version.as_deref().and_then(|version| keys.get(version)) {
+        let image = chat.decrypt_file_with_key(&DecryptFileWithKeyParams::new(downloaded, key.to_bytes()))?;
+    }
 }
 ```
 
@@ -1595,8 +1654,11 @@ grep -rn "target_message_id" --include='*.rs' .
 ```
 
 Every `target_message_id` the second search finds should read a v1 edit's
-signed message id; rename the rest to `target_message_sequence_id`. The
-compiler reports the rest of the index once the dependency is 0.7.0.
+signed message id; rename the rest to `target_message_sequence_id`. Each
+`encrypt_stream` and `decrypt_stream` the first finds is a message's file or
+a file under a key you hold, and [Encrypt a file under a key you
+hold](#encrypt-a-file-under-a-key-you-hold) says which call each moves to.
+The compiler reports the rest of the index once the dependency is 0.7.0.
 
 ### Run a round trip
 
@@ -1659,9 +1721,9 @@ send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,
-and create a group, add a member and remove one. Fetch the conversation's
-events with `GET /2/chat/conversations/{id}/events`, pass `data[].encoded_event`
-and `meta.conversation_key_events` to `decrypt_events` with every
-participant's signing keys, and check that every event in `events` has
-`verified` set and that `errors` holds only the removal's title and
-description re-encryptions.
+and create a group, set its avatar, add a member and remove one. Fetch the
+conversation's events with `GET /2/chat/conversations/{id}/events`, pass
+`data[].encoded_event` and `meta.conversation_key_events` to
+`decrypt_events` with every participant's signing keys, and check that
+every event in `events` has `verified` set and that `errors` holds only the
+removal's title and description re-encryptions.

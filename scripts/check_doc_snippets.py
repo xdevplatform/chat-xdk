@@ -241,7 +241,10 @@ def check_python(paths):
 
         return make
 
-    returns_bytes = {"encrypt_file", "decrypt_file", "export_keys", "sign", "decrypt_conversation_key"}
+    returns_bytes = {
+        "encrypt_file", "decrypt_file", "encrypt_file_with_key", "decrypt_file_with_key", "export_keys", "sign",
+        "decrypt_conversation_key",
+    }
 
     class ChatMock:
         """A Chat whose methods check their arguments against the real

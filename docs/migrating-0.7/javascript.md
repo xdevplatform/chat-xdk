@@ -30,6 +30,7 @@ first call), `[runtime]` a change in behavior that nothing reports, and
 - [ ] `[compile]` [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
 - [ ] `[compile]` [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] `[compile]` [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
+- [ ] `[compile]` [Encrypt a file no message carries, such as a group avatar, with `encryptFileWithKey`](#encrypt-a-file-under-a-key-you-hold)
 - [ ] `[compile]` [Use `fileEncryptor` and `fileDecryptor` for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] `[compile]` [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] `[compile]` [Name a public key input's fields `identityPublicKey` and `publicKeyVersion`](#public-key-inputs-name-the-identity-key-and-its-version)
@@ -193,12 +194,15 @@ search as one command.
 | `chat.decryptEvent(eventB64, keys, signingKeys)` | `chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys })` | [decryptEvent](#decryptevent-takes-a-params-object) |
 | `payload.encryptedContent` | `payload.encodedMessageCreateEvent` | [SendPayload](#sendpayload-fields-take-the-send-requests-names) |
 | `payload.encodedEventSignature` | `payload.encodedMessageEventSignature` | [SendPayload](#sendpayload-fields-take-the-send-requests-names) |
-| `chat.encryptStream(plaintext, key)` | `chat.encryptFile({ file, eventB64, mediaHashKey })` | [Files](#encrypt-a-file-from-its-message) |
-| `chat.decryptStream(encrypted, key)` | `chat.decryptFile({ encrypted, eventB64, conversationKeys, mediaHashKey })` | [Files](#decrypt-a-file-with-its-messages-event) |
-| `chat.streamEncryptor(key)`, `chat.streamDecryptor(key)` | `chat.fileEncryptor({ eventB64, mediaHashKey })`, `chat.fileDecryptor({ eventB64, conversationKeys, mediaHashKey })` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `chat.encryptStream(plaintext, key)`, a message's file | `chat.encryptFile({ file, eventB64, mediaHashKey })` | [Files](#encrypt-a-file-from-its-message) |
+| `chat.encryptStream(plaintext, key)`, any other file, such as a group avatar | `chat.encryptFileWithKey({ file, key })` | [Files under a key](#encrypt-a-file-under-a-key-you-hold) |
+| `chat.decryptStream(encrypted, key)`, a message's file | `chat.decryptFile({ encrypted, eventB64, conversationKeys, mediaHashKey })` | [Files](#decrypt-a-file-with-its-messages-event) |
+| `chat.decryptStream(encrypted, key)`, any other file | `chat.decryptFileWithKey({ encrypted, key })` | [Files under a key](#encrypt-a-file-under-a-key-you-hold) |
+| `chat.streamEncryptor(key)`, `chat.streamDecryptor(key)`, a message's file | `chat.fileEncryptor({ eventB64, mediaHashKey })`, `chat.fileDecryptor({ eventB64, conversationKeys, mediaHashKey })` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `chat.streamEncryptor(key)`, `chat.streamDecryptor(key)`, any other file | `encryptFileWithKey` and `decryptFileWithKey` over the whole file | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
 | `StreamEncryptor`, `StreamDecryptor` | `FileEncryptor`, `FileDecryptor` (interfaces) | [TypeScript](#typescript-import-the-types-the-package-exports) |
 | `encryptedStreamSize(n)` | `encryptedFileSize(n)` | [Files](#encrypt-a-file-from-its-message) |
-| `chat.encrypt(plaintext, key)` | Removed: titles and descriptions go through `prepareGroupTitleChange`, `prepareGroupDescriptionChange` and the group creates and member adds; avatar URLs aren't encrypted; files go through `encryptFile` | [Changing the title](#changing-the-title) |
+| `chat.encrypt(plaintext, key)` | Removed: titles and descriptions go through `prepareGroupTitleChange`, `prepareGroupDescriptionChange` and the group creates and member adds; avatar URLs aren't encrypted; files go through `encryptFile` or `encryptFileWithKey` | [Changing the title](#changing-the-title) |
 | Action signature `signature`, `signatureVersion`, `publicKeyVersion`, `signaturePayload` | Nested under `messageEventSignature`; pass `actionSignatures` as returned | [Action signatures](#action-signatures-come-nested) |
 | Public key input `publicKey`, `keyVersion` | `identityPublicKey`, `publicKeyVersion` | [Public key inputs](#public-key-inputs-name-the-identity-key-and-its-version) |
 | `prepared.participantKeys`, `EncryptedKeyForRecipient`, `encryptedKey` | `prepared.conversationParticipantKeys`, `ConversationParticipantKey`, `encryptedConversationKey` | [Participant keys](#participant-keys-take-the-key-requests-names) |
@@ -491,12 +495,48 @@ const plaintext = chat.decryptFile({
 });
 ```
 
+### Encrypt a file under a key you hold
+
+`encryptStream` and `decryptStream` take a key from the app for every file.
+A file a message carries takes its key from the message, as the two
+sections above show. A file no message carries keeps the key you hold, and
+goes through `encryptFileWithKey` and `decryptFileWithKey`: a group's avatar
+image, which X clients encrypt under the conversation key whose version the
+avatar change signs next to the avatar URL (see [Changing the
+avatar](#changing-the-avatar)), or your app's own files at rest. Each takes
+the raw 32-byte key `encryptStream` took, as `key` in its params object, and
+writes the format `encryptStream` writes: files 0.5.x encrypted with
+`encryptStream` or a stream encryptor decrypt with `decryptFileWithKey`, and
+0.5.x `decryptStream` decrypts what `encryptFileWithKey` returns, so files
+you stored need no re-encryption. A key that isn't 32 bytes throws a
+`ChatXdkError` of kind `invalidInput`, and bytes that aren't a complete file
+encrypted under the key one of kind `decryption`.
+
+```js
+// 0.5.x
+const encrypted = chat.encryptStream(data, conversationKey);
+const plaintext = chat.decryptStream(downloaded, conversationKey);
+
+// 0.7.0
+const encrypted = chat.encryptFileWithKey({ file: data, key: conversationKey });
+const plaintext = chat.decryptFileWithKey({ encrypted: downloaded, key: conversationKey });
+```
+
+To move an `encryptStream` or `decryptStream` call, look at its file. A file
+one of a message's attachments names (a photo, a video, a link card's banner
+or favicon) moves to `encryptFile` and `decryptFile`, with the message; any
+other file moves to `encryptFileWithKey` and `decryptFileWithKey`, with the
+same key.
+
 ### Encrypt and decrypt large files in chunks
 
 `fileEncryptor` and `fileDecryptor` take the same values as `encryptFile`
 and `decryptFile`, without the file bytes, and return a `FileEncryptor` or a
 `FileDecryptor`; `push`, `finish` and `free` keep their 0.5.x form. Size an
-upload with `encryptedFileSize`.
+upload with `encryptedFileSize`. A file under a key you hold has no chunked
+form: read it whole and pass it to `encryptFileWithKey` or
+`decryptFileWithKey` (see [Encrypt a file under a key you
+hold](#encrypt-a-file-under-a-key-you-hold)).
 
 ```js
 // 0.5.x
@@ -1103,7 +1143,8 @@ Every group change below returns `actionSignatures` for its request in
 encrypted under the conversation key, and the SDK encrypts them: the
 creates, member adds, removals and title and description changes take them
 as plaintext and return the encrypted values to send. An avatar is an image
-the app encrypts and uploads; its URL is signed as is.
+the app encrypts with `encryptFileWithKey` and uploads; its URL is signed as
+is.
 
 ### Creating a group
 
@@ -1165,7 +1206,8 @@ if (change.changeType === 'created' && change.title) {
 
 A `created` change also carries the create's `conversationKeyVersion`, and
 the `avatarUrl` a create from another client may set: a media URL whose
-image is encrypted under that key version.
+image is encrypted under that key version, which `decryptFileWithKey` opens
+with that version's key.
 
 ### Adding members
 
@@ -1209,11 +1251,12 @@ the description out, so the add signs at version 7 as in 0.5.x; the new
 members can read the description once a description change sets it under the
 new key.
 
-The avatar isn't re-encrypted: `currentAvatarUrl` takes its media URL,
-signed as is, and the image stays encrypted under the key it was uploaded
-with, which the new members never receive. To keep the avatar readable for
-them, encrypt the image under the key the add returns, upload it, and send
-an [avatar change](#changing-the-avatar) naming the new key version.
+The add doesn't re-encrypt the avatar: `currentAvatarUrl` takes its media
+URL, signed as is, and the image stays encrypted under the key it was
+uploaded with, which the new members never receive. X clients re-encrypt the
+avatar on every key rotation: encrypt the image under the key the add
+returns with `encryptFileWithKey`, upload it, and send an [avatar
+change](#changing-the-avatar) naming the new key version.
 
 A recipient's `decryptEvent` returns the add as a verified `membersAdded`
 change with `memberIds`, `currentMemberIds` and `currentAdminIds`.
@@ -1233,9 +1276,11 @@ next. It takes:
 - `title` and `description`: the group's current title and description, as
   plaintext. Pass each one the group has; the call encrypts each under the
   new key and signs it as a key-rotation re-encryption, which recipients'
-  decrypt drops rather than shows as a change. A rotation leaves the avatar
-  alone: its image stays encrypted under the key it was uploaded with,
-  which the members who stay hold.
+  decrypt drops rather than shows as a change. The avatar is an image you
+  encrypt, so the call doesn't re-encrypt it: X clients re-encrypt the
+  avatar on every key rotation, so once the removal succeeds, encrypt the
+  image under the new key with `encryptFileWithKey`, upload it, and send an
+  [avatar change](#changing-the-avatar) naming the new key version.
 
 The result is a `PreparedConversationChange`: the new `conversationKey` and
 `conversationKeyVersion`, `conversationParticipantKeys` for the members who
@@ -1417,14 +1462,18 @@ if (changeType === 'descriptionChanged') {
 ### Changing the avatar
 
 An avatar URL is not encrypted; the image is. Encrypt the image bytes under
-the conversation key, upload them to the group's media, and pass the image's
-media URL to `prepareGroupAvatarChange`, with the version of the key the
-image is encrypted under. The call signs both as they are and returns a
+the conversation key with `encryptFileWithKey`, as X clients do, upload them
+to the group's media, and pass the image's media URL to
+`prepareGroupAvatarChange`, with the version of the key the image is
+encrypted under. The call signs both as they are and returns a
 `PreparedAction`; send its `actionSignatures` with the URL. A URL containing
-a comma is rejected, since signatures join their fields with commas.
+a comma is rejected, since signatures join their fields with commas. Send an
+avatar change after every key rotation too, with the image encrypted under
+the new key, as X clients do.
 
 ```js
 // 0.5.x
+const encrypted = chat.encryptStream(photo, keys[conversationKeyVersion]);
 await api.put(`/2/chat/conversations/${pathId}`, {
   group_avatar_url: chat.encrypt(avatarUrl, keys[conversationKeyVersion]),
   conversation_key_version: conversationKeyVersion,
@@ -1432,6 +1481,7 @@ await api.put(`/2/chat/conversations/${pathId}`, {
 });
 
 // 0.7.0
+const encrypted = chat.encryptFileWithKey({ file: photo, key: keys[conversationKeyVersion] });
 const prepared = chat.prepareGroupAvatarChange({
   conversationId,
   newAvatarUrl: avatarUrl,
@@ -1445,14 +1495,19 @@ await api.put(`/2/chat/conversations/${pathId}`, {
 });
 ```
 
-A received `avatarChanged` change holds `newAvatarUrl` as sent and its
-`conversationKeyVersion`: download the image and decrypt it with the key for
-that version.
+In both, `avatarUrl` is the media URL of the uploaded `encrypted` image. A
+received `avatarChanged` change holds `newAvatarUrl` as sent and its
+`conversationKeyVersion`: download the image and decrypt it with
+`decryptFileWithKey` under the key for that version.
 
 ```js
 // 0.7.0
-if (groupChange.change.changeType === 'avatarChanged') {
-  showAvatar(groupChange.change.newAvatarUrl, groupChange.change.conversationKeyVersion);
+const change = groupChange.change;
+if (change.changeType === 'avatarChanged') {
+  showAvatar(change.newAvatarUrl, change.conversationKeyVersion);
+  if (change.conversationKeyVersion) {
+    const image = chat.decryptFileWithKey({ encrypted: downloaded, key: keys[change.conversationKeyVersion] });
+  }
 }
 ```
 
@@ -1561,8 +1616,12 @@ grep -rn "targetMessageId" --include='*.js' --include='*.mjs' --include='*.ts' -
 ```
 
 Every `targetMessageId` the second search finds should read a v1 edit's
-signed message id; rename the rest to `targetMessageSequenceId`. Check every
-request body too: each object the package returns goes through `toSnake`.
+signed message id; rename the rest to `targetMessageSequenceId`. Each
+`encryptStream` and `decryptStream` the first finds is a message's file or a
+file under a key you hold, and [Encrypt a file under a key you
+hold](#encrypt-a-file-under-a-key-you-hold) says which call each moves to.
+Check every request body too: each object the package returns goes through
+`toSnake`.
 
 ### Run a round trip
 
@@ -1617,9 +1676,9 @@ built the send, a 0.7 release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,
-and create a group, add a member and remove one. Fetch the conversation's
-events with `GET /2/chat/conversations/{id}/events`, pass `data[].encoded_event`
-and `meta.conversation_key_events` to `decryptEvents` with every
-participant's signing keys, and check that every event in `events` has
-`verified` set and that `errors` holds only the removal's title and
-description re-encryptions.
+and create a group, set its avatar, add a member and remove one. Fetch the
+conversation's events with `GET /2/chat/conversations/{id}/events`, pass
+`data[].encoded_event` and `meta.conversation_key_events` to
+`decryptEvents` with every participant's signing keys, and check that every
+event in `events` has `verified` set and that `errors` holds only the
+removal's title and description re-encryptions.

@@ -34,6 +34,7 @@ call to adopt.
 - [ ] `[runtime]` [Read the send payload under the send request's field names and send `xdk_version`](#the-send-payload-takes-the-send-requests-field-names)
 - [ ] `[compile]` [Build a message before you encrypt its files](#encrypt-a-file-from-its-message)
 - [ ] `[compile]` [Decrypt a file with the event of its message](#decrypt-a-file-with-its-messages-event)
+- [ ] `[compile]` [Encrypt a file no message carries, such as a group avatar, with `chat_xdk_encrypt_file_with_key`](#encrypt-a-file-under-a-key-you-hold)
 - [ ] `[compile]` [Use the file encryptor and decryptor for large files](#encrypt-and-decrypt-large-files-in-chunks)
 - [ ] `[runtime]` [Pass action signatures through as returned](#action-signatures-come-nested)
 - [ ] `[runtime]` [Name a public key's fields `identity_public_key` and `public_key_version`](#public-key-inputs-name-the-identity-key-and-its-version)
@@ -99,7 +100,7 @@ bytes, `data` and `data_len` bytes to sign, and `juicebox_config_json` the
 Juicebox config the X API returns. The snippets leave out the frees.
 
 The params documents use the snake_case field names of the params types in
-[API.md](../API.md), with byte fields (`file`, `encrypted`,
+[API.md](../API.md), with byte fields (`file`, `encrypted`, `key`,
 `conversation_key` and the values of `conversation_keys`) as base64 strings
 and entities as `[start, end, "type"]` arrays. A document may carry fields
 a call doesn't take, which it ignores, but a missing required field or a
@@ -228,10 +229,12 @@ reports those. [Verify](#5-verify) gives the search as one command.
 | A batch result's `messages` | `events` | [Decrypt](#decrypt-with-params-documents) |
 | `chat_xdk_decrypt_event(handle, event_b64, conversation_keys_json, signing_keys_json)` | `chat_xdk_decrypt_event(handle, params_json)` | [Decrypt](#decrypt-with-params-documents) |
 | Send payload's `encrypted_content`, `encoded_event_signature` | `encoded_message_create_event`, `encoded_message_event_signature` | [Send payload](#the-send-payload-takes-the-send-requests-field-names) |
-| `chat_xdk_encrypt_stream`, `chat_xdk_decrypt_stream` | `chat_xdk_encrypt_file`, `chat_xdk_decrypt_file` | [Files](#encrypt-a-file-from-its-message) |
-| `chat_xdk_stream_encryptor_new`, `_push`, `_finish`, `_free`, `chat_xdk_stream_decryptor_*`, `StreamEncryptorHandle`, `StreamDecryptorHandle` | `chat_xdk_file_encryptor_new(handle, params_json, &encryptor)`, `_push`, `_finish`, `_free`, `chat_xdk_file_decryptor_*`, `FileEncryptorHandle`, `FileDecryptorHandle` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `chat_xdk_encrypt_stream`, `chat_xdk_decrypt_stream`, a message's file | `chat_xdk_encrypt_file`, `chat_xdk_decrypt_file` | [Files](#encrypt-a-file-from-its-message) |
+| `chat_xdk_encrypt_stream`, `chat_xdk_decrypt_stream`, any other file, such as a group avatar | `chat_xdk_encrypt_file_with_key`, `chat_xdk_decrypt_file_with_key` | [Files under a key](#encrypt-a-file-under-a-key-you-hold) |
+| `chat_xdk_stream_encryptor_new`, `_push`, `_finish`, `_free`, `chat_xdk_stream_decryptor_*`, `StreamEncryptorHandle`, `StreamDecryptorHandle`, a message's file | `chat_xdk_file_encryptor_new(handle, params_json, &encryptor)`, `_push`, `_finish`, `_free`, `chat_xdk_file_decryptor_*`, `FileEncryptorHandle`, `FileDecryptorHandle` | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
+| `chat_xdk_stream_encryptor_*`, `chat_xdk_stream_decryptor_*`, any other file | `chat_xdk_encrypt_file_with_key` and `chat_xdk_decrypt_file_with_key` over the whole file | [Large files](#encrypt-and-decrypt-large-files-in-chunks) |
 | `chat_xdk_encrypted_stream_size` | `chat_xdk_encrypted_file_size` | [Files](#encrypt-a-file-from-its-message) |
-| `chat_xdk_encrypt` | Removed: titles and descriptions go through `chat_xdk_prepare_group_title_change`, `chat_xdk_prepare_group_description_change` and the group creates and member adds; avatar URLs aren't encrypted; files go through `chat_xdk_encrypt_file` | [Changing the title](#changing-the-title) |
+| `chat_xdk_encrypt` | Removed: titles and descriptions go through `chat_xdk_prepare_group_title_change`, `chat_xdk_prepare_group_description_change` and the group creates and member adds; avatar URLs aren't encrypted; files go through `chat_xdk_encrypt_file` or `chat_xdk_encrypt_file_with_key` | [Changing the title](#changing-the-title) |
 | Action signature's `signature`, `signature_version`, `public_key_version`, `signature_payload` beside `message_id` | Nested under `message_event_signature`, with `signing_public_key`; the signed payload stays inside the SDK | [Action signatures](#action-signatures-come-nested) |
 | Public key's `public_key`, `key_version` | `identity_public_key`, `public_key_version` | [Public keys](#public-key-inputs-name-the-identity-key-and-its-version) |
 | Prepared change's `participant_keys`, `encrypted_key` | `conversation_participant_keys`, `encrypted_conversation_key` | [Participant keys](#participant-keys-take-the-key-requests-names) |
@@ -490,6 +493,45 @@ char *plaintext = take(chat_xdk_decrypt_stream(chat, downloaded_b64, conversatio
 char *plaintext = take(chat_xdk_decrypt_file(chat, decrypt_file_json));
 ```
 
+### Encrypt a file under a key you hold
+
+`chat_xdk_encrypt_stream` and `chat_xdk_decrypt_stream` take a key from the
+app for every file. A file a message carries takes its key from the
+message, as the two sections above show. A file no message carries keeps
+the key you hold, and goes through `chat_xdk_encrypt_file_with_key` and
+`chat_xdk_decrypt_file_with_key`: a group's avatar image, which X clients
+encrypt under the conversation key whose version the avatar change signs
+next to the avatar URL (see [Changing the avatar](#changing-the-avatar)),
+or your app's own files at rest. Each takes the chat and a params document
+with the file (`file` or `encrypted`) and the raw 32-byte key
+`chat_xdk_encrypt_stream` took, as `key`, both base64, and returns the
+result base64. They write the format `chat_xdk_encrypt_stream` writes:
+files 0.5.x encrypted with `chat_xdk_encrypt_stream` or a stream encryptor
+decrypt with `chat_xdk_decrypt_file_with_key`, and 0.5.x
+`chat_xdk_decrypt_stream` decrypts what `chat_xdk_encrypt_file_with_key`
+returns, so files you stored need no re-encryption. A key that isn't 32
+bytes fails with an error of kind `invalid_input`, and bytes that aren't a
+complete file encrypted under the key with one of kind `decryption`.
+
+```c
+// 0.5.x
+char *encrypted = take(chat_xdk_encrypt_stream(chat, file_b64, conversation_key_b64));
+char *plaintext = take(chat_xdk_decrypt_stream(chat, downloaded_b64, conversation_key_b64));
+
+// 0.7.0
+// {"file": "...", "key": "..."}
+char *encrypted = take(chat_xdk_encrypt_file_with_key(chat, encrypt_file_with_key_json));
+// {"encrypted": "...", "key": "..."}
+char *plaintext = take(chat_xdk_decrypt_file_with_key(chat, decrypt_file_with_key_json));
+```
+
+To move a `chat_xdk_encrypt_stream` or `chat_xdk_decrypt_stream` call, look
+at its file. A file one of a message's attachments names (a photo, a video,
+a link card's banner or favicon) moves to `chat_xdk_encrypt_file` and
+`chat_xdk_decrypt_file`, with the message; any other file moves to
+`chat_xdk_encrypt_file_with_key` and `chat_xdk_decrypt_file_with_key`, with
+the same key.
+
 ### Encrypt and decrypt large files in chunks
 
 `chat_xdk_file_encryptor_new` and `chat_xdk_file_decryptor_new` take the
@@ -497,7 +539,10 @@ chat and the same document as `chat_xdk_encrypt_file` and
 `chat_xdk_decrypt_file` without the file bytes. They return an `FfiResult`
 and write the handle to their last argument. The push, finish and free
 calls take the same arguments as 0.5.x's, under the file names, and
-`chat_xdk_encrypted_file_size` sizes an upload.
+`chat_xdk_encrypted_file_size` sizes an upload. A file under a key you hold
+has no chunked form: read it whole and pass it to
+`chat_xdk_encrypt_file_with_key` or `chat_xdk_decrypt_file_with_key` (see
+[Encrypt a file under a key you hold](#encrypt-a-file-under-a-key-you-hold)).
 
 ```c
 // 0.5.x
@@ -1026,7 +1071,8 @@ Every group change below returns `action_signatures` for its request in
 encrypted under the conversation key, and the SDK encrypts them: the
 creates, member adds, removals and title and description changes take them
 as plaintext and return the encrypted values to send. An avatar is an image
-the app encrypts and uploads; its URL is signed as is.
+the app encrypts with `chat_xdk_encrypt_file_with_key` and uploads; its URL
+is signed as is.
 
 ### Creating a group
 
@@ -1091,7 +1137,8 @@ char *title = json_get(group_change_json, strcmp(kind, "Text") == 0 ? "change.ti
 
 A `Created` change also carries the create's `conversation_key_version`, and
 the `avatar_url` a create from another client may set: a media URL whose
-image is encrypted under that key version.
+image is encrypted under that key version, which
+`chat_xdk_decrypt_file_with_key` opens with that version's key.
 
 ### Adding members
 
@@ -1135,11 +1182,12 @@ the description out, so the add signs at version 7 as in 0.5.x; the new
 members can read the description once a description change sets it under the
 new key.
 
-The avatar isn't re-encrypted: `current_avatar_url` takes its media URL,
-signed as is, and the image stays encrypted under the key it was uploaded
-with, which the new members never receive. To keep the avatar readable for
-them, encrypt the image under the key the add returns, upload it, and send
-an [avatar change](#changing-the-avatar) naming the new key version.
+The add doesn't re-encrypt the avatar: `current_avatar_url` takes its media
+URL, signed as is, and the image stays encrypted under the key it was
+uploaded with, which the new members never receive. X clients re-encrypt the
+avatar on every key rotation: encrypt the image under the key the add
+returns with `chat_xdk_encrypt_file_with_key`, upload it, and send an
+[avatar change](#changing-the-avatar) naming the new key version.
 
 A recipient's `chat_xdk_decrypt_event` returns the add as a verified
 `MembersAdded` change with `member_ids`, `current_member_ids` and
@@ -1161,9 +1209,12 @@ encrypts under next. Its document takes:
 - `title` and `description`: the group's current title and description, as
   plaintext. Pass each one the group has; the call encrypts each under the
   new key and signs it as a key-rotation re-encryption, which recipients'
-  decrypt drops rather than shows as a change. A rotation leaves the avatar
-  alone: its image stays encrypted under the key it was uploaded with,
-  which the members who stay hold.
+  decrypt drops rather than shows as a change. The avatar is an image you
+  encrypt, so the call doesn't re-encrypt it: X clients re-encrypt the
+  avatar on every key rotation, so once the removal succeeds, encrypt the
+  image under the new key with `chat_xdk_encrypt_file_with_key`, upload it,
+  and send an [avatar change](#changing-the-avatar) naming the new key
+  version.
 
 The result is a prepared change: the new `conversation_key` (base64) and
 `conversation_key_version`, `conversation_participant_keys` for the members
@@ -1319,28 +1370,36 @@ api_put("/2/chat/conversations/g1", description_request_json);
 ### Changing the avatar
 
 An avatar URL is not encrypted; the image is. Encrypt the image bytes under
-the conversation key, upload them to the group's media, and pass the
-image's media URL to `chat_xdk_prepare_group_avatar_change` as
-`new_avatar_url`, with `conversation_key_version`, the version of the key
-the image is encrypted under. Unlike the title change, it takes no
-`conversation_key`: the image is encrypted before the call. The call signs
-both as they are and returns `action_signatures`; send them with the URL. A
-URL containing a comma is rejected, since signatures join their fields with
-commas. A received `AvatarChanged` change holds `new_avatar_url` as sent
-and its `conversation_key_version`: download the image and decrypt it with
-the key for that version.
+the conversation key with `chat_xdk_encrypt_file_with_key`, as X clients
+do, upload them to the group's media, and pass the image's media URL to
+`chat_xdk_prepare_group_avatar_change` as `new_avatar_url`, with
+`conversation_key_version`, the version of the key the image is encrypted
+under. Unlike the title change, it takes no `conversation_key`: the image
+is encrypted before the call. The call signs both as they are and returns
+`action_signatures`; send them with the URL. A URL containing a comma is
+rejected, since signatures join their fields with commas. Send an avatar
+change after every key rotation too, with the image encrypted under the new
+key, as X clients do. A received `AvatarChanged` change holds
+`new_avatar_url` as sent and its `conversation_key_version`: download the
+image and decrypt it with `chat_xdk_decrypt_file_with_key` under the key
+for that version, as the snippet's last call does.
 
 ```c
 // 0.5.x
+char *encrypted = take(chat_xdk_encrypt_stream(chat, image_b64, conversation_key_b64));
 char *encrypted_avatar_url = take(chat_xdk_encrypt(chat, avatar_url, conversation_key_b64));
 
 // 0.7.0
+// {"file": "...", "key": "..."}
+char *encrypted = take(chat_xdk_encrypt_file_with_key(chat, encrypt_avatar_json));
 // {"conversation_id": "g1", "new_avatar_url": "https://ton.x.com/...", "conversation_key_version": "2"}
 char *avatar = take(chat_xdk_prepare_group_avatar_change(chat, avatar_json));
 // PUT /2/chat/conversations/g1
 // {"group_avatar_url": "https://ton.x.com/...", "conversation_key_version": "2",
 //  "modified_fields": ["group_avatar_url"], "action_signatures": <avatar.action_signatures>}
 api_put("/2/chat/conversations/g1", avatar_request_json);
+// {"encrypted": "...", "key": "..."}
+char *image = take(chat_xdk_decrypt_file_with_key(chat, decrypt_avatar_json));
 ```
 
 ### Admins, invites, join requests, message TTL and screen capture
@@ -1453,7 +1512,11 @@ grep -rn "target_message_id" --include='*.c' --include='*.h' --include='*.cc' --
 ```
 
 Every `target_message_id` the second search finds should read a v1 edit's
-signed message id; rename the rest to `target_message_sequence_id`.
+signed message id; rename the rest to `target_message_sequence_id`. Each
+`chat_xdk_encrypt_stream` and `chat_xdk_decrypt_stream` the first finds is a
+message's file or a file under a key you hold, and [Encrypt a file under a
+key you hold](#encrypt-a-file-under-a-key-you-hold) says which call each
+moves to.
 
 ### Run a round trip
 
@@ -1524,8 +1587,8 @@ receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,
-and create a group, add a member and remove one. Fetch the conversation's
-events with `GET /2/chat/conversations/{id}/events`, pass
+and create a group, set its avatar, add a member and remove one. Fetch the
+conversation's events with `GET /2/chat/conversations/{id}/events`, pass
 `data[].encoded_event` and `meta.conversation_key_events` to
 `chat_xdk_decrypt_events` with every participant's signing keys, and check
 that every event in `events` has `verified` set and that `errors` holds
