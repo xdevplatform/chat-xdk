@@ -442,23 +442,36 @@ export class ChatWithJuicebox {
   }
 }
 
-// Feature switches (GET /2/chat/features). A chat reads them once, when it is
-// created: the wasm core decides what to fetch and what an answer means, and
-// this module performs the GET. Nothing here is API.
+// Feature switches (GET /2/chat/features). A chat reads them when it is
+// created: the wasm core decides what to fetch, when to retry and what an
+// answer means, and this module performs the GET and each retry. Nothing here
+// is API.
 
-/** Start the one read of `wasmChat`'s feature switches. */
+/** Start the read of `wasmChat`'s feature switches. */
 function startFeatureFetch(wasmChat) {
-  const request = wasmChat.__featureStart();
+  performFeatureFetch(wasmChat.__featureStart());
+}
+
+/**
+ * Perform `request`, a GET the core hands out, after its delay, then the
+ * retry its result returns, until none does.
+ */
+function performFeatureFetch(request) {
   if (request === undefined) return;
-  getFeatures(request.url, request.timeoutMs, request.maxBytes).then(({ status, body }) =>
-    __featureComplete(request.id, status, body),
-  );
+  delay(request.delayMs)
+    .then(() => getFeatures(request.url, request.timeoutMs, request.maxBytes))
+    .then(({ status, body }) => performFeatureFetch(__featureComplete(request.id, status, body)));
 }
 
 /** In Node, keep a request's timer from holding the process open. */
 function unrefTimer(timer) {
   timer?.unref?.();
   return timer;
+}
+
+/** Resolve after `ms`, on a timer that never keeps Node running. */
+function delay(ms) {
+  return ms > 0 ? new Promise((resolve) => unrefTimer(setTimeout(resolve, ms))) : Promise.resolve();
 }
 
 const NO_RESPONSE = { status: 0, body: new Uint8Array(0) };

@@ -244,17 +244,31 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
 
 #[cfg(feature = "bindings")]
 #[test]
-fn a_failed_read_leaves_sends_on_v0_for_the_chats_lifetime() {
+fn a_failed_read_is_retried_and_the_retrys_answer_turns_v1_on() {
     let party = author();
     let fetch = start_own_read(&party.core);
-    complete(&fetch, 503, r#"{"features":{"v1_send":true}}"#);
-    assert_eq!(party.core.start_features(), None, "no second read");
+    let retry = crate::bindings::complete_fetch(
+        fetch.id,
+        503,
+        br#"{"features":{"v1_send":true}}"#.as_slice(),
+    )
+    .expect("the failed read is retried");
+    assert_eq!(retry.url, fetch.url);
+    assert_eq!(retry.delay_ms, crate::features::RETRY_FIRST_DELAY_MS);
+    assert_eq!(party.core.start_features(), None, "the read goes on");
     let ckey = key(3);
     let payload = party
         .core
         .encrypt_message(&message_params("hi", &ckey))
         .unwrap();
     assert_v0(&party, &ckey, "after a 503", &payload);
+
+    complete(&retry, 200, r#"{"features":{"v1_send":true}}"#);
+    let payload = party
+        .core
+        .encrypt_message(&message_params("hi", &ckey))
+        .unwrap();
+    assert_v1(&party, &ckey, "after the retry's answer", &payload);
 }
 
 #[cfg(feature = "bindings")]
@@ -513,7 +527,7 @@ fn a_decrypted_v1_edit_names_the_message_it_edits() {
 }
 
 #[test]
-fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
+fn the_first_answer_a_caller_hands_over_sets_the_send_format() {
     let ckey = key(1);
     let send = |party: &Party| {
         party
@@ -546,11 +560,24 @@ fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
     for (status, body) in [
         (404, on.as_slice()),
         (200, b"not json".as_slice()),
-        (200, br#"{"features":{"v1_send":"true"}}"#.as_slice()),
         (200, oversized.as_slice()),
     ] {
         let party = author();
         party.core.set_feature_switches(status, body);
         assert_eq!(send(&party), "7", "{status} {}", body.len());
+        party.core.set_feature_switches(200, on);
+        assert_eq!(
+            send(&party),
+            "10",
+            "the retried GET's answer after {status}"
+        );
     }
+
+    let party = author();
+    party
+        .core
+        .set_feature_switches(200, br#"{"features":{"v1_send":"true"}}"#);
+    assert_eq!(send(&party), "7", "a flag that is not a boolean reads off");
+    party.core.set_feature_switches(200, on);
+    assert_eq!(send(&party), "7", "that answer holds");
 }

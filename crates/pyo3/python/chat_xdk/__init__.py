@@ -108,9 +108,10 @@ class ScreenCaptureChange(str, Enum):
     DetectionDisabled = "DetectionDisabled"
 
 
-# Feature switches (GET /2/chat/features). A chat reads them once, when it is
-# created: the native core decides what to fetch and what an answer means, and
-# this module performs the GET on a daemon thread. Nothing here is API.
+# Feature switches (GET /2/chat/features). A chat reads them when it is
+# created: the native core decides what to fetch, when to retry and what an
+# answer means, and this module performs the GET, and each retry, on a daemon
+# thread. Nothing here is API.
 
 
 def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
@@ -124,19 +125,29 @@ def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
 
 
 def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
-    try:
-        status, body = _get_features(url, timeout, max_bytes)
-    except Exception:
-        status, body = 0, b""
-    _native._feature_complete(fetch_id, status, body)
+    """Perform the GET, then each retry the core returns after its delay,
+    until none is left or the process exits."""
+    while True:
+        try:
+            status, body = _get_features(url, timeout, max_bytes)
+        except Exception:
+            status, body = 0, b""
+        retry = _native._feature_complete(fetch_id, status, body)
+        if retry is None:
+            return
+        fetch_id, url, timeout, max_bytes, delay = retry
+        if _exit_requested.wait(delay):
+            return
 
 
 # The sockets of the GETs under way, by thread. At exit they are cut short and
 # waited for: a daemon thread still inside OpenSSL when the process exits races
-# OpenSSL's own cleanup, which can crash the process.
+# OpenSSL's own cleanup, which can crash the process. A thread waiting to
+# retry ends instead of starting another GET.
 _requests = {}
 _requests_lock = _threading.Lock()
 _exiting = False
+_exit_requested = _threading.Event()
 _tls_context = None
 
 
@@ -199,6 +210,7 @@ def _end_feature_requests():
     """Start no more GETs, cut short the ones under way, and wait for them to
     end, at most 2 seconds."""
     global _exiting
+    _exit_requested.set()
     with _requests_lock:
         _exiting = True
         for sock in _requests.values():

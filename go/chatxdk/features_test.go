@@ -84,7 +84,9 @@ func waitForV1(t *testing.T, chat *Chat) {
 
 // featureServer is a local GET /2/chat/features that records each request's
 // query string and headers. Its redirectTarget path answers that v1_send is
-// on, for the tests that check a redirect to it is not followed.
+// on, for the tests that check a redirect to it is not followed. A request
+// for another path, such as a retry of a server that had this port before,
+// gets a 404 and is not recorded.
 type featureServer struct {
 	*httptest.Server
 	id        int64
@@ -110,6 +112,10 @@ func newFeatureServer(t *testing.T) *featureServer {
 			s.followed++
 			s.mu.Unlock()
 			_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
+			return
+		}
+		if r.URL.Path != s.path() {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		// The answer is fixed when the request is recorded, so a test that
@@ -145,8 +151,12 @@ func newFeatureServer(t *testing.T) *featureServer {
 // the port of one that came before it.
 var featureServerIDs atomic.Int64
 
+func (s *featureServer) path() string {
+	return "/" + strconv.FormatInt(s.id, 10) + "/2/chat/features"
+}
+
 func (s *featureServer) endpoint() string {
-	return s.URL + "/" + strconv.FormatInt(s.id, 10) + "/2/chat/features"
+	return s.URL + s.path()
 }
 
 func (s *featureServer) set(status int, body string) {
@@ -389,10 +399,23 @@ func TestAnyFailureLeavesSendsOnV0(t *testing.T) {
 			if got := sendVersion(t, chat, v); got != "7" {
 				t.Fatalf("send is %q, want 7", got)
 			}
-			if got := server.seen(); len(got) != 1 {
-				t.Fatalf("requests: %d, want 1: a failure is not retried", len(got))
-			}
 		})
+	}
+}
+
+func TestAFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.set(http.StatusServiceUnavailable, `{"features":{"v1_send":true}}`)
+	chat := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "the first request", func() bool { return len(server.seen()) == 1 })
+	server.set(http.StatusOK, `{"features":{"v1_send":true}}`)
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7: the failed read leaves sends on v0", got)
+	}
+	waitFor(t, "v1 from the retry", func() bool { return sendVersion(t, chat, v) == "10" })
+	if got := server.seen(); len(got) != 2 {
+		t.Fatalf("requests: %d, want 2", len(got))
 	}
 }
 

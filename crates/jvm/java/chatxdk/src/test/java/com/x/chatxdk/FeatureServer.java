@@ -18,7 +18,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * A local GET /2/chat/features that records each request's query string and headers. Its
  * {@link #REDIRECT_TARGET} path answers that v1_send is on, for the tests that check a redirect to it
- * is not followed.
+ * is not followed. A request for another path, such as a retry of a server that had this port
+ * before, gets a 404 and is not recorded.
  */
 final class FeatureServer implements AutoCloseable {
 
@@ -55,6 +56,7 @@ final class FeatureServer implements AutoCloseable {
 
     FeatureServer(String body) throws Exception {
         this.body = body;
+        String path = "/" + IDS.incrementAndGet() + "/2/chat/features";
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext(REDIRECT_TARGET, exchange -> {
             synchronized (this) {
@@ -69,6 +71,11 @@ final class FeatureServer implements AutoCloseable {
             }
         });
         server.createContext("/", exchange -> {
+            if (!path.equals(exchange.getRequestURI().getPath())) {
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
             String query = exchange.getRequestURI().getRawQuery();
             // The answer is fixed when the request is recorded, so a test that sees the request
             // can change the next answer.
@@ -116,8 +123,7 @@ final class FeatureServer implements AutoCloseable {
             return t;
         }));
         server.start();
-        endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + "/" + IDS.incrementAndGet()
-                + "/2/chat/features";
+        endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + path;
     }
 
     synchronized void set(int status, String body, long delayMs) {

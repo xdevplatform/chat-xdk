@@ -54,7 +54,8 @@ namespace ChatXdk.Tests
     /// <summary>
     /// A local GET /2/chat/features that records each request's query string and head. Its
     /// <see cref="RedirectTarget"/> path answers that v1_send is on, for the tests that check a
-    /// redirect to it is not followed. It speaks just
+    /// redirect to it is not followed. A request for another path, such as a retry of a server
+    /// that had this port before, gets a 404 and is not recorded. It speaks just
     /// enough HTTP over a <see cref="TcpListener"/> for one request per connection, and
     /// handles a client that gives up mid-request itself.
     /// </summary>
@@ -79,13 +80,16 @@ namespace ChatXdk.Tests
         // port of one that came before it.
         private static int s_lastId;
 
+        private readonly string _path;
+
         public string Endpoint { get; }
 
         public FeatureServer(string body = "{\"features\":{\"v1_send\":true}}")
         {
             _body = body;
             _listener.Start();
-            Endpoint = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/{Interlocked.Increment(ref s_lastId)}/2/chat/features";
+            _path = $"/{Interlocked.Increment(ref s_lastId)}/2/chat/features";
+            Endpoint = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}{_path}";
             _ = Task.Run(AcceptAsync);
         }
 
@@ -174,6 +178,11 @@ namespace ChatXdk.Tests
                     }
                     var queryStart = target.IndexOf('?');
                     var query = queryStart >= 0 ? target[(queryStart + 1)..] : "";
+                    if ((queryStart >= 0 ? target[..queryStart] : target) != _path)
+                    {
+                        await WriteResponseAsync(stream, 404, "", "");
+                        return;
+                    }
                     // The answer is fixed when the request is recorded, so a test that sees the
                     // request can change the next answer.
                     int status;

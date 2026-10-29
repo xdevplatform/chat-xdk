@@ -9,10 +9,10 @@ package chatxdk
 // Internal entry points for this package's feature switches. They are left
 // out of chat_xdk.h because they are not part of the C API.
 struct FfiResult chat_xdk_internal_feature_start(const struct ChatHandle *handle);
-void chat_xdk_internal_feature_complete(uint64_t id,
-                                        int32_t status,
-                                        const uint8_t *body,
-                                        uintptr_t body_len);
+struct FfiResult chat_xdk_internal_feature_complete(uint64_t id,
+                                                    int32_t status,
+                                                    const uint8_t *body,
+                                                    uintptr_t body_len);
 struct FfiResult chat_xdk_internal_feature_configure(const struct ChatHandle *handle,
                                                      const char *endpoint,
                                                      uint64_t timeout_ms);
@@ -163,18 +163,20 @@ func ffiSetCacheKeys(h handle, enabled bool) error {
 	return err
 }
 
-// ffiFeatureStart starts the chat's one read of the feature switches and
-// returns the GET to perform as JSON, or "" when there is none to perform.
+// ffiFeatureStart starts the chat's read of the feature switches and returns
+// the GET to perform as JSON, or "" when there is none to perform.
 func ffiFeatureStart(h handle) (string, error) {
 	return ffiResult(C.chat_xdk_internal_feature_start(h))
 }
 
-func ffiFeatureComplete(id uint64, status int, body []byte) {
+// ffiFeatureComplete reports the result of the GET id and returns the retry
+// to perform as JSON, or "" when there is none.
+func ffiFeatureComplete(id uint64, status int, body []byte) (string, error) {
 	var p *C.uint8_t
 	if len(body) > 0 {
 		p = (*C.uint8_t)(unsafe.Pointer(&body[0]))
 	}
-	C.chat_xdk_internal_feature_complete(C.uint64_t(id), C.int32_t(status), p, C.uintptr_t(len(body)))
+	return ffiResult(C.chat_xdk_internal_feature_complete(C.uint64_t(id), C.int32_t(status), p, C.uintptr_t(len(body))))
 }
 
 func ffiFeatureConfigure(h handle, endpoint string, timeout time.Duration) error {

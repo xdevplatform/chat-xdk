@@ -156,7 +156,15 @@ class TestFeatureSwitches(unittest.TestCase):
                 self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1))
                 time.sleep(delay + 0.2)
                 self.assertEqual(self._send(chat), "7")
-                self.assertEqual(len(self.server.queries), 1, "a failure is not retried")
+
+    def test_a_failed_read_is_retried_and_the_retrys_answer_turns_v1_on(self):
+        self.server.status = 503
+        chat = self._chat()
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1))
+        self.server.status = 200
+        self.assertEqual(self._send(chat), "7", "the failed read leaves sends on v0")
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"), "the retry's answer turns v1 on")
+        self.assertEqual(len(self.server.queries), 2, self.server.queries)
 
     def test_the_read_sends_no_cookies_or_credentials(self):
         self.server.set_cookie = "session=from-the-first-answer; Path=/"

@@ -121,10 +121,10 @@ pub fn detect_image_dimensions(bytes: &[u8]) -> JsValue {
     }
 }
 
-// Feature switches (GET /2/chat/features). A chat reads them once, when it is
-// created: the core decides what to fetch and what an answer means, and the JS
-// wrapper performs the GET. None of this is API, and all of it is left out of
-// the TypeScript declarations.
+// Feature switches (GET /2/chat/features). A chat reads them when it is
+// created: the core decides what to fetch, when to retry and what an answer
+// means, and the JS wrapper performs the GET and each retry. None of this is
+// API, and all of it is left out of the TypeScript declarations.
 
 /// Milliseconds from `performance.now()`, or `Date.now()` without it.
 fn feature_clock() -> u64 {
@@ -140,10 +140,30 @@ fn feature_clock() -> u64 {
 }
 
 /// Report the result of the GET `id`: its HTTP status, 0 when no complete
-/// response arrived, and its body.
+/// response arrived, and its body. Returns the retry to perform, in the shape
+/// `__featureStart` returns, or `undefined`.
 #[wasm_bindgen(js_name = __featureComplete, skip_typescript)]
-pub fn feature_complete(id: f64, status: u16, body: &[u8]) {
-    bindings::complete_fetch(id as u64, status, body);
+pub fn feature_complete(id: f64, status: u16, body: &[u8]) -> JsValue {
+    feature_request(bindings::complete_fetch(id as u64, status, body))
+}
+
+/// A GET for the wrapper to perform, as `{ id, url, timeoutMs, maxBytes,
+/// delayMs }`, or `undefined` for none.
+fn feature_request(fetch: Option<bindings::Fetch>) -> JsValue {
+    let Some(fetch) = fetch else {
+        return JsValue::UNDEFINED;
+    };
+    let request = js_sys::Object::new();
+    for (name, value) in [
+        ("id", JsValue::from(fetch.id as f64)),
+        ("url", fetch.url.into()),
+        ("timeoutMs", (fetch.timeout_ms as f64).into()),
+        ("maxBytes", (fetch.max_bytes as f64).into()),
+        ("delayMs", (fetch.delay_ms as f64).into()),
+    ] {
+        js_sys::Reflect::set(&request, &name.into(), &value).ok();
+    }
+    request.into()
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
@@ -360,25 +380,13 @@ impl Chat {
         self.inner.configure_features(endpoint, timeout_ms as u64);
     }
 
-    /// Start this chat's one read of the feature switches:
-    /// `{ id, url, timeoutMs, maxBytes }` for the wrapper to GET, or
-    /// `undefined` when the chat takes the answer of a GET in flight or has
-    /// started its read already. Not API.
+    /// Start this chat's read of the feature switches:
+    /// `{ id, url, timeoutMs, maxBytes, delayMs }` for the wrapper to GET,
+    /// or `undefined` when the chat takes the answer of a GET in flight or
+    /// has started its read already. Not API.
     #[wasm_bindgen(js_name = __featureStart, skip_typescript)]
     pub fn feature_start(&self) -> JsValue {
-        let Some(fetch) = self.inner.start_features() else {
-            return JsValue::UNDEFINED;
-        };
-        let request = js_sys::Object::new();
-        for (name, value) in [
-            ("id", JsValue::from(fetch.id as f64)),
-            ("url", fetch.url.into()),
-            ("timeoutMs", (fetch.timeout_ms as f64).into()),
-            ("maxBytes", (fetch.max_bytes as f64).into()),
-        ] {
-            js_sys::Reflect::set(&request, &name.into(), &value).ok();
-        }
-        request.into()
+        feature_request(self.inner.start_features())
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`

@@ -4,10 +4,11 @@ using System.Text.Json.Serialization;
 namespace ChatXdk
 {
     /// <summary>
-    /// Reads a chat's feature switches (<c>GET /2/chat/features</c>) once, when the chat is
-    /// created. The native core decides what to fetch and what an answer means; this class
-    /// performs the GET with <see cref="HttpClient"/> on the thread pool and hands the status
-    /// and body back. Nothing here is API.
+    /// Reads a chat's feature switches (<c>GET /2/chat/features</c>) when the chat is created.
+    /// The native core decides what to fetch, when to retry and what an answer means; this
+    /// class performs the GET, and each retry the core hands back, with
+    /// <see cref="HttpClient"/> on the thread pool and hands the status and body back. Nothing
+    /// here is API.
     /// </summary>
     internal static class FeatureFetch
     {
@@ -20,8 +21,8 @@ namespace ChatXdk
             };
 
         /// <summary>
-        /// Start <paramref name="chat"/>'s one read of the feature switches: nothing to do when
-        /// it takes the answer of a GET already in flight.
+        /// Start <paramref name="chat"/>'s read of the feature switches: nothing to do when it
+        /// takes the answer of a GET already in flight.
         /// </summary>
         internal static void Start(Chat chat)
         {
@@ -47,10 +48,19 @@ namespace ChatXdk
                 Chat.ConsumeResult(NativeMethods.chat_xdk_internal_feature_set_default_endpoint(endpointPtr));
         }
 
-        private static async Task PerformAsync(Fetch fetch)
+        /// <summary>
+        /// Perform <paramref name="fetch"/> after its delay, then the retry each result returns,
+        /// until none does.
+        /// </summary>
+        private static async Task PerformAsync(Fetch? fetch)
         {
-            var (status, body) = await GetAsync(fetch).ConfigureAwait(false);
-            Complete(fetch.Id, status, body);
+            while (fetch != null)
+            {
+                if (fetch.DelayMs > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(fetch.DelayMs)).ConfigureAwait(false);
+                var (status, body) = await GetAsync(fetch).ConfigureAwait(false);
+                fetch = Complete(fetch.Id, status, body);
+            }
         }
 
         /// <summary>
@@ -84,16 +94,21 @@ namespace ChatXdk
             }
         }
 
-        private static unsafe void Complete(ulong id, int status, byte[] body)
+        /// <summary>Report the result of the GET <paramref name="id"/>; returns the retry to perform, if any.</summary>
+        private static unsafe Fetch? Complete(ulong id, int status, byte[] body)
         {
+            string json;
             fixed (byte* bodyPtr = body)
-                NativeMethods.chat_xdk_internal_feature_complete(id, status, bodyPtr, (nuint)body.Length);
+                json = Chat.ConsumeResult(
+                    NativeMethods.chat_xdk_internal_feature_complete(id, status, bodyPtr, (nuint)body.Length));
+            return json.Length == 0 ? null : JsonSerializer.Deserialize<Fetch>(json);
         }
 
         private sealed record Fetch(
             [property: JsonPropertyName("id")] ulong Id,
             [property: JsonPropertyName("url")] string Url,
             [property: JsonPropertyName("timeout_ms")] long TimeoutMs,
-            [property: JsonPropertyName("max_bytes")] int MaxBytes);
+            [property: JsonPropertyName("max_bytes")] int MaxBytes,
+            [property: JsonPropertyName("delay_ms")] long DelayMs);
     }
 }

@@ -250,12 +250,13 @@ struct FfiResult chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_
  * `CHAT_XDK_FEATURES_ENDPOINT` you made: its HTTP status, 0 when no
  * response arrived, and `body_len` bytes of its body, read to the end or to
  * one byte past [`CHAT_XDK_FEATURES_MAX_BODY`]; `body` may be NULL when
- * `body_len` is 0. Make the request once, when you create the chat, within
+ * `body_len` is 0. Make the request when you create the chat, within
  * [`CHAT_XDK_FEATURES_TIMEOUT_MS`]. Sends are v0 until an answer turns
- * `v1_send` on, then v1. A chat takes one answer for its lifetime, the
- * first, and a status other than 200, or a body longer than
+ * `v1_send` on, then v1. A status other than 200, or a body longer than
  * [`CHAT_XDK_FEATURES_MAX_BODY`] or that isn't a `{"features": {...}}`
- * object, leaves every switch off.
+ * object, turns no switch on, and the chat takes a later answer, from a
+ * request you retried. The first answer that is a 200 with a
+ * `{"features": {...}}` object holds for the chat's lifetime.
  */
 struct FfiResult chat_xdk_set_feature_switches(const struct ChatHandle *handle,
                                                int32_t status,

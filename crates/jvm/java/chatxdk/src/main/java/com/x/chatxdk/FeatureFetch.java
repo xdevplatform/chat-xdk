@@ -18,9 +18,10 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Reads a chat's feature switches ({@code GET /2/chat/features}) once, when the chat is created.
- * The native core decides what to fetch and what an answer means; this class performs the GET with
- * {@link HttpClient} and hands the status and body back. Nothing here is API.
+ * Reads a chat's feature switches ({@code GET /2/chat/features}) when the chat is created. The
+ * native core decides what to fetch, when to retry and what an answer means; this class performs
+ * the GET, and each retry the core hands back, with {@link HttpClient} and hands the status and
+ * body back. Nothing here is API.
  */
 final class FeatureFetch {
     // The read is anonymous: the client has no cookie handler, so it stores and sends no cookies,
@@ -32,11 +33,15 @@ final class FeatureFetch {
     private FeatureFetch() {}
 
     /**
-     * Start {@code chat}'s one read of the feature switches: nothing to do when it takes the answer
-     * of a GET already in flight.
+     * Start {@code chat}'s read of the feature switches: nothing to do when it takes the answer of
+     * a GET already in flight.
      */
     static void start(Chat chat) {
-        String json = chat.startFeatures();
+        schedule(chat.startFeatures());
+    }
+
+    /** Perform the GET {@code json} describes, if any, after its delay. */
+    private static void schedule(String json) {
         if (json.isEmpty()) {
             return;
         }
@@ -46,11 +51,17 @@ final class FeatureFetch {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException(e);
         }
-        perform(
-                fetch.get("id").asLong(),
-                fetch.get("url").asText(),
-                fetch.get("timeout_ms").asLong(),
-                fetch.get("max_bytes").asInt());
+        long id = fetch.get("id").asLong();
+        String url = fetch.get("url").asText();
+        long timeoutMs = fetch.get("timeout_ms").asLong();
+        int maxBytes = fetch.get("max_bytes").asInt();
+        long delayMs = fetch.path("delay_ms").asLong();
+        if (delayMs <= 0) {
+            perform(id, url, timeoutMs, maxBytes);
+            return;
+        }
+        CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS)
+                .execute(() -> perform(id, url, timeoutMs, maxBytes));
     }
 
     /**
@@ -68,8 +79,8 @@ final class FeatureFetch {
     }
 
     /**
-     * Start the GET; when it ends, or at its timeout, its status and body go back to the core.
-     * Status 0 when no complete response arrived.
+     * Start the GET; when it ends, or at its timeout, its status and body go back to the core, and
+     * the retry the core returns, if any, is scheduled. Status 0 when no complete response arrived.
      */
     private static void perform(long id, String url, long timeoutMs, int maxBytes) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
@@ -90,7 +101,8 @@ final class FeatureFetch {
     }
 
     private static void complete(long id, int status, byte[] body) {
-        FeatureNative.INSTANCE.chat_xdk_internal_feature_complete(id, status, body, body.length);
+        schedule(FfiStrings.consume(
+                FeatureNative.INSTANCE.chat_xdk_internal_feature_complete(id, status, body, body.length)));
     }
 
     /** Collects the body up to one byte past {@code maxBytes}, then stops reading. */

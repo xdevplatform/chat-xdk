@@ -604,12 +604,13 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
 /// `CHAT_XDK_FEATURES_ENDPOINT` you made: its HTTP status, 0 when no
 /// response arrived, and `body_len` bytes of its body, read to the end or to
 /// one byte past [`CHAT_XDK_FEATURES_MAX_BODY`]; `body` may be NULL when
-/// `body_len` is 0. Make the request once, when you create the chat, within
+/// `body_len` is 0. Make the request when you create the chat, within
 /// [`CHAT_XDK_FEATURES_TIMEOUT_MS`]. Sends are v0 until an answer turns
-/// `v1_send` on, then v1. A chat takes one answer for its lifetime, the
-/// first, and a status other than 200, or a body longer than
+/// `v1_send` on, then v1. A status other than 200, or a body longer than
 /// [`CHAT_XDK_FEATURES_MAX_BODY`] or that isn't a `{"features": {...}}`
-/// object, leaves every switch off.
+/// object, turns no switch on, and the chat takes a later answer, from a
+/// request you retried. The first answer that is a 200 with a
+/// `{"features": {...}}` object holds for the chat's lifetime.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_feature_switches(
     handle: *const ChatHandle,
@@ -631,10 +632,11 @@ pub extern "C" fn chat_xdk_set_feature_switches(
 
 /// Internal, for this repository's bindings; not part of the API.
 ///
-/// Start this chat's one read of the feature switches. Returns in `data` the
-/// GET to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
-/// "max_bytes": …}`. Both fields are NULL when the chat takes the answer of a
-/// GET already in flight, or has started its read already.
+/// Start this chat's read of the feature switches. Returns in `data` the GET
+/// to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
+/// "max_bytes": …, "delay_ms": …}`, `delay_ms` being how long to wait before
+/// starting it. Both fields are NULL when the chat takes the answer of a GET
+/// already in flight, or has started its read already.
 #[no_mangle]
 pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> FfiResult {
     catch_ffi(|| {
@@ -656,21 +658,29 @@ pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> 
 /// Report the result of the feature-switch GET `id`: its HTTP status, 0 when
 /// no response arrived, and `body_len` bytes of its body, read to the end or
 /// to one byte past the GET's `max_bytes`. `body` may be NULL when
-/// `body_len` is 0.
+/// `body_len` is 0. Returns in `data` the retry to perform, in the JSON
+/// shape `chat_xdk_internal_feature_start` returns, when the result turned
+/// no switch on and the read is retried; both fields are NULL otherwise.
 #[no_mangle]
 pub extern "C" fn chat_xdk_internal_feature_complete(
     id: u64,
     status: i32,
     body: *const u8,
     body_len: usize,
-) {
-    catch_ffi_or((), || {
+) -> FfiResult {
+    catch_ffi(|| {
         let body = if body.is_null() || body_len == 0 {
             &[][..]
         } else {
             unsafe { std::slice::from_raw_parts(body, body_len) }
         };
-        bindings::complete_fetch(id, u16::try_from(status).unwrap_or(0), body);
+        match bindings::complete_fetch(id, u16::try_from(status).unwrap_or(0), body) {
+            Some(retry) => match serde_json::to_string(&retry) {
+                Ok(json) => ok_data(&json),
+                Err(e) => internal_error(e),
+            },
+            None => ok_void(),
+        }
     })
 }
 

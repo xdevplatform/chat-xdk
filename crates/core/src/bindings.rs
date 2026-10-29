@@ -1,12 +1,14 @@
 //! Feature switches for this repository's language bindings.
 //!
-//! Not part of the public API. A chat reads `GET /2/chat/features` once, when
-//! it is created, and keeps the answer for its lifetime (see
-//! `crate::features`). The core decides what to fetch and what an answer
-//! means; a binding only performs the GET, with its own HTTP stack. Its chat
-//! constructor calls [`FeatureSwitches::start_features`], performs the GET it
-//! returns, if any, in the background, and reports the result with
-//! [`complete_fetch`].
+//! Not part of the public API. A chat reads `GET /2/chat/features` when it is
+//! created, retries a read that fails, and keeps the first answer for its
+//! lifetime (see `crate::features`). The core decides what to fetch, when to
+//! retry and what an answer means; a binding only performs the GETs, with its
+//! own HTTP stack. Its chat constructor calls
+//! [`FeatureSwitches::start_features`] and, in the background, performs the
+//! GET it returns, if any, after the GET's `delay_ms`, reports the result
+//! with [`complete_fetch`], and performs the retry that returns, if any, the
+//! same way.
 
 pub use crate::features::Fetch;
 
@@ -110,9 +112,10 @@ pub fn set_clock(clock: fn() -> u64) {
 /// Report the result of the GET `id`: its HTTP status, 0 when no response
 /// arrived, and the body, read to its end or to [`Fetch::max_bytes`] plus one
 /// byte, whichever comes first. A request that ended any other way reports
-/// status 0.
-pub fn complete_fetch(id: u64, status: u16, body: &[u8]) {
-    shared::complete_fetch(id, status, body);
+/// status 0. Returns the retry to perform when the result turned no switch
+/// on and the read is retried.
+pub fn complete_fetch(id: u64, status: u16, body: &[u8]) -> Option<Fetch> {
+    shared::complete_fetch(id, status, body)
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
@@ -128,9 +131,9 @@ pub trait FeatureSwitches {
     /// uses them.
     fn configure_features(&self, endpoint: &str, timeout_ms: u64);
 
-    /// Start this chat's one read of the switches: the GET to perform, or
-    /// `None` when the chat takes the answer of a GET already in flight or
-    /// has started its read already.
+    /// Start this chat's read of the switches: the GET to perform, or `None`
+    /// when the chat takes the answer of a GET already in flight or has
+    /// started its read already.
     fn start_features(&self) -> Option<Fetch>;
 }
 

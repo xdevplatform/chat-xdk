@@ -3,19 +3,22 @@
 //! The endpoint answers a flat map of booleans,
 //! `{"features": {"v1_send": true}}`.
 //!
-//! Each chat reads the switches once, when it is created, and keeps the answer
-//! for its lifetime. This module decides what to fetch and what an answer
-//! means; it never performs a request. In this repository's language bindings
-//! a chat's constructor starts its GET and the binding performs it with its
+//! Each chat reads the switches when it is created and keeps the first answer
+//! that arrives for its lifetime. This module decides what to fetch, when to
+//! fetch it again and what an answer means; it never performs a request. In
+//! this repository's language bindings a chat's constructor starts its GET,
+//! and the binding performs it, and each retry the core hands back, with its
 //! own HTTP stack (see `crate::bindings`); a Rust caller performs the GET and
 //! hands the answer to `ChatCore::set_feature_switches`. A chat created while
-//! a GET for its endpoint is in flight takes that GET's answer instead of
-//! starting another.
+//! a GET for its endpoint is in flight, or waiting for its retry, takes that
+//! GET's answer instead of starting another.
 //!
-//! Every flag is off until the answer turns it on. A request that fails, takes
+//! Every flag is off until an answer turns it on. A request that fails, takes
 //! longer than its timeout (2 s), answers a status other than 200 or a body
 //! over 64 KiB, or whose body is not a JSON object with a `features` object,
-//! leaves every flag off. A flag whose value is not a boolean reads off.
+//! turns no flag on and is retried: first after [`RETRY_FIRST_DELAY_MS`], then
+//! after twice the previous wait, never more than [`RETRY_MAX_DELAY_MS`], at
+//! most [`MAX_RETRIES`] times. A flag whose value is not a boolean reads off.
 
 // Without the bindings that perform the GETs, nothing here starts one.
 #![cfg_attr(not(feature = "bindings"), allow(dead_code))]
@@ -39,6 +42,15 @@ pub const FEATURES_MAX_BODY: usize = 64 * 1024;
 /// How long a request may take, body included, in milliseconds.
 pub const FEATURES_TIMEOUT_MS: u64 = 2_000;
 
+/// The wait before the first retry of a read that failed, in milliseconds.
+pub(crate) const RETRY_FIRST_DELAY_MS: u64 = 1_000;
+
+/// The longest wait before a retry, in milliseconds.
+pub(crate) const RETRY_MAX_DELAY_MS: u64 = 5 * 60 * 1_000;
+
+/// How many times a read that keeps failing is retried.
+pub(crate) const MAX_RETRIES: u32 = 10;
+
 /// A GET for a language binding to perform.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Fetch {
@@ -51,17 +63,31 @@ pub struct Fetch {
     /// The largest body accepted: read at most one byte more, so a longer
     /// body is seen and rejected.
     pub max_bytes: usize,
+    /// Start the request this long from now: 0 for a chat's first read, the
+    /// backoff for a retry.
+    pub delay_ms: u64,
 }
 
 /// The flags turned on for one chat, set once by the answer to its GET.
 type Flags = RwLock<HashSet<String>>;
 
-/// A GET in flight and the chats waiting for its answer.
+/// A GET in flight, or waiting to start as a retry, and the chats waiting
+/// for its answer.
 #[derive(Debug)]
 struct Request {
     id: u64,
+    timeout_ms: u64,
+    /// How many failed GETs came before this one.
+    retries: u32,
     deadline: u64,
     chats: Vec<Weak<Flags>>,
+}
+
+/// The wait before the retry that follows `retries` earlier retries.
+fn retry_delay_ms(retries: u32) -> u64 {
+    RETRY_FIRST_DELAY_MS
+        .saturating_mul(1u64 << retries.min(32))
+        .min(RETRY_MAX_DELAY_MS)
 }
 
 /// The GETs in flight, by URL.
@@ -73,8 +99,8 @@ struct Requests {
 
 impl Requests {
     /// Have the chat whose flags are `flags` read `url`: it joins the GET for
-    /// `url` in flight, or starts one, returned for the binding to perform. A
-    /// GET past its deadline takes no more chats.
+    /// `url` in flight or waiting for its retry, or starts one, returned for
+    /// the binding to perform. A GET past its deadline takes no more chats.
     fn join(&mut self, url: &str, timeout_ms: u64, flags: &Arc<Flags>, now: u64) -> Option<Fetch> {
         if let Some(request) = self.by_url.get_mut(url) {
             if now < request.deadline {
@@ -82,47 +108,76 @@ impl Requests {
                 return None;
             }
         }
+        Some(self.start(url, timeout_ms, 0, vec![Arc::downgrade(flags)], now))
+    }
+
+    /// Register the GET for `url` that follows `retries` failed ones, for
+    /// `chats`, and return it for the binding to perform after its delay.
+    fn start(
+        &mut self,
+        url: &str,
+        timeout_ms: u64,
+        retries: u32,
+        chats: Vec<Weak<Flags>>,
+        now: u64,
+    ) -> Fetch {
+        let delay_ms = if retries == 0 {
+            0
+        } else {
+            retry_delay_ms(retries - 1)
+        };
         self.last_id += 1;
         let id = self.last_id;
         self.by_url.insert(
             url.to_string(),
             Request {
                 id,
-                deadline: now.saturating_add(timeout_ms),
-                chats: vec![Arc::downgrade(flags)],
+                timeout_ms,
+                retries,
+                deadline: now.saturating_add(delay_ms).saturating_add(timeout_ms),
+                chats,
             },
         );
-        Some(Fetch {
+        Fetch {
             id,
             url: url.to_string(),
             timeout_ms,
             max_bytes: FEATURES_MAX_BODY,
-        })
+            delay_ms,
+        }
     }
 
     /// Apply the result of the GET `id` to the chats waiting for it. A result
-    /// for no GET in flight, or one that arrives after the GET's deadline,
-    /// turns no flag on.
-    fn complete(&mut self, id: u64, status: u16, body: &[u8], now: u64) {
-        let Some(url) = self
+    /// that turns no flag on (a failure, or an answer after the GET's
+    /// deadline) returns the retry for the binding to perform, while a chat
+    /// still waits and retries remain. A result for no GET in flight changes
+    /// nothing.
+    fn complete(&mut self, id: u64, status: u16, body: &[u8], now: u64) -> Option<Fetch> {
+        let url = self
             .by_url
             .iter()
-            .find_map(|(url, request)| (request.id == id).then(|| url.clone()))
-        else {
-            return;
+            .find_map(|(url, request)| (request.id == id).then(|| url.clone()))?;
+        let request = self.by_url.remove(&url)?;
+        let answer = if now < request.deadline {
+            parse_answer(status, body)
+        } else {
+            None
         };
-        let Some(request) = self.by_url.remove(&url) else {
-            return;
-        };
-        if now >= request.deadline {
-            return;
+        if let Some(on) = answer {
+            for chat in request.chats.iter().filter_map(Weak::upgrade) {
+                *chat.write().unwrap_or_else(PoisonError::into_inner) = on.clone();
+            }
+            return None;
         }
-        let Some(on) = parse_answer(status, body) else {
-            return;
-        };
-        for chat in request.chats.iter().filter_map(Weak::upgrade) {
-            *chat.write().unwrap_or_else(PoisonError::into_inner) = on.clone();
+        let chats: Vec<Weak<Flags>> = request
+            .chats
+            .into_iter()
+            .filter(|chat| chat.strong_count() > 0)
+            .collect();
+        if chats.is_empty() || request.retries >= MAX_RETRIES {
+            return None;
         }
+        Some(self.start(&url, request.timeout_ms, request.retries + 1, chats, now))
     }
 }
 
@@ -166,6 +221,8 @@ pub(crate) struct ChatFeatures {
     endpoint: Option<String>,
     /// The timeout of its GET; [`FEATURES_TIMEOUT_MS`] when unset.
     timeout_ms: Option<u64>,
+    /// Whether the chat's answer comes from a read it started, or came from
+    /// the caller already.
     started: bool,
     flags: Arc<Flags>,
     #[cfg(test)]
@@ -192,9 +249,9 @@ impl ChatFeatures {
         self.timeout_ms = Some(timeout_ms);
     }
 
-    /// Start this chat's one read of the switches: the GET to perform, or
-    /// `None` when the chat takes the answer of a GET already in flight, has
-    /// started its read already, or runs without the bindings.
+    /// Start this chat's read of the switches: the GET to perform, or `None`
+    /// when the chat takes the answer of a GET already in flight, has started
+    /// its read or taken an answer already, or runs without the bindings.
     pub(crate) fn start(&mut self) -> Option<Fetch> {
         if std::mem::replace(&mut self.started, true) {
             return None;
@@ -210,13 +267,16 @@ impl ChatFeatures {
     }
 
     /// Take `status` and `body`, the answer to a GET the caller performed,
-    /// unless this chat has started its read already.
+    /// unless this chat has started its read or taken an answer already. An
+    /// answer that turns no flag on leaves the chat open to a later one, from
+    /// a GET the caller retried.
     pub(crate) fn answer(&mut self, status: u16, body: &[u8]) {
-        if std::mem::replace(&mut self.started, true) {
+        if self.started {
             return;
         }
         if let Some(on) = parse_answer(status, body) {
             *self.flags.write().unwrap_or_else(PoisonError::into_inner) = on;
+            self.started = true;
         }
     }
 
@@ -294,8 +354,8 @@ pub(crate) mod shared {
         requests().join(&url, timeout_ms, flags, now_ms())
     }
 
-    pub(crate) fn complete_fetch(id: u64, status: u16, body: &[u8]) {
-        requests().complete(id, status, body, now_ms());
+    pub(crate) fn complete_fetch(id: u64, status: u16, body: &[u8]) -> Option<Fetch> {
+        requests().complete(id, status, body, now_ms())
     }
 }
 
@@ -359,9 +419,10 @@ mod tests {
         assert_eq!(fetch.url, URL);
         assert_eq!(fetch.timeout_ms, 2_000);
         assert_eq!(fetch.max_bytes, 64 * 1024);
+        assert_eq!(fetch.delay_ms, 0, "a first read starts at once");
         assert!(!on(&chat, V1_SEND), "off until the answer");
 
-        requests.complete(fetch.id, 200, V1_ON, 300);
+        assert_eq!(requests.complete(fetch.id, 200, V1_ON, 300), None);
         assert!(on(&chat, V1_SEND));
         assert!(!on(&chat, "other"));
         assert!(requests.by_url.is_empty(), "nothing left in flight");
@@ -422,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_of_failure_leaves_every_flag_off() {
+    fn every_kind_of_failure_leaves_every_flag_off_and_is_retried() {
         let oversized = format!(
             r#"{{"features":{{"v1_send":true}}}}{}"#,
             " ".repeat(64 * 1024)
@@ -434,7 +495,6 @@ mod tests {
             (204, Vec::new()),
             (200, b"not json".to_vec()),
             (200, br#"{"v1_send":true}"#.to_vec()),
-            (200, br#"{"features":{"v1_send":"true"}}"#.to_vec()),
             (200, b"{\"features\":{\"v1_send\":true}}\xff".to_vec()),
             (200, oversized.into_bytes()),
         ];
@@ -442,10 +502,91 @@ mod tests {
             let mut requests = Requests::default();
             let chat = chat();
             let fetch = start(&mut requests, &chat, 0);
-            requests.complete(fetch.id, status, &body, 10);
+            let retry = requests
+                .complete(fetch.id, status, &body, 10)
+                .expect("a retry");
             assert!(!on(&chat, V1_SEND), "{status} {} bytes", body.len());
-            assert!(requests.by_url.is_empty(), "the failed GET is done");
+            assert_ne!(retry.id, fetch.id, "a GET of its own");
+            assert_eq!(
+                (retry.url.as_str(), retry.timeout_ms, retry.delay_ms),
+                (URL, FEATURES_TIMEOUT_MS, RETRY_FIRST_DELAY_MS)
+            );
         }
+    }
+
+    #[test]
+    fn a_flag_that_is_not_a_boolean_reads_off_in_an_answer_that_holds() {
+        let mut requests = Requests::default();
+        let chat = chat();
+        let fetch = start(&mut requests, &chat, 0);
+        let body = br#"{"features":{"v1_send":"true"}}"#;
+        assert_eq!(requests.complete(fetch.id, 200, body, 10), None);
+        assert!(!on(&chat, V1_SEND));
+        assert!(requests.by_url.is_empty(), "the answer is not retried");
+    }
+
+    #[test]
+    fn a_read_that_keeps_failing_is_retried_with_a_doubling_bounded_wait() {
+        let mut requests = Requests::default();
+        let chat = chat();
+        let mut fetch = start(&mut requests, &chat, 0);
+        let mut now = 0;
+        let mut waits = Vec::new();
+        while let Some(retry) = requests.complete(fetch.id, 503, b"", now + 100) {
+            now += 100 + retry.delay_ms;
+            waits.push(retry.delay_ms);
+            fetch = retry;
+        }
+        assert_eq!(
+            waits,
+            [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 256_000, 300_000]
+        );
+        assert_eq!(waits.len(), MAX_RETRIES as usize);
+        assert!(!on(&chat, V1_SEND));
+        assert!(
+            requests.by_url.is_empty(),
+            "no GET once the retries run out"
+        );
+        assert_eq!(retry_delay_ms(40), RETRY_MAX_DELAY_MS);
+    }
+
+    #[test]
+    fn a_retry_that_succeeds_turns_the_flags_on() {
+        let mut requests = Requests::default();
+        let chat = chat();
+        let fetch = start(&mut requests, &chat, 0);
+        let retry = requests.complete(fetch.id, 0, b"", 2_000).unwrap();
+        assert!(!on(&chat, V1_SEND));
+        assert_eq!(requests.complete(retry.id, 200, V1_ON, 3_500), None);
+        assert!(on(&chat, V1_SEND));
+        assert!(requests.by_url.is_empty());
+    }
+
+    #[test]
+    fn a_chat_created_while_a_retry_waits_takes_its_answer() {
+        let mut requests = Requests::default();
+        let first = chat();
+        let fetch = start(&mut requests, &first, 0);
+        let retry = requests.complete(fetch.id, 500, b"", 100).unwrap();
+        let later = chat();
+        assert_eq!(
+            requests.join(URL, FEATURES_TIMEOUT_MS, &later, 600),
+            None,
+            "it waits for the retry"
+        );
+        requests.complete(retry.id, 200, V1_ON, 1_500);
+        assert!(on(&first, V1_SEND));
+        assert!(on(&later, V1_SEND));
+    }
+
+    #[test]
+    fn retries_stop_once_no_chat_waits() {
+        let mut requests = Requests::default();
+        let dropped = chat();
+        let fetch = start(&mut requests, &dropped, 0);
+        drop(dropped);
+        assert_eq!(requests.complete(fetch.id, 503, b"", 10), None);
+        assert!(requests.by_url.is_empty());
     }
 
     #[test]
@@ -460,12 +601,13 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_after_the_deadline_is_ignored() {
+    fn an_answer_after_the_deadline_is_a_failed_read() {
         let mut requests = Requests::default();
         let chat = chat();
         let fetch = start(&mut requests, &chat, 0);
-        requests.complete(fetch.id, 200, V1_ON, 2_000);
+        let retry = requests.complete(fetch.id, 200, V1_ON, 2_000);
         assert!(!on(&chat, V1_SEND));
+        assert_eq!(retry.map(|r| r.delay_ms), Some(RETRY_FIRST_DELAY_MS));
     }
 
     #[test]
@@ -475,7 +617,7 @@ mod tests {
         let late = chat();
         let fetch = start(&mut requests, &late, 2_000);
         assert_ne!(fetch.id, stuck.id, "a new GET");
-        requests.complete(stuck.id, 200, V1_ON, 2_100);
+        assert_eq!(requests.complete(stuck.id, 200, V1_ON, 2_100), None);
         assert!(
             !on(&late, V1_SEND),
             "the old GET's result is for no GET in flight"
@@ -489,11 +631,14 @@ mod tests {
         let mut requests = Requests::default();
         let chat = chat();
         let fetch = start(&mut requests, &chat, 0);
-        requests.complete(fetch.id + 100, 200, V1_ON, 10);
+        assert_eq!(requests.complete(fetch.id + 100, 200, V1_ON, 10), None);
         assert!(!on(&chat, V1_SEND));
         requests.complete(fetch.id, 200, V1_ON, 20);
         assert!(on(&chat, V1_SEND));
-        requests.complete(fetch.id, 200, br#"{"features":{}}"#, 30);
+        assert_eq!(
+            requests.complete(fetch.id, 200, br#"{"features":{}}"#, 30),
+            None
+        );
         assert!(on(&chat, V1_SEND), "the GET already completed");
     }
 
@@ -523,5 +668,20 @@ mod tests {
         assert_eq!(first, None, "without the bindings no GET starts");
         assert_eq!(features.start(), None, "never a second read");
         assert!(!features.enabled(V1_SEND));
+    }
+
+    #[test]
+    fn a_caller_hands_over_a_later_answer_after_a_failed_one() {
+        let mut features = ChatFeatures::default();
+        features.answer(503, V1_ON);
+        assert!(!features.enabled(V1_SEND));
+        features.answer(200, V1_ON);
+        assert!(features.enabled(V1_SEND), "the retried GET's answer");
+        features.answer(200, br#"{"features":{}}"#);
+        assert!(
+            features.enabled(V1_SEND),
+            "the first answer that arrives holds"
+        );
+        assert_eq!(features.start(), None, "an answered chat reads nothing");
     }
 }

@@ -141,8 +141,20 @@ namespace ChatXdk.Tests
                 await WaitFor("the request", () => server.Queries.Count == 1);
                 await Task.Delay(delayMs + 200);
                 Assert.Equal("7", SendVersion(chat));
-                Assert.Single(server.Queries);
             }
+        }
+
+        [Fact]
+        public async Task AFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On()
+        {
+            using var server = new FeatureServer();
+            server.Set(503, "{\"features\":{\"v1_send\":true}}");
+            using var chat = NewChat(server.Endpoint);
+            await WaitFor("the first request", () => server.Queries.Count == 1);
+            server.Set(200, "{\"features\":{\"v1_send\":true}}");
+            Assert.Equal("7", SendVersion(chat));
+            await WaitFor("v1 from the retry", () => SendVersion(chat) == "10");
+            Assert.Equal(2, server.Queries.Count);
         }
 
         [Fact]

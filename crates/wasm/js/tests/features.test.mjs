@@ -165,12 +165,22 @@ async function anyFailureLeavesSendsOnV0(v) {
       await waitFor(`the request (${label})`, () => server.queries.length === 1);
       await sleep(delayMs + 200);
       assert.equal(send(chat, v), "7", label);
-      assert.equal(server.queries.length, 1, `a failure is not retried (${label})`);
       chat.free();
     } finally {
       await server.close();
     }
   }
+}
+
+async function aFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On(v, server) {
+  server.status = 503;
+  const chat = newChat(v, server.endpoint);
+  await waitFor("the first request", () => server.queries.length === 1);
+  server.status = 200;
+  assert.equal(send(chat, v), "7", "the failed read leaves sends on v0");
+  await waitFor("v1 from the retry", () => send(chat, v) === "10");
+  assert.equal(server.queries.length, 2, server.queries.join());
+  chat.free();
 }
 
 async function anUnreachableEndpointLeavesSendsOnV0(v, server) {
@@ -261,9 +271,10 @@ async function theFetchReadCapsTheBodyWhileItStreams(v) {
       ["an oversized body", () => streamed([enabled, ...Array(200).fill(" ".repeat(1024))]), "7"],
       ["a body that cannot stream", () => unstreamable, "7"],
     ];
-    for (const [label, response, expected] of cases) {
+    for (const [index, [label, response, expected]] of cases.entries()) {
       globalThis.fetch = async () => response();
-      const chat = newChat(v, "http://127.0.0.1:9/features", { timeoutMs: 1000 });
+      // An endpoint per case, so no case shares another's retry.
+      const chat = newChat(v, `http://127.0.0.1:9/${index}/features`, { timeoutMs: 1000 });
       await sleep(300);
       assert.equal(send(chat, v), expected, label);
       chat.free();
@@ -345,6 +356,7 @@ async function main() {
     (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
     (server) => theAnswerHoldsForTheChatsLifetime(v, server),
     () => anyFailureLeavesSendsOnV0(v),
+    (server) => aFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On(v, server),
     () => theFetchReadCapsTheBodyWhileItStreams(v),
     (server) => anUnreachableEndpointLeavesSendsOnV0(v, server),
     (server) => aRequestStillOpenAtItsTimeoutFails(v, server),

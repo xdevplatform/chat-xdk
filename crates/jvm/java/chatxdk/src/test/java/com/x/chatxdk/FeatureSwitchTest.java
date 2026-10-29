@@ -186,8 +186,21 @@ class FeatureSwitchTest {
                     waitFor("the request (" + label + ")", () -> server.queries().size() == 1);
                     Thread.sleep(delayMs + 200);
                     assertEquals("7", sendVersion(chat), label);
-                    assertEquals(1, server.queries().size(), "a failure is not retried (" + label + ")");
                 }
+            }
+        }
+    }
+
+    @Test
+    void aFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On() throws Exception {
+        try (FeatureServer server = new FeatureServer()) {
+            server.set(503, "{\"features\":{\"v1_send\":true}}", 0);
+            try (Chat chat = newChat(server.endpoint, 2000)) {
+                waitFor("the first request", () -> server.queries().size() == 1);
+                server.set(200, "{\"features\":{\"v1_send\":true}}", 0);
+                assertEquals("7", sendVersion(chat), "the failed read leaves sends on v0");
+                waitFor("v1 from the retry", () -> "10".equals(sendVersion(chat)));
+                assertEquals(2, server.queries().size(), server.queries().toString());
             }
         }
     }

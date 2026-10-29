@@ -86,7 +86,7 @@ fn the_feature_switch_constants_are_the_cores() {
 }
 
 #[test]
-fn a_caller_hands_a_chat_its_feature_switches_once() {
+fn a_caller_hands_a_chat_its_feature_switches_until_one_answer_holds() {
     let on = br#"{"features":{"v1_send":true}}"#;
     let chat = new_chat();
     assert_eq!(send(chat), "7", "no answer: v0");
@@ -107,6 +107,8 @@ fn a_caller_hands_a_chat_its_feature_switches_once() {
         let chat = new_chat();
         answer(chat, status, body);
         assert_eq!(send(chat), "7", "{status} {}", body.len());
+        answer(chat, 200, on);
+        assert_eq!(send(chat), "10", "the answer to a retried request");
         chat_xdk_free(chat);
     }
 

@@ -37,15 +37,23 @@ export const REDIRECT_TARGET = "/followed/2/chat/features";
 /**
  * A local GET /2/chat/features that records each request's query string and
  * headers. Set `location` to answer with a redirect there; requests that reach
- * REDIRECT_TARGET are counted in `followed`.
+ * REDIRECT_TARGET are counted in `followed`. A request for another path, such
+ * as a retry of a server that had this port before, gets a 404 and is not
+ * recorded.
  */
 export async function featureServer(body = '{"features":{"v1_send":true}}') {
   const state = { status: 200, body, delayMs: 0, location: null, setCookie: null, queries: [], headers: [], followed: 0 };
   const server = http.createServer((req, res) => {
-    if (new URL(req.url, "http://localhost").pathname === REDIRECT_TARGET) {
+    const path = new URL(req.url, "http://localhost").pathname;
+    if (path === REDIRECT_TARGET) {
       state.followed++;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end('{"features":{"v1_send":true}}');
+      return;
+    }
+    if (path !== state.path) {
+      res.writeHead(404);
+      res.end();
       return;
     }
     // The answer is fixed before the request is recorded, so a test that
@@ -69,7 +77,8 @@ export async function featureServer(body = '{"features":{"v1_send":true}}') {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   state.origin = `http://127.0.0.1:${server.address().port}`;
-  state.endpoint = `${state.origin}/${++lastServerId}/2/chat/features`;
+  state.path = `/${++lastServerId}/2/chat/features`;
+  state.endpoint = state.origin + state.path;
   state.unref = () => server.unref();
   state.close = () =>
     new Promise((resolve) => {

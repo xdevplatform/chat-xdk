@@ -409,13 +409,14 @@ impl FileDecryptor {
     }
 }
 
-// Feature switches (GET /2/chat/features). A chat reads them once, when it is
-// created: the core decides what to fetch and what an answer means, and the
-// Python package performs the GET on a thread of its own. None of this is API.
+// Feature switches (GET /2/chat/features). A chat reads them when it is
+// created: the core decides what to fetch, when to retry and what an answer
+// means, and the Python package performs the GET, and each retry, on a thread
+// of its own. None of this is API.
 
 static FEATURE_STARTER: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
 
-/// Start `chat`'s one read of the feature switches: hand the GET the core
+/// Start `chat`'s read of the feature switches: hand the GET the core
 /// returns, if any, to the starter the package registered. A GET that cannot
 /// start fails at once, and the chat keeps every switch off.
 fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
@@ -436,7 +437,7 @@ fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
             .is_ok()
     });
     if !started {
-        bindings::complete_fetch(fetch.id, 0, &[]);
+        let _ = bindings::complete_fetch(fetch.id, 0, &[]);
     }
 }
 
@@ -449,11 +450,24 @@ fn feature_set_starter(py: Python<'_>, starter: Py<PyAny>) {
 }
 
 /// Report the result of the feature GET ``fetch_id``: its HTTP status, 0 when
-/// no complete response arrived, and its body.
+/// no complete response arrived, and its body. Returns the retry to perform,
+/// ``(id, url, timeout_seconds, max_bytes, delay_seconds)``, or ``None``.
 #[pyfunction]
 #[pyo3(name = "_feature_complete")]
-fn feature_complete(fetch_id: u64, status: u16, body: &[u8]) {
-    bindings::complete_fetch(fetch_id, status, body);
+fn feature_complete(
+    fetch_id: u64,
+    status: u16,
+    body: &[u8],
+) -> Option<(u64, String, f64, usize, f64)> {
+    bindings::complete_fetch(fetch_id, status, body).map(|retry| {
+        (
+            retry.id,
+            retry.url,
+            retry.timeout_ms as f64 / 1000.0,
+            retry.max_bytes,
+            retry.delay_ms as f64 / 1000.0,
+        )
+    })
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set

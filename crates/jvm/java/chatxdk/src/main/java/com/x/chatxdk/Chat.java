@@ -230,7 +230,7 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Start this chat's one read of the feature switches: the GET to perform as JSON, or an empty
+     * Start this chat's read of the feature switches: the GET to perform as JSON, or an empty
      * string when the chat takes the answer of a GET already in flight.
      */
     String startFeatures() {
