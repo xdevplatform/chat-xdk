@@ -606,24 +606,22 @@ impl ChatCore {
     /// Decrypt an event quoted by a received reply. A message-key event
     /// opens with the key the reply carries for it when there is one, which
     /// must be a 32-byte key; otherwise its key is resolved like any raw
-    /// event's. Returns the plaintext and, for a message-key event, the
-    /// message key that opened it.
+    /// event's, from the receiver's own keys. Returns the plaintext and, for
+    /// a message-key event, the message key that opened it.
     pub(super) fn open_quoted_event(
         &self,
         raw: &MessageEvent,
         carried_key: Option<&[u8]>,
-        key_changes: &[MessageEvent],
         conversation_keys: &HashMap<String, XChatConversationKey>,
     ) -> Result<(Vec<u8>, Option<XChatConversationKey>), SdkError> {
         let uses_message_key = Self::uses_message_key(raw);
-        let key = match carried_key.filter(|_| uses_message_key) {
-            Some(bytes) => Some(
-                XChatConversationKey::from_bytes(bytes.to_vec()).ok_or_else(|| {
-                    SdkError::Parse("carried message key must be 32 bytes".into())
-                })?,
-            ),
-            None => self.raw_event_contents_key(raw, None, None, key_changes, conversation_keys)?,
-        };
+        let key =
+            match carried_key.filter(|_| uses_message_key) {
+                Some(bytes) => Some(XChatConversationKey::from_bytes(bytes.to_vec()).ok_or_else(
+                    || SdkError::Parse("carried message key must be 32 bytes".into()),
+                )?),
+                None => self.raw_event_contents_key(raw, None, None, &[], conversation_keys)?,
+            };
         let plaintext = Self::open_raw_event(raw, key.as_ref())?;
         Ok((plaintext, key.filter(|_| uses_message_key)))
     }
@@ -807,18 +805,8 @@ impl ChatCore {
         let attachments = thrift_reply_attachments
             .or_else(|| original.as_ref().and_then(|m| m.attachments.clone()));
 
-        // A key-change event is only useful to a recipient when it carries a
-        // key version this reply's own version does not already imply.
-        let embedded_ckces: Vec<MessageEvent> = key_changes
-            .into_iter()
-            .filter(|e| match &e.detail {
-                Some(MessageEventDetail::ConversationKeyChangeEvent(kce)) => {
-                    kce.conversation_key_version.as_deref() != Some(outer_version)
-                }
-                _ => false,
-            })
-            .collect();
-
+        // The key changes opened the original here; recipients open it with
+        // their own keys, so none is embedded.
         Ok(crate::thrift::product::ReplyingToPreview::new(
             sender_id,
             message_text,
@@ -829,7 +817,7 @@ impl ChatCore {
             raw.message_id.clone(),
             raw,
             edit_event,
-            (!embedded_ckces.is_empty()).then_some(embedded_ckces),
+            None::<Vec<MessageEvent>>,
             None,
             None,
             raw_event_message_key,
@@ -879,11 +867,9 @@ impl ChatCore {
             return ReplyPreviewValidation::Invalid;
         }
 
-        let embedded_ckces: Vec<MessageEvent> = preview.raw_event_ckces.clone().unwrap_or_default();
         let Ok((plaintext, original_message_key)) = self.open_quoted_event(
             raw,
             preview.raw_event_message_key.as_deref(),
-            &embedded_ckces,
             conversation_keys,
         ) else {
             return ReplyPreviewValidation::Invalid;
@@ -938,7 +924,6 @@ impl ChatCore {
                 let Ok((edit_plaintext, _)) = self.open_quoted_event(
                     edit,
                     preview.raw_event_edit_message_key.as_deref(),
-                    &embedded_ckces,
                     conversation_keys,
                 ) else {
                     return ReplyPreviewValidation::Invalid;

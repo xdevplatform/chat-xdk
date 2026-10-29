@@ -585,25 +585,20 @@ fn a_quoted_photo_matches_without_its_plaintext_hash() {
     );
 }
 
-#[test]
-fn a_reply_quoting_an_older_key_version_validates_through_its_embedded_key_change() {
-    let author = Party::new(AUTHOR);
-    let replier = Party::new(REPLIER);
-    // The receiver is a participant of the old key change, so it can open it.
-    let receiver_party = Party::new("1003");
-    let receiver_identity = receiver_party.core.get_public_keys().unwrap().identity;
-    let old_key = key(3);
-    let new_key = key(4);
-    let encrypted_old_key = conversation_keys::encrypt_conversation_key(
-        &old_key,
+/// A key change from the author carrying `key` at key version "3",
+/// encrypted to `participant`'s identity key.
+fn old_key_change(participant: &Party, key: &XChatConversationKey) -> ThriftEvent {
+    let identity = participant.core.get_public_keys().unwrap().identity;
+    let encrypted = conversation_keys::encrypt_conversation_key(
+        key,
         &KeyFactory::reconstruct_public_key(
-            &base64_decode(&receiver_identity).unwrap(),
+            &base64_decode(&identity).unwrap(),
             KeypairPurpose::Identity,
         )
         .unwrap(),
     )
     .unwrap();
-    let kce = ThriftEvent {
+    ThriftEvent {
         message_id: Some("kc-1".to_string()),
         sender_id: Some(AUTHOR.to_string()),
         conversation_id: Some(CONVERSATION.to_string()),
@@ -611,15 +606,26 @@ fn a_reply_quoting_an_older_key_version_validates_through_its_embedded_key_chang
             ConversationKeyChangeEvent {
                 conversation_key_version: Some("3".to_string()),
                 conversation_participant_keys: Some(vec![ConversationParticipantKey::new(
-                    Some("1003".to_string()),
-                    Some(base64_encode(&encrypted_old_key)),
+                    Some(participant.user_id.clone()),
+                    Some(base64_encode(&encrypted)),
                     None::<String>,
                 )]),
                 ..Default::default()
             },
         )),
         ..Default::default()
-    };
+    }
+}
+
+#[test]
+fn a_quoted_original_opens_with_the_receivers_keys_never_an_embedded_key_change() {
+    let author = Party::new(AUTHOR);
+    let replier = Party::new(REPLIER);
+    // The receiver is a participant of the old key change, so it could open
+    // it.
+    let receiver_party = Party::new("1003");
+    let old_key = key(3);
+    let new_key = key(4);
     let original = message_event(
         &author,
         "orig-1",
@@ -636,7 +642,7 @@ fn a_reply_quoting_an_older_key_version_validates_through_its_embedded_key_chang
         replying_to_message_sequence_id: Some("200".to_string()),
         replying_to_message_id: Some("orig-1".to_string()),
         raw_event_message_create: Some(original),
-        raw_event_ckces: Some(vec![kce]),
+        raw_event_ckces: Some(vec![old_key_change(&receiver_party, &old_key)]),
         ..Default::default()
     };
     let reply = message_event(
@@ -653,17 +659,24 @@ fn a_reply_quoting_an_older_key_version_validates_through_its_embedded_key_chang
             ..Default::default()
         }),
     );
-    let message = decrypt_message(
-        &receiver_party.core,
-        &reply,
-        &keys("4", &new_key),
-        &[author.entry.clone(), replier.entry.clone()],
-    )
-    .unwrap();
+    let validate = |keys: &HashMap<String, XChatConversationKey>| {
+        decrypt_message(
+            &receiver_party.core,
+            &reply,
+            keys,
+            &[author.entry.clone(), replier.entry.clone()],
+        )
+        .unwrap()
+        .reply_preview_validation
+    };
     assert_eq!(
-        message.reply_preview_validation,
-        Some(ReplyPreviewValidation::Valid)
+        validate(&keys("4", &new_key)),
+        Some(ReplyPreviewValidation::Invalid),
+        "the embedded key change is not read"
     );
+    let mut both = keys("4", &new_key);
+    both.insert("3".to_string(), old_key);
+    assert_eq!(validate(&both), Some(ReplyPreviewValidation::Valid));
 }
 
 // Sending replies and edits.
@@ -760,36 +773,38 @@ fn a_reply_with_every_preview_field_set_needs_no_key_for_a_message_key_original(
 }
 
 #[test]
-fn a_reply_still_embeds_the_key_changes_it_is_given() {
-    let f = ReplyFixture::new();
-    let kce = ThriftEvent {
-        message_id: Some("kc-1".to_string()),
-        sender_id: Some(AUTHOR.to_string()),
-        conversation_id: Some(CONVERSATION.to_string()),
-        detail: Some(Detail::ConversationKeyChangeEvent(
-            ConversationKeyChangeEvent {
-                conversation_key_version: Some("6".to_string()),
-                ..Default::default()
-            },
-        )),
-        ..Default::default()
-    };
-    let mut params = crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&f.original))
+fn a_reply_embeds_no_key_change_even_the_one_that_opened_its_original() {
+    let author = Party::new(AUTHOR);
+    let replier = Party::new(REPLIER);
+    let old_key = key(3);
+    let new_key = key(4);
+    let original = message_event(
+        &author,
+        "orig-1",
+        "200",
+        "3",
+        None,
+        7,
+        &old_key,
+        &build_message_content("Old words", None, None, None).unwrap(),
+    );
+    let mut params = crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&original))
         .with_identity(REPLIER, SIGNING_KEY_VERSION)
-        .with_conversation_key(f.ckey.to_bytes(), "7");
-    params.reply_to_ckces = Some(vec![frame(&kce)]);
-    let payload = f.replier.core.encrypt_reply(&params).unwrap();
-    let Contents::Message(message) = decrypt_payload_contents(&payload, REPLIER, &f.ckey) else {
+        .with_conversation_key(new_key.to_bytes(), "4");
+    params.reply_to_ckces = Some(vec![frame(&old_key_change(&replier, &old_key))]);
+    let payload = replier.core.encrypt_reply(&params).unwrap();
+    let event = sent_event(&payload, REPLIER, CONVERSATION);
+    let Some(Detail::MessageCreateEvent(mce)) = event.detail else {
+        panic!("expected a MessageCreateEvent");
+    };
+    let plaintext = decrypt_message_bytes(&new_key, mce.contents.as_ref().unwrap()).unwrap();
+    let Contents::Message(message) = ChatCore::parse_thrift_entry_contents(&plaintext).unwrap()
+    else {
         panic!("expected a message");
     };
-    assert_eq!(
-        message
-            .replying_to_preview
-            .unwrap()
-            .raw_event_ckces
-            .map(|c| c.len()),
-        Some(1)
-    );
+    let preview = message.replying_to_preview.unwrap();
+    assert_eq!(preview.message_text.as_deref(), Some("Old words"));
+    assert!(preview.raw_event_ckces.is_none());
 }
 
 #[test]
