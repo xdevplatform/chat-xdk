@@ -943,37 +943,23 @@ impl ChatCore {
                 Some(edit_contents)
             }
         };
-        let quoted_text = match &edited {
-            Some(edit) => edit.updated_text.as_deref(),
-            None => original.message_text.as_deref(),
+        let (quoted_text, quoted_entities) = match &edited {
+            Some(edit) => (edit.updated_text.as_deref(), edit.entities.clone()),
+            None => (
+                original.message_text.as_deref(),
+                original
+                    .entities
+                    .as_ref()
+                    .map(|entities| entities.iter().map(|entity| (**entity).clone()).collect()),
+            ),
         };
-        let quoted_entities: Vec<&crate::thrift::product::RichTextEntity> = match &edited {
-            Some(edit) => edit.entities.iter().flatten().collect(),
-            None => original
-                .entities
-                .iter()
-                .flatten()
-                .map(|b| b.as_ref())
-                .collect(),
-        };
-
-        if let Some(claimed_text) = preview.message_text.as_deref() {
-            let quoted_text = quoted_text.unwrap_or("");
-            // Previews may be truncated on the wire, so a claim is valid when
-            // it matches the quoted contents up to the preview's own length
-            // (on a character boundary).
-            if !quoted_text.is_char_boundary(claimed_text.len())
-                || !quoted_text.starts_with(claimed_text)
-            {
-                return ReplyPreviewValidation::Invalid;
-            }
-        }
-        if let Some(claimed_entities) = preview.entities.as_ref() {
-            for entity in claimed_entities {
-                if !quoted_entities.contains(&entity) {
-                    return ReplyPreviewValidation::Invalid;
-                }
-            }
+        // The preview's text is the start of the quoted text, so only their
+        // first characters are compared; its entities are the quoted
+        // message's own, and must be them exactly.
+        if preview_text(preview.message_text.as_deref()) != preview_text(quoted_text)
+            || preview.entities != quoted_entities
+        {
+            return ReplyPreviewValidation::Invalid;
         }
         if let Some(claimed_attachments) = preview.attachments.as_ref() {
             let original_attachments: Vec<ThriftMessageAttachment> = original
@@ -993,4 +979,18 @@ impl ChatCore {
         }
         ReplyPreviewValidation::Valid
     }
+}
+
+/// How much of the quoted text a reply preview's text is compared on: 140
+/// characters, counted in UTF-16 code units as the native clients count
+/// them, so a pair that straddles the limit is cut in half.
+const PREVIEW_LENGTH: usize = 140;
+
+/// The start of `text` a reply preview's text is compared on; an absent text
+/// counts as empty.
+fn preview_text(text: Option<&str>) -> Vec<u16> {
+    text.unwrap_or_default()
+        .encode_utf16()
+        .take(PREVIEW_LENGTH)
+        .collect()
 }

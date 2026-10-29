@@ -274,21 +274,74 @@ fn tampered_raw_event_signature_is_marked_invalid() {
     );
 }
 
-#[test]
-fn truncated_preview_text_is_valid() {
+/// How a reply quoting `original` with each preview text in `previews`
+/// validates.
+fn preview_text_validations(original: &str, previews: &[&str]) -> Vec<ReplyPreviewValidation> {
     let (core, ckey, signing_keys) = reply_test_setup();
-    let orig_b64 = original_event_b64(&core, &ckey, "a long original message body");
+    let orig_b64 = original_event_b64(&core, &ckey, original);
+    previews
+        .iter()
+        .map(|preview| {
+            let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", &*orig_b64)
+                .with_identity("4001", "61")
+                .with_conversation_key(ckey.to_bytes(), "9001");
+            params.reply_to_text = Some(preview.to_string());
+            let reply_payload = core.encrypt_reply(&params).unwrap();
+            decrypt_reply(&core, &ckey, &reply_payload, &signing_keys)
+                .reply_preview_validation
+                .unwrap()
+        })
+        .collect()
+}
 
-    let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
-        .with_identity("4001", "61")
-        .with_conversation_key(ckey.to_bytes(), "9001");
-    params.reply_to_text = Some("a long original".into());
-    let reply_payload = core.encrypt_reply(&params).unwrap();
-
-    let msg = decrypt_reply(&core, &ckey, &reply_payload, &signing_keys);
+#[test]
+fn a_preview_quotes_the_first_140_characters_exactly() {
+    let original = format!("{} and more", "word ".repeat(30));
+    let first_140: String = original.chars().take(140).collect();
     assert_eq!(
-        msg.reply_preview_validation,
-        Some(ReplyPreviewValidation::Valid)
+        preview_text_validations(
+            &original,
+            &[&original, &first_140, &first_140[..139], "word word"]
+        ),
+        [
+            ReplyPreviewValidation::Valid,
+            ReplyPreviewValidation::Valid,
+            ReplyPreviewValidation::Invalid,
+            ReplyPreviewValidation::Invalid,
+        ]
+    );
+    // A short message is quoted whole.
+    assert_eq!(
+        preview_text_validations("I will not", &["I will not", "I will"]),
+        [
+            ReplyPreviewValidation::Valid,
+            ReplyPreviewValidation::Invalid
+        ]
+    );
+}
+
+#[test]
+fn preview_characters_are_counted_in_utf16_code_units() {
+    // The emoji's two code units straddle the limit: the 140th is its first
+    // half, so only that half is compared.
+    let start = "a".repeat(139);
+    let original = format!("{start}\u{1F600} and more");
+    assert_eq!(
+        preview_text_validations(
+            &original,
+            &[
+                &format!("{start}\u{1F600}"),
+                &format!("{start}\u{1F603}"),
+                &start,
+                &format!("{start}b"),
+            ]
+        ),
+        [
+            ReplyPreviewValidation::Valid,
+            ReplyPreviewValidation::Valid,
+            ReplyPreviewValidation::Invalid,
+            ReplyPreviewValidation::Invalid,
+        ]
     );
 }
 
@@ -296,19 +349,21 @@ fn truncated_preview_text_is_valid() {
 fn text_override_still_derives_entities_from_the_original() {
     let (core, ckey, signing_keys) = reply_test_setup();
 
-    let mut orig_params = crate::EncryptMessageParams::new("conv-1", "#topic original")
+    let original = format!("#topic {}", "word ".repeat(40));
+    let mut orig_params = crate::EncryptMessageParams::new("conv-1", &*original)
         .with_identity("4002", "61")
         .with_conversation_key(ckey.to_bytes(), "9001");
     orig_params.entities = Some(vec![crate::EntityDescriptor::new(0, 6, "hashtag")]);
     let orig_payload = core.encrypt_message(&orig_params).unwrap();
     let orig_b64 = wrap_signed_payload_with_seq(&orig_payload, "4002", "conv-1", "seq-orig");
 
-    // A prefix text override must not suppress deriving the remaining
-    // preview fields from the decrypted original.
+    // A text override must not suppress deriving the remaining preview
+    // fields from the decrypted original.
+    let first_140: String = original.chars().take(140).collect();
     let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", orig_b64)
         .with_identity("4001", "61")
         .with_conversation_key(ckey.to_bytes(), "9001");
-    params.reply_to_text = Some("#topic".into());
+    params.reply_to_text = Some(first_140.clone());
     let reply_payload = core.encrypt_reply(&params).unwrap();
 
     let msg = decrypt_reply(&core, &ckey, &reply_payload, &signing_keys);
@@ -321,12 +376,98 @@ fn text_override_still_derives_entities_from_the_original() {
             replying_to_preview: Some(preview),
             ..
         } => {
-            assert_eq!(preview.message_text.as_deref(), Some("#topic"));
+            assert_eq!(preview.message_text.as_deref(), Some(first_140.as_str()));
             let entities = preview.entities.as_ref().expect("derived entities");
             assert_eq!(entities.len(), 1);
         }
         other => panic!("expected Text with preview, got {:?}", other),
     }
+}
+
+#[test]
+fn a_preview_carries_the_quoted_entities_exactly() {
+    let (core, ckey, signing_keys) = reply_test_setup();
+    let text = "#topic and @someone";
+    let quoted = vec![
+        crate::EntityDescriptor::new(0, 6, "hashtag"),
+        crate::EntityDescriptor::new(11, 19, "mention"),
+    ];
+    let mut orig_params = crate::EncryptMessageParams::new("conv-1", text)
+        .with_identity("4002", "61")
+        .with_conversation_key(ckey.to_bytes(), "9001");
+    orig_params.entities = Some(quoted.clone());
+    let orig_payload = core.encrypt_message(&orig_params).unwrap();
+    let orig_b64 = wrap_signed_payload_with_seq(&orig_payload, "4002", "conv-1", "seq-orig");
+    let plain_b64 = original_event_b64(&core, &ckey, text);
+
+    let validate = |original: &str, entities: Option<Vec<crate::EntityDescriptor>>| {
+        let mut params = crate::EncryptReplyParams::new("conv-1", "the reply", original)
+            .with_identity("4001", "61")
+            .with_conversation_key(ckey.to_bytes(), "9001");
+        params.reply_to_entities = entities;
+        let reply_payload = core.encrypt_reply(&params).unwrap();
+        decrypt_reply(&core, &ckey, &reply_payload, &signing_keys).reply_preview_validation
+    };
+    let valid = Some(ReplyPreviewValidation::Valid);
+    let invalid = Some(ReplyPreviewValidation::Invalid);
+    assert_eq!(validate(&orig_b64, None), valid, "derived");
+    assert_eq!(validate(&orig_b64, Some(quoted.clone())), valid, "the same");
+    assert_eq!(
+        validate(&orig_b64, Some(quoted[..1].to_vec())),
+        invalid,
+        "a subset"
+    );
+    assert_eq!(validate(&orig_b64, Some(vec![])), invalid, "none of them");
+    assert_eq!(
+        validate(&plain_b64, None),
+        valid,
+        "a message without entities"
+    );
+    assert_eq!(
+        validate(&plain_b64, Some(vec![])),
+        invalid,
+        "an empty list where the message carries none"
+    );
+}
+
+#[test]
+fn a_preview_without_text_quotes_only_a_message_without_text() {
+    let (core, ckey, signing_keys) = reply_test_setup();
+    let quote = |original: &str| {
+        let orig_b64 = original_event_b64(&core, &ckey, original);
+        let raw = ChatCore::parse_event_b64(&orig_b64).unwrap();
+        let preview = crate::thrift::product::ReplyingToPreview {
+            sender_id: Some(4002),
+            replying_to_message_sequence_id: raw.sequence_id.clone(),
+            replying_to_message_id: raw.message_id.clone(),
+            raw_event_message_create: Some(raw),
+            ..Default::default()
+        };
+        let content = crate::pipeline::build_message_content_with_preview(
+            "the reply",
+            preview,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let signing = core.get_signing_keypair_arc().unwrap();
+        let payload =
+            crate::pipeline::encrypt_and_sign(crate::pipeline::EncryptAndSignParams::new(
+                &ckey,
+                &signing.private,
+                "reply-1",
+                "4001",
+                "conv-1",
+                &content,
+                "9001",
+                "61",
+            ))
+            .unwrap();
+        decrypt_reply(&core, &ckey, &payload, &signing_keys).reply_preview_validation
+    };
+    assert_eq!(quote("words"), Some(ReplyPreviewValidation::Invalid));
+    assert_eq!(quote(""), Some(ReplyPreviewValidation::Valid));
 }
 
 #[test]
