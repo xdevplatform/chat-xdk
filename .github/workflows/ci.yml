@@ -270,7 +270,7 @@ jobs:
           "$RUNNER_TEMP/v05/bin/python" "$GITHUB_WORKSPACE/chat-xdk/tests/compat_v05/verify_with_v05.py" "$RUNNER_TEMP/v0_sends.json"
 
   doc-snippets:
-    # Compiles the 0.7.1 half of every snippet in the migration guides against
+    # Compiles the 0.7.2 half of every snippet in the migration guides against
     # this tree, with each binding's compiler, and runs the C guide's params
     # documents through the library (scripts/check_doc_snippets.py), so a
     # guide that drifts from the API fails CI.
