@@ -603,7 +603,7 @@ export interface GroupLeaveParams {
   conversationId: string;
   /** User ID promoted to admin when the sender is the only admin. */
   promoteAdminId?: string | null;
-  /** Conversation-key version bound into the removal. Omit it to sign `null`. */
+  /** Conversation-key version the removal names; its signature doesn't cover it. */
   conversationKeyVersion?: string | null;
   /** User ID of the member leaving; resolves from the session identity when omitted. */
   senderId?: string | null;

@@ -462,9 +462,10 @@ impl ChatCore {
     ///
     /// `current_title` and `current_description` are plaintext. The call
     /// encrypts each under the new key, signs the ciphertext, and returns it
-    /// as `encrypted_title` and `encrypted_description`. A member add that
-    /// carries a description signs at version 8, the first that covers it.
-    /// `current_avatar_url` is the avatar's media URL, signed as is.
+    /// as `encrypted_title` and `encrypted_description`. While sends are v0,
+    /// a member add that carries a description signs at version 8, the first
+    /// that covers it, and any other at 7; while they are v1, every add signs
+    /// at 10. `current_avatar_url` is the avatar's media URL, signed as is.
     pub fn prepare_group_members_change(
         &self,
         params: &GroupMembersChangeParams,

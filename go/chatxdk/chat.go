@@ -375,7 +375,7 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 //
 // PublicKeys are the identity keys of the members who stay. The result
 // carries the new key, those members' participant keys, and the action
-// signatures: the removal (bound to the new key version), a title and a
+// signatures: the removal (which names the new key version), a title and a
 // description change for each one the params set, re-encrypted under the new
 // key, and the key change.
 func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {

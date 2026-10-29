@@ -1601,7 +1601,7 @@ public final class Types {
         public final String conversationId;
         /** User promoted to admin when the sender is the only admin. */
         public String promoteAdminId;
-        /** Version bound into the removal. Null signs {@code null}. */
+        /** Key version the removal names; its signature doesn't cover it. */
         public String conversationKeyVersion;
         public String senderId;
         public String signingKeyVersion;

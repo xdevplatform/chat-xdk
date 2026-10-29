@@ -650,7 +650,7 @@ namespace ChatXdk
         ///  Sign leaving a group.
         ///
         ///  `params_json` — `conversation_id`, plus optional `promote_admin_id`,
-        ///  `conversation_key_version` (absent signs `null` on the removal), and
+        ///  `conversation_key_version` (named on the removal when set), and
         ///  `sender_id` / `signing_key_version`.
         ///
         ///  Returns JSON `PreparedAction`: the removal of the sender, an admin add

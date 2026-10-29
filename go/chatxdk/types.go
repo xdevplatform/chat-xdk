@@ -471,7 +471,8 @@ type GroupLeaveParams struct {
 	ConversationID string `json:"conversation_id"`
 	// PromoteAdminID is the user promoted to admin, when the sender is the only admin.
 	PromoteAdminID string `json:"promote_admin_id,omitempty"`
-	// ConversationKeyVersion is bound into the removal. Empty signs null.
+	// ConversationKeyVersion is the key version the removal names; its
+	// signature doesn't cover it.
 	ConversationKeyVersion string `json:"conversation_key_version,omitempty"`
 	SenderID               string `json:"sender_id,omitempty"`
 	SigningKeyVersion      string `json:"signing_key_version,omitempty"`

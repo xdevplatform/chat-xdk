@@ -1213,8 +1213,8 @@ impl GroupMembersRemoveParams {
 /// key. The result then signs a group-admin add when `promote_admin_id`
 /// names the member who becomes an admin, and a conversation delete.
 ///
-/// `conversation_key_version` is bound into the removal signature. An empty
-/// string is absent, and an absent version signs the literal `null`.
+/// `conversation_key_version` is the conversation-key version the removal
+/// names, which its signature doesn't cover. An empty string is absent.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupLeaveParams {
@@ -1223,7 +1223,7 @@ pub struct GroupLeaveParams {
     /// User ID promoted to admin with this leave, when the sender is the
     /// only admin. The caller chooses whom to promote.
     pub promote_admin_id: Option<String>,
-    /// Conversation-key version bound into the removal signature.
+    /// Conversation-key version the removal names.
     pub conversation_key_version: Option<String>,
     /// User ID of the member leaving; resolves from the session identity
     /// when unset.
@@ -1251,7 +1251,7 @@ impl GroupLeaveParams {
         self
     }
 
-    /// Set the conversation-key version bound into the removal.
+    /// Set the conversation-key version the removal names.
     pub fn with_conversation_key_version(
         mut self,
         conversation_key_version: impl Into<String>,

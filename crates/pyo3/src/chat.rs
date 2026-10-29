@@ -839,7 +839,7 @@ impl Chat {
     /// members who stay.
     ///
     /// The result carries the new key, the remaining members' participant
-    /// keys, and the action signatures: the removal (bound to the new key
+    /// keys, and the action signatures: the removal (which names the new key
     /// version), a title and a description change for each one the params
     /// set, re-encrypted under the new key, and the key change.
     pub(crate) fn prepare_group_members_remove(

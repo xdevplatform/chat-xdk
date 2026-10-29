@@ -111,9 +111,9 @@
 //! `v1_send` feature switch turns on, then v1 (per-message keys). The
 //! language bindings read the switches themselves when a chat is created;
 //! this crate never makes the request. GET [`FEATURES_ENDPOINT`] when you
-//! create a chat and hand the answer to [`ChatCore::set_feature_switches`]
-//! (or [`Chat::set_feature_switches`]); without an answer every switch is
-//! off. Every chat reads v1 sends.
+//! create a chat, retrying a request that fails, and hand the answer to
+//! [`ChatCore::set_feature_switches`] (or [`Chat::set_feature_switches`]);
+//! without an answer every switch is off. Every chat reads v1 sends.
 //!
 //! ```rust,ignore
 //! let core = ChatCore::new();

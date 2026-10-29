@@ -794,7 +794,7 @@ impl Chat {
     ///
     /// `publicKeys` are the identity keys of the members who stay. The
     /// result carries the new key and the action signatures: the removal,
-    /// bound to the new key version, a title and a description change for
+    /// which names the new key version, a title and a description change for
     /// each one the params set, re-encrypted under the new key, and the key
     /// change.
     #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
