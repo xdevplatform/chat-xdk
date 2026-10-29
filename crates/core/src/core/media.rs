@@ -338,13 +338,16 @@ fn message_id(event: &MessageEvent, which: &str) -> Result<String, SdkError> {
 }
 
 /// The position and own id of the attachment carrying `media_hash_key`: a
-/// media attachment, or a link card whose banner or favicon it is.
+/// media attachment, or a link card whose banner or favicon it is. Payment
+/// receipts take no position, as the native clients leave them out of a
+/// message's attachments before numbering them.
 fn find_attachment<'a>(
     attachments: &'a [Box<MessageAttachment>],
     media_hash_key: &str,
 ) -> Option<(usize, Option<&'a str>)> {
     attachments
         .iter()
+        .filter(|attachment| !matches!(***attachment, MessageAttachment::PaymentReceipt(_)))
         .enumerate()
         .find_map(|(position, attachment)| {
             let own_id = match &**attachment {
