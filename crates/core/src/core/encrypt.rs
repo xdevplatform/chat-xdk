@@ -1013,13 +1013,13 @@ impl ChatCore {
 /// How much of the quoted text a reply preview's text is compared on: 140
 /// characters, counted in UTF-16 code units as the native clients count
 /// them, so a pair that straddles the limit is cut in half.
-const PREVIEW_LENGTH: usize = 140;
+const PREVIEW_TEXT_UNITS: usize = 140;
 
 /// The start of `text` a reply preview's text is compared on; an absent text
 /// counts as empty.
 fn preview_text(text: Option<&str>) -> Vec<u16> {
     text.unwrap_or_default()
         .encode_utf16()
-        .take(PREVIEW_LENGTH)
+        .take(PREVIEW_TEXT_UNITS)
         .collect()
 }
