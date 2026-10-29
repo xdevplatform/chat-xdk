@@ -309,46 +309,32 @@ impl ChatCore {
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
         let conversation_id =
             crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
-        let signing_key = self.get_signing_private_key()?;
 
         let delete_action = if params.delete_for_all {
             crate::thrift::event::DeleteMessageAction::DELETE_FOR_ALL
         } else {
             crate::thrift::event::DeleteMessageAction::DELETE_FOR_SELF
         };
-        let message_id = Self::generate_message_id();
-        let mut signature = crate::signatures::build_message_delete_signature(
-            &signing_key,
-            &signing_key_version,
-            &message_id,
-            &sender_id,
-            &conversation_id,
-            &params.sequence_ids,
-            delete_action.0,
-        )?;
-        signature.encoded_message_event_detail =
-            Self::encode_message_delete_detail(&params.sequence_ids, delete_action)?;
-        Ok(PreparedAction {
-            action_signatures: vec![signature],
-        })
-    }
-
-    /// Serialize the `MessageDeleteEvent` the API validates and relays.
-    ///
-    /// Encoded as a base64 `MessageEventDetail` carrying the sequence ids and
-    /// the delete action.
-    pub(super) fn encode_message_delete_detail(
-        sequence_ids: &[String],
-        delete_action: crate::thrift::event::DeleteMessageAction,
-    ) -> Result<String, SdkError> {
+        // The `MessageDeleteEvent` the API validates and relays: the sequence
+        // ids and the delete action.
         let detail = crate::thrift::event::MessageEventDetail::MessageDeleteEvent(
             crate::thrift::event::MessageDeleteEvent {
-                sequence_ids: Some(sequence_ids.to_vec()),
+                sequence_ids: Some(params.sequence_ids.clone()),
                 delete_message_action: Some(delete_action),
                 pme_sequence_ids: None,
             },
         );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        let signature = self.sign_action_event(
+            &signing_key_version,
+            &sender_id,
+            &conversation_id,
+            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            detail,
+            None,
+        )?;
+        Ok(PreparedAction {
+            action_signatures: vec![signature],
+        })
     }
 
     /// Build the signed action for marking a conversation read.
@@ -380,42 +366,27 @@ impl ChatCore {
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
         let conversation_id =
             crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
-        let signing_key = self.get_signing_private_key()?;
         let seen_at_msec = params.seen_at_msec.unwrap_or_else(now_msec);
 
-        let message_id = Self::generate_message_id();
-        let mut signature = crate::signatures::build_mark_conversation_read_signature(
-            &signing_key,
-            &signing_key_version,
-            &message_id,
-            &sender_id,
-            &conversation_id,
-            &params.seen_until_sequence_id,
-            seen_at_msec,
-        )?;
-        signature.encoded_message_event_detail = Self::encode_mark_conversation_read_detail(
-            &params.seen_until_sequence_id,
-            seen_at_msec,
-        )?;
-        Ok(PreparedAction {
-            action_signatures: vec![signature],
-        })
-    }
-
-    /// Serialize the `MarkConversationReadEvent` as a base64
-    /// `MessageEventDetail` carrying the read point and its time.
-    pub(super) fn encode_mark_conversation_read_detail(
-        seen_until_sequence_id: &str,
-        seen_at_msec: i64,
-    ) -> Result<String, SdkError> {
+        // The `MarkConversationReadEvent`: the read point and its time.
         let detail = crate::thrift::event::MessageEventDetail::MarkConversationReadEvent(
             crate::thrift::event::MarkConversationReadEvent {
-                seen_until_sequence_id: Some(seen_until_sequence_id.to_string()),
+                seen_until_sequence_id: Some(params.seen_until_sequence_id.clone()),
                 seen_at_millis: Some(seen_at_msec),
                 is_grok: None,
             },
         );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        let signature = self.sign_action_event(
+            &signing_key_version,
+            &sender_id,
+            &conversation_id,
+            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            detail,
+            None,
+        )?;
+        Ok(PreparedAction {
+            action_signatures: vec![signature],
+        })
     }
 
     /// Resolve a reaction's conversation id and target sequence id from the

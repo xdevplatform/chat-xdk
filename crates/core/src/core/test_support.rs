@@ -69,6 +69,29 @@ impl Party {
     }
 }
 
+/// A version-7 signature by `core`'s signing key over the key change
+/// `message_id`, which carries `conversation_key` at
+/// `conversation_key_version`.
+pub(super) fn key_change_signature(
+    core: &ChatCore,
+    public_key_version: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    conversation_key_version: &str,
+    conversation_key: &[u8],
+) -> Result<crate::signatures::ActionSignature, SdkError> {
+    crate::signatures::build_ckey_change_signature(
+        &core.get_signing_private_key()?,
+        public_key_version,
+        message_id,
+        sender_id,
+        conversation_id,
+        conversation_key_version,
+        conversation_key,
+    )
+}
+
 pub(super) fn key(byte: u8) -> XChatConversationKey {
     XChatConversationKey::from_bytes(vec![byte; 32]).unwrap()
 }

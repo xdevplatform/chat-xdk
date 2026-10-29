@@ -1824,6 +1824,9 @@ mod test_support;
 mod signature_version_tests;
 
 #[cfg(test)]
+mod action_version_tests;
+
+#[cfg(test)]
 mod message_key_tests;
 
 #[cfg(test)]

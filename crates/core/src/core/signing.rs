@@ -56,90 +56,40 @@ impl ChatCore {
         Ok(KeyFactory::verify(&public_key, signature, data)?)
     }
 
-    /// Build and sign a GroupMemberAdd action signature.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sign_add_members(
-        &self,
-        public_key_version: &str,
-        message_id: &str,
-        sender_id: &str,
-        conversation_id: &str,
-        new_member_ids: &[String],
-        current_member_ids: &[String],
-        current_admin_ids: &[String],
-        conversation_key_version: &str,
-        current_title: Option<&str>,
-        current_avatar_url: Option<&str>,
-        current_description: Option<&str>,
-        current_ttl_msec: Option<i64>,
-        current_screen_capture_blocking_enabled: Option<bool>,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
-        let signing_key = self.get_signing_private_key()?;
-        crate::signatures::sign_group_member_add(
-            &signing_key,
-            public_key_version,
-            message_id,
-            sender_id,
-            conversation_id,
-            new_member_ids,
-            current_member_ids,
-            current_admin_ids,
-            current_title,
-            current_avatar_url,
-            current_ttl_msec,
-            current_screen_capture_blocking_enabled,
-            conversation_key_version,
-            current_description,
-        )
+    /// The signature version of a signed action: `legacy` while sends are
+    /// v0, and the version v1 sends sign at while they are v1, so every
+    /// event a chat signs takes one version at a time.
+    pub(crate) fn action_signature_version(&self, legacy: i32) -> i32 {
+        match self.send_version() {
+            crate::pipeline::SendVersion::V0 => legacy,
+            crate::pipeline::SendVersion::V1 => crate::signatures::MESSAGE_SIGNATURE_VERSION,
+        }
     }
 
-    /// Build and sign a GroupCreate action signature, which sets no avatar.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sign_group_create(
+    /// Sign `detail`, the event of a new action from `sender_id` in
+    /// `conversation_id`, at [`Self::action_signature_version`] of `legacy`.
+    /// `conversation_key` is the raw key a key change carries.
+    pub(crate) fn sign_action_event(
         &self,
         public_key_version: &str,
-        message_id: &str,
-        sender_id: &str,
-        member_ids: &[String],
-        title: Option<&str>,
-        conversation_key_version: &str,
-        is_legacy_group_upgrade: Option<bool>,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
-        let signing_key = self.get_signing_private_key()?;
-        crate::signatures::build_group_create_signature(
-            &signing_key,
-            public_key_version,
-            message_id,
-            sender_id,
-            member_ids,
-            title,
-            None,
-            conversation_key_version,
-            is_legacy_group_upgrade,
-        )
-    }
-
-    /// Build and sign a ConversationKeyChange action signature (v7).
-    ///
-    /// `conversation_key` is the raw 32-byte conversation key.
-    pub(crate) fn sign_key_change(
-        &self,
-        public_key_version: &str,
-        message_id: &str,
         sender_id: &str,
         conversation_id: &str,
-        conversation_key_version: &str,
-        conversation_key: &[u8],
+        legacy: i32,
+        detail: crate::thrift::event::MessageEventDetail,
+        conversation_key: Option<&[u8]>,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         let signing_key = self.get_signing_private_key()?;
-        crate::signatures::build_ckey_change_signature(
+        let ckey_b64 =
+            conversation_key.map(|key| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(key)));
+        crate::signatures::sign_event(
             &signing_key,
             public_key_version,
-            message_id,
+            &Self::generate_message_id(),
             sender_id,
             conversation_id,
-            conversation_key_version,
-            conversation_key,
+            self.action_signature_version(legacy),
+            detail,
+            ckey_b64.as_deref().map(String::as_str),
         )
     }
 }

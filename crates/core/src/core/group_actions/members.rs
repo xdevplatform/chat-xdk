@@ -6,19 +6,14 @@ use crate::error::SdkError;
 use crate::params::{
     GroupAdminsAddParams, GroupAdminsRemoveParams, GroupLeaveParams, GroupMembersRemoveParams,
 };
-use crate::signatures::{
-    ActionSignature, CURRENT_SIGNATURE_VERSION, MEMBER_REMOVE_SIGNATURE_VERSION,
-};
+use crate::signatures::ActionSignature;
 use crate::thrift::event::{
     ConversationDeleteEvent, GroupAdminAddChange, GroupAdminRemoveChange, GroupChange,
     GroupMemberRemoveChange, MessageEventDetail,
 };
 use crate::types::{PreparedAction, PreparedConversationChange};
 
-use super::{
-    encode_detail, group_detail, nullable_str, require_user_ids, sign_metadata, sign_named,
-    ActionCtx, GroupMetadata,
-};
+use super::{group_detail, require_user_ids, sign_change, sign_metadata, ActionCtx, GroupMetadata};
 
 impl ChatCore {
     /// Sign a group member removal and rotate the conversation key for the
@@ -27,14 +22,14 @@ impl ChatCore {
     /// `public_keys` are the identity keys of the members who stay. The
     /// result is a [`PreparedConversationChange`]: the new conversation key,
     /// its participant keys, and `action_signatures` in request order — the
-    /// removal (bound to the new key version); a title and a description
+    /// removal, which names the new key version; a title and a description
     /// change for each of `title` and `description` that is set, encrypted
     /// under the new key and marked as key-rotation re-encryptions, which
     /// recipients' decrypt drops; then the conversation-key change.
     ///
-    /// The removal is signed at signature version 11 so the key version is
-    /// part of the payload. The key change is signed at the version every
-    /// other key change uses.
+    /// Every action signs at the version the chat's other actions sign at: 7
+    /// while sends are v0 and 10 while they are v1. Neither version covers
+    /// the removal's key version, which signature version 11 first signs.
     ///
     /// The result does not include a ratchet tree (`base64_encoded_key_rotation`)
     /// or a rewrapped pin-key bundle (`rotated_pmk_bundle`).
@@ -97,18 +92,14 @@ impl ChatCore {
                 action_signatures.push(signature);
             }
         }
-        let key_change_id = Self::generate_message_id();
-        let mut key_change = self.sign_key_change(
+        action_signatures.push(self.sign_key_change(
             &ctx.signing_key_version,
-            &key_change_id,
             &ctx.sender_id,
             &ctx.conversation_id,
             conversation_key_version,
-            ckey.encoded(),
-        )?;
-        key_change.encoded_message_event_detail =
-            Self::encode_ckey_change_detail(conversation_key_version, &participant_keys)?;
-        action_signatures.push(key_change);
+            &ckey,
+            &participant_keys,
+        )?);
 
         Ok(PreparedConversationChange {
             conversation_id: ctx.conversation_id,
@@ -152,28 +143,19 @@ impl ChatCore {
         let self_ids = vec![ctx.sender_id.clone()];
         let mut signatures = vec![sign_member_remove(&ctx, &self_ids, bound.as_deref())?];
         if let Some(admin_id) = promote {
-            let detail = group_detail(GroupChange::GroupAdminAdd(GroupAdminAddChange {
-                admin_ids: Some(vec![admin_id.clone()]),
-            }))?;
-            signatures.push(sign_named(
+            signatures.push(sign_change(
                 &ctx,
-                "GroupChangeEvent.GroupAdminAddChange",
-                &[&admin_id],
-                CURRENT_SIGNATURE_VERSION,
-                detail,
+                group_detail(GroupChange::GroupAdminAdd(GroupAdminAddChange {
+                    admin_ids: Some(vec![admin_id]),
+                })),
             )?);
         }
-        signatures.push(sign_named(
+        signatures.push(sign_change(
             &ctx,
-            "ConversationDeleteEvent",
-            &[],
-            CURRENT_SIGNATURE_VERSION,
-            encode_detail(MessageEventDetail::ConversationDeleteEvent(
-                ConversationDeleteEvent {
-                    conversation_id: Some(ctx.conversation_id.clone()),
-                    clear_conversation_options: None,
-                },
-            ))?,
+            MessageEventDetail::ConversationDeleteEvent(ConversationDeleteEvent {
+                conversation_id: Some(ctx.conversation_id.clone()),
+                clear_conversation_options: None,
+            }),
         )?);
         Ok(PreparedAction {
             action_signatures: signatures,
@@ -191,11 +173,10 @@ impl ChatCore {
             params.signing_key_version.as_deref(),
             "user_ids",
             &params.user_ids,
-            "GroupChangeEvent.GroupAdminAddChange",
             |ids| {
-                group_detail(GroupChange::GroupAdminAdd(GroupAdminAddChange {
+                GroupChange::GroupAdminAdd(GroupAdminAddChange {
                     admin_ids: Some(ids.to_vec()),
-                }))
+                })
             },
         )
     }
@@ -211,11 +192,10 @@ impl ChatCore {
             params.signing_key_version.as_deref(),
             "user_ids",
             &params.user_ids,
-            "GroupChangeEvent.GroupAdminRemoveChange",
             |ids| {
-                group_detail(GroupChange::GroupAdminRemove(GroupAdminRemoveChange {
+                GroupChange::GroupAdminRemove(GroupAdminRemoveChange {
                     admin_ids: Some(ids.to_vec()),
-                }))
+                })
             },
         )
     }
@@ -236,17 +216,11 @@ fn sign_member_remove(
     user_ids: &[String],
     key_version: Option<&str>,
 ) -> Result<ActionSignature, SdkError> {
-    let version = nullable_str(key_version);
-    let mut extras: Vec<&str> = user_ids.iter().map(String::as_str).collect();
-    extras.push(version.as_str());
-    sign_named(
+    sign_change(
         ctx,
-        "GroupChangeEvent.GroupMemberRemoveChange",
-        &extras,
-        MEMBER_REMOVE_SIGNATURE_VERSION,
         group_detail(GroupChange::GroupMemberRemove(GroupMemberRemoveChange {
             member_ids: Some(user_ids.to_vec()),
             conversation_key_version: key_version.map(str::to_string),
-        }))?,
+        })),
     )
 }

@@ -73,16 +73,16 @@ fn decrypt_event_key_change_verifies_signature() {
         .unwrap();
 
     // Sign the key change (v7 signs the plaintext conversation key).
-    let sig = core
-        .sign_key_change(
-            "pkv-self",
-            "msg-1",
-            "910003",
-            "conv-1",
-            ckey_version,
-            ckey.encoded(),
-        )
-        .unwrap();
+    let sig = crate::core::test_support::key_change_signature(
+        &core,
+        "pkv-self",
+        "msg-1",
+        "910003",
+        "conv-1",
+        ckey_version,
+        ckey.encoded(),
+    )
+    .unwrap();
 
     let kce = ThriftCKCE::new(
         Some(ckey_version.to_string()),

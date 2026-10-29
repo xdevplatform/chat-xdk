@@ -1696,21 +1696,6 @@ impl ScreenCaptureChange {
             ))),
         }
     }
-
-    pub(crate) fn event_name(self) -> &'static str {
-        match self {
-            Self::BlockingEnabled => "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking",
-            Self::BlockingDisabled => {
-                "ConversationMetadataChangeEvent.DisableScreenCaptureBlocking"
-            }
-            Self::DetectionEnabled => {
-                "ConversationMetadataChangeEvent.EnableScreenCaptureDetection"
-            }
-            Self::DetectionDisabled => {
-                "ConversationMetadataChangeEvent.DisableScreenCaptureDetection"
-            }
-        }
-    }
 }
 
 /// A signed conversation-key change, ready to send to the X API.

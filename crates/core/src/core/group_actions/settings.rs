@@ -3,7 +3,6 @@
 use crate::core::ChatCore;
 use crate::error::SdkError;
 use crate::params::{MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams};
-use crate::signatures::CURRENT_SIGNATURE_VERSION;
 use crate::thrift::event::{
     ConversationMetadataChange, ConversationMetadataChangeEvent, DisableScreenCaptureBlocking,
     DisableScreenCaptureDetection, EnableScreenCaptureBlocking, EnableScreenCaptureDetection,
@@ -11,7 +10,7 @@ use crate::thrift::event::{
 };
 use crate::types::PreparedAction;
 
-use super::{encode_detail, one_action, sign_named};
+use super::{one_action, sign_change};
 
 impl ChatCore {
     /// Sign a message-TTL change. The signature covers `ttl_msec` only.
@@ -29,18 +28,14 @@ impl ChatCore {
                 "ttl_msec is negative: pass the message TTL in milliseconds".into(),
             ));
         }
-        let ttl = params.ttl_msec.to_string();
-        let signature = sign_named(
+        let signature = sign_change(
             &ctx,
-            "ConversationMetadataChangeEvent.MessageDurationChange",
-            &[&ttl],
-            CURRENT_SIGNATURE_VERSION,
             metadata_detail(ConversationMetadataChange::MessageDurationChange(
                 MessageDurationChange {
                     ttl_msec: Some(params.ttl_msec),
                     apply_to_all_messages: None,
                 },
-            ))?,
+            )),
         )?;
         Ok(one_action(signature))
     }
@@ -55,16 +50,13 @@ impl ChatCore {
             params.sender_id.as_deref(),
             params.signing_key_version.as_deref(),
         )?;
-        let signature = sign_named(
+        let signature = sign_change(
             &ctx,
-            "ConversationMetadataChangeEvent.MessageDurationRemove",
-            &[],
-            CURRENT_SIGNATURE_VERSION,
             metadata_detail(ConversationMetadataChange::MessageDurationRemove(
                 MessageDurationRemove {
                     current_ttl_msec: None,
                 },
-            ))?,
+            )),
         )?;
         Ok(one_action(signature))
     }
@@ -83,23 +75,15 @@ impl ChatCore {
             params.sender_id.as_deref(),
             params.signing_key_version.as_deref(),
         )?;
-        let signature = sign_named(
-            &ctx,
-            params.change.event_name(),
-            &[],
-            CURRENT_SIGNATURE_VERSION,
-            metadata_detail(screen_capture_detail(params.change))?,
-        )?;
+        let signature = sign_change(&ctx, metadata_detail(screen_capture_detail(params.change)))?;
         Ok(one_action(signature))
     }
 }
 
-fn metadata_detail(change: ConversationMetadataChange) -> Result<String, SdkError> {
-    encode_detail(MessageEventDetail::ConversationMetadataChangeEvent(
-        ConversationMetadataChangeEvent {
-            conversation_metadata_change: Some(change),
-        },
-    ))
+fn metadata_detail(change: ConversationMetadataChange) -> MessageEventDetail {
+    MessageEventDetail::ConversationMetadataChangeEvent(ConversationMetadataChangeEvent {
+        conversation_metadata_change: Some(change),
+    })
 }
 
 fn screen_capture_detail(change: crate::types::ScreenCaptureChange) -> ConversationMetadataChange {

@@ -230,19 +230,14 @@ impl ChatCore {
             None => Self::derive_one_to_one_conversation_id(&params.public_keys)?,
         };
         let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
-        let message_id = Self::generate_message_id();
-        let mut signature = self.sign_key_change(
+        let signature = self.sign_key_change(
             &signing_key_version,
-            &message_id,
             &sender_id,
             &conversation_id,
             conversation_key_version,
-            ckey.encoded(),
+            &ckey,
+            &participant_keys,
         )?;
-        // The signed payload covers only the key bytes; the API also needs the
-        // full event so it can persist and fan out the change.
-        signature.encoded_message_event_detail =
-            Self::encode_ckey_change_detail(conversation_key_version, &participant_keys)?;
         Ok(PreparedConversationChange {
             conversation_id,
             conversation_key: Some(ckey),
@@ -254,14 +249,20 @@ impl ChatCore {
         })
     }
 
-    /// Serialize the `ConversationKeyChangeEvent` the API persists and relays.
-    ///
-    /// Encoded as a base64 `MessageEventDetail` carrying the conversation-key
-    /// version and the per-participant encrypted keys.
-    pub(super) fn encode_ckey_change_detail(
+    /// Sign the change to the conversation key `ckey` at
+    /// `conversation_key_version`: a `ConversationKeyChangeEvent` carrying
+    /// the per-participant encrypted keys, the event the API persists and
+    /// relays. Its signed payload covers the plaintext key, which recipients
+    /// decrypt from their participant key.
+    pub(crate) fn sign_key_change(
+        &self,
+        public_key_version: &str,
+        sender_id: &str,
+        conversation_id: &str,
         conversation_key_version: &str,
+        ckey: &XChatConversationKey,
         participant_keys: &[ConversationParticipantKey],
-    ) -> Result<String, SdkError> {
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
         let participant_keys = participant_keys
             .iter()
             .map(|pk| crate::thrift::event::ConversationParticipantKey {
@@ -278,23 +279,28 @@ impl ChatCore {
                 for_key_rotation: Some(false),
             },
         );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        self.sign_action_event(
+            public_key_version,
+            sender_id,
+            conversation_id,
+            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            detail,
+            Some(ckey.encoded()),
+        )
     }
 
-    /// Serialize the `GroupCreate` event the API persists and relays.
-    ///
-    /// Encoded as a base64 `MessageEventDetail` carrying the full group roster,
-    /// the encrypted title, and the conversation-key version. The backend
-    /// matches on `member_ids`, `admin_ids`, `title`, `avatar_url` and
-    /// `conversation_key_version`; a create sets no avatar.
-    pub(super) fn encode_group_create_detail(
+    /// The `GroupCreate` event the API persists and relays: the full group
+    /// roster, the encrypted title, and the conversation-key version. The
+    /// backend matches on `member_ids`, `admin_ids`, `title`, `avatar_url`
+    /// and `conversation_key_version`; a create sets no avatar.
+    pub(super) fn group_create_detail(
         member_ids: &[String],
         admin_ids: &[String],
         title: Option<&str>,
         conversation_key_version: &str,
         ttl_msec: Option<i64>,
         is_legacy_group_upgrade: Option<bool>,
-    ) -> Result<String, SdkError> {
+    ) -> crate::thrift::event::MessageEventDetail {
         let group_create = crate::thrift::event::GroupCreate {
             member_ids: Some(member_ids.to_vec()),
             admin_ids: Some(admin_ids.to_vec()),
@@ -305,22 +311,19 @@ impl ChatCore {
             ttl_msec,
             group_type: None,
         };
-        let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
+        crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
                 group_change: Some(crate::thrift::event::GroupChange::GroupCreate(group_create)),
                 for_key_rotation: Some(false),
             },
-        );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        )
     }
 
-    /// Serialize the `GroupMemberAddChange` event the API persists and relays.
-    ///
-    /// Encoded as a base64 `MessageEventDetail` carrying the new members plus
-    /// the current roster snapshot the backend matches against, its title and
-    /// description encrypted under the new key.
+    /// The `GroupMemberAddChange` event the API persists and relays: the new
+    /// members plus the current roster snapshot the backend matches against,
+    /// its title and description encrypted under the new key.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn encode_group_member_add_detail(
+    pub(crate) fn group_member_add_detail(
         new_member_ids: &[String],
         current_member_ids: &[String],
         current_admin_ids: &[String],
@@ -331,7 +334,7 @@ impl ChatCore {
         current_ttl_msec: Option<i64>,
         current_screen_capture_blocking_enabled: Option<bool>,
         conversation_key_version: &str,
-    ) -> Result<String, SdkError> {
+    ) -> crate::thrift::event::MessageEventDetail {
         let change = crate::thrift::event::GroupMemberAddChange {
             member_ids: Some(new_member_ids.to_vec()),
             current_member_ids: Some(current_member_ids.to_vec()),
@@ -349,13 +352,12 @@ impl ChatCore {
             rotated_pmk_bundle: None,
             current_description: current_description.map(str::to_string),
         };
-        let detail = crate::thrift::event::MessageEventDetail::GroupChangeEvent(
+        crate::thrift::event::MessageEventDetail::GroupChangeEvent(
             crate::thrift::event::GroupChangeEvent {
                 group_change: Some(crate::thrift::event::GroupChange::GroupMemberAdd(change)),
                 for_key_rotation: Some(false),
             },
-        );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        )
     }
 
     /// Prepare a signed group create, ready to send to the X API.
@@ -411,34 +413,27 @@ impl ChatCore {
 
         // A group create needs two signed actions: the conversation-key change
         // that seeds the group's key, and the group-create action itself.
-        let ckce_message_id = Self::generate_message_id();
-        let mut ckce_sig = self.sign_key_change(
+        let ckce_sig = self.sign_key_change(
             &signing_key_version,
-            &ckce_message_id,
             &sender_id,
             &params.conversation_id,
             conversation_key_version,
-            ckey.encoded(),
+            &ckey,
+            &participant_keys,
         )?;
-        ckce_sig.encoded_message_event_detail =
-            Self::encode_ckey_change_detail(conversation_key_version, &participant_keys)?;
-
-        let create_message_id = Self::generate_message_id();
-        let mut create_sig = self.sign_group_create(
+        let create_sig = self.sign_action_event(
             &signing_key_version,
-            &create_message_id,
             &sender_id,
-            &params.member_ids,
-            encrypted_title.as_deref(),
-            conversation_key_version,
-            None,
-        )?;
-        create_sig.encoded_message_event_detail = Self::encode_group_create_detail(
-            &params.member_ids,
-            &params.admin_ids,
-            encrypted_title.as_deref(),
-            conversation_key_version,
-            ttl_msec,
+            &params.conversation_id,
+            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            Self::group_create_detail(
+                &params.member_ids,
+                &params.admin_ids,
+                encrypted_title.as_deref(),
+                conversation_key_version,
+                ttl_msec,
+                None,
+            ),
             None,
         )?;
 
@@ -522,45 +517,39 @@ impl ChatCore {
 
         // A member add needs two signed actions: the conversation-key change
         // that rotates the group's key, and the member-add action itself.
-        let ckce_message_id = Self::generate_message_id();
-        let mut ckce_sig = self.sign_key_change(
+        let ckce_sig = self.sign_key_change(
             &signing_key_version,
-            &ckce_message_id,
             &sender_id,
             &params.conversation_id,
             conversation_key_version,
-            ckey.encoded(),
+            &ckey,
+            &participant_keys,
         )?;
-        ckce_sig.encoded_message_event_detail =
-            Self::encode_ckey_change_detail(conversation_key_version, &participant_keys)?;
-
-        let add_message_id = Self::generate_message_id();
-        let mut member_add_sig = self.sign_add_members(
+        // A description is first part of the member-add payload at version
+        // 8, so a v0 add that carries one signs at 8.
+        let legacy_version = if encrypted_description.is_some() {
+            crate::signatures::MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION
+        } else {
+            crate::signatures::CURRENT_SIGNATURE_VERSION
+        };
+        let member_add_sig = self.sign_action_event(
             &signing_key_version,
-            &add_message_id,
             &sender_id,
             &params.conversation_id,
-            &params.new_member_ids,
-            &params.current_member_ids,
-            &params.current_admin_ids,
-            conversation_key_version,
-            encrypted_title.as_deref(),
-            current_avatar_url,
-            encrypted_description.as_deref(),
-            current_ttl_msec,
-            params.current_screen_capture_blocking_enabled,
-        )?;
-        member_add_sig.encoded_message_event_detail = Self::encode_group_member_add_detail(
-            &params.new_member_ids,
-            &params.current_member_ids,
-            &params.current_admin_ids,
-            &params.current_pending_member_ids,
-            encrypted_title.as_deref(),
-            current_avatar_url,
-            encrypted_description.as_deref(),
-            current_ttl_msec,
-            params.current_screen_capture_blocking_enabled,
-            conversation_key_version,
+            legacy_version,
+            Self::group_member_add_detail(
+                &params.new_member_ids,
+                &params.current_member_ids,
+                &params.current_admin_ids,
+                &params.current_pending_member_ids,
+                encrypted_title.as_deref(),
+                current_avatar_url,
+                encrypted_description.as_deref(),
+                current_ttl_msec,
+                params.current_screen_capture_blocking_enabled,
+                conversation_key_version,
+            ),
+            None,
         )?;
 
         Ok(PreparedConversationChange {
