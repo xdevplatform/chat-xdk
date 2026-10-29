@@ -581,3 +581,64 @@ fn the_first_answer_a_caller_hands_over_sets_the_send_format() {
     party.core.set_feature_switches(200, on);
     assert_eq!(send(&party), "7", "that answer holds");
 }
+
+/// Whether each of a reaction add, a reaction removal and an edit `party`
+/// sends in `conversation_id` asks for a notification, read from the
+/// payload and from the `MessageCreateEvent` it carries.
+fn notifies(party: &Party, conversation_id: &str) -> [bool; 3] {
+    let ckey = key(3);
+    let target = |params: EncryptReactionParams| {
+        let mut params = params.with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        params.conversation_id = Some(conversation_id.to_string());
+        params.target_message_sequence_id = Some("100".to_string());
+        params
+    };
+    let mut edit =
+        EncryptEditParams::new("", "edited").with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    edit.conversation_id = Some(conversation_id.to_string());
+    edit.target_message_sequence_id = Some("100".to_string());
+    [
+        party
+            .core
+            .encrypt_add_reaction(&target(EncryptReactionParams::new("", "👍")))
+            .unwrap(),
+        party
+            .core
+            .encrypt_remove_reaction(&target(EncryptReactionParams::new("", "👍")))
+            .unwrap(),
+        party.core.encrypt_edit(&edit).unwrap(),
+    ]
+    .map(|payload| {
+        let event = sent_event(&payload, AUTHOR, conversation_id);
+        assert_eq!(
+            create_event(&event).should_notify,
+            Some(payload.should_notify)
+        );
+        payload.should_notify
+    })
+}
+
+#[test]
+fn a_v1_reaction_notifies_only_in_a_one_to_one_conversation_and_never_on_removal() {
+    let party = author();
+    enable_v1_send(&party.core);
+    for one_to_one in [CONVERSATION, "1491585161162473473-2", "2"] {
+        assert_eq!(
+            notifies(&party, one_to_one),
+            [true, false, false],
+            "{one_to_one}"
+        );
+    }
+    assert_eq!(
+        notifies(&party, "g2031597666757378493"),
+        [false, false, false]
+    );
+}
+
+#[test]
+fn v0_reactions_and_edits_notify_as_0_5_did() {
+    let party = author();
+    for conversation_id in [CONVERSATION, "g2031597666757378493"] {
+        assert_eq!(notifies(&party, conversation_id), [true, true, true]);
+    }
+}

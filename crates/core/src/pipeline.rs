@@ -212,9 +212,6 @@ pub(crate) fn canonical_conversation_id<'a>(
     id: &'a str,
     sender_id: &str,
 ) -> std::borrow::Cow<'a, str> {
-    fn is_digits(s: &str) -> bool {
-        !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
-    }
     if let Some((a, b)) = id.split_once([':', '-']) {
         if is_digits(a) && is_digits(b) {
             return std::borrow::Cow::Owned(join_sorted_pair(a, b));
@@ -372,6 +369,18 @@ fn signing_key_infos(params: &EncryptAndSignParams<'_>) -> Vec<MessageSigningKey
             )
         })
         .collect()
+}
+
+/// Whether `conversation_id`, in any form a caller holds it, names a
+/// one-to-one conversation rather than a group.
+pub(crate) fn is_one_to_one(conversation_id: &str, sender_id: &str) -> bool {
+    canonical_conversation_id(conversation_id, sender_id)
+        .split_once(':')
+        .is_some_and(|(a, b)| is_digits(a) && is_digits(b))
+}
+
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
 }
 
 /// Check that `user_id` is a user id in canonical decimal form: digits only,

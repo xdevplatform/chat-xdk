@@ -170,19 +170,24 @@ impl ChatCore {
         let content_bytes =
             crate::pipeline::build_reaction_add_content(&target_sequence_id, &params.emoji)?;
         let message_id = Self::generate_message_id();
-        crate::pipeline::encrypt_and_sign(
-            crate::pipeline::EncryptAndSignParams::new(
-                &ckey,
-                &signing_kp.private,
-                &message_id,
-                &sender_id,
-                &conversation_id,
-                &content_bytes,
-                &conversation_key_version,
-                &signing_key_version,
-            )
-            .send_version(self.send_version()),
+        let send_version = self.send_version();
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
         )
+        .send_version(send_version);
+        // A v1 reaction notifies in a one-to-one conversation only.
+        if send_version == crate::pipeline::SendVersion::V1 {
+            api_params.should_notify =
+                Some(crate::pipeline::is_one_to_one(&conversation_id, &sender_id));
+        }
+        crate::pipeline::encrypt_and_sign(api_params)
     }
 
     /// Encrypt a reaction-remove.
@@ -207,19 +212,23 @@ impl ChatCore {
         let content_bytes =
             crate::pipeline::build_reaction_remove_content(&target_sequence_id, &params.emoji)?;
         let message_id = Self::generate_message_id();
-        crate::pipeline::encrypt_and_sign(
-            crate::pipeline::EncryptAndSignParams::new(
-                &ckey,
-                &signing_kp.private,
-                &message_id,
-                &sender_id,
-                &conversation_id,
-                &content_bytes,
-                &conversation_key_version,
-                &signing_key_version,
-            )
-            .send_version(self.send_version()),
+        let send_version = self.send_version();
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
         )
+        .send_version(send_version);
+        // Removing a v1 reaction notifies no one.
+        if send_version == crate::pipeline::SendVersion::V1 {
+            api_params.should_notify = Some(false);
+        }
+        crate::pipeline::encrypt_and_sign(api_params)
     }
 
     /// Encrypt a message edit.
@@ -265,19 +274,23 @@ impl ChatCore {
             target_message_id.as_deref(),
         )?;
         let message_id = Self::generate_message_id();
-        crate::pipeline::encrypt_and_sign(
-            crate::pipeline::EncryptAndSignParams::new(
-                &ckey,
-                &signing_kp.private,
-                &message_id,
-                &sender_id,
-                &conversation_id,
-                &content_bytes,
-                &conversation_key_version,
-                &signing_key_version,
-            )
-            .send_version(send_version),
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
         )
+        .send_version(send_version);
+        // The native clients notify on an edit only while a switch of their
+        // own is on; the SDK has none, so a v1 edit notifies no one.
+        if send_version == crate::pipeline::SendVersion::V1 {
+            api_params.should_notify = Some(false);
+        }
+        crate::pipeline::encrypt_and_sign(api_params)
     }
 
     /// Build the signed action for deleting messages from a conversation.
