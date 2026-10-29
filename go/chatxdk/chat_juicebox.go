@@ -12,7 +12,7 @@ import (
 // ChangePin and Delete use it; UpdateConfig replaces it. An empty or blank
 // configJSON returns the ErrorKindInvalidState error a chat without a config
 // gives those calls; New creates a chat without one. Like New, it reads the
-// X API's feature switches once, in the background.
+// X API's feature switches in the background.
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func NewWithJuiceboxConfig(configJSON string) (*Chat, error) {

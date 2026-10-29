@@ -148,10 +148,9 @@ impl Requests {
     }
 
     /// Apply the result of the GET `id` to the chats waiting for it. A result
-    /// that turns no flag on (a failure, or an answer after the GET's
-    /// deadline) returns the retry for the binding to perform, while a chat
-    /// still waits and retries remain. A result for no GET in flight changes
-    /// nothing.
+    /// that is no answer (a failure, or a response after the GET's deadline)
+    /// returns the retry for the binding to perform, while a chat still waits
+    /// and retries remain. A result for no GET in flight changes nothing.
     fn complete(&mut self, id: u64, status: u16, body: &[u8], now: u64) -> Option<Fetch> {
         let url = self
             .by_url
@@ -267,9 +266,9 @@ impl ChatFeatures {
     }
 
     /// Take `status` and `body`, the answer to a GET the caller performed,
-    /// unless this chat has started its read or taken an answer already. An
-    /// answer that turns no flag on leaves the chat open to a later one, from
-    /// a GET the caller retried.
+    /// unless this chat has started its read or taken an answer already. A
+    /// status and body that are no answer (see [`parse_answer`]) leave the
+    /// chat open to a later one, from a GET the caller retried.
     pub(crate) fn answer(&mut self, status: u16, body: &[u8]) {
         if self.started {
             return;

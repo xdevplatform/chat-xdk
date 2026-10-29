@@ -58,7 +58,7 @@ type Chat struct {
 }
 
 // New creates a new Chat SDK instance. It reads the X API's feature switches
-// once, in the background.
+// in the background, and retries a read that fails.
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func New() *Chat {
