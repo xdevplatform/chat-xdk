@@ -601,12 +601,9 @@ impl ChatCore {
             None => return Ok(false),
         };
 
-        // Missing version is treated as current.
-        let sig_version = sig_data
-            .signature_version
-            .as_deref()
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
+        let Some(sig_version) = signature_version(parsed) else {
+            return Err("signature_version is missing or not an integer".to_string());
+        };
         if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
             return Err(format!(
                 "signature_version {} is no longer accepted (minimum: {})",
@@ -703,6 +700,18 @@ fn now_msec() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
+/// The signature version an event's signature carries; `None` when it
+/// carries none or one that is not an integer.
+pub(crate) fn signature_version(event: &MessageEvent) -> Option<i32> {
+    event
+        .message_event_signature
+        .as_ref()?
+        .signature_version
+        .as_deref()?
+        .parse::<i32>()
+        .ok()
+}
+
 pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError> {
     let cursor = Cursor::new(data);
     let mut raw = TBinaryInputProtocol::new(cursor, true);
@@ -717,7 +726,8 @@ pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError>
 /// of the signature version the event carries.
 ///
 /// Returns `None` for event types that are not signed (typing, failure,
-/// member account delete).
+/// member account delete), and for an event whose signature carries no
+/// version or one that is not an integer.
 ///
 /// `plaintext_ckey_b64` is required for CKCE v6+ verification — pass the
 /// base64-no-padding encoding of the decrypted conversation key bytes.
@@ -737,12 +747,7 @@ pub fn build_event_signature_payload(
     let sender_id = event.sender_id.as_deref()?;
     let conv_id = event.conversation_id.as_deref();
 
-    let sig_version = event
-        .message_event_signature
-        .as_ref()
-        .and_then(|s| s.signature_version.as_deref())
-        .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
+    let sig_version = signature_version(event)?;
 
     let mut payload = match detail {
         MessageEventDetail::MessageCreateEvent(mce) => {
@@ -753,18 +758,13 @@ pub fn build_event_signature_payload(
             }
             let contents = mce.contents.as_ref()?;
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
-            // v8+ signs the key version as a canonical integer, "null" when
-            // absent or not an integer. Earlier versions sign it as carried,
-            // empty when absent.
-            let ckey_ver = if sig_version >= 8 {
-                nullable_i64(
-                    mce.conversation_key_version
-                        .as_deref()
-                        .and_then(|v| v.parse::<i64>().ok()),
-                )
-            } else {
-                mce.conversation_key_version.clone().unwrap_or_default()
-            };
+            // The key version signs as its integer value, "null" when absent
+            // or not an integer.
+            let ckey_ver = nullable_i64(
+                mce.conversation_key_version
+                    .as_deref()
+                    .and_then(|v| v.parse::<i64>().ok()),
+            );
             let mut extra = vec![ckey_ver, contents_b64];
             // v10+: contents_encryption_version
             if sig_version >= 10 {
@@ -780,7 +780,14 @@ pub fn build_event_signature_payload(
             )
         }
         MessageEventDetail::ConversationKeyChangeEvent(ckce) => {
-            let ckey_ver = ckce.conversation_key_version.as_deref()?;
+            // The key version signs as its integer value; a key change
+            // without one has no payload.
+            let ckey_ver = ckce
+                .conversation_key_version
+                .as_deref()?
+                .parse::<i64>()
+                .ok()?
+                .to_string();
 
             if sig_version >= crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION {
                 // sign the plaintext conversation key bytes (base64 no-padding).
@@ -790,24 +797,22 @@ pub fn build_event_signature_payload(
                     msg_id,
                     sender_id,
                     conv_id,
-                    &[ckey_ver, ckey_b64],
+                    &[&ckey_ver, ckey_b64],
                 )
             } else {
-                // pre-v6: sign the per-participant encrypted key triplets.
+                // pre-v6: sign the per-participant encrypted key triplets,
+                // leaving out the fields an entry lacks.
                 let keys = ckce.conversation_participant_keys.as_ref()?;
-                let mut extra: Vec<&str> = vec![ckey_ver];
-                let parts: Vec<String> = keys
-                    .iter()
-                    .flat_map(|pk| {
-                        vec![
-                            pk.user_id.clone().unwrap_or_default(),
-                            pk.encrypted_conversation_key.clone().unwrap_or_default(),
-                            pk.public_key_version.clone().unwrap_or_default(),
-                        ]
-                    })
-                    .collect();
-                let part_refs: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
-                extra.extend(part_refs);
+                let mut extra: Vec<&str> = vec![&ckey_ver];
+                extra.extend(keys.iter().flat_map(|pk| {
+                    [
+                        pk.user_id.as_deref(),
+                        pk.encrypted_conversation_key.as_deref(),
+                        pk.public_key_version.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                }));
                 build_component_payload(
                     "ConversationKeyChangeEvent",
                     msg_id,

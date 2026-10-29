@@ -183,7 +183,8 @@ pub(super) fn envelope(
     }
 }
 
-/// The signed payload of a `MessageCreateEvent` at `version` (2 or later).
+/// The signed payload of a `MessageCreateEvent` at `version` (2 or later):
+/// the key version as its integer value, `null` when it is not one.
 pub(super) fn message_payload(
     message_id: &str,
     sender_id: &str,
@@ -197,7 +198,9 @@ pub(super) fn message_payload(
         message_id,
         sender_id,
         CONVERSATION,
-        key_version,
+        key_version
+            .parse::<i64>()
+            .map_or("null".to_string(), |v| v.to_string()),
         STANDARD_NO_PAD.encode(contents)
     );
     if version >= 10 {

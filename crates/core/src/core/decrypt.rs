@@ -121,13 +121,11 @@ impl ChatCore {
                 continue;
             }
 
-            let sig_version = parsed
-                .message_event_signature
-                .as_ref()
-                .and_then(|s| s.signature_version.as_deref())
-                .and_then(|v| v.parse::<i32>().ok())
-                .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
-            if sig_version < crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION {
+            // A key change signed before the plaintext key was is left
+            // adopted; one without a version fails verification below.
+            if signature_version(&parsed)
+                .is_some_and(|v| v < crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION)
+            {
                 continue;
             }
 
@@ -203,14 +201,9 @@ impl ChatCore {
                 continue;
             };
 
-            let sig_version = parsed
-                .message_event_signature
-                .as_ref()
-                .and_then(|s| s.signature_version.as_deref())
-                .and_then(|v| v.parse::<i32>().ok())
-                .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
-            if sig_version < crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION {
-                continue;
+            match signature_version(&parsed) {
+                Some(v) if v >= crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION => {}
+                _ => continue,
             }
 
             let Some(adopted) = result.keys.get(&version) else {
