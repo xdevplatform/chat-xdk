@@ -128,14 +128,16 @@ See the **JS** column of the unified tables in [`docs/API.md`](../../../docs/API
 Each chat makes one kind of request itself: an anonymous
 `GET https://api.x.com/2/chat/features` in the background, which reads the X
 API's feature switches that pick the format the SDK sends in. A chat reads
-them once, when it is created, and keeps the answer for its lifetime; chats
-created while a request is in flight share it. The request carries no
-credentials and never delays or fails a call; until it answers, and for the
-chat's lifetime if it fails or is blocked, sends stay in v0, the format 0.5.x
-sends.
-From Node 20.16 the request never keeps the process alive; before it, the
-request can delay exit until it ends, at most 2 seconds.
-In a browser, the request is a simple cross-origin GET made with `fetch`.
+them when it is created, and keeps the first answer for its lifetime; chats
+created while a request is in flight, or waiting to be retried, share it.
+The request carries no credentials and never delays or fails a call. One
+that fails is retried in the background, 1 second later, then after twice
+the previous wait, at most 5 minutes apart and 10 times; until an answer
+arrives, and for the chat's lifetime if none does, sends stay in v0, the
+format 0.5.x sends. From Node 20.16 the request and its retries never keep
+the process alive; before it, a request in flight can delay exit until it
+ends, at most 2 seconds. In a browser, the request is a simple cross-origin
+GET made with `fetch`.
 
 ## Security limitations
 

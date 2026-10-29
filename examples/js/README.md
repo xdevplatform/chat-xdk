@@ -38,9 +38,9 @@ the browser, or in Node for the bot); REST calls go through the **XDK**
 ## Message format
 
 The bot imports its raw private-key blob into a chat from `createChat()`,
-which reads the X API's feature switches once, when it is created, and sends
-v1 if `v1_send` was on then. The browser app drives the lower-level WASM
-`Chat` from `crates/wasm/pkg/`, which doesn't read the switches, so its
+which reads the X API's feature switches when it is created, and sends v1
+once their answer turns `v1_send` on. The browser app drives the lower-level
+WASM `Chat` from `crates/wasm/pkg/`, which doesn't read the switches, so its
 messages go out in the v0 format.
 
 ## Test it (offline, no credentials)

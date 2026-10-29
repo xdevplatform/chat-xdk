@@ -196,41 +196,50 @@ go/chatxdk/                       # Go bindings (cgo over the ffi static archive
 
 The X API serves boolean feature switches at `GET /2/chat/features`, for
 example `{"features":{"v1_send":false}}`. `v1_send` picks the send format: v0,
-the format 0.5.x sends, while it is off, and v1 (per-message keys) while it is on.
-The core holds the whole policy: when to fetch, how chats share an answer,
-response validation and the fail-closed default. It never makes the request
-itself. Each language binding performs the GET the core hands it, with its own
-HTTP stack (`fetch` in a browser), and hands the status and body back. A Rust
+the format 0.5.x sends, while it is off, and v1 (per-message keys) while it
+is on. The core holds the whole policy: when to fetch and when to retry, how
+chats share an answer, response validation and the fail-closed default. It
+never makes the request itself. Each language binding performs each GET the
+core hands it, after the delay the core sets for a retry, with its own HTTP
+stack (`fetch` in a browser), and hands the status and body back. A Rust
 app, or code that calls the C ABI directly, is its own binding: it performs
 the GET and hands the status and body to `set_feature_switches`
 (`chat_xdk_set_feature_switches` in the C ABI, whose header defines the
 endpoint, timeout and body limit as `CHAT_XDK_FEATURES_*`), which applies
-the same validation and the one answer per chat; without it, every switch
-stays off:
+the same validation and keeps a chat's first answer; without it, every
+switch stays off:
 
-- **When:** a chat reads the switches once, when it is created, and keeps the
-  answer for its lifetime. Nothing reads them again; a chat created later
-  makes its own request. Chats created while a request for the same endpoint
-  is in flight share it. Until the answer arrives every switch reads off for
-  the chat, so its first sends can be v0.
+- **When:** a chat reads the switches when it is created, and keeps the first
+  answer for its lifetime. Nothing reads them again for a chat that has an
+  answer; a chat created later makes its own request. Chats created while a
+  request for the same endpoint is in flight, or waiting to be retried, share
+  it. Until an answer arrives every switch reads off for the chat, so its
+  first sends can be v0.
+- **Retries:** a request that fails is retried 1 s later, then after twice
+  the previous wait, never more than 5 minutes apart, at most 10 times, while
+  a chat still waits for its answer. The core sets each delay, and the binding
+  waits it out before the GET. A retry that answers sets the switches of
+  every chat that shares it.
 - **What it sends:** a GET with no query parameters, no credentials and no
   user data. It sends and stores no cookies and follows no redirect: a 3xx
   answer is a status other than 200.
 - **Fail-closed:** a network error, a request that takes more than 2 s in
-  all, a status other than 200, a body over 64 KiB, malformed JSON, or a
-  missing or non-boolean key leaves every switch off for the chat's lifetime,
-  so its sends stay v0. A failed request is not repeated, and the request
-  never blocks or fails an SDK call.
+  all, a status other than 200, a body over 64 KiB, or a body that isn't JSON
+  with a `features` object turns no switch on, and the request is retried;
+  once the retries run out, every switch stays off for the chat's lifetime,
+  so its sends stay v0. A switch whose value isn't a boolean reads off. No
+  request blocks or fails an SDK call.
 - **Where it runs:** in the background, so creating a chat never waits for
   it: a daemon thread in Python, a goroutine in Go, `HttpClient.sendAsync` in
   the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
   20.16 the request's socket and timer are unref'd, so it never keeps a
   process alive; on older Node, `fetch()` can hold the process open until the
-  request ends, at most 2 s. At exit, Python cuts short a request still under
-  way and waits for it, so no thread is inside OpenSSL while OpenSSL cleans
-  up. Every binding reads the body as it streams, up to one byte past
-  64 KiB, so a long body is never held whole; where a runtime can't stream
-  it, the request fails.
+  request ends, at most 2 s. A retry waits on a timer that never keeps a
+  process alive either. At exit, Python cuts short a request still under way,
+  or a retry still waiting, and waits for it, so no thread is inside OpenSSL
+  while OpenSSL cleans up. Every binding reads the body as it streams, up to
+  one byte past 64 KiB, so a long body is never held whole; where a runtime
+  can't stream it, the request fails.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the

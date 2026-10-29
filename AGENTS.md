@@ -28,16 +28,18 @@ to need networking inside the core, it is in the wrong layer.
 **The one exception is the feature-switch fetch.** The SDK fetches
 `GET /2/chat/features` in the background so it can pick its send format
 ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#feature-switches)).
-`crates/core` holds all of its policy (when to fetch, sharing, validation) but
-never makes the request: each language binding performs the GET the core
-hands it, with its own HTTP stack, and hands back the status and body
-unparsed. It is anonymous: no credentials and no query parameters. It is
-bounded (2 s per request, 64 KiB per body), runs once when a chat is created,
-never blocks or fails an SDK call, and is fail-closed: any failure leaves
-every switch off for the chat's lifetime, so its sends stay v0. Don't widen
-it: no other endpoint, no auth, no user data, no repeated or periodic fetch,
-nothing whose failure can change a call's result, and no fetch policy in a
-binding.
+`crates/core` holds all of its policy (when to fetch and retry, sharing,
+validation) but never makes the request: each language binding performs each
+GET the core hands it, after the delay the core sets, with its own HTTP stack,
+and hands back the status and body unparsed. It is anonymous: no credentials
+and no query parameters. It is bounded (2 s per request, 64 KiB per body),
+runs when a chat is created and, while that read keeps failing, at most 10
+more times with backoff (1 s, doubling, at most 5 minutes apart), never blocks
+or fails an SDK call, and is fail-closed: until an answer arrives, and for the
+chat's lifetime if none does, every switch stays off, so its sends stay v0.
+Don't widen it: no other endpoint, no auth, no user data, no periodic fetch,
+no retry past that bound, no new read once a chat has an answer, nothing whose
+failure can change a call's result, and no fetch policy in a binding.
 
 ## 2. Binding parity
 
