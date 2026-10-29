@@ -1,4 +1,4 @@
-//! Signature versions 8 through 11 on received events.
+//! Signature versions on received events, and the payload layout of each.
 //!
 //! Signed payloads are spelled out in each test for the version it signs at,
 //! so the verifier is checked against the payload layout rather than against
@@ -10,10 +10,11 @@ use super::test_support::{
 use super::*;
 use crate::pipeline::build_message_content;
 use crate::thrift::event::{
-    ConversationKeyChangeEvent, ConversationParticipantKey, GroupChange as ThriftGroupChange,
-    GroupChangeEvent as ThriftGroupChangeEvent, GroupCreate, GroupMemberAddChange,
-    GroupMemberRemoveChange, GroupType, MessageCreateEvent, MessageEvent as ThriftEvent,
-    MessageEventDetail as Detail, MessageEventSignature,
+    ConversationKeyChangeEvent, ConversationParticipantKey, GroupAvatarUrlChange,
+    GroupChange as ThriftGroupChange, GroupChangeEvent as ThriftGroupChangeEvent, GroupCreate,
+    GroupDescriptionChange, GroupMemberAddChange, GroupMemberRemoveChange, GroupTitleChange,
+    GroupType, MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail as Detail,
+    MessageEventSignature,
 };
 
 fn payload_string(event: &ThriftEvent, plaintext_ckey_b64: Option<&str>) -> String {
@@ -549,4 +550,115 @@ fn a_key_change_verifies_only_at_the_version_it_was_signed_at() {
         &owner,
         &ckey
     ));
+}
+
+// Group metadata changes, and a value a change removes.
+
+/// A title, description or avatar change setting `value` (`None` removes
+/// it) under key version "2", and the event name its payload starts with.
+fn metadata_changes(value: Option<&str>) -> [(ThriftGroupChange, &'static str); 3] {
+    let value = value.map(str::to_string);
+    let key_version = Some("2".to_string());
+    [
+        (
+            ThriftGroupChange::GroupTitleChange(GroupTitleChange {
+                custom_title: value.clone(),
+                conversation_key_version: key_version.clone(),
+            }),
+            "GroupChangeEvent.GroupTitleChange",
+        ),
+        (
+            ThriftGroupChange::GroupDescriptionChange(GroupDescriptionChange {
+                custom_description: value.clone(),
+                conversation_key_version: key_version.clone(),
+            }),
+            "GroupChangeEvent.GroupDescriptionChange",
+        ),
+        (
+            ThriftGroupChange::GroupAvatarChange(GroupAvatarUrlChange {
+                custom_avatar_url: value,
+                conversation_key_version: key_version,
+            }),
+            "GroupChangeEvent.GroupAvatarUrlChange",
+        ),
+    ]
+}
+
+fn metadata_payload(event_name: &str, value: &str, version: i32) -> String {
+    let mut payload = format!("{event_name},gc-1,{OWNER},{CONVERSATION},2,{value}");
+    if version >= 9 {
+        payload.push_str(&format!(",signature_version={version}"));
+    }
+    payload
+}
+
+#[test]
+fn a_change_that_removes_a_title_description_or_avatar_signs_null() {
+    let owner = Party::new(OWNER);
+    for version in [7, 9, 10, 11] {
+        for (change, event_name) in metadata_changes(None) {
+            let signed = metadata_payload(event_name, "null", version);
+            let event = group_change_event(&owner, change, &signed, version);
+            assert_eq!(payload_string(&event, None), signed);
+            assert!(group_change_verified(&event, &owner), "{signed}");
+        }
+    }
+}
+
+#[test]
+fn an_empty_value_signs_empty_and_never_as_a_removal() {
+    let owner = Party::new(OWNER);
+    for (change, event_name) in metadata_changes(Some("")) {
+        let signed = metadata_payload(event_name, "", 7);
+        let event = group_change_event(&owner, change, &signed, 7);
+        assert!(group_change_verified(&event, &owner), "{signed}");
+    }
+    for (change, event_name) in metadata_changes(None) {
+        let signed = metadata_payload(event_name, "", 7);
+        let event = group_change_event(&owner, change, &signed, 7);
+        assert!(!group_change_verified(&event, &owner), "{signed}");
+    }
+}
+
+#[test]
+fn a_removal_from_a_native_client_decrypts_to_an_empty_value() {
+    let owner = Party::new(OWNER);
+    let core = ChatCore::new();
+    let changes: Vec<GroupChange> = metadata_changes(None)
+        .into_iter()
+        .map(|(change, event_name)| {
+            let event = group_change_event(
+                &owner,
+                change,
+                &metadata_payload(event_name, "null", 10),
+                10,
+            );
+            match core
+                .decrypt_event_with(
+                    &frame(&event),
+                    &keys("2", &key(1)),
+                    std::slice::from_ref(&owner.entry),
+                )
+                .unwrap()
+            {
+                Event::GroupChange(change) => {
+                    assert!(change.verified);
+                    change.change
+                }
+                other => panic!("expected a group change, got {:?}", other),
+            }
+        })
+        .collect();
+    let empty = || GroupText::Text {
+        text: String::new(),
+    };
+    assert!(
+        matches!(&changes[0], GroupChange::TitleChanged { new_title } if *new_title == empty())
+    );
+    assert!(
+        matches!(&changes[1], GroupChange::DescriptionChanged { new_description } if *new_description == empty())
+    );
+    assert!(
+        matches!(&changes[2], GroupChange::AvatarChanged { new_avatar_url, .. } if new_avatar_url.is_empty())
+    );
 }

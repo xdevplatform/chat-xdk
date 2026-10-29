@@ -964,26 +964,28 @@ pub fn build_event_signature_payload(
                         &refs,
                     )
                 }
+                // Key version, then the title: "null" for a change that
+                // removes it.
                 GenGC::GroupTitleChange(c) => {
                     let ckey_ver = c.conversation_key_version.as_deref()?;
-                    let title = c.custom_title.as_deref().unwrap_or("");
+                    let title = nullable_str(c.custom_title.as_deref());
                     build_component_payload(
                         "GroupChangeEvent.GroupTitleChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &[ckey_ver, title],
+                        &[ckey_ver, &title],
                     )
                 }
                 GenGC::GroupAvatarChange(c) => {
                     let ckey_ver = c.conversation_key_version.as_deref()?;
-                    let avatar = c.custom_avatar_url.as_deref().unwrap_or("");
+                    let avatar = nullable_str(c.custom_avatar_url.as_deref());
                     build_component_payload(
                         "GroupChangeEvent.GroupAvatarUrlChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &[ckey_ver, avatar],
+                        &[ckey_ver, &avatar],
                     )
                 }
                 GenGC::GroupCreate(c) => {
@@ -1059,17 +1061,17 @@ pub fn build_event_signature_payload(
                 }
                 // Not part of the signed payload.
                 GenGC::GroupAdminSettingsChange(_) => None,
-                // Key version, then the description. An absent description
-                // signs as empty, the same way a title change signs its title.
+                // Key version, then the description, as a title change signs
+                // its title.
                 GenGC::GroupDescriptionChange(c) => {
                     let ckey_ver = c.conversation_key_version.as_deref()?;
-                    let description = c.custom_description.as_deref().unwrap_or("");
+                    let description = nullable_str(c.custom_description.as_deref());
                     build_component_payload(
                         "GroupChangeEvent.GroupDescriptionChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &[ckey_ver, description],
+                        &[ckey_ver, &description],
                     )
                 }
             }
