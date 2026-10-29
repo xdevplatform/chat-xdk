@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Changed
+
+- While a chat sends v1, every event it signs takes signature version 10, as
+  X clients sign each event at the version their messages sign at:
+  conversation-key changes, group creates (whose payload then covers the
+  group type and TTL), member adds, removals and leaves, the other group and
+  conversation-metadata changes, deletes and read receipts. While it sends
+  v0 they sign at version 7, as in 0.5.x, apart from a member add that
+  carries a description, which signs at version 8. A member removal and the
+  removal a leave signs follow the same rule instead of signing at version
+  11, so 0.5.x readers verify them while the chat sends v0; their
+  signatures don't cover the key version the removal names, which the
+  removal's key change signs.
+- A feature-switch request that fails is retried in the background while a
+  chat waits for its answer: 1 second later, then after twice the previous
+  wait, at most 5 minutes apart and 10 times. The Rust core sets the
+  schedule and every binding follows it. The first answer sets the switches
+  of every chat that shares the request, for their lifetime; until one
+  arrives, and for the chat's lifetime if none does, every switch stays off
+  and the chat sends v0. `set_feature_switches` and `chat_xdk_set_feature_switches` take
+  a later answer after one that failed, so a Rust app or C caller can retry
+  the same way; the first 200 response with a features object holds.
+- A v1 send's encoded signature lists the signing keys the message relies
+  on, by user id and key version (`message_signing_key_info_list`): its
+  sender's and, for a reply, those of the quoted message's sender and of its
+  edit's, as X clients' v1 sends do.
+- A v1 reaction asks for a notification (`should_notify`) only in a
+  one-to-one conversation, and a v1 reaction removal or edit asks for none,
+  as X clients' v1 sends do. v0 reactions, removals and edits ask for one,
+  as 0.5.x's do.
+- A reply embeds no key change (`raw_event_ckces`), and decrypt reads none
+  from a received reply: recipients open the quoted message with their own
+  conversation keys, or with the message key a reply carries for a v1
+  message. `reply_to_ckces` still opens an original under a key version the
+  sender's chat doesn't hold.
+
+### Fixed
+
+- A reply preview validates only when the first 140 characters of its text,
+  counted in UTF-16 code units as X clients count them, are those of the
+  quoted text, and its entities are exactly the quoted message's, or its
+  edit's when the reply embeds the edit.
+- A group change that removes the title, description or avatar verifies: X
+  clients sign `null` in the value's place, and so does the verifier. It
+  decrypts to an empty title, description or avatar URL.
+- An event whose signature carries no signature version, or one that isn't
+  an integer, fails verification. Every version signs a message's
+  conversation-key version as an integer, `null` when missing or not an
+  integer, and a key change's as an integer, as X clients sign them.
+- `decrypt_file` and `file_decryptor` number a message's attachments as X
+  clients do, leaving out payment receipts, so a v1 file whose attachment
+  carries no id opens from a message that also carries a payment receipt.
+
+## [0.7.1] - 2026-10-28
+
 ### Added
 
 `encrypt_file_with_key` and `decrypt_file_with_key` encrypt and decrypt a
