@@ -1787,9 +1787,9 @@ func TestGroupActionSignatures(t *testing.T) {
 			len(rotated.ConversationKey), len(rotated.ConversationParticipantKeys), len(rotated.ActionSignatures))
 	}
 	removal := rotated.ActionSignatures[0]
-	if removal.MessageEventSignature.SignatureVersion != "11" ||
+	if removal.MessageEventSignature.SignatureVersion != "7" ||
 		!signedOver(t, chat, removal, "GroupChangeEvent.GroupMemberRemoveChange,"+removal.MessageID+
-			",111,g100,910007,"+rotated.ConversationKeyVersion+",signature_version=11") {
+			",111,g100,910007") {
 		t.Fatalf("removal signature: %+v", removal)
 	}
 	_, err = chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
@@ -1813,8 +1813,9 @@ func TestGroupActionSignatures(t *testing.T) {
 		t.Fatalf("leave: %v", err)
 	}
 	if len(left.ActionSignatures) != 3 ||
+		left.ActionSignatures[0].MessageEventSignature.SignatureVersion != "7" ||
 		!signedOver(t, chat, left.ActionSignatures[0], "GroupChangeEvent.GroupMemberRemoveChange,"+
-			left.ActionSignatures[0].MessageID+",111,g100,111,7,signature_version=11") ||
+			left.ActionSignatures[0].MessageID+",111,g100,111") ||
 		!signedOver(t, chat, left.ActionSignatures[1], "GroupChangeEvent.GroupAdminAddChange,"+
 			left.ActionSignatures[1].MessageID+",111,g100,910008") ||
 		!signedOver(t, chat, left.ActionSignatures[2], "ConversationDeleteEvent,"+
@@ -1899,6 +1900,40 @@ func TestGroupActionSignatures(t *testing.T) {
 	if !signedOver(t, chat, blocking, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"+
 		blocking.MessageID+",111,g100") {
 		t.Fatalf("screen capture signature: %+v", blocking)
+	}
+}
+
+// While a chat sends v1, its group actions sign at version 10, as its
+// messages do.
+func TestGroupActionsSignAtVersion10WhileSendsAreV1(t *testing.T) {
+	v := loadVectors(t)
+	chat := newV1Chat(t)
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	waitForV1(t, chat)
+	left, err := chat.PrepareGroupLeave(GroupLeaveParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g100",
+	})
+	if err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if len(left.ActionSignatures) != 2 {
+		t.Fatalf("leave signatures: %+v", left.ActionSignatures)
+	}
+	removal, deletion := left.ActionSignatures[0], left.ActionSignatures[1]
+	if removal.MessageEventSignature.SignatureVersion != "10" ||
+		!signedOver(t, chat, removal, "GroupChangeEvent.GroupMemberRemoveChange,"+
+			removal.MessageID+",111,g100,111,signature_version=10") {
+		t.Errorf("removal signature: %+v", removal)
+	}
+	if deletion.MessageEventSignature.SignatureVersion != "10" ||
+		!signedOver(t, chat, deletion, "ConversationDeleteEvent,"+
+			deletion.MessageID+",111,g100,signature_version=10") {
+		t.Errorf("delete signature: %+v", deletion)
 	}
 }
 

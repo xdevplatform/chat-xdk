@@ -963,10 +963,9 @@ namespace ChatXdk.Tests
             Assert.Equal(32, rotated.ConversationKey.Length);
             Assert.Single(rotated.ConversationParticipantKeys);
             Assert.Equal(2, rotated.ActionSignatures.Count);
-            Assert.Equal("11", rotated.ActionSignatures[0].MessageEventSignature.SignatureVersion);
+            Assert.Equal("7", rotated.ActionSignatures[0].MessageEventSignature.SignatureVersion);
             var removal = rotated.ActionSignatures[0];
-            Assert.True(Signs(chat, removal, $"GroupChangeEvent.GroupMemberRemoveChange,{removal.MessageId},111,g100,910007," +
-                $"{rotated.ConversationKeyVersion},signature_version=11"));
+            Assert.True(Signs(chat, removal, $"GroupChangeEvent.GroupMemberRemoveChange,{removal.MessageId},111,g100,910007"));
             var noKeys = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupMembersRemove(
                 new GroupMembersRemoveParams(Array.Empty<PublicKeyInput>(), "g100", new[] { "910007" })
                 {
@@ -984,8 +983,22 @@ namespace ChatXdk.Tests
             });
             Assert.Equal(3, left.ActionSignatures.Count);
             var (leaving, promoting, deleting) = (left.ActionSignatures[0], left.ActionSignatures[1], left.ActionSignatures[2]);
+            Assert.Equal("7", leaving.MessageEventSignature.SignatureVersion);
             Assert.True(Signs(chat, leaving,
-                $"GroupChangeEvent.GroupMemberRemoveChange,{leaving.MessageId},111,g100,111,7,signature_version=11"));
+                $"GroupChangeEvent.GroupMemberRemoveChange,{leaving.MessageId},111,g100,111"));
+
+            using (var v1 = FeatureTestEnvironment.V1Chat())
+            {
+                v1.ImportKeys(new ImportKeysParams(chat.ExportKeys()!));
+                FeatureTestEnvironment.WaitForV1(v1);
+                var v1Left = v1.PrepareGroupLeave(new GroupLeaveParams("g100") { SenderId = "111", SigningKeyVersion = "1" });
+                var (v1Removal, v1Delete) = (v1Left.ActionSignatures[0], v1Left.ActionSignatures[1]);
+                Assert.Equal("10", v1Removal.MessageEventSignature.SignatureVersion);
+                Assert.True(Signs(v1, v1Removal,
+                    $"GroupChangeEvent.GroupMemberRemoveChange,{v1Removal.MessageId},111,g100,111,signature_version=10"));
+                Assert.Equal("10", v1Delete.MessageEventSignature.SignatureVersion);
+                Assert.True(Signs(v1, v1Delete, $"ConversationDeleteEvent,{v1Delete.MessageId},111,g100,signature_version=10"));
+            }
             Assert.True(Signs(chat, promoting, $"GroupChangeEvent.GroupAdminAddChange,{promoting.MessageId},111,g100,910008"));
             Assert.True(Signs(chat, deleting, $"ConversationDeleteEvent,{deleting.MessageId},111,g100"));
 

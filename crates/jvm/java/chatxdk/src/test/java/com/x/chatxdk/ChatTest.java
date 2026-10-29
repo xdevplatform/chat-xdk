@@ -769,10 +769,10 @@ class ChatTest {
             assertEquals(32, rotated.conversationKey.length);
             assertEquals(1, rotated.conversationParticipantKeys.size());
             assertEquals(2, rotated.actionSignatures.size());
-            assertEquals("11", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
+            assertEquals("7", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
             ActionSignature removed = rotated.actionSignatures.get(0);
             assertTrue(signs(chat, removed, "GroupChangeEvent.GroupMemberRemoveChange," + removed.messageId
-                    + ",111,g100,910007," + rotated.conversationKeyVersion + ",signature_version=11"));
+                    + ",111,g100,910007"));
 
             GroupMembersRemoveParams noKeys =
                     new GroupMembersRemoveParams(List.of(), "g100", List.of("910007"));
@@ -794,8 +794,26 @@ class ChatTest {
             ActionSignature leaving = left.actionSignatures.get(0);
             ActionSignature promoting = left.actionSignatures.get(1);
             ActionSignature deleting = left.actionSignatures.get(2);
+            assertEquals("7", leaving.messageEventSignature.signatureVersion);
             assertTrue(signs(chat, leaving, "GroupChangeEvent.GroupMemberRemoveChange," + leaving.messageId
-                    + ",111,g100,111,7,signature_version=11"));
+                    + ",111,g100,111"));
+
+            try (Chat v1 = FeatureServer.v1Chat()) {
+                v1.importKeys(new ImportKeysParams(chat.exportKeys()));
+                FeatureServer.waitForV1(v1);
+                GroupLeaveParams v1Leave = new GroupLeaveParams("g100");
+                v1Leave.senderId = "111";
+                v1Leave.signingKeyVersion = "1";
+                PreparedAction v1Left = v1.prepareGroupLeave(v1Leave);
+                ActionSignature v1Removal = v1Left.actionSignatures.get(0);
+                ActionSignature v1Delete = v1Left.actionSignatures.get(1);
+                assertEquals("10", v1Removal.messageEventSignature.signatureVersion);
+                assertTrue(signs(v1, v1Removal, "GroupChangeEvent.GroupMemberRemoveChange," + v1Removal.messageId
+                        + ",111,g100,111,signature_version=10"));
+                assertEquals("10", v1Delete.messageEventSignature.signatureVersion);
+                assertTrue(signs(v1, v1Delete,
+                        "ConversationDeleteEvent," + v1Delete.messageId + ",111,g100,signature_version=10"));
+            }
             assertTrue(signs(chat, promoting,
                     "GroupChangeEvent.GroupAdminAddChange," + promoting.messageId + ",111,g100,910008"));
             assertTrue(signs(chat, deleting, "ConversationDeleteEvent," + deleting.messageId + ",111,g100"));

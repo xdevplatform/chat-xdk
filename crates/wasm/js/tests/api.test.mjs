@@ -558,9 +558,23 @@ async function main() {
       conversationKeyVersion: "1",
       signingKeyVersion: "1",
     });
+  // Group actions sign at the version sends sign at.
+  const leaveGroup = () => switching.prepareGroupLeave({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+  }).actionSignatures;
   assert.equal(sendHello().signatureInfo.signatureVersion, "7");
+  assert.deepEqual(leaveGroup().map((s) => s.messageEventSignature.signatureVersion), ["7", "7"]);
   await waitForV1(sendHello);
   assert.equal(sendHello().signatureInfo.signatureVersion, "10");
+  const [v1Removal, v1Delete] = leaveGroup();
+  assert.equal(v1Removal.messageEventSignature.signatureVersion, "10");
+  assert.ok(signs(switching, v1Removal,
+    `GroupChangeEvent.GroupMemberRemoveChange,${v1Removal.messageId},111,g100,111,signature_version=10`));
+  assert.equal(v1Delete.messageEventSignature.signatureVersion, "10");
+  assert.ok(signs(switching, v1Delete,
+    `ConversationDeleteEvent,${v1Delete.messageId},111,g100,signature_version=10`));
   switching.free();
   await lateAnswer.close();
 
@@ -725,11 +739,10 @@ async function main() {
   assert.equal(rotated.conversationKey.length, 32);
   assert.equal(rotated.conversationParticipantKeys.length, 1);
   assert.equal(rotated.actionSignatures.length, 2);
-  assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "11");
+  assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "7");
   const removal = rotated.actionSignatures[0];
   assert.ok(signs(chat, removal,
-    `GroupChangeEvent.GroupMemberRemoveChange,${removal.messageId},111,g100,910007,` +
-    `${rotated.conversationKeyVersion},signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${removal.messageId},111,g100,910007`));
   assert.throws(
     () => chat.prepareGroupMembersRemove({
       senderId: "111",
@@ -750,8 +763,9 @@ async function main() {
   });
   assert.equal(left.actionSignatures.length, 3);
   const [leaving, promoting, deleting] = left.actionSignatures;
+  assert.equal(leaving.messageEventSignature.signatureVersion, "7");
   assert.ok(signs(chat, leaving,
-    `GroupChangeEvent.GroupMemberRemoveChange,${leaving.messageId},111,g100,111,7,signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${leaving.messageId},111,g100,111`));
   assert.ok(signs(chat, promoting, `GroupChangeEvent.GroupAdminAddChange,${promoting.messageId},111,g100,910008`));
   assert.ok(signs(chat, deleting, `ConversationDeleteEvent,${deleting.messageId},111,g100`));
 
@@ -796,8 +810,7 @@ async function main() {
   assert.equal(withTitle.actionSignatures.length, 3);
   const [titledRemoval, titleChange] = withTitle.actionSignatures;
   assert.ok(signs(chat, titledRemoval,
-    `GroupChangeEvent.GroupMemberRemoveChange,${titledRemoval.messageId},111,g100,910007,` +
-    `${withTitle.conversationKeyVersion},signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${titledRemoval.messageId},111,g100,910007`));
   assert.equal(titleChange.messageEventSignature.signatureVersion, "7");
   assert.ok(titleChange.encodedMessageEventDetail.length > 0);
   const blocking = onlyAction(chat.prepareScreenCapture({

@@ -133,6 +133,51 @@ fn a_caller_hands_a_chat_its_feature_switches_until_one_answer_holds() {
 }
 
 #[test]
+fn a_group_leave_signs_at_the_version_sends_sign_at() {
+    let chat = new_chat();
+    let leave = || {
+        let params = c(r#"{"conversation_id":"g100"}"#);
+        let prepared: serde_json::Value = serde_json::from_str(
+            &data(prepare::chat_xdk_prepare_group_leave(chat, params.as_ptr())).unwrap(),
+        )
+        .unwrap();
+        prepared["action_signatures"].as_array().unwrap().clone()
+    };
+    let signed_at = |signatures: &[serde_json::Value]| -> Vec<String> {
+        signatures
+            .iter()
+            .map(|s| s["message_event_signature"]["signature_version"].to_string())
+            .collect()
+    };
+    assert_eq!(signed_at(&leave()), [r#""7""#, r#""7""#]);
+    answer(chat, 200, br#"{"features":{"v1_send":true}}"#);
+    let signatures = leave();
+    assert_eq!(signed_at(&signatures), [r#""10""#, r#""10""#]);
+    for (signature, fields) in signatures.iter().zip([
+        "GroupChangeEvent.GroupMemberRemoveChange,{id},1001,g100,1001,signature_version=10",
+        "ConversationDeleteEvent,{id},1001,g100,signature_version=10",
+    ]) {
+        let payload = fields.replace("{id}", signature["message_id"].as_str().unwrap());
+        let signed = &signature["message_event_signature"];
+        let public_key = c(signed["signing_public_key"].as_str().unwrap());
+        let unpadded = signed["signature"].as_str().unwrap();
+        let raw = c(&format!(
+            "{unpadded}{}",
+            "=".repeat((4 - unpadded.len() % 4) % 4)
+        ));
+        let valid = data(signing::chat_xdk_verify(
+            chat,
+            public_key.as_ptr(),
+            raw.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+        ));
+        assert_eq!(valid.as_deref(), Some("true"), "{payload}");
+    }
+    chat_xdk_free(chat);
+}
+
+#[test]
 fn invalid_entities_and_attachments_fail_with_invalid_input() {
     let chat = new_chat();
     let encrypt = |fields: serde_json::Value| {

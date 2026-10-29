@@ -532,8 +532,7 @@ async function delegationTests() {
   assert.equal(removal.actionSignatures.length, 2);
   const [removed] = removal.actionSignatures;
   assert.ok(signs(removed,
-    `GroupChangeEvent.GroupMemberRemoveChange,${removed.messageId},111,g100,910007,` +
-    `${removal.conversationKeyVersion},signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${removed.messageId},111,g100,910007`));
   const left = chat.prepareGroupLeave({ ...group, promoteAdminId: "910008", conversationKeyVersion: "7" });
   assert.equal(left.actionSignatures.length, 3);
   const [, promoted, deleted] = left.actionSignatures;
