@@ -15,6 +15,7 @@ use crate::protocol::serialization::base64_encode;
 use crate::signatures::{MESSAGE_SIGNATURE_VERSION, SIGNATURE_VERSION};
 use crate::thrift::event::{
     MessageCreateEvent, MessageEvent, MessageEventDetail, MessageEventSignature,
+    MessageSigningKeyInfo,
 };
 use crate::thrift::product::{
     AddressRichTextContent, CashtagRichTextContent, EmailRichTextContent, HashtagRichTextContent,
@@ -70,6 +71,32 @@ pub enum SendVersion {
     V1,
 }
 
+/// The author and signing-key version of an event a send embeds, such as a
+/// reply's quoted original, for the X API to fill in that author's signing
+/// key for recipients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddedSigner {
+    pub sender_id: i64,
+    pub public_key_version: i64,
+}
+
+impl EmbeddedSigner {
+    /// The signer of `event`, when it carries a numeric sender id and
+    /// signing-key version.
+    pub(crate) fn of(event: &MessageEvent) -> Option<Self> {
+        Some(Self {
+            sender_id: event.sender_id.as_deref()?.parse().ok()?,
+            public_key_version: event
+                .message_event_signature
+                .as_ref()?
+                .public_key_version
+                .as_deref()?
+                .parse()
+                .ok()?,
+        })
+    }
+}
+
 /// Parameters for [`encrypt_and_sign`].
 ///
 /// Use [`new()`](Self::new) for required fields, then chain optional setters.
@@ -88,6 +115,9 @@ pub struct EncryptAndSignParams<'a> {
     pub ttl_msec: Option<i64>,
     /// Wire format to send in; defaults to [`SendVersion::V0`].
     pub send_version: SendVersion,
+    /// The signers of the events the contents embed (a reply's quoted
+    /// original and edit), listed in a v1 send's signature.
+    pub embedded_signers: Vec<EmbeddedSigner>,
 }
 
 impl<'a> EncryptAndSignParams<'a> {
@@ -116,12 +146,19 @@ impl<'a> EncryptAndSignParams<'a> {
             should_notify: None,
             ttl_msec: None,
             send_version: SendVersion::V0,
+            embedded_signers: Vec::new(),
         }
     }
 
     /// Set the wire format to send in (default: [`SendVersion::V0`]).
     pub fn send_version(mut self, send_version: SendVersion) -> Self {
         self.send_version = send_version;
+        self
+    }
+
+    /// Set the signers of the events the contents embed.
+    pub fn embedded_signers(mut self, signers: Vec<EmbeddedSigner>) -> Self {
+        self.embedded_signers = signers;
         self
     }
 
@@ -273,12 +310,16 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
 
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
     let signature_b64 = STANDARD_NO_PAD.encode(&signature);
+    let signing_key_infos = match params.send_version {
+        SendVersion::V0 => None,
+        SendVersion::V1 => Some(signing_key_infos(&params)),
+    };
     let signature_struct = MessageEventSignature::new(
         Some(signature_b64.clone()),
         Some(params.signing_key_version.to_string()),
         Some(signature_version.clone()),
         None,
-        None,
+        signing_key_infos,
     );
     let signature_bytes = serialize_thrift(&signature_struct)?;
     let encoded_message_event_signature = base64_encode(&signature_bytes);
@@ -300,6 +341,37 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         should_notify,
         xdk_version: crate::XDK_VERSION.to_string(),
     })
+}
+
+/// The signing keys a v1 send asks the X API to fill in for recipients: those
+/// of the events its contents embed, then the sender's own, each listed once,
+/// by member id and signing-key version.
+fn signing_key_infos(params: &EncryptAndSignParams<'_>) -> Vec<MessageSigningKeyInfo> {
+    let own = params
+        .sender_id
+        .parse()
+        .ok()
+        .zip(params.signing_key_version.parse().ok())
+        .map(|(sender_id, public_key_version)| EmbeddedSigner {
+            sender_id,
+            public_key_version,
+        });
+    let mut signers: Vec<EmbeddedSigner> = Vec::new();
+    for signer in params.embedded_signers.iter().copied().chain(own) {
+        if !signers.contains(&signer) {
+            signers.push(signer);
+        }
+    }
+    signers
+        .into_iter()
+        .map(|signer| {
+            MessageSigningKeyInfo::new(
+                Some(signer.sender_id.to_string()),
+                Some(signer.public_key_version.to_string()),
+                None::<String>,
+            )
+        })
+        .collect()
 }
 
 /// Check that `user_id` is a user id in canonical decimal form: digits only,

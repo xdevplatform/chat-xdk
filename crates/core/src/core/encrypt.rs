@@ -120,7 +120,8 @@ impl ChatCore {
             .as_ref()
             .map(crate::pipeline::build_thrift_quick_reply);
 
-        let preview = self.build_reply_preview(params, &ckey, &conversation_key_version)?;
+        let (preview, embedded_signers) =
+            self.build_reply_preview(params, &ckey, &conversation_key_version)?;
 
         let content_bytes = crate::pipeline::build_message_content_with_preview(
             &params.text,
@@ -140,7 +141,8 @@ impl ChatCore {
             &conversation_key_version,
             &signing_key_version,
         )
-        .send_version(send_version);
+        .send_version(send_version)
+        .embedded_signers(embedded_signers);
         api_params.should_notify = params.should_notify;
         api_params.ttl_msec = params.ttl_msec;
         crate::pipeline::encrypt_and_sign(api_params)
@@ -626,19 +628,26 @@ impl ChatCore {
         Ok((plaintext, key.filter(|_| uses_message_key)))
     }
 
-    /// Build the wire `ReplyingToPreview` for an outgoing reply.
+    /// Build the wire `ReplyingToPreview` for an outgoing reply, with the
+    /// signers of the events it embeds.
     ///
     /// When `reply_to_event` is set, the preview fields are derived from the
     /// decrypted original and the raw signed event is embedded so recipients
     /// can validate the preview; explicit `reply_to_*` fields override the
     /// derived values. Without it, the preview is built from the explicit
-    /// fields alone.
+    /// fields alone and embeds no event.
     pub(super) fn build_reply_preview(
         &self,
         params: &EncryptReplyParams,
         outer_key: &XChatConversationKey,
         outer_version: &str,
-    ) -> Result<crate::thrift::product::ReplyingToPreview, SdkError> {
+    ) -> Result<
+        (
+            crate::thrift::product::ReplyingToPreview,
+            Vec<crate::pipeline::EmbeddedSigner>,
+        ),
+        SdkError,
+    > {
         // A preview's entities index the quoted message's text, which the
         // preview may carry only the start of, so their end isn't bounded by
         // the preview's text.
@@ -678,7 +687,7 @@ impl ChatCore {
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
                 )
             })?;
-            return Ok(crate::thrift::product::ReplyingToPreview::new(
+            let preview = crate::thrift::product::ReplyingToPreview::new(
                 explicit_sender_id,
                 params.reply_to_text.clone(),
                 thrift_reply_entities,
@@ -693,7 +702,8 @@ impl ChatCore {
                 None,
                 None,
                 None,
-            ));
+            );
+            return Ok((preview, Vec::new()));
         };
 
         let raw = Self::parse_event_b64(raw_b64)?;
@@ -805,9 +815,14 @@ impl ChatCore {
         let attachments = thrift_reply_attachments
             .or_else(|| original.as_ref().and_then(|m| m.attachments.clone()));
 
+        let embedded_signers = std::iter::once(&raw)
+            .chain(edit_event.as_ref())
+            .filter_map(crate::pipeline::EmbeddedSigner::of)
+            .collect();
+
         // The key changes opened the original here; recipients open it with
         // their own keys, so none is embedded.
-        Ok(crate::thrift::product::ReplyingToPreview::new(
+        let preview = crate::thrift::product::ReplyingToPreview::new(
             sender_id,
             message_text,
             entities,
@@ -822,7 +837,8 @@ impl ChatCore {
             None,
             raw_event_message_key,
             raw_event_edit_message_key,
-        ))
+        );
+        Ok((preview, embedded_signers))
     }
 
     /// Validate a received reply preview against the raw signed original

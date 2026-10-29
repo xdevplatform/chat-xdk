@@ -168,21 +168,29 @@ pub(super) fn sent_event(
     sender_id: &str,
     conversation_id: &str,
 ) -> ThriftEvent {
-    let bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
-    let mut raw = TBinaryInputProtocol::new(Cursor::new(bytes), true);
-    let mut protocol = BoundedProtocol::new(&mut raw);
-    let mce = MessageCreateEvent::read_from_in_protocol(&mut protocol).unwrap();
+    fn read<T: TSerializable>(b64: &str) -> T {
+        let bytes = base64_decode(b64).unwrap();
+        let mut raw = TBinaryInputProtocol::new(Cursor::new(bytes), true);
+        let mut protocol = BoundedProtocol::new(&mut raw);
+        T::read_from_in_protocol(&mut protocol).unwrap()
+    }
+    let mce: MessageCreateEvent = read(&payload.encoded_message_create_event);
+    let signature: MessageEventSignature = read(&payload.encoded_message_event_signature);
+    assert_eq!(signature.signature.as_ref(), Some(&payload.signature));
+    assert_eq!(
+        signature.public_key_version.as_ref(),
+        Some(&payload.signature_info.public_key_version)
+    );
+    assert_eq!(
+        signature.signature_version.as_ref(),
+        Some(&payload.signature_info.signature_version)
+    );
     ThriftEvent {
         message_id: Some(payload.message_id.clone()),
         sender_id: Some(sender_id.to_string()),
         conversation_id: Some(conversation_id.to_string()),
         detail: Some(Detail::MessageCreateEvent(mce)),
-        message_event_signature: Some(MessageEventSignature {
-            signature: Some(payload.signature.clone()),
-            public_key_version: Some(payload.signature_info.public_key_version.clone()),
-            signature_version: Some(payload.signature_info.signature_version.clone()),
-            ..Default::default()
-        }),
+        message_event_signature: Some(signature),
         ..Default::default()
     }
 }

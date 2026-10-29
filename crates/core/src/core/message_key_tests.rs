@@ -835,3 +835,119 @@ fn an_edit_with_explicit_target_fields_ignores_an_unreadable_target_event() {
     };
     assert!(edit.message_id.is_none());
 }
+
+// The signing keys a v1 send lists for the X API to fill in.
+
+/// The `(member id, signing-key version)` entries of a payload's signature
+/// key list, checking that none carries a key of its own; `None` without a
+/// list.
+fn signing_key_list(payload: &SendPayload) -> Option<Vec<(String, String)>> {
+    let bytes = base64_decode(&payload.encoded_message_event_signature).unwrap();
+    let mut raw = TBinaryInputProtocol::new(Cursor::new(bytes), true);
+    let mut protocol = BoundedProtocol::new(&mut raw);
+    let signature =
+        crate::thrift::event::MessageEventSignature::read_from_in_protocol(&mut protocol).unwrap();
+    signature.message_signing_key_info_list.map(|list| {
+        list.into_iter()
+            .map(|info| {
+                assert_eq!(info.signing_public_key, None, "the X API fills it in");
+                (info.member_id.unwrap(), info.public_key_version.unwrap())
+            })
+            .collect()
+    })
+}
+
+fn entry(member_id: &str, version: &str) -> (String, String) {
+    (member_id.to_string(), version.to_string())
+}
+
+#[test]
+fn a_v1_reply_lists_the_quoted_authors_then_the_sender() {
+    let f = ReplyFixture::new();
+    let (edit, _) = edit_event(&f, Some("orig-1"), Some(1), 10);
+    let mut params = crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&f.original))
+        .with_identity(REPLIER, "4")
+        .with_conversation_key(f.ckey.to_bytes(), "7");
+    params.reply_to_edit_event = Some(frame(&edit));
+    let payload = f.replier.core.encrypt_reply(&params).unwrap();
+    // The original and its edit share their author and key version, so they
+    // take one entry.
+    assert_eq!(
+        signing_key_list(&payload),
+        Some(vec![
+            entry(AUTHOR, SIGNING_KEY_VERSION),
+            entry(REPLIER, "4")
+        ])
+    );
+
+    let mut other_author_edit = edit.clone();
+    other_author_edit
+        .message_event_signature
+        .as_mut()
+        .unwrap()
+        .public_key_version = Some("2".to_string());
+    params.reply_to_edit_event = Some(frame(&other_author_edit));
+    let payload = f.replier.core.encrypt_reply(&params).unwrap();
+    assert_eq!(
+        signing_key_list(&payload),
+        Some(vec![
+            entry(AUTHOR, SIGNING_KEY_VERSION),
+            entry(AUTHOR, "2"),
+            entry(REPLIER, "4")
+        ])
+    );
+}
+
+#[test]
+fn a_v1_send_without_a_quoted_event_lists_only_its_sender() {
+    let f = ReplyFixture::new();
+    let message = f
+        .replier
+        .core
+        .encrypt_message(
+            &EncryptMessageParams::new(CONVERSATION, "hi")
+                .with_identity(REPLIER, SIGNING_KEY_VERSION)
+                .with_conversation_key(f.ckey.to_bytes(), "7"),
+        )
+        .unwrap();
+    assert_eq!(
+        signing_key_list(&message),
+        Some(vec![entry(REPLIER, SIGNING_KEY_VERSION)])
+    );
+    let mut explicit = crate::EncryptReplyParams::new(CONVERSATION, "a reply", "")
+        .with_identity(REPLIER, SIGNING_KEY_VERSION)
+        .with_conversation_key(f.ckey.to_bytes(), "7");
+    explicit.reply_to_sequence_id = Some("200".to_string());
+    let reply = f.replier.core.encrypt_reply(&explicit).unwrap();
+    assert_eq!(
+        signing_key_list(&reply),
+        Some(vec![entry(REPLIER, SIGNING_KEY_VERSION)])
+    );
+}
+
+#[test]
+fn a_v0_send_lists_no_signing_keys() {
+    let author = Party::new(AUTHOR);
+    let replier = Party::new(REPLIER);
+    let ckey = key(7);
+    let original = message_event(
+        &author,
+        "orig-1",
+        "200",
+        "7",
+        None,
+        7,
+        &ckey,
+        &build_message_content("Hello", None, None, None).unwrap(),
+    );
+    let payload = replier
+        .core
+        .encrypt_reply(
+            &crate::EncryptReplyParams::new(CONVERSATION, "a reply", frame(&original))
+                .with_identity(REPLIER, SIGNING_KEY_VERSION)
+                .with_conversation_key(ckey.to_bytes(), "7"),
+        )
+        .unwrap();
+    assert_eq!(payload.signature_info.signature_version, "7");
+    assert_eq!(signing_key_list(&payload), None);
+}
