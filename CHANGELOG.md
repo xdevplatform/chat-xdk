@@ -9,14 +9,16 @@
   and on the JVM, `ReplyToMessageID` in Go, `ReplyToMessageId` in .NET). A
   reply built from the explicit preview fields needs it: in v1, X clients
   mark a reply that names no original invalid. With `reply_to_event`, the id
-  comes from the event and the field overrides it.
+  comes from the event, and a `reply_to_message_id` other than it fails with
+  an invalid-input error.
 - `EncryptEditParams` takes `target_message_id`, the signed `message_id` of
   the message an edit replaces (`targetMessageId` in JS and on the JVM,
   `TargetMessageID` in Go, `TargetMessageId` in .NET). A v1 edit names the
   message it edits, as X clients' edits do, so a v1 edit built from
   `conversation_id` and `target_message_sequence_id` needs it; with
-  `target_event`, the id comes from the event and the field overrides it. A
-  v0 edit names none, as in 0.5.x.
+  `target_event`, the id comes from the event, and a `target_message_id`
+  other than it fails with an invalid-input error. A v0 edit names none, as
+  in 0.5.x.
 - A media attachment descriptor takes `plaintext_sha256`, the base64
   SHA-256 of the file's plaintext bytes, which the message carries and signs
   as X clients' messages do. The message is built before its files are
@@ -43,7 +45,13 @@
   removal a leave signs follow the same rule instead of signing at version
   11, so 0.5.x readers verify them while the chat sends v0; their
   signatures don't cover the key version the removal names, which the
-  removal's key change signs.
+  removal's key change signs. A conversation-key change never signs below
+  the highest version of a key change the chat has signed or verified in
+  that conversation, since X clients that enforce a key-change floor
+  reject one signed below the newest before it. A key change raised above 8
+  this way is one 0.5.x readers can't verify, like the one that raised it.
+  The chat holds that floor in memory, so after a restart decrypt the
+  conversation's key changes again before changing its key.
 - A feature-switch request that fails is retried in the background while a
   chat waits for its answer: 1 second later, then after twice the previous
   wait, at most 5 minutes apart and 10 times. The Rust core sets the

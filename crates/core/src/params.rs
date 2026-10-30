@@ -314,7 +314,9 @@ pub struct EncryptReplyParams {
     pub reply_to_sequence_id: Option<String>,
     /// The signed `message_id` of the message being replied to; derived from
     /// `reply_to_event` when unset. A reply built without `reply_to_event`
-    /// needs it: X clients mark a v1 reply that names no original invalid.
+    /// needs it: recipients mark a v1 reply that names no original invalid.
+    /// With `reply_to_event`, one that is not the id the event carries fails
+    /// the call with an `InvalidInput` error.
     pub reply_to_message_id: Option<String>,
     /// The user ID of the message's sender, as digits (for the preview);
     /// derived from `reply_to_event` when unset.
@@ -397,8 +399,8 @@ impl EncryptReplyParams {
         self
     }
 
-    /// Set the signed `message_id` of the message being replied to,
-    /// overriding the one `reply_to_event` carries.
+    /// Set the signed `message_id` of the message being replied to, for a
+    /// reply built without `reply_to_event`.
     pub fn with_reply_to_message_id(mut self, reply_to_message_id: impl Into<String>) -> Self {
         self.reply_to_message_id = non_empty(reply_to_message_id);
         self
@@ -687,6 +689,8 @@ pub struct EncryptEditParams {
     /// The signed `message_id` of the message being edited; derived from
     /// `target_event` when unset. A v1 edit names the message it edits, so a
     /// v1 edit built without `target_event` needs it; a v0 edit names none.
+    /// With `target_event`, one that is not the id the event carries fails
+    /// the call with an `InvalidInput` error.
     pub target_message_id: Option<String>,
     /// User ID of the sender; resolves from the session identity when unset.
     pub sender_id: Option<String>,
@@ -744,8 +748,8 @@ impl EncryptEditParams {
         self
     }
 
-    /// Set the signed `message_id` of the message being edited, overriding
-    /// the one `target_event` carries.
+    /// Set the signed `message_id` of the message being edited, for an edit
+    /// built without `target_event`.
     pub fn with_target_message_id(mut self, target_message_id: impl Into<String>) -> Self {
         self.target_message_id = non_empty(target_message_id);
         self

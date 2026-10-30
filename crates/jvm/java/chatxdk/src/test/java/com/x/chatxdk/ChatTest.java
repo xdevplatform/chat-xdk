@@ -1494,6 +1494,32 @@ class ChatTest {
             JsonNode edited = decryptedContent(chat, v, chat.encryptEdit(edit).eventB64);
             assertEquals(sent.messageId, edited.path("target_message_id").asText());
 
+            // With the original's event, an explicit id must be the one it carries.
+            String other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+            EncryptReplyParams mismatchedReply = new EncryptReplyParams(conversationId, "nice", sent.eventB64);
+            mismatchedReply.conversationKey = key;
+            mismatchedReply.conversationKeyVersion = version;
+            mismatchedReply.replyToSequenceId = "100";
+            mismatchedReply.replyToMessageId = other;
+            ChatXdkException replyError =
+                    assertThrows(ChatXdkException.class, () -> chat.encryptReply(mismatchedReply));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, replyError.getKind());
+            assertEquals("reply_to_message_id '" + other + "' is not the message_id '" + sent.messageId
+                    + "' that reply_to_event carries: pass that id or leave reply_to_message_id unset",
+                    replyError.getMessage());
+            EncryptEditParams mismatchedEdit = new EncryptEditParams(sent.eventB64, "a better photo");
+            mismatchedEdit.conversationId = conversationId;
+            mismatchedEdit.targetMessageSequenceId = "100";
+            mismatchedEdit.targetMessageId = other;
+            mismatchedEdit.conversationKey = key;
+            mismatchedEdit.conversationKeyVersion = version;
+            ChatXdkException editError =
+                    assertThrows(ChatXdkException.class, () -> chat.encryptEdit(mismatchedEdit));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, editError.getKind());
+            assertEquals("target_message_id '" + other + "' is not the message_id '" + sent.messageId
+                    + "' that target_event carries: pass that id or leave target_message_id unset",
+                    editError.getMessage());
+
             photo.attachments = List.of(AttachmentDescriptor.media("hashed", 4, 3, 64, "hashed.jpg", 1, null, "c2hvcnQ="));
             ChatXdkException error = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(photo));
             assertEquals(ChatXdkException.Kind.INVALID_INPUT, error.getKind());

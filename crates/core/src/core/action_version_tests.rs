@@ -49,11 +49,20 @@ fn decode_detail(signature: &ActionSignature) -> Detail {
 
 /// The event recipients receive for `signature`.
 fn delivered(signature: &ActionSignature, conversation_id: &str) -> ThriftEvent {
+    delivered_from(signature, conversation_id, SENDER)
+}
+
+/// The event recipients receive for `signature`, signed by `sender_id`.
+fn delivered_from(
+    signature: &ActionSignature,
+    conversation_id: &str,
+    sender_id: &str,
+) -> ThriftEvent {
     let signed = &signature.message_event_signature;
     ThriftEvent {
         sequence_id: Some("100".to_string()),
         message_id: Some(signature.message_id.clone()),
-        sender_id: Some(SENDER.to_string()),
+        sender_id: Some(sender_id.to_string()),
         conversation_id: Some(conversation_id.to_string()),
         detail: Some(decode_detail(signature)),
         message_event_signature: Some(MessageEventSignature {
@@ -344,6 +353,190 @@ fn key_changes_sign_at_the_version_of_the_send_format() {
             version,
         );
     }
+}
+
+const PEER: &str = "910005";
+
+/// A v1 chat of `PEER`, the other member of `ONE_TO_ONE`, and the key change
+/// it signs there at version 10, which carries `signer`'s key too.
+fn peer_key_change(signer: &Party) -> (Party, PreparedConversationChange) {
+    let peer = Party::new(PEER);
+    peer.core
+        .set_identity(&SetIdentityParams::new(PEER, SIGNING_KEY_VERSION))
+        .unwrap();
+    enable_v1_send(&peer.core);
+    let keys = vec![
+        PublicKeyInput::new(
+            PEER,
+            peer.core.get_public_keys().unwrap().identity,
+            SIGNING_KEY_VERSION,
+        ),
+        public_keys(signer).remove(0),
+    ];
+    let change = peer
+        .core
+        .prepare_conversation_key_change_with_version(
+            &ConversationKeyChangeParams::new(keys),
+            "1700000000001",
+        )
+        .unwrap();
+    assert_eq!(
+        change.action_signatures[0]
+            .message_event_signature
+            .signature_version,
+        "10"
+    );
+    (peer, change)
+}
+
+/// The signature version of the key change `party` signs next with `PEER`,
+/// in `ONE_TO_ONE`, and with another user, in a conversation of its own.
+fn next_key_change_versions(party: &Party) -> [String; 2] {
+    ["910005", "910006"].map(|other| {
+        let keys = vec![
+            public_keys(party).remove(0),
+            PublicKeyInput::new(
+                other,
+                party.core.get_public_keys().unwrap().identity,
+                SIGNING_KEY_VERSION,
+            ),
+        ];
+        let change = party
+            .core
+            .prepare_conversation_key_change_with_version(
+                &ConversationKeyChangeParams::new(keys),
+                "1700000000002",
+            )
+            .unwrap();
+        let signature = &change.action_signatures[0];
+        if other == PEER {
+            assert_key_change(
+                party,
+                signature,
+                ONE_TO_ONE,
+                change.conversation_key.as_ref().unwrap(),
+                &signature.message_event_signature.signature_version,
+            );
+        }
+        signature.message_event_signature.signature_version.clone()
+    })
+}
+
+#[test]
+fn a_key_change_never_signs_below_one_the_chat_verified_in_its_conversation() {
+    let party = signer();
+    assert_eq!(next_key_change_versions(&party), ["7", "7"]);
+
+    let (peer, change) = peer_key_change(&party);
+    let event = frame(&delivered_from(
+        &change.action_signatures[0],
+        ONE_TO_ONE,
+        PEER,
+    ));
+    let key = HashMap::from([(
+        "1700000000001".to_string(),
+        change.conversation_key.clone().unwrap(),
+    )]);
+    let decrypted = party
+        .core
+        .decrypt_event_with(&event, &key, std::slice::from_ref(&peer.entry))
+        .unwrap();
+    assert!(matches!(decrypted, Event::KeyChange(e) if e.verified));
+    assert_eq!(
+        next_key_change_versions(&party),
+        ["10", "7"],
+        "a v0 chat signs its next key change with the peer at 10, and others at 7"
+    );
+}
+
+#[test]
+fn a_key_change_verified_in_a_batch_raises_the_floor_too() {
+    let party = signer();
+    let (peer, change) = peer_key_change(&party);
+    let event = frame(&delivered_from(
+        &change.action_signatures[0],
+        ONE_TO_ONE,
+        PEER,
+    ));
+    let mut params = DecryptEventsParams::new(vec![event]);
+    params.signing_keys = Some(vec![peer.entry.clone()]);
+    let result = party.core.decrypt_events(&params);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(next_key_change_versions(&party), ["10", "7"]);
+}
+
+#[test]
+fn a_key_change_that_does_not_verify_leaves_the_floor_where_it_was() {
+    let party = signer();
+    party.core.set_reject_unverified(false);
+    let (_, change) = peer_key_change(&party);
+    let event = frame(&delivered_from(
+        &change.action_signatures[0],
+        ONE_TO_ONE,
+        PEER,
+    ));
+    let key = HashMap::from([(
+        "1700000000001".to_string(),
+        change.conversation_key.clone().unwrap(),
+    )]);
+    let impostor = Party::new(PEER);
+    let decrypted = party
+        .core
+        .decrypt_event_with(&event, &key, std::slice::from_ref(&impostor.entry))
+        .unwrap();
+    assert!(matches!(decrypted, Event::KeyChange(e) if !e.verified));
+    assert_eq!(next_key_change_versions(&party), ["7", "7"]);
+}
+
+#[test]
+fn a_v1_chat_signs_key_changes_at_10() {
+    let party = signer();
+    enable_v1_send(&party.core);
+    assert_eq!(next_key_change_versions(&party), ["10", "10"]);
+}
+
+#[test]
+fn a_key_change_verified_at_11_raises_even_a_v1_chat_to_11() {
+    let party = signer();
+    enable_v1_send(&party.core);
+    let (peer, _) = peer_key_change(&party);
+    peer.core.raise_key_change_signature_floor(ONE_TO_ONE, 11);
+    let keys = vec![
+        PublicKeyInput::new(
+            PEER,
+            peer.core.get_public_keys().unwrap().identity,
+            SIGNING_KEY_VERSION,
+        ),
+        public_keys(&party).remove(0),
+    ];
+    let change = peer
+        .core
+        .prepare_conversation_key_change_with_version(
+            &ConversationKeyChangeParams::new(keys),
+            "1700000000003",
+        )
+        .unwrap();
+    assert_eq!(
+        change.action_signatures[0]
+            .message_event_signature
+            .signature_version,
+        "11"
+    );
+    let event = frame(&delivered_from(
+        &change.action_signatures[0],
+        ONE_TO_ONE,
+        PEER,
+    ));
+    let key = HashMap::from([(
+        "1700000000003".to_string(),
+        change.conversation_key.clone().unwrap(),
+    )]);
+    let decrypted = party
+        .core
+        .decrypt_event_with(&event, &key, std::slice::from_ref(&peer.entry))
+        .unwrap();
+    assert!(matches!(decrypted, Event::KeyChange(e) if e.verified));
+    assert_eq!(next_key_change_versions(&party), ["11", "10"]);
 }
 
 #[test]

@@ -437,7 +437,7 @@ fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
             .is_ok()
     });
     if !started {
-        let _ = bindings::complete_fetch(fetch.id, 0, &[]);
+        bindings::abandon_fetch(fetch.id);
     }
 }
 

@@ -142,8 +142,9 @@ pub struct EncryptReplyParams {
     pub(crate) reply_to_sequence_id: Option<String>,
     /// Signed message id of the message being replied to; derived from
     /// ``reply_to_event`` when ``None``. A reply built without
-    /// ``reply_to_event`` needs it: X clients mark a v1 reply that names no
-    /// original invalid.
+    /// ``reply_to_event`` needs it: recipients mark a v1 reply that names no
+    /// original invalid. With ``reply_to_event``, one other than the id the
+    /// event carries raises ``InvalidInputError``.
     pub(crate) reply_to_message_id: Option<String>,
     /// User ID of the message's sender, as digits; derived from
     /// ``reply_to_event`` when ``None``.
@@ -354,7 +355,8 @@ pub struct EncryptEditParams {
     /// Signed message id of the message being edited; derived from
     /// ``target_event`` when ``None``. A v1 edit names the message it edits,
     /// so a v1 edit built without ``target_event`` needs it; a v0 edit names
-    /// none.
+    /// none. With ``target_event``, one other than the id the event carries
+    /// raises ``InvalidInputError``.
     pub(crate) target_message_id: Option<String>,
     /// Your user ID; defaults to the ``set_identity`` value.
     pub(crate) sender_id: Option<String>,

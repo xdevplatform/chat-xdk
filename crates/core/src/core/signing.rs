@@ -66,6 +66,42 @@ impl ChatCore {
         }
     }
 
+    /// The signature version of a new key change in `conversation_id`:
+    /// [`Self::action_signature_version`], raised to the highest version of a
+    /// key change this instance signed or verified in that conversation.
+    pub(crate) fn key_change_signature_version(&self, conversation_id: &str) -> i32 {
+        let version = self.action_signature_version(crate::signatures::CURRENT_SIGNATURE_VERSION);
+        let floors = self
+            .key_change_signature_floor
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        floors
+            .get(conversation_id)
+            .map_or(version, |floor| version.max(*floor))
+    }
+
+    /// Record a key change in `conversation_id` signed or verified at
+    /// `version`, so no later one this instance signs there goes below it.
+    pub(crate) fn raise_key_change_signature_floor(&self, conversation_id: &str, version: i32) {
+        let mut floors = self
+            .key_change_signature_floor
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let floor = floors.entry(conversation_id.to_string()).or_insert(version);
+        *floor = (*floor).max(version);
+    }
+
+    /// Record `key_change`, a key change whose signature verified, in its
+    /// conversation's floor.
+    pub(crate) fn raise_key_change_signature_floor_for(&self, key_change: &MessageEvent) {
+        if let (Some(conversation_id), Some(version)) = (
+            key_change.conversation_id.as_deref(),
+            signature_version(key_change),
+        ) {
+            self.raise_key_change_signature_floor(conversation_id, version);
+        }
+    }
+
     /// Sign `detail`, the event of a new action from `sender_id` in
     /// `conversation_id`, at [`Self::action_signature_version`] of `legacy`.
     /// `conversation_key` is the raw key a key change carries.
@@ -78,6 +114,27 @@ impl ChatCore {
         detail: crate::thrift::event::MessageEventDetail,
         conversation_key: Option<&[u8]>,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        self.sign_action_event_at(
+            public_key_version,
+            sender_id,
+            conversation_id,
+            self.action_signature_version(legacy),
+            detail,
+            conversation_key,
+        )
+    }
+
+    /// Sign `detail` as [`Self::sign_action_event`] does, at
+    /// `signature_version`.
+    pub(crate) fn sign_action_event_at(
+        &self,
+        public_key_version: &str,
+        sender_id: &str,
+        conversation_id: &str,
+        signature_version: i32,
+        detail: crate::thrift::event::MessageEventDetail,
+        conversation_key: Option<&[u8]>,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
         let signing_key = self.get_signing_private_key()?;
         let ckey_b64 =
             conversation_key.map(|key| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(key)));
@@ -87,7 +144,7 @@ impl ChatCore {
             &Self::generate_message_id(),
             sender_id,
             conversation_id,
-            self.action_signature_version(legacy),
+            signature_version,
             detail,
             ckey_b64.as_deref().map(String::as_str),
         )

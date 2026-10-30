@@ -860,8 +860,10 @@ namespace ChatXdk
         /// <summary>
         /// Signed message ID of the message being replied to; derived from
         /// <see cref="ReplyToEvent"/> when null. A reply built without
-        /// <see cref="ReplyToEvent"/> needs it: X clients mark a v1 reply that
-        /// names no original invalid.
+        /// <see cref="ReplyToEvent"/> needs it: recipients mark a v1 reply that
+        /// names no original invalid. With <see cref="ReplyToEvent"/>, one other
+        /// than the id the event carries fails with a <see cref="ChatXdkException"/>
+        /// of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
         public string? ReplyToMessageId { get; init; }
         /// <summary>User ID of the message's sender, as digits (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
@@ -963,7 +965,9 @@ namespace ChatXdk
         /// Signed message ID of the message being edited; derived from
         /// <see cref="TargetEvent"/> when null. A v1 edit names the message it
         /// edits, so a v1 edit built without <see cref="TargetEvent"/> needs it;
-        /// a v0 edit names none.
+        /// a v0 edit names none. With <see cref="TargetEvent"/>, one other than
+        /// the id the event carries fails with a <see cref="ChatXdkException"/> of
+        /// kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
         public string? TargetMessageId { get; init; }
         /// <summary>User ID of the sender; resolves from the session identity when null.</summary>

@@ -434,7 +434,9 @@ export interface EncryptReplyParams {
   /**
    * The signed messageId of the message being replied to; derived from
    * replyToEvent when omitted. A reply built without replyToEvent needs it:
-   * X clients mark a v1 reply that names no original invalid.
+   * recipients mark a v1 reply that names no original invalid. With
+   * replyToEvent, one other than the id the event carries fails with a
+   * `ChatXdkError` of kind `invalidInput`.
    */
   replyToMessageId?: string | null;
   /**
@@ -512,7 +514,9 @@ export interface EncryptEditParams {
   /**
    * The signed messageId of the message being edited; derived from
    * targetEvent when omitted. A v1 edit names the message it edits, so a v1
-   * edit built without targetEvent needs it; a v0 edit names none.
+   * edit built without targetEvent needs it; a v0 edit names none. With
+   * targetEvent, one other than the id the event carries fails with a
+   * `ChatXdkError` of kind `invalidInput`.
    */
   targetMessageId?: string | null;
   /** User ID of the sender; resolves from the session identity (setIdentity) when omitted. */

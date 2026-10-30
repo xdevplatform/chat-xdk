@@ -1999,6 +1999,32 @@ namespace ChatXdk.Tests
             }));
             Assert.Equal(sent.MessageId, edited.GetProperty("target_message_id").GetString());
 
+            // With the original's event, an explicit id must be the one it carries.
+            const string other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+            var replyError = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
+                new EncryptReplyParams(v.EventConversationId, "nice", sent.EventB64)
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    ReplyToSequenceId = "100",
+                    ReplyToMessageId = other,
+                }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, replyError.Kind);
+            Assert.Equal($"reply_to_message_id '{other}' is not the message_id '{sent.MessageId}' that "
+                + "reply_to_event carries: pass that id or leave reply_to_message_id unset", replyError.Message);
+            var editError = Assert.Throws<ChatXdkException>(() => chat.EncryptEdit(
+                new EncryptEditParams(sent.EventB64, "a better photo")
+                {
+                    ConversationId = v.EventConversationId,
+                    TargetMessageSequenceId = "100",
+                    TargetMessageId = other,
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, editError.Kind);
+            Assert.Equal($"target_message_id '{other}' is not the message_id '{sent.MessageId}' that "
+                + "target_event carries: pass that id or leave target_message_id unset", editError.Message);
+
             var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
                 new EncryptMessageParams(v.EventConversationId, "a photo")
                 {

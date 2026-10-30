@@ -125,6 +125,24 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2), "the later chat asks for itself")
         self.assertTrue(self._wait_for(lambda: self._send(later) == "10"))
 
+    def test_a_read_that_cannot_start_leaves_the_next_chat_its_own(self):
+        import types
+        from unittest import mock
+
+        import chat_xdk
+
+        class Unstartable(chat_xdk._threading.Thread):
+            def start(self):
+                raise RuntimeError("can't start new thread")
+
+        with mock.patch.object(chat_xdk, "_threading", types.SimpleNamespace(Thread=Unstartable)):
+            stranded = self._chat()
+        self.assertEqual(self._send(stranded), "7", "a read that never started leaves sends on v0")
+        later = self._chat()
+        self.assertTrue(self._wait_for(lambda: self._send(later) == "10"), "the next chat reads for itself")
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+        self.assertEqual(self._send(stranded), "10", "the next chat's read answers the stranded chat")
+
     def test_the_answer_holds_for_the_chats_lifetime(self):
         chat = self._chat()
         self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))

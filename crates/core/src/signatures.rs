@@ -16,7 +16,9 @@ pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 /// Signature version of v0 sends, and of every signed action while sends
 /// are v0 (conversation-key changes, group and conversation changes,
 /// deletes and read receipts), apart from a member add that carries a
-/// description, which signs at [`MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION`].
+/// description, which signs at [`MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION`],
+/// and a key change in a conversation where the chat signed or verified one
+/// at a higher version, which signs at that version.
 /// While sends are v1, sends and signed actions all sign at
 /// [`MESSAGE_SIGNATURE_VERSION`].
 pub const SIGNATURE_VERSION: &str = "7";

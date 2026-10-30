@@ -118,6 +118,13 @@ pub fn complete_fetch(id: u64, status: u16, body: &[u8]) -> Option<Fetch> {
     shared::complete_fetch(id, status, body)
 }
 
+/// End the GET `id`, which the binding could not start, without a retry: the
+/// next chat starts a GET of its own, which also answers the chats waiting
+/// for this one.
+pub fn abandon_fetch(id: u64) {
+    shared::abandon_fetch(id);
+}
+
 /// For this repository's tests: the endpoint of every chat that does not set
 /// its own, or the X API's when `None`.
 pub fn set_default_endpoint(endpoint: Option<&str>) {

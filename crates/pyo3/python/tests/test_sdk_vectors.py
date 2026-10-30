@@ -620,6 +620,41 @@ class TestPythonSdkVectors(unittest.TestCase):
         )
         self.assertEqual(edited["target_message_id"], sent.message_id)
 
+        # With the original's event, an explicit id must be the one it carries.
+        other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f"
+        with self.assertRaises(InvalidInputError) as raised:
+            chat.encrypt_reply(
+                EncryptReplyParams(
+                    conversation_id,
+                    "nice",
+                    sent.event_b64,
+                    reply_to_sequence_id="100",
+                    reply_to_message_id=other,
+                    **key,
+                )
+            )
+        self.assertEqual(
+            str(raised.exception),
+            f"reply_to_message_id '{other}' is not the message_id '{sent.message_id}' that "
+            "reply_to_event carries: pass that id or leave reply_to_message_id unset",
+        )
+        with self.assertRaises(InvalidInputError) as raised:
+            chat.encrypt_edit(
+                EncryptEditParams(
+                    sent.event_b64,
+                    "a better photo",
+                    conversation_id=conversation_id,
+                    target_message_sequence_id="100",
+                    target_message_id=other,
+                    **key,
+                )
+            )
+        self.assertEqual(
+            str(raised.exception),
+            f"target_message_id '{other}' is not the message_id '{sent.message_id}' that "
+            "target_event carries: pass that id or leave target_message_id unset",
+        )
+
         with self.assertRaises(InvalidInputError) as raised:
             chat.encrypt_message(
                 EncryptMessageParams(

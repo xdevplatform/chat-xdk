@@ -324,7 +324,13 @@ Two hygiene notes:
 **Signature versions follow the send format.** A chat signs every action at
 signature version 7 while it sends v0 and at version 10 while it sends v1,
 as X clients sign each event at the version their messages sign at; while it
-sends v0, a member add that carries a description signs at version 8. The
+sends v0, a member add that carries a description signs at version 8. A
+conversation-key change never signs below the highest version of a key
+change the chat has signed or verified in that conversation, which X
+clients enforcing a key-change floor require, so decrypt a conversation's
+key changes (`meta.conversation_key_events`) before you change its key. The
+chat holds that floor in memory for its lifetime, so decrypt them again
+after a restart. The
 payloads below are the version-7 layouts. At version 10 each also carries
 the components versions 8 through 10 add (a member add's description slot, a
 group create's `group_type` and `ttl_msec`) and ends with
@@ -1363,7 +1369,10 @@ them must set `reply_to_message_id`, the original's signed message id
 (`replyToMessageId` in JS, `ReplyToMessageID` in Go, `replyToMessageId` on
 the JVM, `ReplyToMessageId` in .NET): X clients mark a v1 reply that embeds
 no per-message-key original and names no original invalid, and validate one
-that names it against their own copy of the original.
+that names it against their own copy of the original. With `reply_to_event`,
+the id comes from the event, and a `reply_to_message_id` other than it fails
+with an invalid-input error: recipients reject a preview whose id is not
+its embedded original's.
 
 **Reactions are event-based too.** `EncryptReactionParams` (shared by add and
 remove — the same params value can add and later remove the same reaction)
@@ -1382,7 +1391,9 @@ names the original's signed message id, which receivers need to tie an edit
 to a message encrypted under a per-message key: the SDK derives it from
 `target_event`, and an edit built from the explicit pair sets it as
 `target_message_id` (`targetMessageId` in JS and on the JVM,
-`TargetMessageID` in Go, `TargetMessageId` in .NET). A v0 edit names none.
+`TargetMessageID` in Go, `TargetMessageId` in .NET). With `target_event`, a
+`target_message_id` other than the id the event carries fails with an
+invalid-input error. A v0 edit names none.
 The edit is encrypted and signed like a regular message (the identity/key
 overrides above apply) and returns a `SendPayload` with its own fresh
 `message_id`.
@@ -2655,7 +2666,7 @@ the snake_case keys below).
 
 ```typescript
 type AttachmentDescriptor =
-  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number; plaintext_sha256?: string }
+  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number; plaintext_sha256?: string | null }
   | { attachment_type: 'url'; url: string; display_title?: string; banner_image?: UrlAttachmentImageDescriptor; favicon_image?: UrlAttachmentImageDescriptor }
   | { attachment_type: 'post'; rest_id?: string; post_url?: string };
 

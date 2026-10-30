@@ -360,8 +360,9 @@ type QuickReplyOption struct {
 // so recipients can validate the preview. The explicit ReplyTo* field
 // overrides remain for callers that no longer hold the raw event. A reply
 // built from them needs ReplyToMessageID, the signed message_id of the
-// message it quotes: X clients mark a v1 reply that names no original
-// invalid.
+// message it quotes: recipients mark a v1 reply that names no original
+// invalid. With ReplyToEvent, a ReplyToMessageID other than the id the event
+// carries fails with an error of kind ErrorKindInvalidInput.
 //
 // The identity and key fields are optional overrides, and the reply's files
 // work, as on EncryptMessageParams.
@@ -424,7 +425,9 @@ type EncryptReactionParams struct {
 // fields remain as overrides for callers that no longer hold the raw event.
 // TargetMessageID is the signed message_id of the message being edited: a
 // v1 edit names the message it edits, so a v1 edit built without
-// TargetEvent needs it, and a v0 edit names none.
+// TargetEvent needs it, and a v0 edit names none. With TargetEvent, a
+// TargetMessageID other than the id the event carries fails with an error of
+// kind ErrorKindInvalidInput.
 //
 // The identity and key fields are optional overrides, as on
 // EncryptMessageParams.

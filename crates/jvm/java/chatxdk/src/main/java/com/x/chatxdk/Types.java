@@ -911,8 +911,10 @@ public final class Types {
         /**
          * Signed message ID of the message being replied to; derived from
          * {@link #replyToEvent} when null. A reply built without
-         * {@link #replyToEvent} needs it: X clients mark a v1 reply that names
-         * no original invalid.
+         * {@link #replyToEvent} needs it: recipients mark a v1 reply that
+         * names no original invalid. With {@link #replyToEvent}, one other than
+         * the id the event carries fails with a {@link ChatXdkException} of
+         * kind {@code INVALID_INPUT}.
          */
         public String replyToMessageId;
 
@@ -1039,7 +1041,9 @@ public final class Types {
          * Signed message ID of the message being edited; derived from
          * {@link #targetEvent} when null. A v1 edit names the message it
          * edits, so a v1 edit built without {@link #targetEvent} needs it; a
-         * v0 edit names none.
+         * v0 edit names none. With {@link #targetEvent}, one other than the id
+         * the event carries fails with a {@link ChatXdkException} of kind
+         * {@code INVALID_INPUT}.
          */
         public String targetMessageId;
 

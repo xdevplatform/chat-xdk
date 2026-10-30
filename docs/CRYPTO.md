@@ -483,7 +483,7 @@ as `message_event_signature.signature_version`).
 | Constant | Value | Meaning |
 |----------|-------|---------|
 | `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every v1 message the SDK sends, the first version that signs `contents_encryption_version`, and on every action signature (conversation-key changes, group changes, deletes, read receipts) while the chat sends v1 |
-| `SIGNATURE_VERSION` | `"7"` | Stamped on v0 messages and, while the chat sends v0, on its action signatures, apart from a member add that carries a description (version 8) |
+| `SIGNATURE_VERSION` | `"7"` | Stamped on v0 messages and, while the chat sends v0, on its action signatures, apart from a member add that carries a description (version 8) and a key change in a conversation where the chat signed or verified one at a higher version (that version) |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
 | `MAX_SIGNATURE_VERSION` (internal) | `11` | Newest version accepted on verification; a signature labeled with a newer version is rejected, since its payload layout is unknown |
 | `CKEY_PLAINTEXT_SIGNATURE_VERSION` | `6` | First version whose conversation-key-change payload signs the plaintext conversation key (so a recipient can reproduce and verify it) |
@@ -530,7 +530,14 @@ comma-separated payloads (`signatures.rs`), at the version the chat's sends
 sign at, as X clients sign every event at their messages' version: version 7
 while it sends v0, in the layouts below, and version 10 while it sends v1,
 where each layout gains the components versions 8 through 10 add (see
-[Verifying newer versions](#verifying-newer-versions)):
+[Verifying newer versions](#verifying-newer-versions)). A conversation-key
+change never signs below the highest version of a key change the chat has
+signed or verified in that conversation: X clients that enforce a key-change
+signature-version floor reject a key change signed below the newest one
+before it as a downgrade, and a chat sends v0 until its feature read
+answers. Decrypting a conversation's key changes before changing its key
+lets the chat see them; the floor lives in memory for the chat's lifetime,
+like the conversation-key high-water mark.
 
 - **GroupCreate** (from `prepare_group_create`, v4+):
   ```

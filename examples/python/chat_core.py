@@ -253,7 +253,7 @@ class ChatCore:
         builds a *threaded* reply. ``reply_to_ckces`` are the raw key-change
         events that open an original sent under an older key version. A
         reply by ``reply_to_sequence_id`` also needs ``reply_to_message_id``,
-        the quoted message's ``id``: X clients mark a v1 reply that names no
+        the quoted message's ``id``: recipients mark a v1 reply that names no
         original invalid. Omit the conversation key pair to resolve it from
         the SDK's verified-key cache (``set_cache_keys``).
         ``entities`` are ``(start, end, type)`` byte ranges; ``attachments``

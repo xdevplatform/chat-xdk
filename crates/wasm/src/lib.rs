@@ -662,9 +662,11 @@ impl Chat {
     /// original), and explicit `replyToSequenceId`, `replyToMessageId`,
     /// `replyToSenderId`, `replyToText`, `replyToEntities`,
     /// `replyToAttachments` overrides for callers that no longer hold the raw
-    /// event; such a reply needs `replyToMessageId`, as X clients mark a v1
-    /// reply that names no original invalid. The reply's id and files work as
-    /// in `encryptMessage`.
+    /// event; such a reply needs `replyToMessageId`, as recipients mark a v1
+    /// reply that names no original invalid. With `replyToEvent`, a
+    /// `replyToMessageId` other than the id the event carries fails with an
+    /// invalid-input error. The reply's id and files work as in
+    /// `encryptMessage`.
     #[wasm_bindgen(js_name = encryptReply)]
     pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptReplyParams = from_js_params("encryptReply", params)?;
@@ -738,7 +740,9 @@ impl Chat {
     /// conversation id, the target sequence id and, for a v1 edit, the
     /// target message id are derived — or explicit `conversationId` /
     /// `targetMessageSequenceId` / `targetMessageId` overrides; a v1 edit
-    /// built without `targetEvent` needs `targetMessageId`. `entities`
+    /// built without `targetEvent` needs `targetMessageId`, and with
+    /// `targetEvent` one other than the id the event carries fails with an
+    /// invalid-input error. `entities`
     /// (array of `[start, end, "type"]` tuples) describes the replacement
     /// text; `senderId`, `signingKeyVersion`, `conversationKey` (Uint8Array),
     /// and `conversationKeyVersion` resolve from the session identity and key

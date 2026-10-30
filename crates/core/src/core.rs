@@ -60,6 +60,11 @@ pub struct ChatCore {
     keypair_manager: KeypairManager,
     reject_unverified: std::sync::atomic::AtomicBool,
     conversation_key_high_water: std::sync::RwLock<HashMap<String, u64>>,
+    /// Per conversation, the highest signature version of a key change this
+    /// instance signed or verified. A key change signed below an earlier one
+    /// in its conversation is rejected as a downgrade, so none this instance
+    /// signs goes below it.
+    key_change_signature_floor: std::sync::RwLock<HashMap<String, i32>>,
     /// User id of this instance's owner, set by [`Self::set_identity`] and
     /// used as the default `sender_id` for signed actions.
     owner_user_id: std::sync::RwLock<Option<String>>,
@@ -106,6 +111,7 @@ impl ChatCore {
             keypair_manager: KeypairManager::new(),
             reject_unverified: std::sync::atomic::AtomicBool::new(true),
             conversation_key_high_water: std::sync::RwLock::new(HashMap::new()),
+            key_change_signature_floor: std::sync::RwLock::new(HashMap::new()),
             owner_user_id: std::sync::RwLock::new(None),
             cache_keys: std::sync::atomic::AtomicBool::new(false),
             conversation_key_cache: std::sync::RwLock::new(HashMap::new()),

@@ -1231,6 +1231,39 @@ func TestV1ParityFieldsReachTheWire(t *testing.T) {
 		t.Errorf("target_message_id %q, want %q", edited.TargetMessageID, original.MessageID)
 	}
 
+	// With the original's event, an explicit id must be the one it carries.
+	other := "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f"
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "nice",
+		ReplyToEvent:           original.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToSequenceID:      "100",
+		ReplyToMessageID:       other,
+	})
+	wantReply := "reply_to_message_id '" + other + "' is not the message_id '" + original.MessageID +
+		"' that reply_to_event carries: pass that id or leave reply_to_message_id unset"
+	var replyErr *Error
+	if !errors.As(err, &replyErr) || replyErr.Kind != ErrorKindInvalidInput || replyErr.Message != wantReply {
+		t.Errorf("a mismatched ReplyToMessageID: got %v, want an invalid-input error %q", err, wantReply)
+	}
+	_, err = chat.EncryptEdit(EncryptEditParams{
+		TargetEvent:             original.EventB64,
+		ConversationID:          v.EventConversationID,
+		TargetMessageSequenceID: "100",
+		TargetMessageID:         other,
+		UpdatedText:             "a better photo",
+		ConversationKey:         v.conversationKey(t),
+		ConversationKeyVersion:  v.EventConversationKeyVersion,
+	})
+	wantEdit := "target_message_id '" + other + "' is not the message_id '" + original.MessageID +
+		"' that target_event carries: pass that id or leave target_message_id unset"
+	var editErr *Error
+	if !errors.As(err, &editErr) || editErr.Kind != ErrorKindInvalidInput || editErr.Message != wantEdit {
+		t.Errorf("a mismatched TargetMessageID: got %v, want an invalid-input error %q", err, wantEdit)
+	}
+
 	short := "c2hvcnQ="
 	photo.PlaintextSHA256 = &short
 	_, err = chat.EncryptMessage(EncryptMessageParams{

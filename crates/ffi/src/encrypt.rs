@@ -106,8 +106,9 @@ pub(crate) fn parse_quick_reply(value: serde_json::Value) -> Result<QuickReply, 
 /// `reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
 /// `reply_to_text`, `reply_to_entities`, and `reply_to_attachments`
 /// overrides remain for callers that no longer hold the raw event; such a
-/// reply needs `reply_to_message_id`, as X clients mark a v1 reply that names
-/// no original invalid.
+/// reply needs `reply_to_message_id`, as recipients mark a v1 reply that
+/// names no original invalid. With `reply_to_event`, a `reply_to_message_id`
+/// other than the id the event carries fails with an invalid-input error.
 ///
 /// Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
 /// and files work as for `chat_xdk_encrypt_message`.
@@ -264,7 +265,9 @@ pub(crate) fn encrypt_reaction_impl(
 /// from it), with explicit `conversation_id` / `target_message_sequence_id`
 /// / `target_message_id` overrides for callers that no longer hold the raw
 /// event; a v1 edit built without `target_event` needs `target_message_id`
-/// to name the message it edits. Optional `entities`
+/// to name the message it edits. With `target_event`, a `target_message_id`
+/// other than the id the event carries fails with an invalid-input error.
+/// Optional `entities`
 /// (`[start, end, type]` tuples for the replacement text), `sender_id` /
 /// `signing_key_version` (unset resolves from the session identity), and
 /// `conversation_key` (base64) / `conversation_key_version` (unset resolves

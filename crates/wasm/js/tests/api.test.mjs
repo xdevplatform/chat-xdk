@@ -734,6 +734,38 @@ async function main() {
     conversationKeyVersion: "1",
   });
   assert.equal(decryptOwn(v1Edit).targetMessageId, hashedPhoto.messageId);
+  // With the original's event, an explicit id must be the one it carries.
+  const otherId = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+  assert.throws(
+    () => v1Sender.encryptReply({
+      conversationId: "conv-1",
+      text: "nice",
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+      replyToEvent: hashedPhoto.eventB64,
+      replyToSequenceId: "seq-99",
+      replyToMessageId: otherId,
+    }),
+    {
+      kind: "invalidInput",
+      message: `reply_to_message_id '${otherId}' is not the message_id '${hashedPhoto.messageId}' that reply_to_event carries: pass that id or leave reply_to_message_id unset`,
+    },
+  );
+  assert.throws(
+    () => v1Sender.encryptEdit({
+      targetEvent: hashedPhoto.eventB64,
+      conversationId: "conv-1",
+      targetMessageSequenceId: "seq-99",
+      targetMessageId: otherId,
+      updatedText: "a better photo",
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+    }),
+    {
+      kind: "invalidInput",
+      message: `target_message_id '${otherId}' is not the message_id '${hashedPhoto.messageId}' that target_event carries: pass that id or leave target_message_id unset`,
+    },
+  );
   assert.throws(
     () => v1Sender.encryptMessage({
       conversationId: "conv-1",

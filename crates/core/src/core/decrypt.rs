@@ -121,8 +121,9 @@ impl ChatCore {
                 continue;
             }
 
-            // A key change signed before the plaintext key was is left
-            // adopted; one without a version fails verification below.
+            // A key change signed below CKEY_PLAINTEXT_SIGNATURE_VERSION can't
+            // be verified, so it stays adopted; one without a version fails
+            // verification below.
             if signature_version(&parsed)
                 .is_some_and(|v| v < crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION)
             {
@@ -148,7 +149,9 @@ impl ChatCore {
                 self.verify_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64)),
                 Ok(true)
             );
-            if !verified {
+            if verified {
+                self.raise_key_change_signature_floor_for(&parsed);
+            } else {
                 result.keys.remove(&version);
             }
         }
@@ -224,6 +227,7 @@ impl ChatCore {
                 self.verify_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64)),
                 Ok(true)
             ) {
+                self.raise_key_change_signature_floor_for(&parsed);
                 let entry = verified_max.entry(conv_id.to_string()).or_insert(0);
                 *entry = (*entry).max(version_num);
             }
@@ -596,6 +600,9 @@ impl ChatCore {
                 );
                 let verified = matches!(sig_result, Ok(true));
                 self.reject_if_unverified(&sig_result, "KeyChange")?;
+                if verified {
+                    self.raise_key_change_signature_floor_for(parsed);
+                }
                 Event::KeyChange(KeyChangeEvent {
                     meta,
                     conversation_key_version: key_change

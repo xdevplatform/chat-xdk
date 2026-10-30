@@ -81,7 +81,8 @@ impl ChatCore {
     /// id, sender, text, entities, attachments) is derived from that raw
     /// signed event and the event itself is embedded so recipients can
     /// validate the preview. Explicit `reply_to_*` fields override the
-    /// derived values.
+    /// derived values, apart from `reply_to_message_id`, which must be the id
+    /// the event carries.
     pub fn encrypt_reply(&self, params: &EncryptReplyParams) -> Result<SendPayload, SdkError> {
         let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
         let signing_key_version =
@@ -240,7 +241,8 @@ impl ChatCore {
     ///
     /// When `target_event` is set, the conversation id, the target sequence
     /// id and, for a v1 edit, the target message id are derived from that raw
-    /// event; explicit fields override them.
+    /// event; explicit fields override them, apart from `target_message_id`,
+    /// which must be the id the event carries.
     pub fn encrypt_edit(&self, params: &EncryptEditParams) -> Result<SendPayload, SdkError> {
         let (conversation_id, target_sequence_id) = Self::resolve_event_target(
             params.target_event.as_deref(),
@@ -257,27 +259,25 @@ impl ChatCore {
             &sender_id,
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        // Only v1 edits name the message they edit; v0 edits are built as
-        // 0.5.x built them. The target event is read leniently: an unparsable
-        // one already fails above unless explicit fields made it unnecessary,
-        // and then only the message id it would give is lost.
-        let send_version = self.send_version();
-        let target_message_id = if send_version == crate::pipeline::SendVersion::V1 {
+        // The target event is read leniently: an unparsable one already fails
+        // above unless explicit fields made it unnecessary, and then only the
+        // message id it would give is lost.
+        let target_message_id = same_message_id(
+            "target_message_id",
+            params.target_message_id.clone().filter(|v| !v.is_empty()),
+            "target_event",
             params
-                .target_message_id
-                .clone()
+                .target_event
+                .as_deref()
                 .filter(|v| !v.is_empty())
-                .or_else(|| {
-                    params
-                        .target_event
-                        .as_deref()
-                        .filter(|v| !v.is_empty())
-                        .and_then(|b64| Self::parse_event_b64(b64).ok())
-                        .and_then(|event| event.message_id)
-                })
-        } else {
-            None
-        };
+                .and_then(|b64| Self::parse_event_b64(b64).ok())
+                .and_then(|event| event.message_id),
+        )?;
+        // Only v1 edits name the message they edit; v0 edits are built as
+        // 0.5.x built them.
+        let send_version = self.send_version();
+        let target_message_id =
+            target_message_id.filter(|_| send_version == crate::pipeline::SendVersion::V1);
         let content_bytes = crate::pipeline::build_message_edit_content(
             &target_sequence_id,
             &params.updated_text,
@@ -296,8 +296,7 @@ impl ChatCore {
             &signing_key_version,
         )
         .send_version(send_version);
-        // The native clients notify on an edit only while a switch of their
-        // own is on; the SDK has none, so a v1 edit notifies no one.
+        // A v1 edit asks for no notification.
         if send_version == crate::pipeline::SendVersion::V1 {
             api_params.should_notify = Some(false);
         }
@@ -847,6 +846,12 @@ impl ChatCore {
             .chain(edit_event.as_ref())
             .filter_map(crate::pipeline::EmbeddedSigner::of)
             .collect();
+        let message_id = same_message_id(
+            "reply_to_message_id",
+            explicit_message_id,
+            "reply_to_event",
+            raw.message_id.clone(),
+        )?;
 
         // The key changes opened the original here; recipients open it with
         // their own keys, so none is embedded.
@@ -857,7 +862,7 @@ impl ChatCore {
             attachments,
             None::<String>,
             Some(sequence_id),
-            explicit_message_id.or_else(|| raw.message_id.clone()),
+            message_id,
             raw,
             edit_event,
             None::<Vec<MessageEvent>>,
@@ -987,21 +992,27 @@ impl ChatCore {
                 Some(edit_contents)
             }
         };
-        let (quoted_text, quoted_entities) = match &edited {
-            Some(edit) => (edit.updated_text.as_deref(), edit.entities.clone()),
+        let (quoted_text, entities_match) = match &edited {
+            Some(edit) => (
+                edit.updated_text.as_deref(),
+                preview.entities == edit.entities,
+            ),
             None => (
                 original.message_text.as_deref(),
-                original
-                    .entities
-                    .as_ref()
-                    .map(|entities| entities.iter().map(|entity| (**entity).clone()).collect()),
+                match (&preview.entities, &original.entities) {
+                    (None, None) => true,
+                    (Some(claimed), Some(quoted)) => {
+                        claimed.iter().eq(quoted.iter().map(|entity| &**entity))
+                    }
+                    _ => false,
+                },
             ),
         };
         // The preview's text is the start of the quoted text, so only their
         // first characters are compared; its entities are the quoted
         // message's own, and must be them exactly.
         if preview_text(preview.message_text.as_deref()) != preview_text(quoted_text)
-            || preview.entities != quoted_entities
+            || !entities_match
         {
             return ReplyPreviewValidation::Invalid;
         }
@@ -1025,9 +1036,31 @@ impl ChatCore {
     }
 }
 
-/// How much of the quoted text a reply preview's text is compared on: 140
-/// characters, counted in UTF-16 code units as the native clients count
-/// them, so a pair that straddles the limit is cut in half.
+/// The message id a reply or edit names: the one its `event_field` event
+/// carries, or `explicit` (from `explicit_field`) when the event carries
+/// none. An `explicit` id that differs from the event's fails: recipients
+/// reject a reply preview whose id is not its embedded original's, and an
+/// edit's event and id must name the same message.
+fn same_message_id(
+    explicit_field: &str,
+    explicit: Option<String>,
+    event_field: &str,
+    carried: Option<String>,
+) -> Result<Option<String>, SdkError> {
+    match (explicit, carried) {
+        (Some(explicit), Some(carried)) if explicit != carried => {
+            Err(SdkError::InvalidInput(format!(
+                "{explicit_field} '{explicit}' is not the message_id '{carried}' that \
+                 {event_field} carries: pass that id or leave {explicit_field} unset"
+            )))
+        }
+        (explicit, carried) => Ok(carried.or(explicit)),
+    }
+}
+
+/// How much of the quoted text a reply preview's text is compared on: the
+/// first 140 UTF-16 code units, so a pair that straddles the limit is cut in
+/// half.
 const PREVIEW_TEXT_UNITS: usize = 140;
 
 /// The start of `text` a reply preview's text is compared on; an absent text

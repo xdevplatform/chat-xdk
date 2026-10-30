@@ -339,8 +339,7 @@ fn message_id(event: &MessageEvent, which: &str) -> Result<String, SdkError> {
 
 /// The position and own id of the attachment carrying `media_hash_key`: a
 /// media attachment, or a link card whose banner or favicon it is. Payment
-/// receipts take no position, as the native clients leave them out of a
-/// message's attachments before numbering them.
+/// receipts take no position.
 fn find_attachment<'a>(
     attachments: &'a [Box<MessageAttachment>],
     media_hash_key: &str,

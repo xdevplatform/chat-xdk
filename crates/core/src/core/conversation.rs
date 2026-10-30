@@ -253,7 +253,8 @@ impl ChatCore {
     /// `conversation_key_version`: a `ConversationKeyChangeEvent` carrying
     /// the per-participant encrypted keys, the event the API persists and
     /// relays. Its signed payload covers the plaintext key, which recipients
-    /// decrypt from their participant key.
+    /// decrypt from their participant key. It signs at
+    /// [`Self::key_change_signature_version`].
     pub(crate) fn sign_key_change(
         &self,
         public_key_version: &str,
@@ -279,14 +280,17 @@ impl ChatCore {
                 for_key_rotation: Some(false),
             },
         );
-        self.sign_action_event(
+        let signature_version = self.key_change_signature_version(conversation_id);
+        let signature = self.sign_action_event_at(
             public_key_version,
             sender_id,
             conversation_id,
-            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            signature_version,
             detail,
             Some(ckey.encoded()),
-        )
+        )?;
+        self.raise_key_change_signature_floor(conversation_id, signature_version);
+        Ok(signature)
     }
 
     /// The `GroupCreate` event the API persists and relays: the full group

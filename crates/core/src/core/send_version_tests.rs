@@ -574,20 +574,37 @@ fn a_v1_edit_built_without_its_target_event_names_the_message_its_params_name() 
 }
 
 #[test]
-fn an_explicit_target_message_id_overrides_the_target_events() {
+fn a_target_message_id_must_be_the_one_the_target_event_carries() {
     let party = author();
-    enable_v1_send(&party.core);
     let ckey = key(3);
     let original = party
         .core
         .encrypt_message(&message_params("original", &ckey))
         .unwrap();
-    let params = EncryptEditParams::new(frame(&delivered(&original, "100")), "edited")
-        .with_target_message_id("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
-        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    let target = frame(&delivered(&original, "100"));
+    let edit = |message_id: &str| {
+        EncryptEditParams::new(target.clone(), "edited")
+            .with_target_message_id(message_id)
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
+    };
+    let other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+    let expected = format!(
+        "target_message_id '{other}' is not the message_id '{}' that \
+         target_event carries: pass that id or leave target_message_id unset",
+        original.message_id
+    );
+    for v1 in [false, true] {
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        let error = party.core.encrypt_edit(&edit(other)).unwrap_err();
+        assert!(matches!(error, SdkError::InvalidInput(_)), "v1 {v1}");
+        assert_eq!(error.to_string(), expected, "v1 {v1}");
+    }
     assert_eq!(
-        edited_message_id(&party, &ckey, &params).as_deref(),
-        Some("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+        edited_message_id(&party, &ckey, &edit(&original.message_id)),
+        Some(original.message_id.clone()),
+        "the id the event carries is accepted"
     );
 }
 
@@ -649,7 +666,7 @@ fn a_reply_built_from_explicit_fields_names_the_message_its_params_name() {
 }
 
 #[test]
-fn an_explicit_reply_to_message_id_overrides_the_reply_to_events() {
+fn a_reply_to_message_id_must_be_the_one_the_reply_to_event_carries() {
     let party = author();
     let ckey = key(3);
     let original = party
@@ -657,19 +674,32 @@ fn an_explicit_reply_to_message_id_overrides_the_reply_to_events() {
         .encrypt_message(&message_params("original", &ckey))
         .unwrap();
     let event = frame(&delivered(&original, "100"));
-    let derived = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
-        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
-    let overridden = EncryptReplyParams::new(CONVERSATION, "reply", event)
-        .with_reply_to_message_id("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
-        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    let reply = |message_id: Option<&str>| {
+        let params = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        match message_id {
+            Some(id) => params.with_reply_to_message_id(id),
+            None => params,
+        }
+    };
+    let other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+    let error = party.core.encrypt_reply(&reply(Some(other))).unwrap_err();
+    assert!(matches!(error, SdkError::InvalidInput(_)));
     assert_eq!(
-        quoted_message_id(&party, &ckey, &derived),
-        Some(original.message_id.clone())
+        error.to_string(),
+        format!(
+            "reply_to_message_id '{other}' is not the message_id '{}' that \
+             reply_to_event carries: pass that id or leave reply_to_message_id unset",
+            original.message_id
+        )
     );
-    assert_eq!(
-        quoted_message_id(&party, &ckey, &overridden).as_deref(),
-        Some("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
-    );
+    for message_id in [None, Some(original.message_id.as_str())] {
+        assert_eq!(
+            quoted_message_id(&party, &ckey, &reply(message_id)),
+            Some(original.message_id.clone()),
+            "{message_id:?}"
+        );
+    }
 }
 
 fn photo_with_hash(media_hash_key: &str, plaintext_sha256: Option<&str>) -> AttachmentDescriptor {

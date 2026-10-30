@@ -100,7 +100,9 @@ struct Requests {
 impl Requests {
     /// Have the chat whose flags are `flags` read `url`: it joins the GET for
     /// `url` in flight or waiting for its retry, or starts one, returned for
-    /// the binding to perform. A GET past its deadline takes no more chats.
+    /// the binding to perform. A GET past its deadline takes no more chats:
+    /// the GET that replaces it also answers the chats still waiting on it,
+    /// since its own late result changes nothing.
     fn join(&mut self, url: &str, timeout_ms: u64, flags: &Arc<Flags>, now: u64) -> Option<Fetch> {
         if let Some(request) = self.by_url.get_mut(url) {
             if now < request.deadline {
@@ -108,7 +110,26 @@ impl Requests {
                 return None;
             }
         }
-        Some(self.start(url, timeout_ms, 0, vec![Arc::downgrade(flags)], now))
+        let mut chats = vec![Arc::downgrade(flags)];
+        if let Some(expired) = self.by_url.remove(url) {
+            chats.extend(
+                expired
+                    .chats
+                    .into_iter()
+                    .filter(|chat| chat.strong_count() > 0),
+            );
+        }
+        Some(self.start(url, timeout_ms, 0, chats, now))
+    }
+
+    /// End the GET `id`, which its binding could not start, without a retry:
+    /// the next chat starts a GET of its own, which also answers the chats
+    /// waiting for this one.
+    fn abandon(&mut self, id: u64) {
+        if let Some(request) = self.by_url.values_mut().find(|request| request.id == id) {
+            request.deadline = 0;
+            request.retries = MAX_RETRIES;
+        }
     }
 
     /// Register the GET for `url` that follows `retries` failed ones, for
@@ -355,6 +376,10 @@ pub(crate) mod shared {
 
     pub(crate) fn complete_fetch(id: u64, status: u16, body: &[u8]) -> Option<Fetch> {
         requests().complete(id, status, body, now_ms())
+    }
+
+    pub(crate) fn abandon_fetch(id: u64) {
+        requests().abandon(id);
     }
 }
 
@@ -612,17 +637,71 @@ mod tests {
     #[test]
     fn a_get_past_its_deadline_takes_no_more_chats() {
         let mut requests = Requests::default();
-        let stuck = start(&mut requests, &chat(), 0);
+        let waiting = chat();
+        let stuck = start(&mut requests, &waiting, 0);
         let late = chat();
         let fetch = start(&mut requests, &late, 2_000);
         assert_ne!(fetch.id, stuck.id, "a new GET");
         assert_eq!(requests.complete(stuck.id, 200, V1_ON, 2_100), None);
         assert!(
-            !on(&late, V1_SEND),
+            !on(&late, V1_SEND) && !on(&waiting, V1_SEND),
             "the old GET's result is for no GET in flight"
         );
         requests.complete(fetch.id, 200, V1_ON, 2_200);
         assert!(on(&late, V1_SEND));
+        assert!(
+            on(&waiting, V1_SEND),
+            "the new GET answers the old one's chats"
+        );
+    }
+
+    #[test]
+    fn the_chats_of_a_get_past_its_deadline_are_retried_with_the_new_one() {
+        let mut requests = Requests::default();
+        let waiting = chat();
+        let first = start(&mut requests, &waiting, 0);
+        let retry = requests.complete(first.id, 503, b"", 10).expect("a retry");
+        let late = chat();
+        let fetch = start(&mut requests, &late, 10 + retry.delay_ms + retry.timeout_ms);
+        assert_eq!(requests.complete(retry.id, 0, b"", 4_000), None);
+        let next = requests
+            .complete(fetch.id, 503, b"", 4_100)
+            .expect("the new GET's retry");
+        requests.complete(next.id, 200, V1_ON, 4_100 + next.delay_ms);
+        assert!(on(&late, V1_SEND));
+        assert!(
+            on(&waiting, V1_SEND),
+            "the retry answers the old GET's chats"
+        );
+    }
+
+    #[test]
+    fn a_get_that_cannot_start_leaves_the_next_chat_its_own() {
+        let mut requests = Requests::default();
+        let stranded = chat();
+        let fetch = start(&mut requests, &stranded, 0);
+        requests.abandon(fetch.id);
+        let next = chat();
+        let own = start(&mut requests, &next, 10);
+        assert_ne!(own.id, fetch.id);
+        assert_eq!(own.delay_ms, 0, "a first read, not a retry");
+        assert_eq!(requests.complete(fetch.id, 200, V1_ON, 20), None);
+        requests.complete(own.id, 200, V1_ON, 30);
+        assert!(on(&next, V1_SEND));
+        assert!(
+            on(&stranded, V1_SEND),
+            "the next GET answers the stranded chat"
+        );
+    }
+
+    #[test]
+    fn a_get_that_cannot_start_schedules_no_retry() {
+        let mut requests = Requests::default();
+        let stranded = chat();
+        let fetch = start(&mut requests, &stranded, 0);
+        requests.abandon(fetch.id);
+        assert_eq!(requests.complete(fetch.id, 0, b"", 10), None);
+        assert!(!on(&stranded, V1_SEND));
     }
 
     #[test]
