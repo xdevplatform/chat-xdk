@@ -1344,8 +1344,9 @@ format already carries them.
 
 **Replies are event-based.** The preferred form of `EncryptReplyParams` adds
 `reply_to_event` — the base64 raw signed event being replied to. The SDK
-derives the reply preview (sequence id, sender, text, entities, attachments)
-from it and embeds the raw event in the outgoing message so recipients can
+derives the reply preview (sequence id, message id, sender, text, entities,
+attachments) from it and embeds the raw event in the outgoing message so
+recipients can
 validate the preview (see
 [CRYPTO.md — Reply preview validation](CRYPTO.md#reply-preview-validation)).
 Two companions cover the edge cases: `reply_to_edit_event` carries the raw
@@ -1355,9 +1356,14 @@ different key version than this reply; the reply doesn't embed them, since
 recipients open the original with their own keys. When the original or its
 edit is encrypted under a per-message key, the reply also carries that key
 so recipients can open it. The explicit preview fields —
-`reply_to_sequence_id`, `reply_to_sender_id`, `reply_to_text`,
-`reply_to_entities`, `reply_to_attachments` — remain as overrides for callers
-that no longer hold the raw event.
+`reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
+`reply_to_text`, `reply_to_entities`, `reply_to_attachments` — remain as
+overrides for callers that no longer hold the raw event. A reply built from
+them must set `reply_to_message_id`, the original's signed message id
+(`replyToMessageId` in JS, `ReplyToMessageID` in Go, `replyToMessageId` on
+the JVM, `ReplyToMessageId` in .NET): X clients mark a v1 reply that embeds
+no per-message-key original and names no original invalid, and validate one
+that names it against their own copy of the original.
 
 **Reactions are event-based too.** `EncryptReactionParams` (shared by add and
 remove — the same params value can add and later remove the same reaction)
@@ -1371,9 +1377,12 @@ instead.
 as a reaction: `target_event` (the base64 raw event of the message being
 edited) or the explicit `conversation_id` / `target_message_sequence_id`
 pair. Optional `entities` describe rich text in the replacement text;
-omitting them clears any entities the original carried. With
-`target_event`, the edit also names the original's signed message id, which
-receivers need to tie an edit to a message encrypted under a per-message key.
+omitting them clears any entities the original carried. A v1 edit also
+names the original's signed message id, which receivers need to tie an edit
+to a message encrypted under a per-message key: the SDK derives it from
+`target_event`, and an edit built from the explicit pair sets it as
+`target_message_id` (`targetMessageId` in JS and on the JVM,
+`TargetMessageID` in Go, `TargetMessageId` in .NET). A v0 edit names none.
 The edit is encrypted and signed like a regular message (the identity/key
 overrides above apply) and returns a `SendPayload` with its own fresh
 `message_id`.
@@ -2214,6 +2223,7 @@ let params = EncryptMessageParams::new(conversation_id, "a photo").with_attachme
         filename: "photo.jpg".to_string(),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     },
 ]);
 let photo_message = chat.encrypt_message(&params)?;
@@ -2645,7 +2655,7 @@ the snake_case keys below).
 
 ```typescript
 type AttachmentDescriptor =
-  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number }
+  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number; plaintext_sha256?: string }
   | { attachment_type: 'url'; url: string; display_title?: string; banner_image?: UrlAttachmentImageDescriptor; favicon_image?: UrlAttachmentImageDescriptor }
   | { attachment_type: 'post'; rest_id?: string; post_url?: string };
 
@@ -2671,6 +2681,47 @@ fidelity); a negative one, on an image or a media attachment, fails the same
 way. So do a `url` attachment with an empty `url` (`a URL card's url is
 empty: pass the link the card shows`) and a `post` attachment with neither
 `rest_id` nor `post_url`.
+
+**File hashes.** A `media` attachment's optional `plaintext_sha256` is the
+base64 SHA-256 of the file's plaintext bytes, as X clients send it. The
+message carries and signs it, and the message is built before its files are
+encrypted, so hash the file yourself before you encrypt the message.
+Recipients read it back as the decrypted attachment's `plaintext_sha256`
+(`plaintextSha256` in JS) to check the file they decrypt. One that is not the
+base64 of 32 bytes fails the send with an invalid-input error:
+`media_hash_key 'photo' has plaintext_sha256 '…': pass the base64 SHA-256 of
+the file's plaintext bytes (32 bytes)`.
+
+```python
+# Python
+digest = base64.b64encode(hashlib.sha256(photo).digest()).decode()
+attachment = {"attachment_type": "media", "media_hash_key": key, "width": 640, "height": 480,
+              "filesize_bytes": encrypted_file_size(len(photo)), "filename": "photo.jpg",
+              "media_type": 1, "plaintext_sha256": digest}
+```
+
+```go
+// Go
+sum := sha256.Sum256(photo)
+hash := base64.StdEncoding.EncodeToString(sum[:])
+attachment.PlaintextSHA256 = &hash
+```
+
+```java
+// JVM
+String hash = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(photo));
+AttachmentDescriptor.media(key, 640, 480, encryptedSize, "photo.jpg", 1, null, hash);
+```
+
+```csharp
+// .NET
+var hash = Convert.ToBase64String(SHA256.HashData(photo));
+AttachmentDescriptor.Media(key, 640, 480, encryptedSize, "photo.jpg", 1, null, hash);
+```
+
+In Rust the field is `plaintext_sha256: Option<String>` on
+`AttachmentDescriptor::Media`, and in JS `plaintext_sha256` on the
+attachment object.
 
 **URL cards ("clickable images").** A `url` attachment with only a `url`
 renders as a bare link on some clients: clients only auto-fetch missing card
@@ -2969,7 +3020,7 @@ Parsed from decrypted message content. Uses `attachmentType` (JS) / `attachment_
 ```typescript
 // JS/WASM
 type AttachmentInfo =
-  | { attachmentType: 'media'; mediaHashKey?: string; dimensions?: { width?: number; height?: number }; mediaType?: string; durationMillis?: number; filesizeBytes?: number; filename?: string; attachmentId?: string }
+  | { attachmentType: 'media'; mediaHashKey?: string; dimensions?: { width?: number; height?: number }; mediaType?: string; durationMillis?: number; filesizeBytes?: number; filename?: string; attachmentId?: string; plaintextSha256?: string }
   | { attachmentType: 'url'; url?: string; bannerImageMediaHashKey?: string; faviconImageMediaHashKey?: string; displayTitle?: string; attachmentId?: string }
   | { attachmentType: 'post'; restId?: string; postUrl?: string; attachmentId?: string }
   | { attachmentType: 'unifiedCard'; url?: string; attachmentId?: string }

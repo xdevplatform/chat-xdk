@@ -361,9 +361,10 @@ or its edit's. 0.5.x accepted any start of the quoted text and entities
 among the quoted message's, so it showed previews as valid that X clients
 mark invalid, such as one that quotes a message's first word as all of it.
 0.7.2 checks a preview as X clients do, and the previews it builds pass that
-check. X clients also check a v1 reply against the message it names, and a
-reply built only from the explicit preview fields names none, so each guide
-builds replies from the event they quote. A reply embeds no key change, as X
+check. X clients also check a v1 reply against the message it names, so each
+guide builds replies from the event they quote, and a reply built from the
+explicit preview fields names the quoted message by its `message_id`, as
+`reply_to_message_id`. A reply embeds no key change, as X
 clients' replies don't: every member receives the conversation's key
 changes, so recipients open the quoted message with their own conversation
 keys, or with the message key a reply carries for a v1 message, and decrypt

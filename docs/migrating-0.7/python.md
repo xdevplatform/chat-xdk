@@ -904,10 +904,11 @@ X clients count them, are those of the quoted text, and its entities are
 exactly the quoted message's, or its edit's when the reply embeds the edit.
 0.5.x accepted any start of the quoted text, and entities among the quoted
 message's. `encrypt_reply` builds such a preview from `reply_to_event`, and
-from `reply_to_edit_event` when the message was edited, so pass them rather
-than only the explicit preview fields: in v1, X clients check a reply
-against the message it quotes, which those fields don't name, and mark a
-reply built from them alone invalid.
+from `reply_to_edit_event` when the message was edited, so pass them when
+you hold them. In v1, X clients check a reply against the message it names
+and mark a reply that names none invalid, so a reply built from the
+explicit preview fields names the quoted message's `message_id` as
+`reply_to_message_id`.
 
 A reply carries no key change. Recipients open the quoted message with their
 own conversation keys, or with the message key a reply carries for a v1

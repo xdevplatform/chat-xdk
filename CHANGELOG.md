@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+
+- `EncryptReplyParams` takes `reply_to_message_id`, the signed `message_id`
+  of the message a reply quotes, in every binding (`replyToMessageId` in JS
+  and on the JVM, `ReplyToMessageID` in Go, `ReplyToMessageId` in .NET). A
+  reply built from the explicit preview fields needs it: in v1, X clients
+  mark a reply that names no original invalid. With `reply_to_event`, the id
+  comes from the event and the field overrides it.
+- `EncryptEditParams` takes `target_message_id`, the signed `message_id` of
+  the message an edit replaces (`targetMessageId` in JS and on the JVM,
+  `TargetMessageID` in Go, `TargetMessageId` in .NET). A v1 edit names the
+  message it edits, as X clients' edits do, so a v1 edit built from
+  `conversation_id` and `target_message_sequence_id` needs it; with
+  `target_event`, the id comes from the event and the field overrides it. A
+  v0 edit names none, as in 0.5.x.
+- A media attachment descriptor takes `plaintext_sha256`, the base64
+  SHA-256 of the file's plaintext bytes, which the message carries and signs
+  as X clients' messages do. The message is built before its files are
+  encrypted, so the caller hashes the file. One that is not the base64 of 32
+  bytes fails the send with an invalid-input error. Decrypted media
+  attachments return it as `plaintext_sha256` (`plaintextSha256` in JS),
+  `null` when the sender sent none. The JVM and .NET add an eight-argument
+  `media` / `Media` factory that takes it; Go adds
+  `AttachmentDescriptor.PlaintextSHA256`.
+- Rust: `AttachmentDescriptor::Media` gains the `plaintext_sha256:
+  Option<String>` field, so code that builds the variant with a struct
+  literal adds `plaintext_sha256: None` (or the hash), and a pattern that
+  lists every field adds it or ends in `..`.
+
 ### Changed
 
 - While a chat sends v1, every event it signs takes signature version 10, as
