@@ -690,6 +690,61 @@ async function main() {
   assert.equal(decodedEdit.entities[0].startIndex, 4);
   assert.equal(decodedEdit.entities[0].endIndex, 23);
 
+  // 4c2b. A v1 send built without the original event names it through the
+  // explicit fields, and a media attachment carries the SHA-256 of its
+  // plaintext file: replyToMessageId, targetMessageId and plaintext_sha256
+  // each read back from the decrypted send.
+  const photoSha256 = Buffer.from(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode("the photo's plaintext bytes")),
+  ).toString("base64");
+  const hashedPhoto = v1Sender.encryptMessage({
+    conversationId: "conv-1",
+    text: "a hashed photo",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+    attachments: [
+      { ...photoAttachment("hashed"), plaintext_sha256: photoSha256 },
+      photoAttachment("unhashed"),
+    ],
+  });
+  const hashedEvent = chat.decryptEvent({
+    eventB64: hashedPhoto.eventB64,
+    conversationKeys: { "1": convKey },
+    signingKeys: ownSigningKeys,
+  });
+  assert.equal(hashedEvent.verified, true);
+  assert.deepEqual(hashedEvent.attachments.map((a) => a.plaintextSha256), [photoSha256, null]);
+  const v1Reply = v1Sender.encryptReply({
+    conversationId: "conv-1",
+    text: "nice",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+    replyToSequenceId: "seq-99",
+    replyToMessageId: hashedPhoto.messageId,
+    replyToSenderId: "111",
+    replyToText: "a hashed photo",
+  });
+  assert.equal(decryptOwn(v1Reply).replyingToPreview.replyingToMessageId, hashedPhoto.messageId);
+  const v1Edit = v1Sender.encryptEdit({
+    conversationId: "conv-1",
+    targetMessageSequenceId: "seq-99",
+    targetMessageId: hashedPhoto.messageId,
+    updatedText: "a better photo",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  });
+  assert.equal(decryptOwn(v1Edit).targetMessageId, hashedPhoto.messageId);
+  assert.throws(
+    () => v1Sender.encryptMessage({
+      conversationId: "conv-1",
+      text: "a short hash",
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+      attachments: [{ ...photoAttachment("hashed"), plaintext_sha256: "c2hvcnQ=" }],
+    }),
+    /media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the file's plaintext bytes \(32 bytes\)/,
+  );
+
   // 4c3. prepareMessageDelete returns the request's actionSignatures: one
   // signed action with the encoded MessageDeleteEvent detail, its signature
   // nested; 1:1 ids are signed in canonical colon form.

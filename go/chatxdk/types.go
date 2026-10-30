@@ -286,6 +286,13 @@ type AttachmentDescriptor struct {
 	FaviconImage *URLAttachmentImageDescriptor `json:"favicon_image,omitempty"`
 	RestID       *string                       `json:"rest_id,omitempty"`
 	PostURL      *string                       `json:"post_url,omitempty"`
+	// PlaintextSHA256 is the base64 SHA-256 of a "media" attachment's
+	// plaintext file, which recipients can check the decrypted file
+	// against. The message carries and signs it, and the message is built
+	// before its files are encrypted, so hash the file yourself. One that
+	// is not the base64 of 32 bytes fails the send with an error of kind
+	// ErrorKindInvalidInput.
+	PlaintextSHA256 *string `json:"plaintext_sha256,omitempty"`
 }
 
 // URLAttachmentImageDescriptor references an encrypted preview image
@@ -349,9 +356,12 @@ type QuickReplyOption struct {
 //
 // The preferred reply target is ReplyToEvent — the base64 raw signed event
 // being replied to — from which the SDK derives the reply preview (sequence
-// id, sender, text, entities, attachments) and which it embeds so recipients
-// can validate the preview. The explicit ReplyTo* field overrides remain for
-// callers that no longer hold the raw event.
+// id, message id, sender, text, entities, attachments) and which it embeds
+// so recipients can validate the preview. The explicit ReplyTo* field
+// overrides remain for callers that no longer hold the raw event. A reply
+// built from them needs ReplyToMessageID, the signed message_id of the
+// message it quotes: X clients mark a v1 reply that names no original
+// invalid.
 //
 // The identity and key fields are optional overrides, and the reply's files
 // work, as on EncryptMessageParams.
@@ -372,6 +382,7 @@ type EncryptReplyParams struct {
 	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
 	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
 	ReplyToSequenceID      string                 `json:"reply_to_sequence_id,omitempty"`     // empty = derived from ReplyToEvent
+	ReplyToMessageID       string                 `json:"reply_to_message_id,omitempty"`      // empty = derived from ReplyToEvent
 	ReplyToSenderID        string                 `json:"reply_to_sender_id,omitempty"`       // digits; empty = derived from ReplyToEvent
 	ReplyToText            *string                `json:"reply_to_text,omitempty"`
 	Entities               []EntityTuple          `json:"entities,omitempty"`
@@ -408,9 +419,12 @@ type EncryptReactionParams struct {
 // EncryptEditParams are the parameters for EncryptEdit.
 //
 // The preferred edit target is TargetEvent — the base64 raw event of the
-// message being edited — from which the SDK derives ConversationID and
-// TargetMessageSequenceID; the explicit fields remain as overrides for
-// callers that no longer hold the raw event.
+// message being edited — from which the SDK derives ConversationID,
+// TargetMessageSequenceID and, for a v1 edit, TargetMessageID; the explicit
+// fields remain as overrides for callers that no longer hold the raw event.
+// TargetMessageID is the signed message_id of the message being edited: a
+// v1 edit names the message it edits, so a v1 edit built without
+// TargetEvent needs it, and a v0 edit names none.
 //
 // The identity and key fields are optional overrides, as on
 // EncryptMessageParams.
@@ -423,6 +437,7 @@ type EncryptEditParams struct {
 	Entities                []EntityTuple `json:"entities,omitempty"`
 	ConversationID          string        `json:"conversation_id,omitempty"`            // empty = derived from TargetEvent
 	TargetMessageSequenceID string        `json:"target_message_sequence_id,omitempty"` // empty = derived from TargetEvent
+	TargetMessageID         string        `json:"target_message_id,omitempty"`          // empty = derived from TargetEvent
 	SenderID                string        `json:"sender_id,omitempty"`                  // empty = session identity
 	SigningKeyVersion       string        `json:"signing_key_version,omitempty"`        // empty = session identity
 	ConversationKey         []byte        `json:"conversation_key,omitempty"`           // raw 32-byte key; nil = key cache

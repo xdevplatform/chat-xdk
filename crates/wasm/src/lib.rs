@@ -656,13 +656,15 @@ impl Chat {
     ///
     /// Takes a single params object: the same fields as `encryptMessage` plus
     /// `replyToEvent` — the base64 raw signed event being replied to, from
-    /// which the reply preview (sequence id, sender, text, entities,
-    /// attachments) is derived — with optional `replyToEditEvent`,
+    /// which the reply preview (sequence id, message id, sender, text,
+    /// entities, attachments) is derived — with optional `replyToEditEvent`,
     /// `replyToCkces` (base64 raw key-change events needed to decrypt the
-    /// original), and explicit `replyToSequenceId`, `replyToSenderId`,
-    /// `replyToText`, `replyToEntities`, `replyToAttachments` overrides for
-    /// callers that no longer hold the raw event. The reply's id and files
-    /// work as in `encryptMessage`.
+    /// original), and explicit `replyToSequenceId`, `replyToMessageId`,
+    /// `replyToSenderId`, `replyToText`, `replyToEntities`,
+    /// `replyToAttachments` overrides for callers that no longer hold the raw
+    /// event; such a reply needs `replyToMessageId`, as X clients mark a v1
+    /// reply that names no original invalid. The reply's id and files work as
+    /// in `encryptMessage`.
     #[wasm_bindgen(js_name = encryptReply)]
     pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptReplyParams = from_js_params("encryptReply", params)?;
@@ -678,6 +680,7 @@ impl Chat {
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
         core_params.reply_to_sequence_id = p.reply_to_sequence_id;
+        core_params.reply_to_message_id = p.reply_to_message_id;
         core_params.reply_to_sender_id = p.reply_to_sender_id;
         core_params.reply_to_text = p.reply_to_text;
         core_params.entities = p.entities.map(entity_tuples_to_descs);
@@ -732,8 +735,10 @@ impl Chat {
     ///
     /// Takes a single params object with camelCase keys: `updatedText`,
     /// plus `targetEvent` — the base64 raw event being edited, from which the
-    /// conversation id and target sequence id are derived — or explicit
-    /// `conversationId` / `targetMessageSequenceId` overrides. `entities`
+    /// conversation id, the target sequence id and, for a v1 edit, the
+    /// target message id are derived — or explicit `conversationId` /
+    /// `targetMessageSequenceId` / `targetMessageId` overrides; a v1 edit
+    /// built without `targetEvent` needs `targetMessageId`. `entities`
     /// (array of `[start, end, "type"]` tuples) describes the replacement
     /// text; `senderId`, `signingKeyVersion`, `conversationKey` (Uint8Array),
     /// and `conversationKeyVersion` resolve from the session identity and key
@@ -1506,6 +1511,7 @@ struct JsEncryptReplyParams {
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
     reply_to_sequence_id: Option<String>,
+    reply_to_message_id: Option<String>,
     #[serde(default, deserialize_with = "reply_to_sender_id_string")]
     reply_to_sender_id: Option<String>,
     reply_to_text: Option<String>,
@@ -1556,6 +1562,7 @@ struct JsEncryptEditParams {
     entities: Option<Vec<(i32, i32, String)>>,
     conversation_id: Option<String>,
     target_message_sequence_id: Option<String>,
+    target_message_id: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
@@ -1571,6 +1578,7 @@ impl JsEncryptEditParams {
         params.entities = self.entities.map(entity_tuples_to_descs);
         params.conversation_id = self.conversation_id;
         params.target_message_sequence_id = self.target_message_sequence_id;
+        params.target_message_id = self.target_message_id;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params.conversation_key = self.conversation_key;

@@ -2,6 +2,7 @@ package chatxdk
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -1145,6 +1146,105 @@ func sendFiles(t *testing.T, chat *Chat, v sdkVectors, text string, attachments 
 		t.Errorf("sent text %q, want %q", msg.Text(), text)
 	}
 	return payload
+}
+
+// TestV1ParityFieldsReachTheWire drives the three optional fields a v1 send
+// takes when the caller holds no original event: a reply's
+// ReplyToMessageID, an edit's TargetMessageID and a media attachment's
+// PlaintextSHA256, each read back from the decrypted send.
+func TestV1ParityFieldsReachTheWire(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
+
+	sum := sha256.Sum256([]byte("the photo's plaintext bytes"))
+	hash := base64.StdEncoding.EncodeToString(sum[:])
+	photo := mediaAttachment("photo")
+	photo.PlaintextSHA256 = &hash
+	original := sendFiles(t, chat, v, "a photo", []AttachmentDescriptor{photo, mediaAttachment("other")})
+	decrypted, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         original.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	var hashes []*string
+	for _, raw := range mustMessage(t, decrypted, err).Attachments {
+		var info struct {
+			PlaintextSHA256 *string `json:"plaintext_sha256"`
+		}
+		if err := json.Unmarshal(raw, &info); err != nil {
+			t.Fatalf("attachment %s: %v", raw, err)
+		}
+		hashes = append(hashes, info.PlaintextSHA256)
+	}
+	if len(hashes) != 2 || hashes[0] == nil || *hashes[0] != hash || hashes[1] != nil {
+		t.Errorf("decrypted plaintext_sha256s %v, want [%s <nil>]", hashes, hash)
+	}
+
+	replyText := "a photo"
+	reply, err := chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "nice",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToSequenceID:      "100",
+		ReplyToMessageID:       original.MessageID,
+		ReplyToSenderID:        v.EventSenderID,
+		ReplyToText:            &replyText,
+	})
+	if err != nil {
+		t.Fatalf("EncryptReply failed: %v", err)
+	}
+	var preview struct {
+		ReplyingToMessageID string `json:"replying_to_message_id"`
+	}
+	if err := json.Unmarshal(decryptOwnText(t, chat, v, reply).ReplyingToPreview, &preview); err != nil {
+		t.Fatalf("reply preview: %v", err)
+	}
+	if preview.ReplyingToMessageID != original.MessageID {
+		t.Errorf("replying_to_message_id %q, want %q", preview.ReplyingToMessageID, original.MessageID)
+	}
+
+	edit, err := chat.EncryptEdit(EncryptEditParams{
+		ConversationID:          v.EventConversationID,
+		TargetMessageSequenceID: "100",
+		TargetMessageID:         original.MessageID,
+		UpdatedText:             "a better photo",
+		ConversationKey:         v.conversationKey(t),
+		ConversationKeyVersion:  v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptEdit failed: %v", err)
+	}
+	decrypted, err = chat.DecryptEvent(DecryptEventParams{
+		EventB64:         edit.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	var edited struct {
+		TargetMessageID string `json:"target_message_id"`
+	}
+	if err := json.Unmarshal(mustMessage(t, decrypted, err).Content.raw, &edited); err != nil {
+		t.Fatalf("edit content: %v", err)
+	}
+	if edited.TargetMessageID != original.MessageID {
+		t.Errorf("target_message_id %q, want %q", edited.TargetMessageID, original.MessageID)
+	}
+
+	short := "c2hvcnQ="
+	photo.PlaintextSHA256 = &short
+	_, err = chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "a photo",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		Attachments:            []AttachmentDescriptor{photo},
+	})
+	want := "media_hash_key 'photo' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the file's plaintext bytes (32 bytes)"
+	var chatErr *Error
+	if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput || chatErr.Message != want {
+		t.Errorf("a short plaintext_sha256: got %v, want an invalid-input error %q", err, want)
+	}
 }
 
 // fileParams names the file mediaHashKey of the sent message payload.

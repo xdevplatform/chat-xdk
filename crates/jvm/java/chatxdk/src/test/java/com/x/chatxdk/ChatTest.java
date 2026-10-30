@@ -1433,11 +1433,72 @@ class ChatTest {
 
     /** The content of a message this chat sent, decrypted and verified. */
     private static JsonNode decryptedContent(Chat chat, JsonNode v, String eventB64) throws Exception {
+        return decryptedEvent(chat, v, eventB64).path("content");
+    }
+
+    /** A message this chat sent, decrypted and verified. */
+    private static JsonNode decryptedEvent(Chat chat, JsonNode v, String eventB64) throws Exception {
         DecryptEventParams params = new DecryptEventParams(eventB64, conversationKeys(v));
         params.signingKeys = eventSigningKeys(v);
         JsonNode event = chat.decryptEvent(params);
         assertTrue(event.path("verified").asBoolean());
-        return event.path("content");
+        return event;
+    }
+
+    // A v1 send built without the original event names it through the explicit fields, and a
+    // media attachment carries the SHA-256 of its plaintext file: replyToMessageId,
+    // targetMessageId and plaintextSha256 each read back from the decrypted send.
+    @Test
+    void v1SendsNameTheOriginalAndCarryTheFileHashFromExplicitFields() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = FeatureServer.v1Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            String senderId = v.get("event_sender_id").asText();
+            chat.setIdentity(new SetIdentityParams(senderId, v.get("event_signing_key_version").asText()));
+            FeatureServer.waitForV1(chat);
+            byte[] key = b64(v, "conversation_key_b64");
+            String version = v.get("event_conversation_key_version").asText();
+            String conversationId = v.get("event_conversation_id").asText();
+            String hash = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256")
+                    .digest("the photo's plaintext bytes".getBytes(StandardCharsets.UTF_8)));
+
+            EncryptMessageParams photo = new EncryptMessageParams(conversationId, "a photo");
+            photo.conversationKey = key;
+            photo.conversationKeyVersion = version;
+            photo.attachments = List.of(
+                    AttachmentDescriptor.media("hashed", 4, 3, 64, "hashed.jpg", 1, null, hash),
+                    AttachmentDescriptor.media("unhashed", 4, 3, 64, "unhashed.jpg", 1, null));
+            SendPayload sent = chat.encryptMessage(photo);
+            assertEquals("10", sent.signatureInfo.signatureVersion);
+            JsonNode attachments = decryptedEvent(chat, v, sent.eventB64).path("attachments");
+            assertEquals(hash, attachments.path(0).path("plaintext_sha256").asText());
+            assertTrue(attachments.path(1).path("plaintext_sha256").isNull());
+
+            EncryptReplyParams reply = new EncryptReplyParams(conversationId, "nice", null);
+            reply.conversationKey = key;
+            reply.conversationKeyVersion = version;
+            reply.replyToSequenceId = "100";
+            reply.replyToMessageId = sent.messageId;
+            reply.replyToSenderId = senderId;
+            reply.replyToText = "a photo";
+            JsonNode replied = decryptedContent(chat, v, chat.encryptReply(reply).eventB64);
+            assertEquals(sent.messageId, replied.path("replying_to_preview").path("replying_to_message_id").asText());
+
+            EncryptEditParams edit = new EncryptEditParams(null, "a better photo");
+            edit.conversationId = conversationId;
+            edit.targetMessageSequenceId = "100";
+            edit.targetMessageId = sent.messageId;
+            edit.conversationKey = key;
+            edit.conversationKeyVersion = version;
+            JsonNode edited = decryptedContent(chat, v, chat.encryptEdit(edit).eventB64);
+            assertEquals(sent.messageId, edited.path("target_message_id").asText());
+
+            photo.attachments = List.of(AttachmentDescriptor.media("hashed", 4, 3, 64, "hashed.jpg", 1, null, "c2hvcnQ="));
+            ChatXdkException error = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(photo));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, error.getKind());
+            assertEquals("media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the "
+                    + "file's plaintext bytes (32 bytes)", error.getMessage());
+        }
     }
 
     @Test

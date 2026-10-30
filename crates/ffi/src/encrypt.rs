@@ -103,9 +103,11 @@ pub(crate) fn parse_quick_reply(value: serde_json::Value) -> Result<QuickReply, 
 /// replied to; the preview is derived from it), with optional
 /// `reply_to_edit_event` and `reply_to_ckces` (base64 raw key-change events
 /// needed when the original used a different key version). The explicit
-/// `reply_to_sequence_id`, `reply_to_sender_id`, `reply_to_text`,
-/// `reply_to_entities`, and `reply_to_attachments` overrides remain for
-/// callers that no longer hold the raw event.
+/// `reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
+/// `reply_to_text`, `reply_to_entities`, and `reply_to_attachments`
+/// overrides remain for callers that no longer hold the raw event; such a
+/// reply needs `reply_to_message_id`, as X clients mark a v1 reply that names
+/// no original invalid.
 ///
 /// Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
 /// and files work as for `chat_xdk_encrypt_message`.
@@ -157,6 +159,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.conversation_key = ckey_bytes;
         params.conversation_key_version = p.conversation_key_version;
         params.reply_to_sequence_id = p.reply_to_sequence_id;
+        params.reply_to_message_id = p.reply_to_message_id;
         params.reply_to_sender_id = p.reply_to_sender_id;
         params.reply_to_text = p.reply_to_text;
         params.entities = p.entities.map(entity_tuples_to_descs);
@@ -257,9 +260,11 @@ pub(crate) fn encrypt_reaction_impl(
 ///
 /// `params_json` — single JSON document: `updated_text` plus the edit
 /// target: preferably `target_event` (base64 raw event being edited; the
-/// conversation id and target sequence id are derived from it), with
-/// explicit `conversation_id` / `target_message_sequence_id` overrides for
-/// callers that no longer hold the raw event. Optional `entities`
+/// conversation id, target sequence id and target message id are derived
+/// from it), with explicit `conversation_id` / `target_message_sequence_id`
+/// / `target_message_id` overrides for callers that no longer hold the raw
+/// event; a v1 edit built without `target_event` needs `target_message_id`
+/// to name the message it edits. Optional `entities`
 /// (`[start, end, type]` tuples for the replacement text), `sender_id` /
 /// `signing_key_version` (unset resolves from the session identity), and
 /// `conversation_key` (base64) / `conversation_key_version` (unset resolves
@@ -289,6 +294,7 @@ pub extern "C" fn chat_xdk_encrypt_edit(
         params.entities = p.entities.map(entity_tuples_to_descs);
         params.conversation_id = p.conversation_id;
         params.target_message_sequence_id = p.target_message_sequence_id;
+        params.target_message_id = p.target_message_id;
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;
         params.conversation_key = ckey_bytes;

@@ -67,6 +67,7 @@ fn files_take_the_messages_key_from_the_cache_too() {
         filename: "photo.jpg".into(),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     }]);
     let payload = core.encrypt_message(&params).unwrap();
 

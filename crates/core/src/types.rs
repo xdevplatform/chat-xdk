@@ -190,6 +190,9 @@ pub struct MediaAttachment {
     pub attachment_id: Option<String>,
     pub legacy_media_url_https: Option<String>,
     pub legacy_media_preview_url: Option<String>,
+    /// Base64 SHA-256 of the file's plaintext bytes, when the sender
+    /// included it: compare it with the SHA-256 of the decrypted file.
+    pub plaintext_sha256: Option<String>,
 }
 
 /// Media dimensions (width/height).
@@ -727,6 +730,9 @@ pub struct MediaAttachmentInfo {
     pub attachment_id: Option<String>,
     pub legacy_media_url_https: Option<String>,
     pub legacy_media_preview_url: Option<String>,
+    /// Base64 SHA-256 of the file's plaintext bytes, when the sender
+    /// included it: compare it with the SHA-256 of the decrypted file.
+    pub plaintext_sha256: Option<String>,
 }
 
 /// Media dimensions (width/height).
@@ -1373,6 +1379,14 @@ pub enum AttachmentDescriptor {
         media_type: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_millis: Option<i64>,
+        /// Base64 SHA-256 of the file's plaintext bytes, which recipients can
+        /// check the decrypted file against. The message carries and signs
+        /// it, and the message is built before its files are encrypted, so
+        /// the caller hashes the file. One that is not the base64 of 32
+        /// bytes fails the send with an `InvalidInput` error; an empty one
+        /// is unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plaintext_sha256: Option<String>,
     },
     /// A URL card attachment.
     ///

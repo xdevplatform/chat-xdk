@@ -405,8 +405,9 @@ export interface EncryptReplyParams {
   text: string;
   /**
    * Base64 of the raw signed event being replied to. The reply preview
-   * (sequence id, sender, text, entities, attachments) is derived from it
-   * and the raw event is embedded so recipients can validate the preview.
+   * (sequence id, message id, sender, text, entities, attachments) is
+   * derived from it and the raw event is embedded so recipients can
+   * validate the preview.
    */
   replyToEvent?: string | null;
   /** Base64 of the raw signed edit event, when the original was edited. */
@@ -430,6 +431,12 @@ export interface EncryptReplyParams {
   conversationKeyVersion?: string | null;
   /** The sequenceId of the message being replied to; derived from replyToEvent when omitted. */
   replyToSequenceId?: string | null;
+  /**
+   * The signed messageId of the message being replied to; derived from
+   * replyToEvent when omitted. A reply built without replyToEvent needs it:
+   * X clients mark a v1 reply that names no original invalid.
+   */
+  replyToMessageId?: string | null;
   /**
    * The user ID of the message's sender, as digits (for the preview);
    * derived from replyToEvent when omitted.
@@ -488,8 +495,8 @@ export interface EncryptReactionParams {
  * Parameters for encryptEdit.
  *
  * The preferred form passes `targetEvent` — the base64 raw event of the
- * message being edited — and lets the SDK derive the conversation id and
- * target sequence id from it.
+ * message being edited — and lets the SDK derive the conversation id, the
+ * target sequence id and, for a v1 edit, the target message id from it.
  */
 export interface EncryptEditParams {
   /** The replacement message text. */
@@ -502,6 +509,12 @@ export interface EncryptEditParams {
   conversationId?: string | null;
   /** The sequenceId of the message being edited; derived from targetEvent when omitted. */
   targetMessageSequenceId?: string | null;
+  /**
+   * The signed messageId of the message being edited; derived from
+   * targetEvent when omitted. A v1 edit names the message it edits, so a v1
+   * edit built without targetEvent needs it; a v0 edit names none.
+   */
+  targetMessageId?: string | null;
   /** User ID of the sender; resolves from the session identity (setIdentity) when omitted. */
   senderId?: string | null;
   /** Version of the signing key used to sign the message; resolves from the session identity when omitted. */
@@ -968,10 +981,15 @@ export interface DecryptFileWithKeyParams {
  * `filename`, a `filesize_bytes` of 0 or less, or a negative `width` or
  * `height` fails the send with a `ChatXdkError` of kind `invalidInput`, as
  * do a `url` attachment with an empty `url` and a `post` attachment with
- * neither `rest_id` nor `post_url`.
+ * neither `rest_id` nor `post_url`. A media attachment's optional
+ * `plaintext_sha256` is the base64 SHA-256 of the file's plaintext bytes,
+ * which recipients can check the decrypted file against: the message carries
+ * and signs it, and the message is built before its files are encrypted, so
+ * hash the file yourself. One that is not the base64 of 32 bytes fails the
+ * send the same way.
  */
 export type AttachmentDescriptor =
-  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number }
+  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number; plaintext_sha256?: string | null }
   | { attachment_type: 'url'; url: string; display_title?: string; banner_image?: UrlAttachmentImageDescriptor; favicon_image?: UrlAttachmentImageDescriptor }
   | { attachment_type: 'post'; rest_id?: string; post_url?: string };
 
@@ -1173,6 +1191,8 @@ export interface AttachmentInfo {
   attachmentId?: string;
   legacyMediaUrlHttps?: string;
   legacyMediaPreviewUrl?: string;
+  /** Base64 SHA-256 of the file's plaintext bytes, when the sender included it. */
+  plaintextSha256?: string;
   url?: string;
   bannerImageMediaHashKey?: string;
   faviconImageMediaHashKey?: string;

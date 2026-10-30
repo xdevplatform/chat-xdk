@@ -11,7 +11,7 @@ use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
 use crate::crypto::message_keys;
 use crate::error::SdkError;
-use crate::protocol::serialization::base64_encode;
+use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::signatures::{MESSAGE_SIGNATURE_VERSION, SIGNATURE_VERSION};
 use crate::thrift::event::{
     MessageCreateEvent, MessageEvent, MessageEventDetail, MessageEventSignature,
@@ -682,12 +682,18 @@ pub fn build_thrift_attachments(
                 filename,
                 media_type,
                 duration_millis,
+                plaintext_sha256,
             } => {
                 let dimensions = ThriftMediaDimensions::new(Some(*width), Some(*height));
                 let resolved_media_type = match media_type {
                     Some(i) => ThriftMediaType::from(*i),
                     None => ThriftMediaType::IMAGE,
                 };
+                // Callers validate first (validate_plaintext_sha256s).
+                let plaintext_sha256 = plaintext_sha256
+                    .as_deref()
+                    .filter(|v| !v.is_empty())
+                    .and_then(|v| base64_decode(v).ok());
                 let media = ThriftMediaAttachmentStruct::new(
                     Some(media_hash_key.clone()),
                     Some(Box::new(dimensions)),
@@ -699,7 +705,7 @@ pub fn build_thrift_attachments(
                     None::<String>,
                     None::<String>,
                     None::<String>,
-                    None::<Vec<u8>>,
+                    plaintext_sha256,
                 );
                 Box::new(ThriftMessageAttachment::Media(Box::new(media)))
             }
@@ -826,7 +832,8 @@ pub(crate) fn file_media_hash_keys(descs: &[AttachmentDescriptor]) -> Vec<&str> 
 /// Check the fields of the attachments a message sends: a URL card has a
 /// url, a post a `rest_id` or a `post_url`, and every file one references
 /// has a media hash key, a filename, a size above 0 and no negative width or
-/// height, with no two attachments referencing the same media hash key. A
+/// height, with no two attachments referencing the same media hash key, and
+/// a media attachment's `plaintext_sha256`, when set, is a base64 SHA-256. A
 /// file is uploaded once, under its media hash key, encrypted under the key
 /// of the one attachment that references it, and receivers discard a file
 /// sent without its name or size.
@@ -894,6 +901,31 @@ pub(crate) fn validate_attachment_fields(descs: &[AttachmentDescriptor]) -> Resu
                      the file once for each attachment"
                 )));
             }
+        }
+    }
+    validate_plaintext_sha256s(descs)
+}
+
+/// Check that each media attachment's `plaintext_sha256`, when set, is the
+/// base64 of a SHA-256: 32 bytes.
+pub(crate) fn validate_plaintext_sha256s(descs: &[AttachmentDescriptor]) -> Result<(), SdkError> {
+    for desc in descs {
+        let AttachmentDescriptor::Media {
+            media_hash_key,
+            plaintext_sha256: Some(hash),
+            ..
+        } = desc
+        else {
+            continue;
+        };
+        if hash.is_empty() {
+            continue;
+        }
+        if base64_decode(hash).map(|bytes| bytes.len()).ok() != Some(32) {
+            return Err(SdkError::InvalidInput(format!(
+                "media_hash_key '{media_hash_key}' has plaintext_sha256 '{hash}': pass the \
+                 base64 SHA-256 of the file's plaintext bytes (32 bytes)"
+            )));
         }
     }
     Ok(())
@@ -1140,6 +1172,7 @@ mod tests {
             height: 1080,
             media_type: Some(1), // image
             duration_millis: None,
+            plaintext_sha256: None,
             filesize_bytes: 150000,
             filename: "photo.jpg".to_string(),
         }]);
@@ -1312,6 +1345,7 @@ mod tests {
             filename: "image.png".to_string(),
             media_type: None, // should default to IMAGE
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -1326,6 +1360,7 @@ mod tests {
             filename: "clip.mp4".to_string(),
             media_type: Some(3), // video
             duration_millis: Some(15000),
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -1340,6 +1375,7 @@ mod tests {
             filename: "funny.gif".to_string(),
             media_type: Some(2), // gif
             duration_millis: Some(3000),
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -1357,6 +1393,7 @@ mod tests {
                 filename: "thumb.jpg".to_string(),
                 media_type: Some(1),
                 duration_millis: None,
+                plaintext_sha256: None,
             },
             AttachmentDescriptor::Url {
                 url: "https://example.com".to_string(),
@@ -1389,6 +1426,7 @@ mod tests {
             filename: "file".to_string(),
             media_type,
             duration_millis: None,
+            plaintext_sha256: None,
         }
     }
 
@@ -1598,6 +1636,7 @@ mod tests {
             filename: "pic.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         let content =
             build_message_content("Check this out", None, Some(attachments), None).unwrap();
@@ -1637,6 +1676,7 @@ mod tests {
             filename: "reply.png".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content_with_preview(
             "Here's a photo reply",
@@ -1726,6 +1766,7 @@ mod tests {
             filename: "original.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content_with_preview(
             "@user check https://reply-link.com",

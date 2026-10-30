@@ -1100,6 +1100,7 @@ mod tests {
                 filename: "photo.jpg".into(),
                 media_type: Some(1),
                 duration_millis: None,
+                plaintext_sha256: None,
             }])
             .with_should_notify(false)
             .with_ttl_msec(60_000);
@@ -1566,6 +1567,7 @@ mod tests {
                 filename: "photo.png".to_string(),
                 media_type: None,
                 duration_millis: None,
+                plaintext_sha256: None,
             }]);
         let payload = chat.encrypt_message(&params).unwrap();
         (

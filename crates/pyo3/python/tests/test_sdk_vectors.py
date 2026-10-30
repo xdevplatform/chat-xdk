@@ -530,6 +530,111 @@ class TestPythonSdkVectors(unittest.TestCase):
             {"content_type": "Edit", "target_message_sequence_id": "1", "updated_text": "fixed"},
         )
 
+    def test_v1_sends_name_the_original_and_carry_the_file_hash_from_explicit_fields(self):
+        """A v1 send built without the original event names it through the
+        explicit fields, and a media attachment carries the SHA-256 of its
+        plaintext file: ``reply_to_message_id``, ``target_message_id`` and
+        ``plaintext_sha256`` each read back from the decrypted send."""
+        import hashlib
+
+        from chat_xdk import (
+            DecryptEventParams,
+            EncryptEditParams,
+            EncryptMessageParams,
+            EncryptReplyParams,
+            InvalidInputError,
+        )
+        from features_support import wait_for_v1
+
+        v = _load_vectors()
+        chat = self._identity_chat(v, v1=True)
+        wait_for_v1(chat)
+        conversation_id = v["event_conversation_id"]
+        version = v["event_conversation_key_version"]
+        key = dict(
+            conversation_key=base64.b64decode(v["conversation_key_b64"]),
+            conversation_key_version=version,
+        )
+        digest = base64.b64encode(hashlib.sha256(b"the photo's plaintext bytes").digest()).decode()
+
+        def photo(media_hash_key, **extra):
+            return {
+                "attachment_type": "media",
+                "media_hash_key": media_hash_key,
+                "width": 4,
+                "height": 3,
+                "filesize_bytes": 64,
+                "filename": f"{media_hash_key}.jpg",
+                "media_type": 1,
+                **extra,
+            }
+
+        sent = chat.encrypt_message(
+            EncryptMessageParams(
+                conversation_id,
+                "a photo",
+                attachments=[photo("hashed", plaintext_sha256=digest), photo("unhashed")],
+                **key,
+            )
+        )
+        self.assertEqual(sent.signature_info.signature_version, "10")
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                sent.event_b64,
+                {version: key["conversation_key"]},
+                signing_keys=_fixture_signing_keys(v),
+            )
+        )
+        self.assertTrue(event["verified"])
+        self.assertEqual([a["plaintext_sha256"] for a in event["attachments"]], [digest, None])
+
+        replied = self._decrypt_own(
+            chat,
+            v,
+            chat.encrypt_reply(
+                EncryptReplyParams(
+                    conversation_id,
+                    "nice",
+                    reply_to_sequence_id="100",
+                    reply_to_message_id=sent.message_id,
+                    reply_to_sender_id=v["event_sender_id"],
+                    reply_to_text="a photo",
+                    **key,
+                )
+            ),
+        )
+        self.assertEqual(replied["replying_to_preview"]["replying_to_message_id"], sent.message_id)
+
+        edited = self._decrypt_own(
+            chat,
+            v,
+            chat.encrypt_edit(
+                EncryptEditParams(
+                    updated_text="a better photo",
+                    conversation_id=conversation_id,
+                    target_message_sequence_id="100",
+                    target_message_id=sent.message_id,
+                    **key,
+                )
+            ),
+        )
+        self.assertEqual(edited["target_message_id"], sent.message_id)
+
+        with self.assertRaises(InvalidInputError) as raised:
+            chat.encrypt_message(
+                EncryptMessageParams(
+                    conversation_id,
+                    "a photo",
+                    attachments=[photo("hashed", plaintext_sha256="c2hvcnQ=")],
+                    **key,
+                )
+            )
+        self.assertEqual(
+            str(raised.exception),
+            "media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 "
+            "of the file's plaintext bytes (32 bytes)",
+        )
+
     def test_failure_event_decodes_type_and_rate_limit_tier(self):
         from chat_xdk import Chat, DecryptEventParams
 

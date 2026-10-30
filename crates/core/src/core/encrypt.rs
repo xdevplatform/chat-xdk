@@ -77,10 +77,11 @@ impl ChatCore {
 
     /// Encrypt a reply.
     ///
-    /// When `reply_to_event` is set, the reply preview (sequence id, sender,
-    /// text, entities, attachments) is derived from that raw signed event and
-    /// the event itself is embedded so recipients can validate the preview.
-    /// Explicit `reply_to_*` fields override the derived values.
+    /// When `reply_to_event` is set, the reply preview (sequence id, message
+    /// id, sender, text, entities, attachments) is derived from that raw
+    /// signed event and the event itself is embedded so recipients can
+    /// validate the preview. Explicit `reply_to_*` fields override the
+    /// derived values.
     pub fn encrypt_reply(&self, params: &EncryptReplyParams) -> Result<SendPayload, SdkError> {
         let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
         let signing_key_version =
@@ -237,8 +238,9 @@ impl ChatCore {
     /// recipient; it is sent through the same message-create channel as a
     /// regular message and carries its own fresh message id.
     ///
-    /// When `target_event` is set, the conversation id and target sequence id
-    /// are derived from that raw event; explicit fields override them.
+    /// When `target_event` is set, the conversation id, the target sequence
+    /// id and, for a v1 edit, the target message id are derived from that raw
+    /// event; explicit fields override them.
     pub fn encrypt_edit(&self, params: &EncryptEditParams) -> Result<SendPayload, SdkError> {
         let (conversation_id, target_sequence_id) = Self::resolve_event_target(
             params.target_event.as_deref(),
@@ -256,17 +258,26 @@ impl ChatCore {
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
         // Only v1 edits name the message they edit; v0 edits are built as
-        // 0.5.x built them. Read leniently: an unparsable target event already
-        // fails above unless explicit fields made it unnecessary, and then
-        // only the message id is lost.
+        // 0.5.x built them. The target event is read leniently: an unparsable
+        // one already fails above unless explicit fields made it unnecessary,
+        // and then only the message id it would give is lost.
         let send_version = self.send_version();
-        let target_message_id = params
-            .target_event
-            .as_deref()
-            .filter(|_| send_version == crate::pipeline::SendVersion::V1)
-            .filter(|v| !v.is_empty())
-            .and_then(|b64| Self::parse_event_b64(b64).ok())
-            .and_then(|event| event.message_id);
+        let target_message_id = if send_version == crate::pipeline::SendVersion::V1 {
+            params
+                .target_message_id
+                .clone()
+                .filter(|v| !v.is_empty())
+                .or_else(|| {
+                    params
+                        .target_event
+                        .as_deref()
+                        .filter(|v| !v.is_empty())
+                        .and_then(|b64| Self::parse_event_b64(b64).ok())
+                        .and_then(|event| event.message_id)
+                })
+        } else {
+            None
+        };
         let content_bytes = crate::pipeline::build_message_edit_content(
             &target_sequence_id,
             &params.updated_text,
@@ -674,6 +685,9 @@ impl ChatCore {
         // a reply preview mirrors an already-sent original (which receivers
         // validate against the embedded raw event), so rejecting it would
         // block replying to messages from clients that sent such lists.
+        if let Some(attachments) = params.reply_to_attachments.as_deref() {
+            crate::pipeline::validate_plaintext_sha256s(attachments)?;
+        }
         let thrift_reply_attachments = params
             .reply_to_attachments
             .as_deref()
@@ -682,6 +696,7 @@ impl ChatCore {
             .reply_to_sequence_id
             .clone()
             .filter(|v| !v.is_empty());
+        let explicit_message_id = params.reply_to_message_id.clone().filter(|v| !v.is_empty());
         let explicit_sender_id = match params
             .reply_to_sender_id
             .as_deref()
@@ -707,7 +722,7 @@ impl ChatCore {
                 thrift_reply_attachments,
                 None::<String>,
                 Some(sequence_id),
-                None::<String>,
+                explicit_message_id,
                 None,
                 None,
                 None,
@@ -842,7 +857,7 @@ impl ChatCore {
             attachments,
             None::<String>,
             Some(sequence_id),
-            raw.message_id.clone(),
+            explicit_message_id.or_else(|| raw.message_id.clone()),
             raw,
             edit_event,
             None::<Vec<MessageEvent>>,

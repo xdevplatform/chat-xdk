@@ -1953,6 +1953,64 @@ namespace ChatXdk.Tests
             Assert.False(edited.TryGetProperty("target_message_id", out _));
         }
 
+        // A v1 send built without the original event names it through the explicit fields,
+        // and a media attachment carries the SHA-256 of its plaintext file: ReplyToMessageId,
+        // TargetMessageId and PlaintextSha256 each read back from the decrypted send.
+        [Fact]
+        public void V1Sends_NameTheOriginalAndCarryTheFileHash_FromExplicitFields()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v, v1: true);
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes("the photo's plaintext bytes")));
+
+            var sent = SendFiles(chat, v, "a photo",
+                AttachmentDescriptor.Media("hashed", 4, 3, 64, "hashed.jpg", 1, null, hash),
+                Photo("unhashed"));
+            var evt = chat.DecryptEvent(new DecryptEventParams(sent.EventB64, ConversationKeys(v))
+            {
+                SigningKeys = EventSigningKeys(v),
+            });
+            var attachments = evt.GetProperty("attachments");
+            Assert.Equal(hash, attachments[0].GetProperty("plaintext_sha256").GetString());
+            Assert.Equal(JsonValueKind.Null, attachments[1].GetProperty("plaintext_sha256").ValueKind);
+
+            var replied = DecryptOwnContent(chat, v, chat.EncryptReply(
+                new EncryptReplyParams(v.EventConversationId, "nice", null)
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    ReplyToSequenceId = "100",
+                    ReplyToMessageId = sent.MessageId,
+                    ReplyToSenderId = v.EventSenderId,
+                    ReplyToText = "a photo",
+                }));
+            Assert.Equal(sent.MessageId,
+                replied.GetProperty("replying_to_preview").GetProperty("replying_to_message_id").GetString());
+
+            var edited = DecryptOwnContent(chat, v, chat.EncryptEdit(new EncryptEditParams(null, "a better photo")
+            {
+                ConversationId = v.EventConversationId,
+                TargetMessageSequenceId = "100",
+                TargetMessageId = sent.MessageId,
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            }));
+            Assert.Equal(sent.MessageId, edited.GetProperty("target_message_id").GetString());
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
+                new EncryptMessageParams(v.EventConversationId, "a photo")
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    Attachments = new[] { AttachmentDescriptor.Media("hashed", 4, 3, 64, "hashed.jpg", 1, null, "c2hvcnQ=") },
+                }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, ex.Kind);
+            Assert.Equal("media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the "
+                + "file's plaintext bytes (32 bytes)", ex.Message);
+        }
+
         // A signed group description change: DecryptEvent returns the
         // description decrypted under the fixture conversation key, and
         // without that key the change fails instead of coming back as

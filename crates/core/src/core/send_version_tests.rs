@@ -338,6 +338,7 @@ fn files_of_a_v0_message_use_the_conversation_key() {
         filename: "f.bin".to_string(),
         media_type: Some(5),
         duration_millis: None,
+        plaintext_sha256: None,
     }]);
     let payload = party.core.encrypt_message(&params).unwrap();
     assert_v0(&party, &ckey, "message with a file", &payload);
@@ -385,6 +386,7 @@ fn with_photos(text: &str, ckey: &XChatConversationKey) -> EncryptMessageParams 
         filename: format!("{media_hash_key}.jpg"),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     };
     let mut params = message_params(text, ckey);
     params.attachments = Some(vec![photo("photo-a"), photo("photo-b")]);
@@ -524,6 +526,267 @@ fn a_decrypted_v1_edit_names_the_message_it_edits() {
             "edited".to_string()
         )
     );
+}
+
+/// The message id a v1 edit built by `params` names, read from its opened
+/// contents.
+fn edited_message_id(
+    party: &Party,
+    ckey: &XChatConversationKey,
+    params: &EncryptEditParams,
+) -> Option<String> {
+    let edit = party.core.encrypt_edit(params).unwrap();
+    let key = match create_event(&delivered(&edit, "200")).contents_encryption_version {
+        Some(_) => message_key(&edit, ckey),
+        None => ckey.clone(),
+    };
+    let Contents::MessageEdit(contents) = opened_contents(&edit, &key) else {
+        panic!("expected an edit");
+    };
+    contents.message_id
+}
+
+#[test]
+fn a_v1_edit_built_without_its_target_event_names_the_message_its_params_name() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let explicit = EncryptEditParams::new("", "edited")
+        .with_conversation_id(CONVERSATION)
+        .with_target_message_sequence_id("100")
+        .with_target_message_id(original.message_id.clone())
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+
+    assert_eq!(edited_message_id(&party, &ckey, &explicit), None);
+    enable_v1_send(&party.core);
+    assert_eq!(
+        edited_message_id(&party, &ckey, &explicit),
+        Some(original.message_id.clone())
+    );
+    let unnamed = EncryptEditParams::new("", "edited")
+        .with_conversation_id(CONVERSATION)
+        .with_target_message_sequence_id("100")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    assert_eq!(edited_message_id(&party, &ckey, &unnamed), None);
+}
+
+#[test]
+fn an_explicit_target_message_id_overrides_the_target_events() {
+    let party = author();
+    enable_v1_send(&party.core);
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let params = EncryptEditParams::new(frame(&delivered(&original, "100")), "edited")
+        .with_target_message_id("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    assert_eq!(
+        edited_message_id(&party, &ckey, &params).as_deref(),
+        Some("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+    );
+}
+
+/// The `replying_to_message_id` of the preview a reply built by `params`
+/// carries, read from its opened contents.
+fn quoted_message_id(
+    party: &Party,
+    ckey: &XChatConversationKey,
+    params: &EncryptReplyParams,
+) -> Option<String> {
+    let reply = party.core.encrypt_reply(params).unwrap();
+    let key = match create_event(&delivered(&reply, "200")).contents_encryption_version {
+        Some(_) => message_key(&reply, ckey),
+        None => ckey.clone(),
+    };
+    let Contents::Message(contents) = opened_contents(&reply, &key) else {
+        panic!("expected a message");
+    };
+    contents
+        .replying_to_preview
+        .and_then(|preview| preview.replying_to_message_id)
+}
+
+#[test]
+fn a_reply_built_from_explicit_fields_names_the_message_its_params_name() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let explicit = |message_id: Option<&str>| {
+        let params = EncryptReplyParams::new(CONVERSATION, "reply", "")
+            .with_reply_to_sequence_id("100")
+            .with_reply_to_sender_id(AUTHOR)
+            .with_reply_to_text("original")
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        match message_id {
+            Some(id) => params.with_reply_to_message_id(id),
+            None => params,
+        }
+    };
+
+    for v1 in [false, true] {
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        assert_eq!(
+            quoted_message_id(&party, &ckey, &explicit(Some(&original.message_id))),
+            Some(original.message_id.clone()),
+            "v1 {v1}"
+        );
+        assert_eq!(
+            quoted_message_id(&party, &ckey, &explicit(None)),
+            None,
+            "v1 {v1}"
+        );
+    }
+}
+
+#[test]
+fn an_explicit_reply_to_message_id_overrides_the_reply_to_events() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let event = frame(&delivered(&original, "100"));
+    let derived = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    let overridden = EncryptReplyParams::new(CONVERSATION, "reply", event)
+        .with_reply_to_message_id("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    assert_eq!(
+        quoted_message_id(&party, &ckey, &derived),
+        Some(original.message_id.clone())
+    );
+    assert_eq!(
+        quoted_message_id(&party, &ckey, &overridden).as_deref(),
+        Some("6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+    );
+}
+
+fn photo_with_hash(media_hash_key: &str, plaintext_sha256: Option<&str>) -> AttachmentDescriptor {
+    AttachmentDescriptor::Media {
+        media_hash_key: media_hash_key.to_string(),
+        width: 640,
+        height: 480,
+        filesize_bytes: 4096,
+        filename: format!("{media_hash_key}.jpg"),
+        media_type: Some(1),
+        duration_millis: None,
+        plaintext_sha256: plaintext_sha256.map(str::to_string),
+    }
+}
+
+#[test]
+fn a_media_attachment_carries_and_decrypts_its_plaintext_sha256() {
+    use sha2::{Digest, Sha256};
+    let party = author();
+    let ckey = key(3);
+    let digest = Sha256::digest(b"the photo's plaintext bytes").to_vec();
+    let hash = base64_encode(&digest);
+    for v1 in [false, true] {
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        let mut params = message_params("photo", &ckey);
+        params.attachments = Some(vec![
+            photo_with_hash("photo-a", Some(&hash)),
+            photo_with_hash("photo-b", None),
+        ]);
+        let payload = party.core.encrypt_message(&params).unwrap();
+        let key = if v1 {
+            message_key(&payload, &ckey)
+        } else {
+            ckey.clone()
+        };
+        let Contents::Message(contents) = opened_contents(&payload, &key) else {
+            panic!("expected a message");
+        };
+        let sent: Vec<Option<Vec<u8>>> = contents
+            .attachments
+            .unwrap_or_default()
+            .iter()
+            .map(|attachment| match attachment.as_ref() {
+                ThriftAttachment::Media(media) => media.plaintext_sha256.clone(),
+                other => panic!("unexpected attachment {:?}", other),
+            })
+            .collect();
+        assert_eq!(sent, [Some(digest.clone()), None], "v1 {v1}");
+
+        let message = decrypt_message(
+            &ChatCore::new(),
+            &delivered(&payload, "100"),
+            &keys(KEY_VERSION, &ckey),
+            std::slice::from_ref(&party.entry),
+        )
+        .unwrap();
+        assert!(message.verified, "v1 {v1}");
+        let infos: Vec<Option<String>> = message
+            .attachments
+            .iter()
+            .map(|attachment| match attachment {
+                AttachmentInfo::Media(media) => media.plaintext_sha256.clone(),
+                other => panic!("unexpected attachment {:?}", other),
+            })
+            .collect();
+        assert_eq!(infos, [Some(hash.clone()), None], "v1 {v1}");
+        let MessageContent::Text { attachments, .. } = message.content else {
+            panic!("expected text content");
+        };
+        let content: Vec<Option<String>> = attachments
+            .unwrap_or_default()
+            .into_iter()
+            .map(|attachment| match attachment {
+                MessageAttachment::Media { media } => media.plaintext_sha256,
+                other => panic!("unexpected attachment {:?}", other),
+            })
+            .collect();
+        assert_eq!(content, [Some(hash.clone()), None], "v1 {v1}");
+    }
+}
+
+#[test]
+fn a_plaintext_sha256_that_is_not_a_base64_sha256_fails_the_send() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let event = frame(&delivered(&original, "100"));
+    for bad in ["not base64!", "c2hvcnQ=", &base64_encode(&[7u8; 33])] {
+        let expected = format!("media_hash_key 'photo-a' has plaintext_sha256 '{bad}'");
+        let mut message = message_params("photo", &ckey);
+        message.attachments = Some(vec![photo_with_hash("photo-a", Some(bad))]);
+        let reply = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+            .with_attachments(vec![photo_with_hash("photo-a", Some(bad))])
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        let quoting = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+            .with_reply_to_attachments(vec![photo_with_hash("photo-a", Some(bad))])
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        let errors = [
+            party.core.encrypt_message(&message).unwrap_err(),
+            party.core.encrypt_reply(&reply).unwrap_err(),
+            party.core.encrypt_reply(&quoting).unwrap_err(),
+        ];
+        for error in errors {
+            assert!(
+                matches!(&error, SdkError::InvalidInput(m) if m.starts_with(&expected)),
+                "{bad}: {error:?}"
+            );
+        }
+    }
+    let mut empty = message_params("photo", &ckey);
+    empty.attachments = Some(vec![photo_with_hash("photo-a", Some(""))]);
+    assert!(party.core.encrypt_message(&empty).is_ok());
 }
 
 #[test]

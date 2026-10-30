@@ -52,6 +52,7 @@ fn image(media_hash_key: &str) -> AttachmentDescriptor {
         filename: format!("{media_hash_key}.jpg"),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     }
 }
 

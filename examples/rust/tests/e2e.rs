@@ -373,6 +373,7 @@ fn e2e_live() {
                         filename: "e2e.bin".to_string(),
                         media_type: Some(5),
                         duration_millis: None,
+                        plaintext_sha256: None,
                     }]),
                     quick_reply: None,
                     ttl_msec: Some(24 * 60 * 60 * 1000),

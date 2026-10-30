@@ -498,6 +498,16 @@ public final class Types {
         @JsonProperty("duration_millis")
         public final Long durationMillis;
 
+        /**
+         * Base64 SHA-256 of the media file's plaintext bytes, which recipients can check the
+         * decrypted file against. The message carries and signs it, and the message is built
+         * before its files are encrypted, so the caller hashes the file. One that is not the
+         * base64 of 32 bytes fails the send with a {@link ChatXdkException} of kind
+         * {@code INVALID_INPUT}.
+         */
+        @JsonProperty("plaintext_sha256")
+        public final String plaintextSha256;
+
         /** URL for a URL-card attachment. */
         @JsonProperty("url")
         public final String url;
@@ -531,6 +541,7 @@ public final class Types {
                 String filename,
                 Integer mediaType,
                 Long durationMillis,
+                String plaintextSha256,
                 String url,
                 String displayTitle,
                 UrlAttachmentImageDescriptor bannerImage,
@@ -545,6 +556,7 @@ public final class Types {
             this.filename = filename;
             this.mediaType = mediaType;
             this.durationMillis = durationMillis;
+            this.plaintextSha256 = plaintextSha256;
             this.url = url;
             this.displayTitle = displayTitle;
             this.bannerImage = bannerImage;
@@ -562,6 +574,22 @@ public final class Types {
                 String filename,
                 Integer mediaType,
                 Long durationMillis) {
+            return media(mediaHashKey, width, height, filesizeBytes, filename, mediaType, durationMillis, null);
+        }
+
+        /**
+         * Create a media attachment that carries the base64 SHA-256 of the file's plaintext bytes.
+         * {@code mediaType}, {@code durationMillis} and {@code plaintextSha256} may be null.
+         */
+        public static AttachmentDescriptor media(
+                String mediaHashKey,
+                long width,
+                long height,
+                long filesizeBytes,
+                String filename,
+                Integer mediaType,
+                Long durationMillis,
+                String plaintextSha256) {
             return new AttachmentDescriptor(
                     "media",
                     Objects.requireNonNull(mediaHashKey, "mediaHashKey"),
@@ -571,6 +599,7 @@ public final class Types {
                     Objects.requireNonNull(filename, "filename"),
                     mediaType,
                     durationMillis,
+                    plaintextSha256,
                     null,
                     null,
                     null,
@@ -606,6 +635,7 @@ public final class Types {
                     null,
                     null,
                     null,
+                    null,
                     Objects.requireNonNull(url, "url"),
                     displayTitle,
                     bannerImage,
@@ -617,7 +647,7 @@ public final class Types {
         /** Create a post/tweet attachment from its {@code restId}, its {@code postUrl}, or both. */
         public static AttachmentDescriptor post(String restId, String postUrl) {
             return new AttachmentDescriptor(
-                    "post", null, null, null, null, null, null, null, null, null, null, null,
+                    "post", null, null, null, null, null, null, null, null, null, null, null, null,
                     restId, postUrl);
         }
     }
@@ -845,8 +875,9 @@ public final class Types {
 
         /**
          * Base64 raw signed event being replied to. The reply preview
-         * (sequence id, sender, text, entities, attachments) is derived from
-         * it and the raw event is embedded so recipients can validate the preview.
+         * (sequence id, message id, sender, text, entities, attachments) is
+         * derived from it and the raw event is embedded so recipients can
+         * validate the preview.
          */
         public final String replyToEvent;
 
@@ -876,6 +907,14 @@ public final class Types {
 
         /** Sequence ID of the message being replied to; derived from {@link #replyToEvent} when null. */
         public String replyToSequenceId;
+
+        /**
+         * Signed message ID of the message being replied to; derived from
+         * {@link #replyToEvent} when null. A reply built without
+         * {@link #replyToEvent} needs it: X clients mark a v1 reply that names
+         * no original invalid.
+         */
+        public String replyToMessageId;
 
         /** User ID of the message's sender, as digits (for the preview); derived from {@link #replyToEvent} when null. */
         public String replyToSenderId;
@@ -975,9 +1014,10 @@ public final class Types {
      * Parameters for {@link Chat#encryptEdit}.
      *
      * <p>The preferred form passes the raw event of the message being edited
-     * ({@code targetEvent}) and lets the SDK derive the conversation id and
-     * target sequence id from it; the explicit field overrides remain for
-     * callers that no longer hold the raw event.
+     * ({@code targetEvent}) and lets the SDK derive the conversation id, the
+     * target sequence id and, for a v1 edit, the target message id from it;
+     * the explicit field overrides remain for callers that no longer hold the
+     * raw event.
      */
     public static final class EncryptEditParams {
         /** Base64 raw event being edited; the conversation id and target sequence id are derived from it. */
@@ -994,6 +1034,14 @@ public final class Types {
 
         /** Sequence ID of the message being edited; derived from {@link #targetEvent} when null. */
         public String targetMessageSequenceId;
+
+        /**
+         * Signed message ID of the message being edited; derived from
+         * {@link #targetEvent} when null. A v1 edit names the message it
+         * edits, so a v1 edit built without {@link #targetEvent} needs it; a
+         * v0 edit names none.
+         */
+        public String targetMessageId;
 
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;

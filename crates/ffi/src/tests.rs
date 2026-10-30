@@ -240,7 +240,14 @@ fn invalid_entities_and_attachments_fail_with_invalid_input() {
     });
     let mut negative_width = photo(1000, "photo.jpg");
     negative_width["width"] = (-1).into();
+    let mut short_hash = photo(1000, "photo.jpg");
+    short_hash["plaintext_sha256"] = "c2hvcnQ=".into();
     for (attachment, message) in [
+        (
+            short_hash,
+            "media_hash_key 'photo' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 \
+             of the file's plaintext bytes (32 bytes)",
+        ),
         (
             photo(1000, ""),
             "media_hash_key 'photo' has an empty filename: pass the file's original name",

@@ -1306,6 +1306,7 @@ fn collect_attachments(
                     attachment_id: media.attachment_id.clone(),
                     legacy_media_url_https: media.legacy_media_url_https.clone(),
                     legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+                    plaintext_sha256: media.plaintext_sha256.as_deref().map(base64_encode),
                 };
                 parsed.push(AttachmentInfo::Media(info));
             }
@@ -1535,6 +1536,7 @@ fn map_media_attachment(media: &crate::thrift::product::MediaAttachment) -> Medi
         attachment_id: media.attachment_id.clone(),
         legacy_media_url_https: media.legacy_media_url_https.clone(),
         legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+        plaintext_sha256: media.plaintext_sha256.as_deref().map(base64_encode),
     }
 }
 
