@@ -236,7 +236,9 @@ class ChatCore:
         conversation_key: bytes | None = None,
         conversation_key_version: str | None = None,
         reply_to_event: str | None = None,
+        reply_to_ckces: list[str] | None = None,
         reply_to_sequence_id: str | None = None,
+        reply_to_message_id: str | None = None,
         entities: list[tuple[int, int, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
         quick_reply: QuickReply | None = None,
@@ -248,8 +250,12 @@ class ChatCore:
         ``encrypt_message``; with ``reply_to_event`` (the raw encoded event
         being answered — preferred, the SDK derives and embeds the validated
         preview) or ``reply_to_sequence_id``, the SDK's ``encrypt_reply``
-        builds a *threaded* reply. Omit the conversation key pair to resolve
-        it from the SDK's verified-key cache (``set_cache_keys``).
+        builds a *threaded* reply. ``reply_to_ckces`` are the raw key-change
+        events that open an original sent under an older key version. A
+        reply by ``reply_to_sequence_id`` also needs ``reply_to_message_id``,
+        the quoted message's ``id``: X clients mark a v1 reply that names no
+        original invalid. Omit the conversation key pair to resolve it from
+        the SDK's verified-key cache (``set_cache_keys``).
         ``entities`` are ``(start, end, type)`` byte ranges; ``attachments``
         are attachment descriptors, each file naming the media hash key its
         upload started with; ``quick_reply`` offers selectable options or
@@ -279,7 +285,9 @@ class ChatCore:
                     conversation_id,
                     text,
                     reply_to_event,
+                    reply_to_ckces=reply_to_ckces,
                     reply_to_sequence_id=reply_to_sequence_id,
+                    reply_to_message_id=reply_to_message_id,
                     conversation_key=conversation_key,
                     conversation_key_version=conversation_key_version,
                     entities=entities,

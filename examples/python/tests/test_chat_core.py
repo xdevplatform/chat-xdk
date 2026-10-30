@@ -264,10 +264,28 @@ class TestPreparedChanges(unittest.TestCase):
             conversation_key=conv_key,
             conversation_key_version="1",
             reply_to_sequence_id="42",
+            reply_to_message_id="6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f",
             entities=[(0, 5, "mention")],
             ttl_msec=60_000,
         )
         self.assertTrue(body["encoded_message_create_event"])
+        # A reply built from a sequence id names the original by its id too.
+        sent = core.decrypt_one(
+            body["event_b64"],
+            {"1": conv_key},
+            [
+                {
+                    "user_id": "1000",
+                    "public_key_version": "1",
+                    "public_key": self.vectors["signing_public_b64"],
+                    "identity_public_key": self.vectors["identity_public_b64"],
+                    "identity_public_key_signature": self.vectors["identity_public_key_signature_b64"],
+                }
+            ],
+        )
+        preview = sent["content"]["replying_to_preview"]
+        self.assertEqual(preview["replying_to_message_sequence_id"], "42")
+        self.assertEqual(preview["replying_to_message_id"], "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
 
     def test_media_encrypt_decrypt_roundtrip(self):
         # The message-first media flow: the message names the file by the
